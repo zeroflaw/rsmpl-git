@@ -5,6 +5,12 @@ use rsmpl_patch::{Allow, ErrorCode, FileSection, Hunk, Scope, StructuredError};
 use crate::lines::LineIndex;
 
 /// Validate `allow` / `optional` match counts (SPEC 17.5, 24.3).
+///
+/// `wide` is the whole-file (`# scope=file`) probe count for the same
+/// pattern, when the caller ran one (T62): `Some(1)` means the pattern is
+/// fine but the range is wrong, so the suggestion offers the zero-discovery
+/// `# scope=file` retry; `Some(n > 1)` suggests widening + `# allow=many`;
+/// `Some(0)`/`None` keep the generic inspect suggestion.
 pub fn ensure_match_count(
     found: usize,
     allow: Allow,
@@ -12,6 +18,7 @@ pub fn ensure_match_count(
     rule: &str,
     file: &str,
     range: &str,
+    wide: Option<usize>,
 ) -> Result<(), StructuredError> {
     match (found, allow, optional) {
         (0, _, true) => Ok(()),
@@ -20,9 +27,7 @@ pub fn ensure_match_count(
                 .with_rule(rule)
                 .with_file(file)
                 .with_range(range)
-                .with_suggestion(format!(
-                    "run `rsmpl-git --inspect {file}` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"
-                )),
+                .with_suggestion(zero_match_suggestion(file, wide)),
         ),
         (1, _, _) => Ok(()),
         (_, Allow::Many, _) => Ok(()),
@@ -70,6 +75,23 @@ pub fn ensure_file_range(
     Ok(())
 }
 
+fn zero_match_suggestion(file: &str, wide: Option<usize>) -> String {
+    let base = format!(
+        "run `rsmpl-git --inspect {file}` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"
+    );
+    match wide {
+        Some(1) => format!(
+            "{base} — exactly one match exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@` (no inspect needed)"
+        ),
+        // Note: matchers stop counting at 2 under `# allow=one`, so the
+        // wide count saturates — report "multiple", never an exact number.
+        Some(n) if n > 1 => format!(
+            "{base} — multiple matches exist outside this range; widen the range (or add `# scope=file`) and add `# allow=many` if intended"
+        ),
+        _ => base,
+    }
+}
+
 fn range_err(rule: &str, file: &str, start: u32, len: u32, n: u32) -> StructuredError {
     StructuredError::new(
         ErrorCode::RangeConflict,
@@ -96,12 +118,52 @@ mod tests {
             "r",
             "src/lib.rs",
             "40..47",
+            None,
         )
         .unwrap_err();
         let s = err.suggestion.expect("suggestion");
         assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
         assert!(s.contains("--calls"), "got: {s}");
         assert!(s.contains("# optional"), "got: {s}");
+        assert!(!s.contains("scope=file"), "got: {s}");
+    }
+
+    #[test]
+    fn wide_hint_single_suggests_scope_file() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            Some(1),
+        )
+        .unwrap_err();
+        let s = err.suggestion.expect("suggestion");
+        assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
+        assert!(s.contains("# scope=file"), "got: {s}");
+        assert!(s.contains("@@ -1,1 @@"), "got: {s}");
+    }
+
+    #[test]
+    fn wide_hint_many_suggests_widen_and_allow_many() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            Some(3),
+        )
+        .unwrap_err();
+        let s = err.suggestion.expect("suggestion");
+        assert!(
+            s.contains("multiple matches exist outside this range"),
+            "got: {s}"
+        );
+        assert!(s.contains("# allow=many"), "got: {s}");
     }
 
     #[test]

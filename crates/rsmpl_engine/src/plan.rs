@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use rsmpl_patch::{ErrorCode, Hunk, Patch, StructuredError};
+use rsmpl_patch::{Directive, ErrorCode, Hunk, Patch, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
 
 use crate::capture::CaptureStore;
@@ -126,6 +126,19 @@ pub fn apply_with_captures(
             if targets.is_empty() && rh.is_optional() {
                 continue; // optional cut with no match: no capture, no cut
             }
+            // T62: same whole-file probe for cut hunks (span collection,
+            // no edits involved).
+            let wide = if targets.is_empty() && rh.scope() != Scope::File {
+                let wide_targets = matcher_fn::find_item_targets(
+                    &state.parsed,
+                    Scope::File,
+                    rh.header.old_start,
+                    rh.header.old_len,
+                );
+                Some(wide_targets.len())
+            } else {
+                None
+            };
             ensure_match_count(
                 targets.len(),
                 rsmpl_patch::Allow::One,
@@ -133,6 +146,7 @@ pub fn apply_with_captures(
                 &rh.rule_name(),
                 path,
                 &range_desc,
+                wide,
             )?;
             let (sl, el) = targets[0];
             // Capture the exact item span (no blank-line absorption); the
@@ -196,113 +210,8 @@ pub fn apply_with_captures(
                         rh.header.old_start,
                         rh.header.old_start + rh.header.old_len
                     );
-                    let found = match &compiled.kind {
-                        PatternKind::Fn { .. } => matcher_fn::apply_fn_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::Expr {
-                            minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
-                            ..
-                        } => matcher_macro::apply_macro_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::Expr { .. } => matcher_expr::apply_expr_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::General { .. } => matcher_general::apply_general_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::ItemCapture { .. } => matcher_fn::apply_item_delete(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::Insertion { use_name, .. } => match use_name {
-                            Some(name) => {
-                                paste_capture(
-                                    &captures,
-                                    name,
-                                    &state.index,
-                                    rh.header.old_start,
-                                    &rule,
-                                    path,
-                                    edits,
-                                )?;
-                                1
-                            }
-                            None => matcher_fn::apply_insertion(
-                                &state.original,
-                                &state.index,
-                                rh,
-                                &compiled,
-                                edits,
-                            )
-                            .map_err(|e| e.with_file(path))?,
-                        },
-                        PatternKind::ImplContext { .. } => matcher_fn::apply_impl_context_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::Macro { .. } => matcher_macro::apply_macro_hunk(
-                            &state.parsed,
-                            &state.original,
-                            &state.index,
-                            rh,
-                            &compiled,
-                            edits,
-                        )
-                        .map_err(|e| e.with_file(path))?,
-                        PatternKind::Raw { .. } => {
-                            return Err(StructuredError::new(
-                                ErrorCode::PatternConflict,
-                                "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
-                            )
-                            .with_rule(rule.clone())
-                            .with_file(path));
-                        }
-                    };
+                    let found = apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
+                        .map_err(|e| e.with_file(path))?;
                     // A non-insertion hunk carrying `# use=` has no v0.1 meaning.
                     if !rh.uses().is_empty()
                         && !matches!(
@@ -320,6 +229,17 @@ pub fn apply_with_captures(
                         .with_rule(rule.clone())
                         .with_file(path));
                     }
+                    // T62: on a hard zero-match, probe the same pattern
+                    // whole-file (scope overridden, count-only, edits
+                    // discarded) so an unambiguous failure can suggest the
+                    // zero-discovery `# scope=file` retry. Insertions use
+                    // anchors rather than pattern search and are excluded
+                    // by the probe itself.
+                    let wide = if found == 0 && !rh.is_optional() && rh.scope() != Scope::File {
+                        probe_whole_file(state, path, rh, &compiled, &captures)
+                    } else {
+                        None
+                    };
                     ensure_match_count(
                         found,
                         rh.allow(),
@@ -327,6 +247,7 @@ pub fn apply_with_captures(
                         &rule,
                         path,
                         &range_desc,
+                        wide,
                     )?;
                     rule_order.push((
                         (sec_idx, hunk_idx),
@@ -365,6 +286,149 @@ pub fn apply_with_captures(
     }
 
     Ok(report)
+}
+
+/// Dispatch one pass-2 RSmPL hunk to its matcher (SPEC 23.1 step 7).
+///
+/// Extracted from the pass-2 loop so the T62 whole-file probe reuses the
+/// exact same dispatch (no predicate duplication, no drift). File context
+/// (`with_file`) is applied by the caller, not here, so real and probe
+/// runs share error shapes.
+fn apply_rsmpl_hunk(
+    state: &FileState,
+    path: &str,
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    captures: &CaptureStore,
+    edits: &mut Vec<TextEdit>,
+) -> Result<usize, StructuredError> {
+    let rule = rh.rule_name();
+    match &compiled.kind {
+        PatternKind::Fn { .. } => matcher_fn::apply_fn_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::Expr {
+            minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
+            ..
+        } => matcher_macro::apply_macro_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::Expr { .. } => matcher_expr::apply_expr_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::General { .. } => matcher_general::apply_general_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::ItemCapture { .. } => matcher_fn::apply_item_delete(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::Insertion { use_name, .. } => match use_name {
+            Some(name) => {
+                paste_capture(
+                    captures,
+                    name,
+                    &state.index,
+                    rh.header.old_start,
+                    &rule,
+                    path,
+                    edits,
+                )?;
+                Ok(1)
+            }
+            None => {
+                matcher_fn::apply_insertion(&state.original, &state.index, rh, compiled, edits)
+            }
+        },
+        PatternKind::ImplContext { .. } => matcher_fn::apply_impl_context_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::Macro { .. } => matcher_macro::apply_macro_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::Raw { .. } => Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
+        )
+        .with_rule(rule)),
+    }
+}
+
+/// T62 whole-file probe: re-run the same matcher with scope overridden to
+/// `File` and count matches without keeping edits.
+///
+/// Returns `None` when the probe itself errors (keep the original error's
+/// generic hint) or the hunk kind is not probe-eligible: insertions use
+/// anchors rather than pattern search, and `Raw` shapes never reach here
+/// (rejected before dispatch). The probe fires only on the zero-match
+/// path, so the happy path pays no extra matching cost.
+fn probe_whole_file(
+    state: &FileState,
+    path: &str,
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    captures: &CaptureStore,
+) -> Option<usize> {
+    if matches!(
+        &compiled.kind,
+        PatternKind::Insertion { .. } | PatternKind::Raw { .. }
+    ) {
+        return None;
+    }
+    let mut wide_hunk = rh.clone();
+    wide_hunk.directives.push(Directive::Scope(Scope::File));
+    let mut probe_edits = Vec::new();
+    apply_rsmpl_hunk(
+        state,
+        path,
+        &wide_hunk,
+        compiled,
+        captures,
+        &mut probe_edits,
+    )
+    .ok()
 }
 
 /// v0.1 capability gate (SPEC 22-23): only `format=preserve` and AST matching
@@ -584,6 +648,43 @@ mod tests {
         let out = &files["src/lib.rs"];
         assert!(out.contains("fn bar()"), "got: {out}");
         assert!(!out.contains("fn foo()"), "got: {out}");
+    }
+
+    #[test]
+    fn zero_match_unique_elsewhere_hints_scope_file() {
+        // T62: tight wrong range (lines 1-1) but the only `foo` is on
+        // line 5 — the suggestion must offer the zero-discovery retry.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let src = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn foo() {}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("no match found"), "got: {err}");
+        assert!(err.contains("# scope=file"), "got: {err}");
+        assert!(err.contains("@@ -1,1 @@"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_many_elsewhere_hints_widen() {
+        // T62: zero in range, several matches elsewhere — suggest widening
+        // plus `# allow=many` instead of the single-match retry.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src =
+            "fn a() {}\nfn b() {\n    foo(1);\n}\nfn c() {\n    foo(2);\n}\nfn d() {\n    foo(3);\n}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("multiple matches exist"), "got: {err}");
+        assert!(err.contains("# allow=many"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_nowhere_keeps_generic_hint() {
+        // T62: pattern matches nothing anywhere — no scope=file retry.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn nosuchfn(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let src = "fn a() {}\nfn b() {}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("rsmpl-git --inspect"), "got: {err}");
+        assert!(!err.contains("scope=file"), "got: {err}");
     }
 
     #[test]

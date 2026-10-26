@@ -391,6 +391,41 @@ fn json_envelope_on_match_failure() {
 }
 
 #[test]
+fn json_envelope_zero_match_unique_elsewhere_hints_scope_file() {
+    // T62: tight wrong range (lines 1-1) but the only `foo` is on line 3 —
+    // the JSON envelope must offer the zero-discovery `# scope=file` retry.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {}\nfn b() {}\nfn foo() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    let err = &v["error"];
+    assert_eq!(err["code"], serde_json::json!("RSMPL_MATCH_CONFLICT"));
+    assert!(
+        err["suggestion"].as_str().unwrap().contains("# scope=file"),
+        "suggestion must offer the scope=file retry, got: {err}"
+    );
+    assert!(
+        err["suggestion"].as_str().unwrap().contains("@@ -1,1 @@"),
+        "suggestion must name the dummy range, got: {err}"
+    );
+}
+
+#[test]
 fn json_envelope_on_range_failure_carries_inspect_command() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");

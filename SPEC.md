@@ -2966,6 +2966,15 @@ reason: no match found
 suggestion: run `rsmpl-git --inspect src/lib.rs` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`
 ```
 
+When the engine can prove the range (not the pattern) is wrong, it appends
+a zero-discovery retry (T62 probe: the same matcher re-run whole-file,
+count-only). Exactly one match elsewhere appends `— exactly one match
+exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`
+(no inspect needed)`; several matches elsewhere append `— multiple matches
+exist outside this range; widen the range (or add `# scope=file`) and add
+`# allow=many` if intended`. (Counts saturate: matchers stop counting at 2
+under `# allow=one`, so the many-case never claims an exact number.)
+
 ### 25.5 Symbol conflict
 
 Symbol resolution failed.
