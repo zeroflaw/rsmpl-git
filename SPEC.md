@@ -3895,7 +3895,11 @@ Rules:
   changes exist. With no changes `--context` is a no-op like the budget flag.
 - `--context` is rejected with `--inspect` (same message and exit 2 as the
   D.2.1 flag, same `RSMPL_IO_CONFLICT` envelope); non-numeric values stay
-  plain-text clap parse errors.
+  plain-text clap parse errors. The flag stays an `Option` (default applied
+  as 3 when absent) rather than a clap `default_value_t` so the CLI can tell
+  absent from explicitly passed (even an explicit `--context 3` is rejected
+  with `--inspect`); hence the default is documented manually in the help
+  text instead of clap's automatic `[default: 3]` marker.
 
 ### D.3 Range discovery (`--inspect <path>`)
 

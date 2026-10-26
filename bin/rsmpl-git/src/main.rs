@@ -77,6 +77,10 @@ struct Cli {
     diff_max_lines: Option<usize>,
 
     /// Lowering context radius (default 3, `0` valid; SPEC D.2.2).
+    // NOTE: stays `Option` (not `default_value_t = 3`) so absent-vs-explicit
+    // is detectable: `--inspect` rejects an explicitly passed `--context`
+    // (even `--context 3`); the default is applied via `unwrap_or(3)`.
+    // Plain `//` (not `///`) keeps this out of `--help` (T46 token budget).
     #[arg(long, value_name = "N")]
     context: Option<usize>,
 

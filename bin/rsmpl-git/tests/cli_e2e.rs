@@ -1395,3 +1395,61 @@ fn context_rejected_with_inspect() {
         "got: {stderr}"
     );
 }
+
+// --- T53: `--context` stays `Option` so absent-vs-explicit is detectable ---
+
+#[test]
+fn context_help_documents_default_manually() {
+    // The default (3) is rendered by hand in the help text, not by clap's
+    // `[default: 3]` (which needs `default_value_t` and would erase the
+    // absent-vs-explicit distinction `--inspect` relies on). Pin the marker
+    // so dropping it breaks loudly instead of silently hiding the default.
+    let out = Command::new(binary()).arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        help.contains("--context") && help.contains("(default 3"),
+        "got: {help}"
+    );
+}
+
+#[test]
+fn explicit_default_context_three_rejected_with_inspect() {
+    // Even the default value, when passed explicitly, is rejected with
+    // `--inspect` — proof the `Option` (absent-vs-explicit) shape is
+    // load-bearing and `default_value_t = 3` would be a behavior change.
+    // Both modes pinned per T47 (text block / JSON envelope).
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let out = run(dir.path(), &["--inspect", "src/lib.rs", "--context", "3"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("--inspect does not take --diff-max-lines/--context"),
+        "got: {stderr}"
+    );
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    let json_out = run(
+        dir.path(),
+        &[
+            "--inspect",
+            "src/lib.rs",
+            "--context",
+            "3",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(json_out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout))
+        .expect("failure stdout must be a JSON envelope");
+    assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--inspect does not take --diff-max-lines/--context"),
+        "got: {v}"
+    );
+    assert!(v["error"]["suggestion"].is_string(), "got: {v}");
+}
