@@ -124,6 +124,20 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
         patch.files.push(sec);
     }
 
+    if patch.files.is_empty() {
+        // T59: an empty patch (zero file sections) is an authoring typo,
+        // not a no-op — fail fast per SPEC 2.6 instead of reporting success.
+        return Err(StructuredError::new(
+            ErrorCode::ParseConflict,
+            "empty patch: no `diff --git` file sections",
+        )
+        .with_suggestion(
+            "provide at least one `diff --git a/.. b/..` file section with a hunk \
+             (see SPEC 6 minimal recipe); check for an empty --patch/--file/stdin",
+        )
+        .into());
+    }
+
     validate_patch(&patch)?;
 
     Ok(patch)
@@ -1027,6 +1041,16 @@ mod tests {
                 assert_eq!(oh.lines.len(), 3);
             }
             _ => panic!("expected ordinary"),
+        }
+    }
+
+    #[test]
+    fn empty_patch_rejected() {
+        for text in ["", "  \n\n", "# rsmpl-git=0.1\n"] {
+            let e = parse_patch(text).unwrap_err();
+            let msg = format!("{e}");
+            assert!(msg.contains("RSMPL_PARSE_CONFLICT"), "got: {msg}");
+            assert!(msg.contains("diff --git"), "got: {msg}");
         }
     }
 }

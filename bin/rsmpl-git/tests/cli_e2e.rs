@@ -124,6 +124,40 @@ fn no_match_exits_two_with_structured_error() {
 }
 
 #[test]
+fn empty_patch_fails_text() {
+    // T59: zero file sections is an authoring typo, not a no-op.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let out = run(dir.path(), &["--patch", ""]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+}
+
+#[test]
+fn empty_patch_fails_json_envelope() {
+    // T59: same failure in machine mode carries the JSON envelope.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg("")
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PARSE_CONFLICT")
+    );
+}
+
+#[test]
 fn stdin_patch_applies() {
     use std::io::Write;
     use std::process::Stdio;

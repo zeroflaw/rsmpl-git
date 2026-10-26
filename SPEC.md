@@ -349,7 +349,7 @@ The `-`, `+`, and context lines in an RSmPL hunk, parsed as Rust semantic patter
 A patch file consists of zero or more file sections.
 
 ```ebnf
-patch           ::= file_section*
+patch           ::= file_section+
 
 file_section    ::= git_file_header file_body
 
@@ -387,7 +387,12 @@ The file contains:
 
 The `---` / `+++` / `index` lines above are optional file metadata
 (`git_metadata*` in the grammar); the parser only requires the
-`diff --git` line before the hunks. The canonical agent recipe is
+`diff --git` line before the hunks. An empty patch (zero file
+sections) is rejected with `RSMPL_PARSE_CONFLICT`: an empty
+`--patch`/`--file`/stdin is almost certainly an authoring typo,
+and silent success would violate Section 2.6. (A non-empty patch
+whose hunks lower to no changes still succeeds with an empty
+diff.) The canonical agent recipe is
 therefore the 1-line header:
 
 ```diff
