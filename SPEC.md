@@ -3882,7 +3882,8 @@ cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 Both sources stay: `--patch` keeps small patches temp-file-free while
 `--file` avoids shell-quoting for large patches; a unified
 `<text|@file|->` spelling would add quoting ambiguity for zero token
-savings.
+savings. Canonical stdin spelling is `--patch -`; `--file -` is the
+symmetric alias (same bytes, same behavior).
 
 ### D.2 Machine-readable reports (`--format json`)
 
@@ -4034,6 +4035,13 @@ Rules:
   --diff-max-lines 2` shows the first 2 lines of the 0-context diff;
   `--context 0 --diff-max-lines 0` omits with `diff_truncated: true` iff
   changes exist. With no changes `--context` is a no-op like the budget flag.
+- Four-lever summary: `--format` chooses the report language (text diff
+  vs JSON object), `--diff-max-lines` trims only the reported `diff`
+  preview, `--context` reshapes the lowering that `--check`/apply/
+  `--output` all consume, and `--output` always saves the full lowering —
+  so `--format json --diff-max-lines 0 --context 0 --check --output
+  full.patch` verifies with zero preview tokens while keeping the
+  appliable patch on disk.
 - `--context` is rejected with `--inspect` (same message and exit 2 as the
   D.2.1 flag, same `RSMPL_IO_CONFLICT` envelope); non-numeric values stay
   plain-text clap parse errors. The flag stays an `Option` (default applied

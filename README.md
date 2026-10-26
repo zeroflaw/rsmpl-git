@@ -43,6 +43,9 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --check
   rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check --output full.patch
   # Shrink the lowering itself (still appliable): 0 context lines, stats exact:
   rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
+  # Rule of thumb: `--format` picks text vs JSON, `--diff-max-lines` trims
+  # the preview only, `--context` shrinks the lowering itself, `--output`
+  # always saves the full diff.
 
 # Discover valid @@ ranges without reading whole files:
 rsmpl-git --repo ./my-repo --inspect src/lib.rs
