@@ -114,10 +114,10 @@ Piped patches avoid temp files (SPEC D.1). JSON prints
 
 | Code | Fix |
 |---|---|
-| `RSMPL_RANGE_CONFLICT` | range exceeds file / not original coordinates — re-`--inspect` |
+| `RSMPL_RANGE_CONFLICT` | range exceeds file — re-run the suggested `rsmpl-git --inspect <file>` command |
 | `RSMPL_PARSE_CONFLICT` | target file doesn't parse as Rust — read the file |
 | `RSMPL_PATTERN_CONFLICT` | pattern doesn't parse — check SPEC 18.6 table |
-| `RSMPL_MATCH_CONFLICT` | `no match found` (range/pattern wrong, add `# optional`) or too many (add `# allow=many`) |
+| `RSMPL_MATCH_CONFLICT` | `no match found` — re-run the suggested `rsmpl-git --inspect <file>` (add `--calls` for calls), then fix range/pattern or add `# optional`; too many matches — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |

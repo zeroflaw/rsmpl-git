@@ -2274,7 +2274,8 @@ General `let`-statement, expression, and type patterns (Section 18.1, v0.1
 note) cover a bounded shape set. Anything outside it fails fast: either at
 compile time with the exact diagnostic below, or at match time as a silent
 candidate rejection that surfaces as `RSMPL_MATCH_CONFLICT` with reason `no
-match found` and suggestion ``check the range and pattern, or add `# optional` ``.
+match found` and a suggestion carrying the exact `rsmpl-git --inspect
+<file>` discovery command.
 There is no partial matching and no guessing; check this table before
 authoring instead of iterating against `--check`.
 
@@ -2840,7 +2841,11 @@ rule: rename_calls
 file: src/lib.rs
 old_range: 40..47
 reason: range exceeds file length
+suggestion: run `rsmpl-git --inspect src/lib.rs` to list valid ranges
 ```
+
+The `suggestion` carries the exact discovery command (repo-relative
+path) so an agent repairs without guessing flags.
 
 ### 25.2 Parse conflict
 
@@ -2875,6 +2880,17 @@ old_range: 40..47
 expected: one
 actual: three
 suggestion: add "# allow=many" if multiple rewrites are intended
+```
+
+A zero-match failure carries the exact discovery command instead:
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: rename_calls
+file: src/lib.rs
+old_range: 40..47
+reason: no match found
+suggestion: run `rsmpl-git --inspect src/lib.rs` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`
 ```
 
 ### 25.5 Symbol conflict
@@ -3778,7 +3794,8 @@ prints one JSON object to stdout:
   parsing stderr prose:
 
 ```json
-{"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "check the range and pattern, or add `# optional`"}}
+{"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "run `rsmpl-git --inspect src/lib.rs` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"}}
+
 ```
 
 - The envelope always carries all six keys (`code rule file range reason

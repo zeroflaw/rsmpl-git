@@ -20,7 +20,9 @@ pub fn ensure_match_count(
                 .with_rule(rule)
                 .with_file(file)
                 .with_range(range)
-                .with_suggestion("check the range and pattern, or add `# optional`"),
+                .with_suggestion(format!(
+                    "run `rsmpl-git --inspect {file}` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"
+                )),
         ),
         (1, _, _) => Ok(()),
         (_, Allow::Many, _) => Ok(()),
@@ -67,4 +69,36 @@ fn range_err(rule: &str, file: &str, start: u32, len: u32, n: u32) -> Structured
     .with_rule(rule)
     .with_file(file)
     .with_range(format!("{start}..{}", start + len))
+    .with_suggestion(format!(
+        "run `rsmpl-git --inspect {file}` to list valid ranges"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_match_suggestion_carries_inspect_command() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "40..47",
+        )
+        .unwrap_err();
+        let s = err.suggestion.expect("suggestion");
+        assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
+        assert!(s.contains("--calls"), "got: {s}");
+        assert!(s.contains("# optional"), "got: {s}");
+    }
+
+    #[test]
+    fn range_suggestion_carries_inspect_command() {
+        let err = range_err("r", "src/lib.rs", 90, 8, 10);
+        let s = err.suggestion.expect("suggestion");
+        assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
+    }
 }

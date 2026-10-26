@@ -197,8 +197,44 @@ fn json_envelope_on_match_failure() {
         "got: {err}"
     );
     assert!(err["suggestion"].is_string(), "got: {err}");
+    assert!(
+        err["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("--inspect src/lib.rs"),
+        "suggestion must carry the discovery command, got: {err}"
+    );
     // File untouched by the failed run.
     assert!(read(dir.path(), "src/lib.rs").contains("fn a()"));
+}
+
+#[test]
+fn json_envelope_on_range_failure_carries_inspect_command() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -90,8 +90,8 @@ rule=r\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    let err = &v["error"];
+    assert_eq!(err["code"], serde_json::json!("RSMPL_RANGE_CONFLICT"));
+    assert_eq!(err["file"], serde_json::json!("src/lib.rs"));
+    assert!(
+        err["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("--inspect src/lib.rs"),
+        "suggestion must carry the discovery command, got: {err}"
+    );
 }
 
 #[test]
