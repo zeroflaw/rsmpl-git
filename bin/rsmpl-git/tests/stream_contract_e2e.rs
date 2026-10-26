@@ -285,3 +285,44 @@ fn unknown_header_tag_fails_fast_text_and_json() {
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
 }
+
+#[test]
+fn unknown_root_and_kind_fail_fast_text_and_json() {
+    // T110+T111 (SPEC 2.6/13.4/15.1): unimplemented `# root=` values and
+    // never-binding metavar kinds fail fast. Text keeps the stderr
+    // diagnostic; JSON carries the stdout-only envelope (exit 2).
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    for (patch, needle) in [
+        (
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# root=bogus\n- foo\n+ bar\n",
+            "unknown `# root=` value",
+        ),
+        (
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# lifetime L\n- foo(L)\n+ bar(L)\n",
+            "is not supported in v0.1",
+        ),
+    ] {
+        let out = run(dir.path(), &["--patch", patch]);
+        assert_eq!(out.status.code(), Some(2), "patch: {patch}");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+        assert!(stderr.contains(needle), "got: {stderr}");
+        let out = Command::new(binary())
+            .arg("--patch")
+            .arg(patch)
+            .arg("--repo")
+            .arg(dir.path())
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "patch: {patch}");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+        assert_eq!(
+            v["error"]["code"],
+            serde_json::json!("RSMPL_PATTERN_CONFLICT")
+        );
+    }
+}

@@ -118,6 +118,41 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         })
         .next_back();
 
+    // T110: `# root=` is closed to the four implemented force-paths (SPEC
+    // 13.4). Anything else previously fell through to heuristic routing — a
+    // silent no-op against SPEC 2.6 (same class as T113).
+    if let Some(r) = root.as_deref() {
+        if !matches!(r, "item" | "expr" | "stmt" | "type") {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "unknown `# root=` value `{r}` (only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4)"
+                ),
+            ));
+        }
+    }
+
+    // T111: reject metavariable kinds with no engine binding (SPEC 15.1).
+    // `identifier/path/lifetime/field` parse but never bind — agents pay
+    // tokens for `# lifetime L` that can never match as a lifetime.
+    for (kind, name) in &table.declared {
+        if matches!(
+            kind,
+            MetavarKind::Identifier
+                | MetavarKind::Path
+                | MetavarKind::Lifetime
+                | MetavarKind::Field
+        ) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "`# {} {name}` is not supported in v0.1 (see SPEC 15.1 for the implemented kinds)",
+                    kind.as_str()
+                ),
+            ));
+        }
+    }
+
     let minus_raw = full_minus_text(hunk);
     let plus_raw = full_plus_text(hunk);
     let context_raw = hunk.context_text();
@@ -1200,6 +1235,55 @@ mod tests {
                 rendered.contains(want),
                 "SPEC 18.6 drift: want {want:?} in:\n{rendered}"
             );
+        }
+    }
+
+    #[test]
+    fn unknown_root_values_rejected() {
+        // T110: only item/expr/stmt/type have a force path; anything else
+        // must fail fast instead of silently falling through to heuristic
+        // routing (SPEC 2.6).
+        for bad in ["pat", "impl_item", "trait_item", "bogus"] {
+            let patch = format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root={bad}\n- foo\n+ bar\n"
+            );
+            let err = compile(&hunk_of(&patch)).unwrap_err();
+            assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+            assert!(
+                err.render().contains("unknown `# root=` value"),
+                "missing needle for root={bad}: {}",
+                err.render()
+            );
+        }
+        // Supported roots still route.
+        let ok = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root=expr\n# expr E\n- foo(E)\n+ bar(E)\n",
+        );
+        assert!(compile(&ok).is_ok());
+    }
+
+    #[test]
+    fn unsupported_metavar_kinds_rejected() {
+        // T111: identifier/path/lifetime/field have no engine binding; they
+        // must fail fast instead of parsing as generic placeholders (SPEC 2.6).
+        for kind in ["identifier", "path", "lifetime", "field"] {
+            let patch = format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# {kind} X\n- foo(X)\n+ bar(X)\n"
+            );
+            let err = compile(&hunk_of(&patch)).unwrap_err();
+            assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+            assert!(
+                err.render().contains("is not supported in v0.1"),
+                "missing needle for kind={kind}: {}",
+                err.render()
+            );
+        }
+        // Supported-kind controls still compile (incl. structural S/M/TT).
+        for decl in ["# expr E", "# stmt S", "# macro M", "# token_tree TT"] {
+            let patch = format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n{decl}\n- foo\n+ bar\n"
+            );
+            assert!(compile(&hunk_of(&patch)).is_ok(), "decl {decl} broke");
         }
     }
 }

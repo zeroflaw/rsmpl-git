@@ -1121,10 +1121,12 @@ Recommended root directives:
 # root=expr
 # root=stmt
 # root=type
-# root=pat
-# root=impl_item
-# root=trait_item
 ```
+
+Any other `# root=` value (`pat`, `impl_item`, `trait_item`, or a typo)
+is rejected with `RSMPL_PATTERN_CONFLICT` — only the four force paths above
+are implemented in v0.1, and silently falling through to heuristic routing
+would violate Section 2.6. The remaining parse contexts are future work.
 
 ---
 
@@ -1712,27 +1714,32 @@ RSmPL deliberately allows compact metavariable use such as `E`, `T`, and `I`, be
 
 ### 15.1 Supported metavariable kinds
 
+Implemented in v0.1 (fail fast on anything else):
+
 | Kind | Matches |
 |---|---|
-| `identifier` | Rust identifier |
-| `path` | Rust path |
-| `symbol` | resolved semantic symbol |
+| `symbol` | resolved semantic symbol (via `# symbol Name=path`, not `# symbol Name`) |
 | `expr` | expression |
-| `stmt` | statement |
+| `stmt` | accepted as a structural placeholder (e.g. the unused `# stmt S` in `let` examples); not a distinct statement binder |
 | `item` | item, including its attached attribute/doc-comment envelope unless overridden by `# attrs=...` |
 | `type` | type |
-| `pat` | pattern |
-| `lifetime` | lifetime |
+| `pat` | pattern (whole-pattern placeholder, concrete pattern, or `P: T` parts in `let`) |
 | `generic_params` | generic parameter list |
 | `where_clause` | where clause |
 | `visibility` | visibility marker such as absent, `pub`, `pub(crate)` |
 | `qualifier` | one function qualifier |
 | `qualifier_list` | zero or more function qualifiers |
-| `attributes` | zero or more attributes or doc-comment-derived `#[doc = ...]` attributes |
-| `block` | block expression or function body |
-| `field` | struct field |
+| `attributes` | zero or more attributes or doc-comment-derived `#[doc = ...]` attributes (structural) |
+| `block` | block expression or function body (structural) |
 | `macro` | macro path/name |
 | `token_tree` | macro token tree or token sequence |
+
+Rejected in v0.1 with `RSMPL_PATTERN_CONFLICT`: `identifier`, `path`,
+`lifetime`, `field`. These parse as declarations but have no kind-specific
+engine binding — an agent authoring `# lifetime L` pays tokens for a
+lifetime match that can never happen (Section 2.6). `stmt`, `attributes`,
+`block`, `macro`, and `token_tree` are accepted as structural placeholders
+(kind unchecked), not as distinct kind-checked binders.
 
 ### 15.2 Naming
 
@@ -1768,7 +1775,6 @@ The engine may reject lowercase metavariable names unless explicitly configured.
 # type T
 # item I
 # pat P
-# identifier Name
 ```
 
 ### 15.4 Metavariable use and literal shadowing
@@ -2938,7 +2944,10 @@ reason: target file does not parse as Rust
 The RSmPL pattern failed to parse. Unknown directives (`# foo`,
 `# foo=bar`), `# edition=*`, and `# format_scope=*` are rejected here
 (no silent ignore, Section 9.6), as is any hunk-header `k=v` tag other
-than `rule=` (no silent dead tags, Section 8.3).
+than `rule=` (no silent dead tags, Section 8.3), any `# root=` value other
+than `item/expr/stmt/type` (no silent heuristic fallthrough, Section 13.4),
+and any `# identifier/# path/# lifetime/# field` metavariable declaration
+(no kind-specific binding in v0.1, Section 15.1).
 
 ```text
 RSMPL_PATTERN_CONFLICT
