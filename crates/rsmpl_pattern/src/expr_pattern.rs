@@ -194,6 +194,26 @@ pub fn normalize_trailing_commas(text: &str) -> String {
     text.to_string()
 }
 
+/// True when the (pre-placeholder) pattern text is `let`-led: `let`
+/// followed by whitespace, `(`, or `[`. Such patterns are statements and
+/// must reach the `let` gate, never the call router.
+fn is_let_led(stripped: &str) -> bool {
+    let t = stripped.trim_start();
+    t.strip_prefix("let").is_some_and(|rest| {
+        rest.starts_with(char::is_whitespace) || rest.starts_with('(') || rest.starts_with('[')
+    })
+}
+
+/// Statement keywords that can never be a plain-call callee. A pattern
+/// like `if (x)` is not a call to `if`; returning `Raw` lets the general
+/// matcher produce the correct fail-fast diagnostic.
+fn is_statement_keyword(callee: &str) -> bool {
+    matches!(
+        callee,
+        "let" | "if" | "match" | "for" | "while" | "loop" | "return" | "else"
+    )
+}
+
 /// High-level classify used by `pattern.rs`.
 pub fn classify_call_pattern(
     minus_raw: &str,
@@ -202,6 +222,18 @@ pub fn classify_call_pattern(
     let (stripped, literals) = strip_literal_quotes(minus_raw)?;
     let lit_strs: Vec<String> = literals.into_iter().map(|l| l.literal).collect();
     let (sub, maps) = ExprPattern::placeholder_expr(&stripped, table);
+    // `let`-led patterns are statements, not calls: bypass call/method
+    // routing so `let (E, x) = ...` reaches the `let` gate (SPEC 18.6)
+    // instead of classifying as a `let(...)` call.
+    if is_let_led(&stripped) {
+        return Ok((
+            ExprPatternKind::Raw {
+                text: normalize_trailing_commas(&sub),
+            },
+            maps,
+            lit_strs,
+        ));
+    }
     // Macro invocation `name!(...)`.
     if let Some(bang) = sub.find('!') {
         let before = sub[..bang].trim();
@@ -217,36 +249,46 @@ pub fn classify_call_pattern(
             ));
         }
     }
-    // Method call `recv.method(args)`.
+    // Method call `recv.method(args)`. A receiver carrying `=`/`;` (e.g.
+    // `let x = a.b(c)`, already bypassed above for `let`) or a method
+    // containing whitespace is not a method call; fall through.
     if let Some(dot) = sub.rfind('.') {
         if let Some(paren) = sub[dot..].find('(') {
             let recv = sub[..dot].trim().to_string();
             let method = sub[dot + 1..dot + paren].trim().to_string();
-            let args_inner = sub[dot + paren + 1..]
+            let recv_ok = !recv.is_empty() && !recv.contains('=') && !recv.contains(';');
+            let method_ok = !method.is_empty() && !method.contains(char::is_whitespace);
+            if recv_ok && method_ok {
+                let args_inner = sub[dot + paren + 1..]
+                    .rsplit_once(')')
+                    .map(|(a, _)| a)
+                    .unwrap_or("");
+                let args = classify_args(args_inner, table);
+                return Ok((
+                    ExprPatternKind::MethodCall {
+                        receiver: recv,
+                        method,
+                        args,
+                    },
+                    maps,
+                    lit_strs,
+                ));
+            }
+        }
+    }
+    // Plain call `callee(args)`. A callee containing whitespace or a Rust
+    // statement keyword (`let`/`if`/`match`/...) is not a call callee;
+    // return `Raw` so the caller can try the general matcher.
+    if let Some(paren) = sub.find('(') {
+        let callee = sub[..paren].trim().to_string();
+        if !callee.contains(char::is_whitespace) && !is_statement_keyword(&callee) {
+            let args_inner = sub[paren + 1..]
                 .rsplit_once(')')
                 .map(|(a, _)| a)
                 .unwrap_or("");
             let args = classify_args(args_inner, table);
-            return Ok((
-                ExprPatternKind::MethodCall {
-                    receiver: recv,
-                    method,
-                    args,
-                },
-                maps,
-                lit_strs,
-            ));
+            return Ok((ExprPatternKind::Call { callee, args }, maps, lit_strs));
         }
-    }
-    // Plain call `callee(args)`.
-    if let Some(paren) = sub.find('(') {
-        let callee = sub[..paren].trim().to_string();
-        let args_inner = sub[paren + 1..]
-            .rsplit_once(')')
-            .map(|(a, _)| a)
-            .unwrap_or("");
-        let args = classify_args(args_inner, table);
-        return Ok((ExprPatternKind::Call { callee, args }, maps, lit_strs));
     }
     Ok((
         ExprPatternKind::Raw {
@@ -288,5 +330,39 @@ mod tests {
     #[test]
     fn parses_concrete_expr() {
         assert!(try_parse_expr("foo(x)").is_ok());
+    }
+
+    #[test]
+    fn let_led_patterns_bypass_call_router() {
+        // T16a: `let (...)` must not classify as a `let(...)` call; the
+        // `Raw` shape lets `pattern.rs` try the general `let` gate.
+        for text in [
+            "let (E, x) = E;",
+            "let [E, x] = E;",
+            "let x = E;",
+            "let x = foo(E)",
+        ] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(
+                matches!(kind, ExprPatternKind::Raw { .. }),
+                "{text:?} got: {kind:?}"
+            );
+        }
+        // Genuine calls are untouched.
+        let (kind, _, _) = classify_call_pattern("foo(E)", &table()).unwrap();
+        assert!(matches!(kind, ExprPatternKind::Call { .. }));
+        let (kind, _, _) = classify_call_pattern("Receiver.old_method(Arg)", &table()).unwrap();
+        assert!(matches!(kind, ExprPatternKind::MethodCall { .. }));
+    }
+
+    #[test]
+    fn statement_keywords_are_not_callees() {
+        for text in ["if (E)", "match (E)", "return (E)"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(
+                matches!(kind, ExprPatternKind::Raw { .. }),
+                "{text:?} got: {kind:?}"
+            );
+        }
     }
 }

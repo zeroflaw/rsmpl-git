@@ -2417,9 +2417,14 @@ matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
 — so in practice C6 fires for every empty-`+` expression hunk. Delete a
 `let` statement instead (whole lines), or write an explicit replacement.
 
-Routing trap: `let (E, x) = ...` never reaches gate C8 — the tuple parens
-make the call router claim it as a `let(...)` call pattern. Non-call shapes
-such as `let [E, x] = ...` reach the `let` gate.
+Routing note: `let`-led patterns always reach the `let` gate — a
+`let`-keyword callee guard stops the call router claiming `let (E, x)`
+as a `let(...)` call (likewise `let [E, x]` and `let x = foo(E)`).
+`let (E, x) = ...` therefore fails at gate C1 (`...` rejected) and
+`let (E, x) = E;` at gate C8 (embedded metavariables), not with a bogus
+`no match found` from the call matcher. Callees containing whitespace or
+a statement keyword (`if`/`match`/`return`/...) likewise fall through to
+the general matcher.
 
 #### Match-time silent rejections (surface as `no match found`)
 

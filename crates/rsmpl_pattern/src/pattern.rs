@@ -1223,9 +1223,9 @@ mod tests {
                 "v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type",
             ),
             // C8: embedded metavariable inside the `let` bound pattern.
-            // (Slice shape: a paren tuple after `let` would route to the
-            // call matcher as `let(...)`; `[E, x]` reaches the general
-            // matcher and trips the embedded-metavariable gate.)
+            // (T16a: paren tuples reach the gate too — the `let`-led
+            // bypass stops the call router claiming `let(...)`; the
+            // slice shape below pins the C8 diagnostic byte-for-byte.)
             (
                 format!(
                     "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let [E, x] = E;\n+ let [E, x] = E;\n"
@@ -1254,6 +1254,37 @@ mod tests {
                 "SPEC 18.6 drift: want {want:?} in:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn paren_tuple_let_reaches_let_gate() {
+        // T16a router-precision pin: `let (E, x)` must reach the general
+        // `let` gate (C8) instead of classifying as a `let(...)` call.
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let patch = format!(
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let (E, x) = E;\n+ let (E, x) = E;\n"
+        );
+        let err = compile(&hunk_of(&patch)).unwrap_err();
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+        assert!(
+            err.render().contains("embedded metavariables elsewhere"),
+            "paren-tuple let missed the C8 gate:\n{}",
+            err.render()
+        );
+        // Concrete paren-tuple lets compile to the Stmt shape.
+        let ok = format!(
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n- let (a, b) = y;\n+ let (c, d) = y;\n"
+        );
+        assert!(
+            matches!(
+                compile(&hunk_of(&ok)).unwrap().kind,
+                PatternKind::General {
+                    shape: GeneralShape::Stmt,
+                    ..
+                }
+            ),
+            "concrete paren-tuple let should be General::Stmt"
+        );
     }
 
     #[test]
