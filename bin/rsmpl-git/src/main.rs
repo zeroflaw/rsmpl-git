@@ -17,6 +17,8 @@
 //! rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
 //! # Scan a whole subtree in one call (grep-style `file: kind name s-e`):
 //! rsmpl-git --repo ./my-repo --inspect src/ --calls
+//! # Bound large scans so they stay token-efficient:
+//! rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
@@ -93,6 +95,13 @@ struct Cli {
     /// reading the whole file). Requires `--inspect`.
     #[arg(long)]
     calls: bool,
+
+    /// With `--inspect`, cap the total number of listed entries
+    /// (items + calls combined) so large subtree scans stay token-bounded.
+    /// Excess entries are omitted with a stderr `truncated:` marker (text)
+    /// or `"truncated": true` (JSON). Requires `--inspect`.
+    #[arg(long, value_name = "N")]
+    max_items: Option<usize>,
 }
 
 /// CLI failure: structured patch/IO errors (JSON-enveloped with
@@ -158,6 +167,12 @@ fn run() -> Result<(), CliError> {
     if cli.calls && cli.inspect.is_none() {
         return Err(CliError::Usage(
             "--calls requires --inspect <path>".to_string(),
+        ));
+    }
+
+    if cli.max_items.is_some() && cli.inspect.is_none() {
+        return Err(CliError::Usage(
+            "--max-items requires --inspect <path>".to_string(),
         ));
     }
 
@@ -354,12 +369,17 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
     } else {
         None
     };
+    let cap = cli.max_items.unwrap_or(usize::MAX);
+    let total = items.len() + calls.as_ref().map_or(0, Vec::len);
+    let truncated = total > cap;
+    let omitted = total.saturating_sub(cap.min(total));
+    let (items_out, calls_out) = truncate_single(items, calls, cap);
     match cli.format {
         Format::Json => {
-            let payload = if let Some(calls) = calls {
-                serde_json::json!({ "path": rel_str, "items": items, "calls": calls })
+            let payload = if let Some(calls) = calls_out {
+                serde_json::json!({ "path": rel_str, "items": items_out, "calls": calls, "truncated": truncated })
             } else {
-                serde_json::json!({ "path": rel_str, "items": items })
+                serde_json::json!({ "path": rel_str, "items": items_out, "truncated": truncated })
             };
             println!(
                 "{}",
@@ -368,17 +388,36 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
             );
         }
         Format::Text => {
-            for i in &items {
+            for i in &items_out {
                 println!("{} {} {}-{}", i.kind, i.name, i.start, i.end);
             }
-            if let Some(calls) = calls {
+            if let Some(calls) = calls_out {
                 for c in &calls {
                     println!("{} {} {}-{}", c.kind, c.name, c.start, c.end);
                 }
             }
+            if truncated {
+                eprintln!(
+                    "truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)"
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// Truncate a single-file inspect result to a global `cap` over
+/// `items ++ calls` (items first, today's order). Returns the kept slices.
+fn truncate_single(
+    items: Vec<inspect::ItemInfo>,
+    calls: Option<Vec<inspect::CallInfo>>,
+    cap: usize,
+) -> (Vec<inspect::ItemInfo>, Option<Vec<inspect::CallInfo>>) {
+    let take_items = items.len().min(cap);
+    let remaining = cap.saturating_sub(take_items);
+    let items_out = items.into_iter().take(take_items).collect();
+    let calls_out = calls.map(|c| c.into_iter().take(remaining).collect());
+    (items_out, calls_out)
 }
 
 /// Directory scan for `--inspect <dir>`: one call lists items (+ calls
@@ -386,10 +425,12 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
 ///
 /// Text mode prints grep-style `rel: kind name s-e` lines (files sorted,
 /// items-then-calls within each file; files with no entries emit nothing).
-/// JSON mode prints `{"path","files":[{"path","items"[, "calls"]}]}` with
-/// one entry per successfully parsed `.rs` file. Unreadable/unparseable
-/// files are skipped with a stderr warning so one broken file never blocks
-/// the whole scan (single-inspect it for the full parse detail).
+/// JSON mode prints `{"path","files":[{"path","items"[, "calls"]}],
+/// "truncated": bool}` with one entry per successfully parsed `.rs` file.
+/// Unreadable/unparseable files are skipped with a stderr warning so one
+/// broken file never blocks the whole scan (single-inspect it for the full
+/// parse detail). With `--max-items N` at most `N` entries are emitted
+/// globally (text: stderr `truncated:` marker; JSON: `"truncated": true`).
 fn run_inspect_dir(
     cli: &Cli,
     rel: &std::path::Path,
@@ -398,80 +439,142 @@ fn run_inspect_dir(
     let rel_str = rel.to_string_lossy().to_string();
     let mut abs_files = inspect::collect_rs_files(abs);
     abs_files.sort_by_key(|a| rel_display(&cli.repo, a));
-    if cli.format == Format::Json {
-        let mut files = Vec::new();
-        for abs_file in &abs_files {
-            let rel_file = rel_display(&cli.repo, abs_file);
-            let text = match std::fs::read_to_string(abs_file) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("warning: skipping {rel_file}: cannot read: {e}");
-                    continue;
-                }
-            };
-            let items = match inspect::inspect_source(&text) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("warning: skipping {rel_file}: {}", e.message);
-                    continue;
-                }
-            };
-            if cli.calls {
-                let calls = match inspect::inspect_calls(&text) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("warning: skipping calls for {rel_file}: {}", e.message);
-                        continue;
-                    }
-                };
-                files.push(serde_json::json!({
-                    "path": rel_file, "items": items, "calls": calls
-                }));
-            } else {
-                files.push(serde_json::json!({ "path": rel_file, "items": items }));
+    // Pass 1: parse everything (warn-and-skip broken files), so the global
+    // `--max-items` cap can be applied deterministically in sorted order.
+    let mut parsed: Vec<(
+        String,
+        Vec<inspect::ItemInfo>,
+        Option<Vec<inspect::CallInfo>>,
+    )> = Vec::new();
+    for abs_file in &abs_files {
+        let rel_file = rel_display(&cli.repo, abs_file);
+        let text = match std::fs::read_to_string(abs_file) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("warning: skipping {rel_file}: cannot read: {e}");
+                continue;
             }
-        }
-        let payload = serde_json::json!({ "path": rel_str, "files": files });
+        };
+        let items = match inspect::inspect_source(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warning: skipping {rel_file}: {}", e.message);
+                continue;
+            }
+        };
+        let calls = if cli.calls {
+            match inspect::inspect_calls(&text) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("warning: skipping calls for {rel_file}: {}", e.message);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        parsed.push((rel_file, items, calls));
+    }
+    let cap = cli.max_items.unwrap_or(usize::MAX);
+    let total: usize = parsed
+        .iter()
+        .map(|(_, items, calls)| items.len() + calls.as_ref().map_or(0, Vec::len))
+        .sum();
+    let truncated = total > cap;
+    let omitted = total.saturating_sub(cap.min(total));
+    if cli.format == Format::Json {
+        let files = truncate_dir_entries(parsed, cap, cli.calls);
+        let payload =
+            serde_json::json!({ "path": rel_str, "files": files, "truncated": truncated });
         println!(
             "{}",
             serde_json::to_string(&payload)
                 .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
         );
     } else {
-        for abs_file in &abs_files {
-            let rel_file = rel_display(&cli.repo, abs_file);
-            let text = match std::fs::read_to_string(abs_file) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("warning: skipping {rel_file}: cannot read: {e}");
-                    continue;
-                }
-            };
-            let items = match inspect::inspect_source(&text) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("warning: skipping {rel_file}: {}", e.message);
-                    continue;
-                }
-            };
-            for i in &items {
+        let mut remaining = cap;
+        for (rel_file, items, calls) in &parsed {
+            for i in items.iter().take(remaining.min(items.len())) {
                 println!("{}: {} {} {}-{}", rel_file, i.kind, i.name, i.start, i.end);
             }
-            if cli.calls {
-                match inspect::inspect_calls(&text) {
-                    Ok(calls) => {
-                        for c in &calls {
-                            println!("{}: {} {} {}-{}", rel_file, c.kind, c.name, c.start, c.end);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("warning: skipping calls for {rel_file}: {}", e.message);
-                    }
+            let used_items = items.len().min(remaining);
+            remaining = remaining.saturating_sub(used_items);
+            if let Some(calls) = calls {
+                for c in calls.iter().take(remaining.min(calls.len())) {
+                    println!("{}: {} {} {}-{}", rel_file, c.kind, c.name, c.start, c.end);
                 }
+                remaining = remaining.saturating_sub(calls.len().min(remaining));
             }
+            if remaining == 0 && truncated {
+                // Stop at the cap; later files are omitted (empty files emit
+                // nothing in text mode anyway).
+                break;
+            }
+        }
+        if truncated {
+            eprintln!(
+                "truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)"
+            );
         }
     }
     Ok(())
+}
+
+/// Truncate directory entries to a global `cap` over `items ++ calls`,
+/// preserving sorted file order and items-then-calls order within a file.
+/// Empty files (no entries) are always kept for coverage; files after the
+/// budget is exhausted are omitted.
+fn truncate_dir_entries(
+    parsed: Vec<(
+        String,
+        Vec<inspect::ItemInfo>,
+        Option<Vec<inspect::CallInfo>>,
+    )>,
+    cap: usize,
+    with_calls: bool,
+) -> Vec<serde_json::Value> {
+    let mut files = Vec::new();
+    let mut remaining = cap;
+    for (rel_file, items, calls) in parsed {
+        if with_calls {
+            let calls = calls.unwrap_or_default();
+            let entry_total = items.len() + calls.len();
+            if entry_total == 0 {
+                files.push(serde_json::json!({ "path": rel_file, "items": [], "calls": [] }));
+                continue;
+            }
+            if remaining == 0 {
+                continue;
+            }
+            let take_items = items.len().min(remaining);
+            remaining = remaining.saturating_sub(take_items);
+            let take_calls = calls.len().min(remaining);
+            remaining = remaining.saturating_sub(take_calls);
+            let items_out: Vec<_> = items.into_iter().take(take_items).collect();
+            let calls_out: Vec<_> = calls.into_iter().take(take_calls).collect();
+            files.push(
+                serde_json::json!({ "path": rel_file, "items": items_out, "calls": calls_out }),
+            );
+            if remaining == 0 {
+                // Later non-empty files are omitted; trailing empty files
+                // would still be appended by later iterations (they cost 0),
+                // which is intended for coverage.
+            }
+        } else {
+            if items.is_empty() {
+                files.push(serde_json::json!({ "path": rel_file, "items": [] }));
+                continue;
+            }
+            if remaining == 0 {
+                continue;
+            }
+            let take_items = items.len().min(remaining);
+            remaining = remaining.saturating_sub(take_items);
+            let items_out: Vec<_> = items.into_iter().take(take_items).collect();
+            files.push(serde_json::json!({ "path": rel_file, "items": items_out }));
+        }
+    }
+    files
 }
 
 /// Repo-relative display path with `/` separators for inspect output.

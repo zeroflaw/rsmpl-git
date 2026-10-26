@@ -40,6 +40,8 @@ rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
 # Scan a whole subtree in one call (grep-style `file: kind name s-e`):
 rsmpl-git --repo ./my-repo --inspect src/ --calls
 rsmpl-git --repo ./my-repo --inspect src --format json
+# Bound large scans so they stay token-efficient (`truncated` in JSON):
+rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
 
 # Apply and save the concrete diff for review:
 rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch --verbose

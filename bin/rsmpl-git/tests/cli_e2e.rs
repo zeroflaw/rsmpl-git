@@ -501,3 +501,227 @@ fn inspect_lists_item_spans() {
     let stdout = String::from_utf8_lossy(&text.stdout).to_string();
     assert!(stdout.contains("fn foo 1-1"), "got: {stdout}");
 }
+
+#[test]
+fn inspect_max_items_caps_dir_text_and_json() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(&dir.path().join(""), "src/a.rs", "struct S;\n");
+    fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+    write(
+        &dir.path().join(""),
+        "src/nested/b.rs",
+        "fn b() {\n    foo(1);\n}\n",
+    );
+
+    // Text mode: 3 items + 1 call = 4 entries; cap 2 keeps the first two.
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--calls", "--max-items", "2"])
+        .output()
+        .unwrap();
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "got: {stdout}");
+    assert!(stdout.contains("src/a.rs: struct S 1-1"), "got: {stdout}");
+    assert!(stdout.contains("src/lib.rs: fn foo 1-1"), "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&text.stderr).to_string();
+    assert!(stderr.contains("truncated:"), "got: {stderr}");
+    assert!(stderr.contains("2 more entries omitted"), "got: {stderr}");
+
+    // JSON mode: same cap, `truncated` true, exactly 2 entries total.
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args([
+            "--inspect",
+            "src",
+            "--calls",
+            "--format",
+            "json",
+            "--max-items",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["truncated"], serde_json::json!(true), "got: {v}");
+    let files = v["files"].as_array().unwrap();
+    let total: usize = files
+        .iter()
+        .map(|f| f["items"].as_array().unwrap().len() + f["calls"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(total, 2, "got: {v}");
+
+    // Uncapped JSON reports `truncated: false` (compat: extra key only).
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--calls", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["truncated"], serde_json::json!(false), "got: {v}");
+}
+
+#[test]
+fn inspect_max_items_single_file_truncates_calls_first() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo() {}\nfn a() {\n    foo(1);\n    obj.method(x);\n    assert_eq!(a, b);\n}\n",
+    );
+
+    // 2 items + 3 calls = 5 entries; cap 2 keeps items only.
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--calls", "--max-items", "2"])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "got: {stdout}");
+    assert!(stdout.contains("fn foo 1-1"), "got: {stdout}");
+    assert!(!stdout.contains("call foo"), "got: {stdout}");
+    assert!(
+        String::from_utf8_lossy(&text.stderr).contains("truncated:"),
+        "got: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+
+    // Cap 3 keeps items + first call.
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--calls", "--max-items", "3"])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    assert!(stdout.contains("call foo 3-3"), "got: {stdout}");
+    assert!(!stdout.contains("method method"), "got: {stdout}");
+
+    // JSON single-file carries `truncated` in both capped and uncapped runs.
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args([
+            "--inspect",
+            "src/lib.rs",
+            "--format",
+            "json",
+            "--max-items",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["items"].as_array().unwrap().len(), 1, "got: {v}");
+    assert_eq!(v["truncated"], serde_json::json!(true), "got: {v}");
+
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["truncated"], serde_json::json!(false), "got: {v}");
+}
+
+#[test]
+fn max_items_without_inspect_is_usage_error() {
+    let dir = init_repo();
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--max-items", "5"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("--max-items requires --inspect"),
+        "got: {stderr}"
+    );
+}
+
+#[test]
+fn inspect_max_items_zero_yields_truncated() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--max-items", "0"])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    assert!(
+        String::from_utf8_lossy(&text.stdout).is_empty(),
+        "got: {}",
+        String::from_utf8_lossy(&text.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&text.stderr).contains("truncated:"),
+        "got: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args([
+            "--inspect",
+            "src/lib.rs",
+            "--format",
+            "json",
+            "--max-items",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert!(v["items"].as_array().unwrap().is_empty(), "got: {v}");
+    assert_eq!(v["truncated"], serde_json::json!(true), "got: {v}");
+
+    // Empty file with cap 0 is not truncated (nothing to omit).
+    write(&dir.path().join(""), "src/empty.rs", "");
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args([
+            "--inspect",
+            "src/empty.rs",
+            "--format",
+            "json",
+            "--max-items",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["truncated"], serde_json::json!(false), "got: {v}");
+}

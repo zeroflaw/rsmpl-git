@@ -3797,7 +3797,42 @@ Rules:
   `warning: skipping <rel>: …` so one broken file never blocks the
   scan; single-inspect that file for the full `RSMPL_PARSE_CONFLICT`.
 - On huge repos scope to a subtree (`--inspect src/net/`) rather than
-  the root; output budgeting is future work.
+  the root, or bound the output with `--max-items N` (D.3.3).
+
+#### D.3.3 Output budget (`--inspect <path> --max-items N`)
+
+Directory scans and call previews are unbounded by default, which can
+exceed an agent's context on large repos. `--max-items N` caps the total
+number of listed entries (`items` + `calls` combined) in deterministic
+sorted order (files lexicographic, items-then-calls within each file):
+
+```sh
+rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
+rsmpl-git --repo ./my-repo --inspect src/lib.rs --max-items 5 --format json
+```
+
+Rules:
+
+- `N` is a global cap, not per-file. The first `N` entries in the
+  single/dir order are emitted; the rest are omitted. `--max-items 0`
+  emits no entries (coverage/headers only). Absent flag means unbounded
+  (backward compatible).
+- Requires `--inspect`; otherwise the CLI exits 2 with
+  `--max-items requires --inspect <path>` (same usage-error class as
+  `--calls` without `--inspect`).
+- Text mode prints at most `N` entry lines to stdout (pure
+  `kind name s-e` / `rel: kind name s-e` lines). When entries were
+  omitted, one stderr marker is printed:
+  `truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)`.
+- JSON mode adds a top-level `"truncated": bool` to both shapes:
+  single `{"path", "items"[, "calls"], "truncated"}` and directory
+  `{"path", "files": [{"path", "items"[, "calls"]}], "truncated"}`.
+  Truncated runs contain fewer entries (partial file arrays, later files
+  omitted); empty files (`items: []`, plus `calls: []` when `--calls`)
+  are still included for coverage because they cost no budget.
+  Uncapped small outputs report `"truncated": false` so agents can always
+  check the key. The per-file `calls` omission rule (D.3.1/D.3.2) is
+  unchanged.
 
 Recommended agent loop:
 
