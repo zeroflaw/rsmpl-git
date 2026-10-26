@@ -89,6 +89,11 @@ marker; hunks with other directives omit it (SPEC 7.1).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`# type T`). Bare `P` never matches `x: T` — write `P: T`.
   Full supported-vs-rejected table: SPEC 18.6.
+- Ordinary hunks: text edits with no `#` lines; headers stay two-sided
+  (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11).
+- Macros: plain call patterns never reach inside macro invocations;
+  `# macro=token_tree` is verbatim-only (`- M!(...)` / `+ N!(...)` renames);
+  edits inside macro bodies go through ordinary hunks (SPEC 21).
 
 ## Loop (SPEC D.3.3)
 
@@ -104,6 +109,8 @@ rsmpl-git --file change.rsmpl                       # apply for real
   review-only, never pipe it to `git apply` (SPEC D.2.1/D.2.2).
 - Lint without a checkout: `--repo /tmp/empty --check` — `no match found`
   is the pass signal (SPEC D.2.4); re-check against the real repo after.
+- Verify the JSON `matches` count equals the sites you read before
+  applying — fewer means a site (e.g. inside a macro) needs an ordinary hunk.
 - Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
   (no input flags means stdin; `--patch -` is the explicit alias,
   `--file -` the symmetric alias, SPEC D.1).
