@@ -390,7 +390,7 @@ The `---` / `+++` / `index` lines above are optional file metadata
 (`git_metadata*` in the grammar); the parser only requires the
 `diff --git` line before the hunks. An empty patch (zero file
 sections) is rejected with `RSMPL_PARSE_CONFLICT`: an empty
-`--patch`/`--file`/stdin is almost certainly an authoring typo,
+`--file`/stdin is almost certainly an authoring typo,
 and silent success would violate Section 2.6. (A non-empty patch
 whose hunks lower to no changes still succeeds with an empty
 diff.) The canonical agent recipe is
@@ -3064,8 +3064,8 @@ hunk: @@ -1,4 +1,5 @@
 A filesystem operation failed: the patch file or stdin could not be read,
 a repo file could not be read, or the `--output` file could not be written.
 Filesystem failures use this code so JSON-mode agents always receive a
-machine-readable envelope. Flag-usage errors (unknown flag, bad value,
-`--patch` plus `--file` together) use this code too, for the same reason:
+machine-readable envelope. Flag-usage errors (unknown flag, bad value)
+use this code too, for the same reason:
 with `--format json` they print the stdout-only envelope (D.2) instead of
 clap's stderr text.
 
@@ -3903,25 +3903,24 @@ whole-file scope (D.3), not a CLI listing mode.
 
 ### D.1 Piped patches (stdin)
 
-No `--patch`/`--file` flags means stdin (Unix filter default), so the
-cheapest spelling needs no input flag at all:
+No `--file` flag means stdin (Unix filter default), so the cheapest
+spelling needs no input flag at all:
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 cat change.rsmpl | rsmpl-git --check
 ```
 
-`--patch -` and `--file -` spell the same stdin read explicitly. Empty
-stdin is rejected with the T59 `RSMPL_PARSE_CONFLICT` (empty input is an
-authoring typo, never silent success). A bare interactive call with no pipe
-blocks on stdin like any Unix filter — pipe or pass `--patch`/`--file`.
+`--file -` spells the same stdin read explicitly. Empty stdin is rejected
+with the T59 `RSMPL_PARSE_CONFLICT` (empty input is an authoring typo,
+never silent success). A bare interactive call with no pipe blocks on
+stdin like any Unix filter — pipe or pass `--file`.
 
-Both sources stay: `--patch` keeps small patches temp-file-free while
-`--file` avoids shell-quoting for large patches; a unified
-`<text|@file|->` spelling would add quoting ambiguity for zero token
-savings. Canonical stdin spelling is bare stdin (no flags); `--patch -`
-is the explicit alias, `--file -` the symmetric alias (same bytes, same
-behavior).
+Two sources cover every case: stdin keeps small patches temp-file-free
+while `--file` avoids shell-quoting for large patches (T135 removed the
+redundant `--patch '<diff>'` inline spelling, which duplicated stdin with
+worse quoting and arg-length failure modes). Canonical stdin spelling is
+bare stdin (no flags); `--file -` is the explicit alias.
 
 ### D.2 Machine-readable reports (`--format json`)
 
@@ -4001,13 +4000,13 @@ prints one JSON object to stdout:
   suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
   or output files, stdin failures, and flag-usage errors.
-- Flag-usage errors (unknown flag, bad value, `--patch` plus `--file`
-  together) are enveloped too: with `--format json` they print the same
-  stdout-only `RSMPL_IO_CONFLICT` envelope (reason = clap's one-line
-  error, suggestion = run `` `rsmpl-git --help` ``) and exit 2. Text mode
-  keeps clap's stderr error. (No-input is not an error: bare stdin
-  is the default, D.1.) One caveat: a missing `--format` value cannot be
-  detected as a json request, so it always takes the text path.
+- Flag-usage errors (unknown flag, bad value) are enveloped too: with
+  `--format json` they print the same stdout-only `RSMPL_IO_CONFLICT`
+  envelope (reason = clap's one-line error, suggestion = run
+  `` `rsmpl-git --help` ``) and exit 2. Text mode keeps clap's stderr
+  error. (No-input is not an error: bare stdin is the default, D.1.)
+  One caveat: a missing `--format` value cannot be detected as a json
+  request, so it always takes the text path.
 
 #### D.2.1 Output budget (`--diff-max-lines N`)
 

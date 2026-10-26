@@ -97,9 +97,10 @@ fn text_unknown_flag_stays_clap() {
 }
 
 #[test]
-fn json_both_inputs_is_envelope() {
-    // `conflicts_with` fires before `run()`; the envelope must still hold.
-    let out = run_raw(&["--patch", "X", "--file", "Y", "--format", "json"]);
+fn json_removed_patch_flag_is_envelope() {
+    // T135 complement to the T128 `--context` pin: the removed `--patch`
+    // spelling is a usage error, so json mode envelops it.
+    let out = run_raw(&["--patch", "X", "--format", "json"]);
     assert_envelope(&out, "--patch");
 }
 

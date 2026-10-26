@@ -38,6 +38,27 @@ fn run(dir: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(binary())
+        .args(extra)
+        .arg("--repo")
+        .arg(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn rename_patch() -> &'static str {
     "diff --git src/lib.rs\n@@ -1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n"
 }
@@ -56,7 +77,7 @@ fn text_apply_is_stdout_quiet() {
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
-    let out = run(dir.path(), &["--patch", rename_patch()]);
+    let out = run_stdin(dir.path(), rename_patch(), &[]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -84,7 +105,7 @@ fn text_check_diff_on_stdout_check_on_stderr() {
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
-    let out = run(dir.path(), &["--patch", rename_patch(), "--check"]);
+    let out = run_stdin(dir.path(), rename_patch(), &["--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -111,10 +132,7 @@ fn json_check_has_no_stderr_check_line() {
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
-    let out = run(
-        dir.path(),
-        &["--patch", rename_patch(), "--format", "json", "--check"],
-    );
+    let out = run_stdin(dir.path(), rename_patch(), &["--format", "json", "--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -143,14 +161,28 @@ fn failing_check_still_writes_output() {
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
     let saved = dir.path().join("lowered.patch");
-    let out = Command::new(binary())
-        .args(["--patch", rename_patch(), "--check", "--output"])
-        .arg(&saved)
-        .arg("--repo")
-        .arg(dir.path())
-        .env("PATH", "/nonexistent-rsmpl-git-bin")
-        .output()
-        .unwrap();
+    let out = {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = Command::new(binary())
+            .args(["--check", "--output"])
+            .arg(&saved)
+            .arg("--repo")
+            .arg(dir.path())
+            .env("PATH", "/nonexistent-rsmpl-git-bin")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(rename_patch().as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
@@ -171,11 +203,10 @@ fn empty_lowering_writes_no_output_file() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
     let saved = dir.path().join("empty.patch");
-    let out = run(
+    let out = run_stdin(
         dir.path(),
+        noop_patch(),
         &[
-            "--patch",
-            noop_patch(),
             "--format",
             "json",
             "--check",
@@ -203,7 +234,7 @@ fn empty_text_check_prints_no_changes() {
     // `(no changes)` to stdout and exits clean without touching git.
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
-    let out = run(dir.path(), &["--patch", noop_patch(), "--check"]);
+    let out = run_stdin(dir.path(), noop_patch(), &["--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -220,14 +251,7 @@ fn json_failure_is_stdout_only() {
     // success `check:` line). `warning:`-only stderr stays allowed.
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg("")
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), "", &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -250,7 +274,7 @@ fn text_failure_keeps_stderr_code() {
     // diagnostic with the structured code.
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
-    let out = run(dir.path(), &["--patch", ""]);
+    let out = run_stdin(dir.path(), "", &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
@@ -263,19 +287,12 @@ fn unknown_header_tag_fails_fast_text_and_json() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x id=y\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("unknown header tag"), "got: {stderr}");
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -303,19 +320,12 @@ fn unknown_root_and_kind_fail_fast_text_and_json() {
             "is not supported in v0.1",
         ),
     ] {
-        let out = run(dir.path(), &["--patch", patch]);
+        let out = run_stdin(dir.path(), patch, &[]);
         assert_eq!(out.status.code(), Some(2), "patch: {patch}");
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
         assert!(stderr.contains(needle), "got: {stderr}");
-        let out = Command::new(binary())
-            .arg("--patch")
-            .arg(patch)
-            .arg("--repo")
-            .arg(dir.path())
-            .args(["--format", "json"])
-            .output()
-            .unwrap();
+        let out = run_stdin(dir.path(), patch, &["--format", "json"]);
         assert_eq!(out.status.code(), Some(2), "patch: {patch}");
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let v: serde_json::Value =

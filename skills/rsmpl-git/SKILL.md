@@ -112,8 +112,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 - Verify the JSON `matches` count equals the sites you read before
   applying — fewer means a site (e.g. inside a macro) needs an ordinary hunk.
 - Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
-  (no input flags means stdin; `--patch -` is the explicit alias,
-  `--file -` the symmetric alias, SPEC D.1).
+  (no input flags means stdin; `--file -` is the explicit alias, SPEC D.1).
 
 ## Errors: code → fix (SPEC 25)
 

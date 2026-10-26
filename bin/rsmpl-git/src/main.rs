@@ -4,8 +4,6 @@
 //!
 //! ```sh
 //! # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-//! # Inline patch:
-//! rsmpl-git --patch '<diff text>'
 //! # Piped patch, no temp file (no input flags means stdin):
 //! cat change.rsmpl | rsmpl-git --check
 //! # From a file, printing the lowered diff without applying:
@@ -41,12 +39,8 @@ enum Format {
     about = "Apply RSmPL-Git semantic patches via lowering to Git patches"
 )]
 struct Cli {
-    /// Inline patch text, or `-` for stdin (no input flags also reads stdin).
-    #[arg(long, conflicts_with = "file")]
-    patch: Option<String>,
-
     /// Patch file path, or `-` for stdin (no input flags also reads stdin).
-    #[arg(long, conflicts_with = "patch")]
+    #[arg(long)]
     file: Option<PathBuf>,
 
     /// Repo worktree (default: .).
@@ -71,13 +65,11 @@ struct Cli {
 }
 
 /// CLI failure: structured patch/IO errors (JSON-enveloped with
-/// `--format json`, SPEC D.2) vs. input-shape usage errors (the defensive
-/// both-inputs arm; clap's own parse errors are enveloped at the
-/// `try_parse` site below). Both print the stdout-only JSON envelope in
+/// `--format json`, SPEC D.2). Clap's own parse errors are enveloped at the
+/// `try_parse` site below. Both print the stdout-only JSON envelope in
 /// json mode (SPEC D.2).
 enum CliError {
     Structured(StructuredError),
-    Usage(String),
 }
 
 impl CliError {
@@ -93,19 +85,6 @@ impl CliError {
 fn main() {
     if let Err(e) = run() {
         match e {
-            CliError::Usage(msg) => {
-                if wants_json() {
-                    // Defensive both-inputs arm (clap `conflicts_with`
-                    // fires first, so this is unreachable in practice):
-                    // same stdout-only envelope as any usage error.
-                    let s = StructuredError::new(ErrorCode::IoConflict, msg)
-                        .with_suggestion("run `rsmpl-git --help` for usage");
-                    let payload = serde_json::json!({ "error": s.to_json() });
-                    println!("{payload}");
-                } else {
-                    eprintln!("{msg}");
-                }
-            }
             CliError::Structured(s) => {
                 if wants_json() {
                     // JSON failures are stdout-only (T89 symmetry with the
@@ -143,12 +122,12 @@ fn wants_json() -> bool {
 
 #[allow(clippy::too_many_lines)]
 fn run() -> Result<(), CliError> {
-    // Usage errors (unknown flag, bad value, `--patch` + `--file`
-    // together) are enveloped as `RSMPL_IO_CONFLICT` JSON on stdout when
-    // `--format json` was requested (SPEC D.2); otherwise clap's own
-    // text error goes to stderr. `wants_json` hand-scans argv because a
-    // failed parse leaves no `Cli` to inspect (T99 pin: both spellings,
-    // any position; a missing `--format` value can't be known → text).
+    // Usage errors (unknown flag, bad value) are enveloped as
+    // `RSMPL_IO_CONFLICT` JSON on stdout when `--format json` was requested
+    // (SPEC D.2); otherwise clap's own text error goes to stderr.
+    // `wants_json` hand-scans argv because a failed parse leaves no `Cli`
+    // to inspect (T99 pin: both spellings, any position; a missing
+    // `--format` value can't be known → text).
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
@@ -168,29 +147,21 @@ fn run() -> Result<(), CliError> {
         }
     };
 
-    let patch_text = match (&cli.patch, &cli.file) {
-        (Some(p), None) if p == "-" => read_stdin()?,
-        (Some(p), None) => p.clone(),
-        (None, Some(f)) if f.as_os_str() == "-" => read_stdin()?,
-        (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| {
+    let patch_text = match &cli.file {
+        Some(f) if f.as_os_str() == "-" => read_stdin()?,
+        Some(f) => std::fs::read_to_string(f).map_err(|e| {
             CliError::io_file(
                 format!("cannot read patch file {}: {e}", f.display()),
                 &f.to_string_lossy(),
             )
         })?,
-        (None, None) => {
+        None => {
             // Unix filter default (T129): no input flags means stdin, so
             // `cat change.rsmpl | rsmpl-git --check` just works. Empty stdin
             // surfaces as the T59 empty-patch `RSMPL_PARSE_CONFLICT`, not
             // silent success. Like any filter, a bare interactive call
-            // blocks on stdin — pipe or pass `--patch`/`--file` instead.
+            // blocks on stdin — pipe or pass `--file` instead.
             read_stdin()?
-        }
-        (Some(_), Some(_)) => {
-            return Err(CliError::Usage(
-                "--patch and --file conflict: provide only one (or neither, to read stdin)"
-                    .to_string(),
-            ));
         }
     };
 

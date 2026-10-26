@@ -126,7 +126,7 @@ rsmpl-git --file change.rsmpl --output full.patch
 ```
 
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
-`--patch '<diff>'` inlines small patches; `--file` avoids quoting for large ones. JSON prints
+`--file` names a patch file (avoids quoting for large patches). JSON prints
 `{rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
 JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes

@@ -65,7 +65,6 @@ fn agents_md_citations_resolve() {
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout).to_string();
     for flag in [
-        "--patch",
         "--file",
         "--repo",
         "--check",

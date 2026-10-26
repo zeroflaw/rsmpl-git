@@ -27,9 +27,6 @@ need no git.
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-# Inline patch (no restatement of unchanged bodies needed):
-rsmpl-git --patch "$(cat change.rsmpl)"
-
 # Piped patch, no temp file (no input flags means stdin):
 cat change.rsmpl | rsmpl-git --check
 

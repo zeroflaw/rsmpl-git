@@ -37,6 +37,27 @@ fn run(dir: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(binary())
+        .args(extra)
+        .arg("--repo")
+        .arg(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 #[test]
 fn inline_fn_rename_applies() {
     let dir = init_repo();
@@ -46,7 +67,7 @@ fn inline_fn_rename_applies() {
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -67,7 +88,7 @@ fn minimal_file_section_header_applies() {
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,3 +1,3 @@\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -87,7 +108,7 @@ fn lang_directive_optional_applies() {
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=rename_calls\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -109,7 +130,7 @@ fn single_path_and_range_elision_applies() {
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
     let patch = "diff --git src/lib.rs\n@@ -1,3 @@\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -132,7 +153,7 @@ fn diet_extreme_call_rewrite_applies() {
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
     let patch = "diff --git src/lib.rs\n@@ -1,4 @@\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -149,7 +170,7 @@ fn single_range_ordinary_hunk_rejected() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "foo\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 @@\n-foo\n+bar\n";
-    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(!out.status.success(), "expected failure");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
@@ -198,7 +219,7 @@ fn no_match_exits_two_with_structured_error() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
@@ -215,7 +236,7 @@ fn zero_match_reason_carries_candidate_preview_text() {
         "fn a() {}\nfn b() {}\nfn foo() {}\n",
     );
     let patch = "diff --git src/lib.rs\n@@ -3,1 @@ rule=r\n# lang=rust\n- fn nosuchfn(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
@@ -239,14 +260,7 @@ fn json_report_arrays_follow_document_order() {
     );
     write(&dir.path().join(""), "src/a.rs", "fn a() {}\n");
     let patch = "diff --git a/src/z.rs b/src/z.rs\n@@ -1,1 +1,1 @@ rule=r_rename\n# lang=rust\n- fn keep(...) {\n+ fn keep2(...) {\n      ...\n  }\n@@ -2,1 +2,1 @@ rule=r_cut\n# lang=rust\n# item I\n# bind=H\n- I\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1,0 +1,0 @@ rule=r_paste\n# lang=rust\n# use=H\n+ H\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json", "--check"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -275,7 +289,7 @@ fn empty_patch_fails_text() {
     // T59: zero file sections is an authoring typo, not a no-op.
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
-    let out = run(dir.path(), &["--patch", ""]);
+    let out = run_stdin(dir.path(), "", &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
@@ -286,14 +300,7 @@ fn empty_patch_fails_json_envelope() {
     // T59: same failure in machine mode carries the JSON envelope.
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg("")
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), "", &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -311,19 +318,12 @@ fn unknown_directive_fails_fast_text_and_json() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# foo=bar\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("unknown directive"), "got: {stderr}");
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -346,7 +346,7 @@ fn stdin_patch_applies() {
     );
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
     let mut child = Command::new(binary())
-        .args(["--patch", "-", "--repo"])
+        .args(["--repo"])
         .arg(dir.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -370,7 +370,7 @@ fn stdin_patch_applies() {
 
 #[test]
 fn stdin_default_applies_without_input_flags() {
-    // T129: no `--patch`/`--file` means stdin (Unix filter behavior).
+    // T129: no `--file` means stdin (Unix filter behavior).
     use std::io::Write;
     use std::process::Stdio;
     let dir = init_repo();
@@ -483,14 +483,7 @@ fn json_envelope_on_match_failure() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -531,14 +524,7 @@ fn json_envelope_zero_match_unique_elsewhere_hints_scope_file() {
         "fn a() {}\nfn b() {}\nfn foo() {}\n",
     );
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -560,14 +546,7 @@ fn json_envelope_on_range_failure_names_file_read() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -90,8 +90,8 @@ rule=r\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -594,14 +573,7 @@ fn json_match_failure_suggestion_carries_scope_file_hint() {
         "fn a() {}\nfn b() {}\nfn foo() {}\n",
     );
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
@@ -692,16 +664,10 @@ fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# optional\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let out = run(
+    let out = run_stdin(
         dir.path(),
-        &[
-            "--patch",
-            patch,
-            "--format",
-            "json",
-            "--diff-max-lines",
-            "0",
-        ],
+        patch,
+        &["--format", "json", "--diff-max-lines", "0"],
     );
     assert!(
         out.status.success(),
@@ -953,10 +919,7 @@ fn output_creates_missing_parent_dirs() {
     let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
     let nested = dir.path().join("a").join("b").join("full.patch");
     assert!(!dir.path().join("a").exists());
-    let out = run(
-        dir.path(),
-        &["--patch", patch, "--output", nested.to_str().unwrap()],
-    );
+    let out = run_stdin(dir.path(), patch, &["--output", nested.to_str().unwrap()]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1165,10 +1128,7 @@ fn text_apply_summary_matches_json_files() {
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
-    let json_out = run(
-        dir_json.path(),
-        &["--patch", patch, "--format", "json", "--check"],
-    );
+    let json_out = run_stdin(dir_json.path(), patch, &["--format", "json", "--check"]);
     assert!(
         json_out.status.success(),
         "stderr: {}",
@@ -1184,7 +1144,7 @@ fn text_apply_summary_matches_json_files() {
         .collect();
     assert_eq!(paths, vec!["src/lib.rs"], "got: {v}");
     // Text apply on the real repo: same single path on stderr.
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1199,10 +1159,7 @@ fn text_apply_summary_matches_json_files() {
     let noop = "diff --git src/lib.rs\n@@ -1,1 @@ rule=noop\n# lang=rust\n# optional\n- fn missing_xyz(...) {\n+ fn renamed_xyz(...) {\n      ...\n  }\n";
     let dir_noop = init_repo();
     write(&dir_noop.path().join(""), "src/lib.rs", "fn foo() {}\n");
-    let json_noop = run(
-        dir_noop.path(),
-        &["--patch", noop, "--format", "json", "--check"],
-    );
+    let json_noop = run_stdin(dir_noop.path(), noop, &["--format", "json", "--check"]);
     assert!(
         json_noop.status.success(),
         "stderr: {}",
@@ -1213,7 +1170,7 @@ fn text_apply_summary_matches_json_files() {
     assert_eq!(v2["files"].as_array().unwrap().len(), 0, "got: {v2}");
     let dir_noop2 = init_repo();
     write(&dir_noop2.path().join(""), "src/lib.rs", "fn foo() {}\n");
-    let text_noop = run(dir_noop2.path(), &["--patch", noop, "--check"]);
+    let text_noop = run_stdin(dir_noop2.path(), noop, &["--check"]);
     assert!(
         text_noop.status.success(),
         "stderr: {}",
@@ -1235,19 +1192,19 @@ fn scope_file_dummy_range_applies() {
         "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn foo() {}\n",
     );
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let bare = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", bare, "--check"]);
+    let out = run_stdin(dir.path(), bare, &["--check"]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
     // Apply for real with scope=file.
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1264,13 +1221,13 @@ fn absolute_target_path_rejected() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
     let patch = "diff --git /tmp/evil.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("absolute"), "got: {stderr}");
     // JSON mode: the same failure as a stdout envelope.
-    let json = run(dir.path(), &["--patch", patch, "--format", "json"]);
+    let json = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(json.status.code(), Some(2));
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&json.stdout)).expect("stdout is JSON");
@@ -1288,12 +1245,12 @@ fn traversal_target_path_rejected() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
     let patch = "diff --git ../evil.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("escapes"), "got: {stderr}");
-    let json = run(dir.path(), &["--patch", patch, "--format", "json"]);
+    let json = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(json.status.code(), Some(2));
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&json.stdout)).expect("stdout is JSON");
@@ -1311,7 +1268,7 @@ fn missing_target_warns_and_creates_on_apply() {
     // `new file mode`, and apply creates the file.
     let dir = init_repo();
     let patch = "diff --git src/new.rs\n@@ -1,0 @@ rule=insert_use\n# lang=rust\n+ use crate::new_module::Thing;\n";
-    let check = run(dir.path(), &["--patch", patch, "--check"]);
+    let check = run_stdin(dir.path(), patch, &["--check"]);
     assert!(
         check.status.success(),
         "stderr: {}",
@@ -1321,7 +1278,7 @@ fn missing_target_warns_and_creates_on_apply() {
     assert!(stdout.contains("new file mode"), "got: {stdout}");
     let stderr = String::from_utf8_lossy(&check.stderr).to_string();
     assert!(stderr.contains("treating as new"), "got: {stderr}");
-    let out = run(dir.path(), &["--patch", patch]);
+    let out = run_stdin(dir.path(), patch, &[]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1346,19 +1303,31 @@ fn output_path_is_cwd_relative_not_repo_joined() {
     let cwd = tempfile::tempdir().unwrap();
     let patch =
         "diff --git src/lib.rs\n@@ -1,2 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let out = Command::new(binary())
-        .args([
-            "--patch",
-            patch,
-            "--repo",
-            repo.path().to_str().unwrap(),
-            "--output",
-            "rel.patch",
-            "--check",
-        ])
-        .current_dir(cwd.path())
-        .output()
-        .unwrap();
+    let out = {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = Command::new(binary())
+            .args([
+                "--repo",
+                repo.path().to_str().unwrap(),
+                "--output",
+                "rel.patch",
+                "--check",
+            ])
+            .current_dir(cwd.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(patch.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1387,14 +1356,7 @@ fn repeat_folds_nested_match_json_report() {
     );
     let patch =
         "diff --git src/lib.rs\n@@ -1,3 @@ rule=unbox\n# repeat\n# expr E\n- Box::new(E)\n+ E\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json", "--check"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1420,7 +1382,7 @@ fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
     );
     let lenient =
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,99 @@\n fn a() {}\n-fn b() {}\n+fn b2() {}\n fn c() {}\n";
-    let out = run(dir.path(), &["--patch", lenient, "--check"]);
+    let out = run_stdin(dir.path(), lenient, &["--check"]);
     assert!(
         out.status.success(),
         "lenient counts should pass, stderr: {}",
@@ -1429,7 +1391,7 @@ fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
     // Same file, same (correct) counts, but one wrong content line.
     let wrong_content =
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-WRONG\n+fn b2() {}\n fn c() {}\n";
-    let out = run(dir.path(), &["--patch", wrong_content, "--check"]);
+    let out = run_stdin(dir.path(), wrong_content, &["--check"]);
     assert!(!out.status.success(), "wrong content must fail");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("GIT_HUNK_CONFLICT"), "got: {stderr}");
@@ -1441,14 +1403,7 @@ fn repeat_with_bind_rejected_json_envelope() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=cut\n# repeat\n# item I\n# bind=H\n- I\n";
-    let out = Command::new(binary())
-        .arg("--patch")
-        .arg(patch)
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value =
