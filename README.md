@@ -29,7 +29,7 @@ cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 # From a file, preview the lowered Git diff without applying:
 rsmpl-git --file change.rsmpl --repo ./my-repo --check
 
-  # Machine-readable result (rules, files_changed, files stats, diff, check):
+  # Machine-readable result (rules, files stats, diff, check):
   rsmpl-git --file change.rsmpl --repo ./my-repo --format json --check
 
   # Token-bounded verification: stats + check, no diff tokens ...
@@ -59,7 +59,7 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch
 Exit codes: `0` applied/clean, `2` patch error (structured
 `RSMPL_*`/`GIT_*` diagnostic on stderr). Text `--check` prints the lowered
 diff to stdout (plain apply stays quiet); `--format json` prints
-`{rules, files_changed, files, diff, diff_truncated, check}` to stdout
+`{rules, files, diff, diff_truncated, check}` to stdout
 (`rules` = per-rule match counts; `files` = per-file `added`/`removed`;
 `diff_truncated` = reported diff hides a non-empty lowering);
 `--diff-max-lines N` (`0` omits) bounds the reported diff only

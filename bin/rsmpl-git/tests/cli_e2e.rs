@@ -840,11 +840,9 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
         serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
         "got: {v}"
     );
-    assert_eq!(
-        v["files_changed"],
-        serde_json::json!(["src/lib.rs"]),
-        "got: {v}"
-    );
+    // T54: `files_changed` removed (duplicated `files[].path`); the single
+    // path source is `files[].path`.
+    assert!(v.get("files_changed").is_none(), "got: {v}");
     // --check must not modify the file even though the diff was omitted.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
@@ -965,18 +963,16 @@ fn json_default_report_carries_files_and_untruncated() {
         serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
         "got: {v}"
     );
-    // `files_changed` stays the path list for compat, in the same order.
+    // T54: `files_changed` removed (duplicated `files[].path`); the single
+    // path source is `files[].path`.
+    assert!(v.get("files_changed").is_none(), "got: {v}");
     let paths: Vec<&str> = v["files"]
         .as_array()
         .unwrap()
         .iter()
         .map(|f| f["path"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        v["files_changed"],
-        serde_json::Value::Array(paths.iter().map(|p| serde_json::json!(p)).collect()),
-        "got: {v}"
-    );
+    assert_eq!(paths, vec!["src/lib.rs"], "got: {v}");
 }
 
 #[test]

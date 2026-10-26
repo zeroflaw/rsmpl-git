@@ -3775,7 +3775,6 @@ prints one JSON object to stdout:
 ```json
 {
   "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1}],
-  "files_changed": ["src/lib.rs"],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
@@ -3785,10 +3784,11 @@ prints one JSON object to stdout:
 
 - `rules` is the per-rule match report (text mode prints only one-line
   `applied`/`check` summaries; agents needing match counts use JSON).
-- `files_changed` lists repo-relative paths actually rewritten.
 - `files` lists per-file `{path, added, removed}` line stats computed from
   the full old/new contents, so counts stay exact even when `diff` is
-  truncated or omitted (see D.2.1). Empty when no changes.
+  truncated or omitted (see D.2.1). Empty when no changes. `files[].path`
+  is the single source of changed paths (a former `files_changed` key that
+  duplicated these paths was removed as pure report overhead).
 - `diff` is the lowered ordinary Git diff (empty string when no changes).
 - `diff_truncated` is `true` iff the lowered diff is non-empty and the
   reported `diff` string hides any of it (`--diff-max-lines N` cut lines
@@ -3887,7 +3887,7 @@ Rules:
   lowering. A truncated report (`diff_truncated: true`) is review-only,
   but an N-context diff is appliable — to recover full context, re-run
   without the flag.
-- Per-file `{path, added, removed}` stats and `files_changed` are computed
+- Per-file `{path, added, removed}` stats are computed
   from the full old/new contents, so they are identical for every N.
 - Layering: the D.2.1 report budget applies after lowering. `--context 0
   --diff-max-lines 2` shows the first 2 lines of the 0-context diff;

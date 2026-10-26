@@ -306,7 +306,6 @@ fn run() -> Result<(), CliError> {
             "rules": report.rules.iter().map(|r| serde_json::json!({
                 "rule": r.rule, "file": r.file, "matches": r.matches
             })).collect::<Vec<_>>(),
-            "files_changed": report.files_changed,
             "files": changed.iter().map(|(path, added, removed)| serde_json::json!({
                 "path": path, "added": added, "removed": removed
             })).collect::<Vec<_>>(),
