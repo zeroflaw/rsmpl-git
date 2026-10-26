@@ -74,8 +74,8 @@ diff to stdout (plain apply stays quiet); `--format json` prints
 ## Minimal semantic hunk
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-@@ -1,5 +1,5 @@ rule=rename_foo
+diff --git src/lib.rs
+@@ -1,5 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -83,9 +83,10 @@ diff --git a/src/lib.rs b/src/lib.rs
    }
 ```
 
-Minimal header: `diff --git` alone suffices (no `---`/`+++`/`index`);
-`rule=` may be omitted; copy the old side to the new side
-(`@@ -old,len +old,len @@`, new side ignored, SPEC 10.4).
+Minimal header: `diff --git <path>` alone suffices (no
+`---`/`+++`/`index`); `rule=` may be omitted; elide the new side
+(`@@ -old,len @@`, new side ignored, SPEC 10.4; copy-old stays
+compatible).
 The `# lang=rust` line is the RSmPL marker here (a hunk with no `#`
 lines is an ordinary Git hunk); hunks that already carry other
 directives omit it (SPEC 7.1).

@@ -353,13 +353,18 @@ patch           ::= file_section+
 
 file_section    ::= git_file_header file_body
 
-git_file_header ::= "diff --git " old_path " " new_path newline
+git_file_header ::= "diff --git " path (" " path)? newline
                     git_metadata*
 
 file_body       ::= hunk*
 
 hunk            ::= ordinary_hunk | rsmpl_hunk
 ```
+
+A single path (`diff --git src/lib.rs`) is equivalent to the duplicated
+two-path form (`diff --git a/src/lib.rs b/src/lib.rs`); an optional
+`a/`/`b/` prefix is stripped either way. The two-path form stays for
+renames and for compatibility with Git tooling.
 
 Example:
 
@@ -393,11 +398,11 @@ sections) is rejected with `RSMPL_PARSE_CONFLICT`: an empty
 and silent success would violate Section 2.6. (A non-empty patch
 whose hunks lower to no changes still succeeds with an empty
 diff.) The canonical agent recipe is
-therefore the 1-line header:
+therefore the 1-line header plus an elided new side:
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-@@ -10,7 +10,7 @@
+diff --git src/lib.rs
+@@ -10,7 @@
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -411,8 +416,9 @@ The single `# lang=rust` line is the RSmPL marker here: a hunk with
 no `#` lines at all would be an ordinary Git hunk (Section 7.2), so
 a bare rename keeps the marker while hunks that already carry other
 directives (such as `# allow=many` / `# expr E`) omit it.
-For RSmPL hunks the `+new,len` side is ignored (Section 10.4), so
-the recipe copies the old side verbatim (`@@ -10,7 +10,7 @@`).
+For RSmPL hunks the `+new,len` side is ignored (Section 10.4), so it
+may be elided (`@@ -10,7 @@` defaults to the old side); copying the
+old side verbatim (`@@ -10,7 +10,7 @@`) stays compatible.
 
 ---
 
@@ -547,11 +553,21 @@ Therefore directives are unambiguous.
 
 ## 8. RSmPL Hunk Header Syntax
 
-An RSmPL hunk uses a standard-looking unified-diff hunk header:
+An RSmPL hunk uses a standard-looking unified-diff hunk header, with
+the new-side range optionally elided:
 
 ```diff
 @@ -old_start,old_len +new_start,new_len @@ rule=name
 ```
+
+```diff
+@@ -old_start,old_len @@ rule=name
+```
+
+The elided form defaults the new side to the old side and is
+RSmPL-only: ordinary hunks (no `#` directives) must keep both ranges,
+because Git semantics need them. An elided new side on an ordinary
+hunk is rejected with `RSMPL_PARSE_CONFLICT`.
 
 Example:
 
@@ -853,7 +869,7 @@ is a review-oriented declaration of the intended output extent. It is not used t
 
 Because RSmPL bodies may contain ellipses, metavariables, captures, moved AST nodes, and formatter output, the new-side line count is an **extent declaration**, not a literal promise that the resulting output will contain exactly that number of lines.
 
-Implementations should tolerate new-side line-count drift for RSmPL hunks and compute the final concrete line counts when lowering the RSmPL-Git patch to an ordinary Git diff. The new-side values are not consulted for RSmPL matching at all, so an agent that wants zero decision cost may copy the old side verbatim (e.g. `@@ -10,7 +10,7 @@`).
+Implementations should tolerate new-side line-count drift for RSmPL hunks and compute the final concrete line counts when lowering the RSmPL-Git patch to an ordinary Git diff. The new-side values are not consulted for RSmPL matching at all, so an agent that wants zero decision cost may elide the new side (`@@ -10,7 @@`, which defaults to the old side) or copy the old side verbatim (e.g. `@@ -10,7 +10,7 @@`, kept for compatibility).
 
 For example:
 
@@ -3420,7 +3436,7 @@ patch               ::= file_section*
 
 file_section        ::= git_file_header file_metadata* hunk*
 
-git_file_header     ::= "diff --git " path " " path newline
+git_file_header     ::= "diff --git " path (" " path)? newline
 
 file_metadata       ::= metadata_line newline
 
@@ -3430,7 +3446,7 @@ ordinary_hunk       ::= hunk_header ordinary_hunk_body
 
 rsmpl_hunk          ::= hunk_header directive_block rsmpl_hunk_body
 
-hunk_header         ::= "@@ -" range " +" range " @@" hunk_header_tail? newline
+hunk_header         ::= "@@ -" range (" +" range)? " @@" hunk_header_tail? newline
 
 range               ::= integer ("," integer)?
 
@@ -3722,8 +3738,8 @@ The canonical ordinary hunk shape remains:
 
 A compliant RSmPL-Git v0.1 implementation must:
 
-1. parse Git-style file sections;
-2. distinguish ordinary hunks from RSmPL hunks;
+1. parse Git-style file sections (a single `diff --git <path>` is allowed);
+2. distinguish ordinary hunks from RSmPL hunks (elided new sides are RSmPL-only);
 3. treat any `#` directive block as an RSmPL hunk (Rust by default; `# lang=rust` accepted, `# lang=<other>` rejected);
 4. treat directive lines as metadata, not source lines;
 5. derive file and range from Git patch structure;

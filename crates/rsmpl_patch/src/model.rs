@@ -35,6 +35,9 @@ pub struct HunkHeader {
     pub old_len: u32,
     pub new_start: u32,
     pub new_len: u32,
+    /// True when the `+new,len` side was elided (`@@ -old,len @@`).
+    /// RSmPL-only (SPEC 8): the new side defaults to the old side.
+    pub new_elided: bool,
     pub rule: Option<String>,
     pub id: Option<String>,
     pub depends: Option<String>,

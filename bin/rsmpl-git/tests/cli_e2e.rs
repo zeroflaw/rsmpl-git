@@ -99,6 +99,42 @@ fn lang_directive_optional_applies() {
 }
 
 #[test]
+fn single_path_and_range_elision_applies() {
+    // T68+T64: `diff --git <path>` + `@@ -old,len @@` is the minimal
+    // recipe (single path ≡ a/X b/X; elided new side defaults to old).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("+fn bar(x: i32)"), "got: {stdout}");
+}
+
+#[test]
+fn single_range_ordinary_hunk_rejected() {
+    // T64: new-side elision is RSmPL-only; ordinary hunks need both ranges.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "foo\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 @@\n-foo\n+bar\n";
+    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    assert!(!out.status.success(), "expected failure");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("both") || stderr.contains("RSmPL"),
+        "got: {stderr}"
+    );
+}
+
+#[test]
 fn check_prints_diff_and_does_not_modify() {
     let dir = init_repo();
     let before = "fn a() {\n    foo(1);\n    foo(2);\n}\n";

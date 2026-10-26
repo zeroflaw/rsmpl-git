@@ -1,8 +1,9 @@
 //! Line-oriented parser for RSmPL-Git patch files.
 //!
 //! Grammar (SPEC section 30):
-//! `patch ::= file_section*`, file sections start with `diff --git`,
-//! hunks start with `@@ -a,b +c,d @@ tail`. A hunk is RSmPL iff the
+//! `patch ::= file_section*`, file sections start with `diff --git`
+//! (one path suffices, SPEC 6), hunks start with `@@ -a,b (+c,d)? @@ tail`
+//! (new-side elision is RSmPL-only, SPEC 8). A hunk is RSmPL iff the
 //! first line after the header is an unprefixed `#` directive (SPEC
 //! 7.1); `# lang=rust` is accepted but optional (Rust is the default).
 
@@ -150,8 +151,13 @@ fn is_version_marker(line: &str) -> bool {
 
 fn parse_diff_git_header(line: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix("diff --git ")?;
-    // Paths may be quoted; split into two (old, new) honoring quotes.
+    // Paths may be quoted; split into one or two paths honoring quotes.
+    // A single path (`diff --git <path>`, SPEC 6) is equivalent to the
+    // duplicated two-path form; the two-path form stays for renames/compat.
     let parts = split_paths(rest)?;
+    if parts.len() == 1 {
+        return Some((parts[0].clone(), parts[0].clone()));
+    }
     if parts.len() != 2 {
         return None;
     }
@@ -273,6 +279,21 @@ fn parse_hunk(lines: &[&str], at: usize) -> Result<(Hunk, usize)> {
             next,
         ))
     } else {
+        // New-side elision (`@@ -old,len @@`) is RSmPL-only (SPEC 8):
+        // ordinary hunks keep full Git two-range semantics.
+        if header.new_elided {
+            return Err(StructuredError::new(
+                ErrorCode::ParseConflict,
+                format!(
+                    "ordinary hunk requires both -old,len +new,len ranges: {}",
+                    lines[at]
+                ),
+            )
+            .with_suggestion(
+                "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add a `#` directive line to make it an RSmPL hunk",
+            )
+            .into());
+        }
         let (body, next) = parse_body_lines(lines, idx, false)?;
         Ok((
             Hunk::Ordinary(OrdinaryHunk {
@@ -365,7 +386,8 @@ fn parse_body_lines(
 }
 
 fn parse_hunk_header(line: &str) -> std::result::Result<HunkHeader, StructuredError> {
-    // `@@ -old[,len] +new[,len] @@ tail`
+    // `@@ -old[,len] (+new[,len])? @@ tail`; the `+new` side may be elided
+    // for RSmPL hunks (SPEC 8), defaulting to the old side (cf. SPEC 10.4).
     let err = |msg: String| StructuredError::new(ErrorCode::ParseConflict, msg);
     if !line.starts_with("@@") {
         return Err(err(format!("invalid hunk header: {line}")));
@@ -380,17 +402,25 @@ fn parse_hunk_header(line: &str) -> std::result::Result<HunkHeader, StructuredEr
     let old_s = parts
         .next()
         .ok_or_else(|| err(format!("invalid hunk header ranges: {line}")))?;
-    let new_s = parts
-        .next()
-        .ok_or_else(|| err(format!("invalid hunk header ranges: {line}")))?;
+    let new_s = parts.next();
+    if parts.next().is_some() {
+        return Err(err(format!("invalid hunk header ranges: {line}")));
+    }
     let (old_start, old_len) = parse_range(old_s, '-')?;
-    let (new_start, new_len) = parse_range(new_s, '+')?;
+    let (new_start, new_len, new_elided) = match new_s {
+        Some(s) => {
+            let (ns, nl) = parse_range(s, '+')?;
+            (ns, nl, false)
+        }
+        None => (old_start, old_len, true),
+    };
     let (rule, id, depends, extra) = parse_header_tags(&tail);
     Ok(HunkHeader {
         old_start,
         old_len,
         new_start,
         new_len,
+        new_elided,
         rule,
         id,
         depends,
@@ -1055,5 +1085,46 @@ mod tests {
             assert!(msg.contains("RSMPL_PARSE_CONFLICT"), "got: {msg}");
             assert!(msg.contains("diff --git"), "got: {msg}");
         }
+    }
+
+    #[test]
+    fn single_path_header_parses() {
+        // T68: `diff --git <path>` ≡ `diff --git a/X b/X`; `b/`-style
+        // prefixes are stripped and quoted space paths keep working.
+        let p = parse_patch("diff --git src/lib.rs\n@@ -1,3 +1,3 @@\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n")
+            .unwrap();
+        assert_eq!(p.files[0].target_path, "src/lib.rs");
+        assert!(p.files[0].hunks[0].is_rsmpl());
+        let p = parse_patch(
+            "diff --git \"a/my file.rs\" \"b/my file.rs\"\n@@ -1,1 +1,1 @@\n-foo\n+bar\n",
+        )
+        .unwrap();
+        assert_eq!(p.files[0].target_path, "my file.rs");
+    }
+
+    #[test]
+    fn single_range_rsmpl_parses_new_eq_old() {
+        // T64: `@@ -old,len @@` elides the ignored new side (RSmPL-only).
+        let p = parse_patch("diff --git src/lib.rs\n@@ -1,3 @@\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n")
+            .unwrap();
+        match &p.files[0].hunks[0] {
+            Hunk::Rsmpl(rh) => {
+                assert!(rh.header.new_elided);
+                assert_eq!((rh.header.new_start, rh.header.new_len), (1, 3));
+            }
+            _ => panic!("expected rsmpl"),
+        }
+    }
+
+    #[test]
+    fn single_range_ordinary_rejected() {
+        // T64: ordinary hunks keep full Git two-range semantics.
+        let e = parse_patch("diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,2 @@\n-foo\n+bar\n")
+            .unwrap_err();
+        let msg = format!("{e}");
+        assert!(
+            msg.contains("RSmpl") || msg.contains("RSMPL") || msg.contains("both"),
+            "got: {msg}"
+        );
     }
 }

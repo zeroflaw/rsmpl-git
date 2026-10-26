@@ -7,8 +7,8 @@ normative section (SPEC 9.3, SPEC 14.1, SPEC 18.6, SPEC D.3, …).
 ## Patch skeleton
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-@@ -1,5 +1,5 @@ rule=rename_foo
+diff --git src/lib.rs
+@@ -1,5 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -16,14 +16,15 @@ diff --git a/src/lib.rs b/src/lib.rs
    }
 ```
 
-Minimal recipe: `diff --git` alone suffices (`---`/`+++`/`index`
-lines are optional metadata); `rule=` may be omitted (diagnostics
-show `<unnamed>`; add `rule=name` when a patch has several hunks).
-For RSmPL hunks the `+new,len` side is ignored (SPEC 10.4), so
-the recipe copies the old side verbatim (`@@ -old,len +old,len @@`).
+Minimal recipe: `diff --git <path>` alone suffices (single path ≡
+`a/X b/X`; `---`/`+++`/`index` lines are optional metadata); `rule=`
+may be omitted (diagnostics show `<unnamed>`; add `rule=name` when a
+patch has several hunks). For RSmPL hunks the `+new,len` side is
+ignored (SPEC 10.4), so elide it (`@@ -old,len @@`); copying the old
+side verbatim (`@@ -old,len +old,len @@`) stays compatible.
 
-Rules: every semantic hunk = `@@ -old,len +new,len @@ rule=name`
-header + at least one `#` directive line + `-`/`+`/context lines
+Rules: every semantic hunk = `@@ -old,len @@ rule=name`
+header (+new,len elided, RSmPL-only) + at least one `#` directive line + `-`/`+`/context lines
 (`# lang=rust` alone is the marker for bare renames; hunks that
 already carry other directives omit it, SPEC 7.1). All `-old,len`
 ranges cite the ORIGINAL pre-patch file, never rebased by earlier hunks
