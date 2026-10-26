@@ -710,6 +710,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
             "anchor" => Ok(Directive::Scope(Scope::Anchor)),
             "overlap" => Ok(Directive::Scope(Scope::Overlap)),
             "exact" => Ok(Directive::Scope(Scope::Exact)),
+            "file" => Ok(Directive::Scope(Scope::File)),
             _ => Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!("invalid scope `{v}`: {line}"),
@@ -1112,6 +1113,17 @@ mod tests {
                 assert!(rh.header.new_elided);
                 assert_eq!((rh.header.new_start, rh.header.new_len), (1, 3));
             }
+            _ => panic!("expected rsmpl"),
+        }
+    }
+
+    #[test]
+    fn scope_file_parses() {
+        // T61: `# scope=file` searches the whole file with a dummy range.
+        let p = parse_patch("diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# scope=file\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n")
+            .unwrap();
+        match &p.files[0].hunks[0] {
+            Hunk::Rsmpl(rh) => assert_eq!(rh.scope(), Scope::File),
             _ => panic!("expected rsmpl"),
         }
     }

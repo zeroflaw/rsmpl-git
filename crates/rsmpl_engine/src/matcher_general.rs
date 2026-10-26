@@ -464,6 +464,7 @@ fn in_scope(start_line: u32, end_line: u32, scope: Scope, old_start: u32, old_le
         Scope::Anchor => start_line >= old_start && start_line <= hi,
         Scope::Overlap => start_line <= hi && end_line >= old_start,
         Scope::Exact => old_len > 0 && start_line == old_start && end_line == end,
+        Scope::File => true,
     }
 }
 

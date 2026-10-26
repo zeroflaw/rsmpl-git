@@ -86,6 +86,7 @@ pub enum Scope {
     Anchor,
     Overlap,
     Exact,
+    File,
 }
 
 /// Attribute policies (SPEC 14.6).

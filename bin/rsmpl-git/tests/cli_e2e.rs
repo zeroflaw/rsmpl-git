@@ -1811,3 +1811,37 @@ fn explicit_default_context_three_rejected_with_inspect() {
     );
     assert!(v["error"]["suggestion"].is_string(), "got: {v}");
 }
+
+#[test]
+fn scope_file_dummy_range_applies() {
+    // T61: `@@ -1,1 @@` + `# scope=file` renames a fn on lines 5-7
+    // with no inspect roundtrip; the same dummy without `scope=file`
+    // fails with `RSMPL_MATCH_CONFLICT`.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn foo() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let bare = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", bare, "--check"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
+    // Apply for real with scope=file.
+    let out = run(dir.path(), &["--patch", patch]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("fn bar()"), "got: {text}");
+}

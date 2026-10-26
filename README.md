@@ -95,7 +95,8 @@ Key rules for authors:
 
 - Every semantic hunk is scoped by its file section + old-side range, always
   interpreted in **original-source coordinates** (never rebased by earlier
-  hunks in the same patch).
+  hunks in the same patch). Small file already held? `@@ -1,1 @@` +
+  `# scope=file` searches the whole file with no inspect roundtrip.
 - `fn foo(...) { ... }` matches only plain functions (modifiers are
   explicit); attributes/doc comments are preserved by default. Writing
   slots explicitly evolves the signature (`- fn f(...)` /

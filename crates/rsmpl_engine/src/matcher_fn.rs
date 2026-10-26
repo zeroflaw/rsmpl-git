@@ -88,6 +88,7 @@ fn in_scope(c: &FnCandidate<'_>, scope: Scope, old_start: u32, old_len: u32) -> 
         Scope::Anchor => c.fn_line >= old_start && c.fn_line <= end.max(old_start),
         Scope::Overlap => c.start_line <= end.max(old_start) && c.end_line >= old_start,
         Scope::Exact => old_len > 0 && c.start_line == old_start && c.end_line == end,
+        Scope::File => true,
     }
 }
 
@@ -996,6 +997,7 @@ fn collect_non_fn_item_spans(
         let s = it.span().start().line as u32;
         let e = it.span().end().line as u32;
         let inside = match scope {
+            Scope::File => true,
             Scope::Contained => s >= old_start && e <= end.max(old_start),
             Scope::Anchor => s >= old_start && s <= end.max(old_start),
             Scope::Overlap => s <= end.max(old_start) && e >= old_start,
@@ -1142,6 +1144,7 @@ pub fn apply_impl_context_hunk(
             let me = m.span().end().line as u32;
             let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
             let inside = match hunk.scope() {
+                Scope::File => true,
                 Scope::Contained => {
                     ms >= hunk.header.old_start && me <= end.max(hunk.header.old_start)
                 }

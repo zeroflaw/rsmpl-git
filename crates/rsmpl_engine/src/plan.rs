@@ -573,4 +573,27 @@ mod tests {
             apply_multi(patch, vec![("src/lib.rs", "fn a() {\n    foo(1);\n}\n")]).unwrap_err();
         assert!(err.contains("RSMPL_CAPTURE_CONFLICT"), "got: {err}");
     }
+
+    #[test]
+    fn scope_file_dummy_range_finds_late_item() {
+        // T61: `@@ -1,1 @@` + `# scope=file` renames a fn on lines 5-7
+        // with no inspect roundtrip.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let src = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn foo() {}\n";
+        let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("fn bar()"), "got: {out}");
+        assert!(!out.contains("fn foo()"), "got: {out}");
+    }
+
+    #[test]
+    fn scope_file_whole_file_call_rewrite() {
+        // T61: `allow=many` + `scope=file` rewrites calls anywhere.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1);\n}\nfn b() {\n    foo(2);\n}\n";
+        let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert_eq!(out.matches("bar(").count(), 2, "got: {out}");
+        assert!(!out.contains("foo("), "got: {out}");
+    }
 }

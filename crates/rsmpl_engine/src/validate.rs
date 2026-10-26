@@ -1,6 +1,6 @@
 //! Match-count and range validation (SPEC 24, 25).
 
-use rsmpl_patch::{Allow, ErrorCode, FileSection, StructuredError};
+use rsmpl_patch::{Allow, ErrorCode, FileSection, Hunk, Scope, StructuredError};
 
 use crate::lines::LineIndex;
 
@@ -45,6 +45,15 @@ pub fn ensure_file_range(
 ) -> Result<(), StructuredError> {
     let n = index.line_count() as u32;
     for hunk in &section.hunks {
+        // `# scope=file` searches the whole file; the `@@` range is a
+        // dummy (canonical `@@ -1,1 @@`) and skips bounds validation.
+        // Insertion anchors (`old_len==0`) still use the header as the
+        // anchor position, so scope is moot there but harmless.
+        if let Hunk::Rsmpl(rh) = hunk {
+            if rh.scope() == Scope::File {
+                continue;
+            }
+        }
         let h = hunk.header();
         let rule = h.rule.clone().unwrap_or_default();
         if h.old_len == 0 {
@@ -100,5 +109,28 @@ mod tests {
         let err = range_err("r", "src/lib.rs", 90, 8, 10);
         let s = err.suggestion.expect("suggestion");
         assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
+    }
+
+    #[test]
+    fn scope_file_skips_range_bounds() {
+        use crate::lines::LineIndex;
+        // T61: dummy `90,8` in a 10-line file passes with `# scope=file`.
+        let text = "fn a() {}\n".repeat(10);
+        let index = LineIndex::new(&text);
+        let section: FileSection = rsmpl_patch::parse_patch(
+            "diff --git src/lib.rs\n@@ -90,8 @@ rule=r\n# scope=file\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n",
+        )
+        .unwrap()
+        .files
+        .remove(0);
+        assert!(ensure_file_range(&index, &section, "src/lib.rs").is_ok());
+        // Same dummy without `scope=file` fails.
+        let section: FileSection = rsmpl_patch::parse_patch(
+            "diff --git src/lib.rs\n@@ -90,8 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n",
+        )
+        .unwrap()
+        .files
+        .remove(0);
+        assert!(ensure_file_range(&index, &section, "src/lib.rs").is_err());
     }
 }

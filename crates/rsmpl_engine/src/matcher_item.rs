@@ -153,6 +153,7 @@ fn in_scope(c: &ItemCandidate, scope: Scope, old_start: u32, old_len: u32) -> bo
         Scope::Anchor => c.anchor_line >= old_start && c.anchor_line <= end.max(old_start),
         Scope::Overlap => c.start_line <= end.max(old_start) && c.end_line >= old_start,
         Scope::Exact => old_len > 0 && c.start_line == old_start && c.end_line == end,
+        Scope::File => true,
     }
 }
 

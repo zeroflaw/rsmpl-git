@@ -699,6 +699,7 @@ hunks that already carry other directives omit it.
 | `# scope=anchor` | First concrete non-ellipsis token must be inside the old range. |
 | `# scope=overlap` | Matched AST node may overlap the old range. |
 | `# scope=exact` | Matched AST node span must exactly match the old range after trivia normalization. |
+| `# scope=file` | Search the whole file; the `@@` old range is a dummy (canonical `@@ -1,1 @@`) and range-bounds validation is skipped. Insertion anchors ignore scope. |
 | `# bind=Name` | Capture exactly one rewritten or removed AST object under a cross-hunk name. Scalar only in this version. |
 | `# use=Name` | Use a previously captured scalar object. |
 | `# attrs=preserve` | Ignore attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement. Default. |
@@ -818,7 +819,7 @@ For every RSmPL hunk, the old-side range:
 -old_start,old_len
 ```
 
-is interpreted against the **original file contents before any hunk in the patch file is applied**.
+is interpreted against the **original file contents before any hunk in the patch file is applied**. The sole exception is `# scope=file` (Section 17.3), where the range is a dummy and the whole file is searched.
 
 This rule is mandatory.
 
@@ -841,7 +842,7 @@ For RSmPL hunks, the old-side range:
 -old_start,old_len
 ```
 
-defines the region in the original source file where AST matching is permitted.
+defines the region in the original source file where AST matching is permitted. With `# scope=file` the range is a dummy (canonical `@@ -1,1 @@`); the engine searches the whole file and skips range-bounds validation for that hunk.
 
 Example:
 
@@ -2122,6 +2123,16 @@ Useful when the provided line range cuts through a larger node.
 The matched AST node span must exactly equal the old-side range after trivia normalization.
 
 Useful for precise item movement.
+
+#### `scope=file`
+
+Search the whole file. The `@@ -old,len` old range is a dummy
+(canonical `@@ -1,1 @@`) and range-bounds validation is skipped for
+that hunk, so no `--inspect` roundtrip is needed when the agent
+already holds the file. Matching, `allow`/`optional` count
+validation, and edit-level overlap checks are unchanged; only the
+range pre-filter is lifted. Insertion anchors (`-old_start,0`) still
+use the header as the anchor position — scope is moot there.
 
 ### 17.4 Repeated metavariable occurrences
 

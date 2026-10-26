@@ -37,6 +37,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 |---|---|
 | `# lang=rust` | optional: marker for directive-free hunks; omit when other `#` lines present (SPEC 7.1) |
 | `# allow=many` | many matches may rewrite (default `one`) |
+| `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no inspect needed (SPEC 17.3) |
 | `# optional` | zero matches OK (default: error) |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable (SPEC 15) |
 | `# item I` + `# bind=Name` / `# use=Name` | cut / paste a moved item (SPEC 9.3) |
@@ -96,7 +97,9 @@ Item spans locate definitions, `--calls` lists call/method/macro sites for
 tight rewrite ranges, directory scan covers a subtree in one call, and
 `--max-items N` bounds large scans (SPEC D.3, SPEC D.3.1, SPEC D.3.2,
 SPEC D.3.3). Spans are 1-based inclusive; the hunk length is
-`L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`).
+`L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`). Small file
+already held? Skip inspect: `@@ -1,1 @@` + `# scope=file` searches
+the whole file (SPEC 17.3).
 
 ## Verify cheaply
 

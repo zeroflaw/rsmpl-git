@@ -131,6 +131,7 @@ fn in_scope(c: &MacroCandidate, scope: Scope, old_start: u32, old_len: u32) -> b
         Scope::Anchor => c.start_line >= old_start && c.start_line <= hi,
         Scope::Overlap => c.start_line <= hi && c.end_line >= old_start,
         Scope::Exact => old_len > 0 && c.start_line == old_start && c.end_line == end,
+        Scope::File => true,
     }
 }
 
