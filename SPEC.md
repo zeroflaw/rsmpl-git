@@ -3876,7 +3876,8 @@ valid `@@ -old,len` ranges and verify results.
 from an argument or a temp file:
 
 ```sh
-cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+cat change.rsmpl | rsmpl-git --patch -
 ```
 
 Both sources stay: `--patch` keeps small patches temp-file-free while
@@ -3978,14 +3979,15 @@ all by itself. One apply-path flag bounds only the *reported* diff; it
 never changes what is checked, applied, or saved:
 
 ```sh
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 # Stats + check only, no diff tokens at all:
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 0 --check
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
 
 # First 40 lines of diff for a quick skim, stats stay exact:
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 40 --check
 
 # Text equivalent (stdout is the reported diff, markers on stderr):
-rsmpl-git --file change.rsmpl --repo ./my-repo --check --diff-max-lines 40
+rsmpl-git --file change.rsmpl --check --diff-max-lines 40
 ```
 
 Rules:
@@ -4022,11 +4024,12 @@ itself by setting the unified-diff context radius (default `3` when the flag
 is absent, `0` allowed):
 
 ```sh
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 # Minimal tokens, still a real appliable patch:
-rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
+rsmpl-git --file change.rsmpl --check --context 0
 
 # One context line for a quick skim; check still verifies the N-context diff:
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --context 1 --check
+rsmpl-git --file change.rsmpl --format json --context 1 --check
 ```
 
 Rules:
@@ -4134,7 +4137,8 @@ target file with the same Rust frontend the engine uses and lists its items
 with 1-based inclusive line spans:
 
 ```sh
-rsmpl-git --repo ./my-repo --inspect src/lib.rs
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+rsmpl-git --inspect src/lib.rs
 # fn foo 1-3
 # struct Config 5-9
 # method Config::load 11-15
@@ -4158,7 +4162,8 @@ function bodies. `--calls` additionally lists candidate call sites with
 range without reading the whole file:
 
 ```sh
-rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+rsmpl-git --inspect src/lib.rs --calls
 # fn foo 1-3
 # call foo 5-5
 # method try_send 5-5
@@ -4192,7 +4197,8 @@ Passing a directory (e.g. `--inspect src/`, `--inspect src`,
 skip `git ls-files` plus N per-file inspects:
 
 ```sh
-rsmpl-git --repo ./my-repo --inspect src/ --calls
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+rsmpl-git --inspect src/ --calls
 # src/lib.rs: fn foo 1-1
 # src/lib.rs: call foo 3-3
 # src/a.rs: struct S 1-2
@@ -4232,8 +4238,9 @@ number of listed entries (`items` + `calls` combined) in deterministic
 sorted order (files lexicographic, items-then-calls within each file):
 
 ```sh
-rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
-rsmpl-git --repo ./my-repo --inspect src/lib.rs --max-items 5 --format json
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+rsmpl-git --inspect src --calls --max-items 20
+rsmpl-git --inspect src/lib.rs --max-items 5 --format json
 ```
 
 Rules:
