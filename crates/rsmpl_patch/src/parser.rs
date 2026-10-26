@@ -529,10 +529,14 @@ fn parse_directive(line: &str) -> Result<Directive> {
                 )
                 .into());
             }
-            Ok(Directive::Unknown {
-                key: single.to_string(),
-                value: None,
-            })
+            // T113: unknown bare directives fail fast (SPEC 2.6) — no
+            // forward-compat silent ignore.
+            Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!("unknown directive `#{single}`: {line}"),
+            )
+            .with_suggestion("check SPEC 9.3 for the supported directive list".to_string())
+            .into())
         }
         [kind, rest @ ..] => {
             if let Some(mk) = MetavarKind::parse(kind) {
@@ -595,11 +599,13 @@ fn parse_directive(line: &str) -> Result<Directive> {
                 }
                 return Ok(Directive::MetaVar { kind: mk, names });
             }
-            // Unknown multi-token directive: keep as Unknown for forward compat.
-            Ok(Directive::Unknown {
-                key: tokens[0].to_string(),
-                value: Some(tokens[1..].join(" ")),
-            })
+            // T113: unknown multi-token directives fail fast (SPEC 2.6).
+            Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!("unknown directive `#{}`: {line}", tokens[0]),
+            )
+            .with_suggestion("check SPEC 9.3 for the supported directive list".to_string())
+            .into())
         }
     }
 }
@@ -621,27 +627,13 @@ fn split_kv(body: &str) -> Option<(&str, &str)> {
     Some((k, v))
 }
 
-/// Known `key=value` directive keys (SPEC 9.3). Unknown keys are kept as
-/// `Directive::Unknown` for forward compatibility, except near-miss typos
-/// (edit distance 1 to a known key) which are rejected to catch `# alow=...`.
+/// Known `key=value` directive keys (SPEC 9.3). Unknown keys are rejected
+/// with `RSMPL_PATTERN_CONFLICT` (T113 fail-fast, SPEC 2.6); only
+/// edit-distance-1 near-misses get the did-you-mean suggestion, every other
+/// unknown key gets the SPEC 9.3 pointer.
 const KNOWN_KV_KEYS: &[&str] = &[
-    "lang",
-    "allow",
-    "optional",
-    "scope",
-    "bind",
-    "use",
-    "attrs",
-    "mode",
-    "macro",
-    "format",
-    "format_scope",
-    "returns",
-    "root",
-    "fallback",
-    "metavars",
-    "edition",
-    "symbol",
+    "lang", "allow", "optional", "scope", "bind", "use", "attrs", "mode", "macro", "format",
+    "returns", "root", "fallback", "metavars", "symbol",
 ];
 
 fn edit_distance_one(a: &str, b: &str) -> bool {
@@ -769,16 +761,14 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
             )
             .into()),
         },
-        "format_scope" => match v {
-            "node" => Ok(Directive::FormatScope(FormatScope::Node)),
-            "range" => Ok(Directive::FormatScope(FormatScope::Range)),
-            "file" => Ok(Directive::FormatScope(FormatScope::File)),
-            _ => Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                format!("invalid format_scope `{v}`: {line}"),
-            )
-            .into()),
-        },
+        "format_scope" => Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!("unsupported directive `# format_scope={v}` (only `# format=preserve` is supported in v0.1): {line}"),
+        )
+        .with_suggestion(
+            "remove the directive — only `# format=preserve` is supported".to_string(),
+        )
+        .into()),
         "returns" => match v {
             "none" => Ok(Directive::ReturnsNone(true)),
             _ => Err(StructuredError::new(
@@ -805,7 +795,14 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
             )
             .into()),
         },
-        "edition" => Ok(Directive::Edition(v.to_string())),
+        "edition" => Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!("unsupported directive `# edition={v}` (edition is the toolchain default in v0.1): {line}"),
+        )
+        .with_suggestion(
+            "remove the directive — edition is the toolchain default in v0.1".to_string(),
+        )
+        .into()),
         "symbol" => {
             // `# symbol=...` without name — invalid; canonical is `# symbol N=P`.
             Err(StructuredError::new(
@@ -827,10 +824,13 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                     .into());
                 }
             }
-            Ok(Directive::Unknown {
-                key: k.to_string(),
-                value: Some(v.to_string()),
-            })
+            // T113: unknown `k=v` directives fail fast (SPEC 2.6).
+            Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!("unknown directive `#{k}={v}`: {line}"),
+            )
+            .with_suggestion("check SPEC 9.3 for the supported directive list".to_string())
+            .into())
         }
     }
 }
@@ -1064,6 +1064,28 @@ mod tests {
         let e = parse_patch(text).unwrap_err();
         let msg = format!("{e}");
         assert!(msg.contains("alow") || msg.contains("allow"));
+    }
+
+    #[test]
+    fn rejects_unknown_and_unsupported_directives() {
+        // T113: silent no-op directives fail fast (SPEC 2.6).
+        for directive in [
+            "# foo",
+            "# foo=bar",
+            "# edition=2021",
+            "# format_scope=node",
+            "# frobnicate many things",
+        ] {
+            let text = format!(
+                "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n{directive}\n- fn foo(...) {{\n+ fn bar(...) {{\n      ...\n  }}\n"
+            );
+            let e = parse_patch(&text).unwrap_err();
+            let msg = format!("{e}");
+            assert!(
+                msg.contains("RSMPL_PATTERN_CONFLICT"),
+                "directive {directive} got: {msg}"
+            );
+        }
     }
 
     #[test]

@@ -125,13 +125,6 @@ pub enum FormatMode {
     Canonical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatScope {
-    Node,
-    Range,
-    File,
-}
-
 /// Metavariable kinds (SPEC 15.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetavarKind {
@@ -208,6 +201,9 @@ impl MetavarKind {
 }
 
 /// A single directive line (SPEC 9).
+/// T113: unknown directives are rejected at parse time (SPEC 2.6) — there
+/// is no `Unknown` catch-all, no `Edition`, and no `FormatScope`: the
+/// parser is the single source of supported-directive truth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Directive {
     LangRust,
@@ -220,12 +216,10 @@ pub enum Directive {
     Mode(ParseMode),
     MacroMode(MacroMode),
     Format(FormatMode),
-    FormatScope(FormatScope),
     ReturnsNone(bool),
     Root(String),
     FallbackSyntax(bool),
     SigiledMetavars(bool),
-    Edition(String),
     Symbol {
         name: String,
         path: String,
@@ -233,10 +227,6 @@ pub enum Directive {
     MetaVar {
         kind: MetavarKind,
         names: Vec<String>,
-    },
-    Unknown {
-        key: String,
-        value: Option<String>,
     },
 }
 

@@ -776,6 +776,13 @@ space
 
 Everything before that, if it is an unprefixed `#` line, is a directive.
 
+Unknown directives are rejected with `RSMPL_PATTERN_CONFLICT` (no
+forward-compat silent ignore, Section 2.6): an agent that authors `# foo`
+or `# foo=bar` gets `unknown directive` plus the Section 9.3 pointer
+instead of a silently ignored no-op. `# edition=*` and `# format_scope=*`
+are rejected as unsupported in v0.1 (edition is the toolchain default;
+only `# format=preserve` is supported).
+
 ---
 
 ## 10. Line Range Semantics
@@ -2929,7 +2936,9 @@ reason: target file does not parse as Rust
 
 ### 25.3 Pattern conflict
 
-The RSmPL pattern failed to parse.
+The RSmPL pattern failed to parse. Unknown directives (`# foo`,
+`# foo=bar`), `# edition=*`, and `# format_scope=*` are rejected here
+(no silent ignore, Section 9.6).
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -3707,7 +3716,7 @@ Possible future extensions:
 - semantic move with path rewriting;
 - stable canonical formatting mode;
 - explicit collection-valued captures and list paste separators;
-- explicit edition support:
+- explicit edition support (currently rejected, see Section 9.6):
 
 ```text
 # edition=2021
