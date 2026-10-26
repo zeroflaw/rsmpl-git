@@ -113,7 +113,8 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --output full.patch
 ```
 
 Piped patches avoid temp files (SPEC D.1). JSON prints
-`{rules, files, diff, diff_truncated, check}` (SPEC D.2);
+`{rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
+inspect JSON carries `total`/`omitted` next to `truncated` (SPEC D.3.3);
 `--diff-max-lines N` (`0` omits) bounds only the reported diff while
 `--check`/`--output`/apply use the full lowering (SPEC D.2.1); `--context N`
 (default 3, `0` allowed) shrinks the lowering itself (SPEC D.2.2, SPEC 26.1).

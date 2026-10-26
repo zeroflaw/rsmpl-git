@@ -321,6 +321,8 @@ fn run() -> Result<(), CliError> {
             })).collect::<Vec<_>>(),
             "diff": reported,
             "diff_truncated": diff_truncated,
+            "diff_lines": total_lines,
+            "diff_shown": reported.lines().count(),
             "check": if cli.check { serde_json::Value::String("ok".to_string()) } else { serde_json::Value::Null },
         });
         println!(
@@ -430,10 +432,12 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
     let (items_out, calls_out) = truncate_single(items, calls, cap);
     match cli.format {
         Format::Json => {
+            // T56: exact entry counts so agents can size the next
+            // `--max-items N` without guessing (`total` pre-cap, `omitted` hidden).
             let payload = if let Some(calls) = calls_out {
-                serde_json::json!({ "path": rel_str, "items": items_out, "calls": calls, "truncated": truncated })
+                serde_json::json!({ "path": rel_str, "items": items_out, "calls": calls, "truncated": truncated, "total": total, "omitted": omitted })
             } else {
-                serde_json::json!({ "path": rel_str, "items": items_out, "truncated": truncated })
+                serde_json::json!({ "path": rel_str, "items": items_out, "truncated": truncated, "total": total, "omitted": omitted })
             };
             println!(
                 "{}",
@@ -538,8 +542,7 @@ fn run_inspect_dir(
     let omitted = total.saturating_sub(cap.min(total));
     if cli.format == Format::Json {
         let files = truncate_dir_entries(parsed, cap, cli.calls);
-        let payload =
-            serde_json::json!({ "path": rel_str, "files": files, "truncated": truncated });
+        let payload = serde_json::json!({ "path": rel_str, "files": files, "truncated": truncated, "total": total, "omitted": omitted });
         println!(
             "{}",
             serde_json::to_string(&payload)

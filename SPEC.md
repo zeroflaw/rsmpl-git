@@ -3880,6 +3880,8 @@ prints one JSON object to stdout:
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
+  "diff_lines": 12,
+  "diff_shown": 12,
   "check": "ok"
 }
 ```
@@ -3898,6 +3900,10 @@ prints one JSON object to stdout:
 - `diff_truncated` is `true` iff the lowered diff is non-empty and the
   reported `diff` string hides any of it (`--diff-max-lines N` cut lines
   off, including `N=0` which omits); else `false` (including no-changes).
+  `diff_lines` is the line count of the full lowering (`0` when no
+  changes); `diff_shown` is the line count of the reported `diff` string
+  (`0` when omitted or no changes). JSON consumers size the next budget
+  as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
 - `check` is `"ok"` when `--check` was passed, else `null`.
 - `rules` follows patch document order (file-section order, then
   hunk order within a section), so a multi-hunk patch reads
@@ -4137,9 +4143,14 @@ Rules:
   `kind name s-e` / `rel: kind name s-e` lines). When entries were
   omitted, one stderr marker is printed:
   `truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)`.
-- JSON mode adds a top-level `"truncated": bool` to both shapes:
-  single `{"path", "items"[, "calls"], "truncated"}` and directory
-  `{"path", "files": [{"path", "items"[, "calls"]}], "truncated"}`.
+- JSON mode adds top-level `"truncated": bool` plus exact counts
+  `"total"` (pre-cap entries, `items` + `calls` combined) and `"omitted"`
+  (entries hidden by the cap; `0` when uncapped or under cap) to both
+  shapes: single `{"path", "items"[, "calls"], "truncated", "total",
+  "omitted"}` and directory `{"path", "files": [{"path", "items"[,
+  "calls"]}], "truncated", "total", "omitted"}`. JSON consumers size the
+  next `--max-items N` as `total - omitted` shown vs hidden instead of
+  guessing.
   Truncated runs contain fewer entries (partial file arrays, later files
   omitted); empty files (`items: []`, plus `calls: []` when `--calls`)
   are still included for coverage because they cost no budget.
