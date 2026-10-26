@@ -40,7 +40,10 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch --verbose
 
 Exit codes: `0` applied/clean, `2` patch error (structured
 `RSMPL_*`/`GIT_*` diagnostic on stderr). `--format json` prints
-`{rules, files_changed, diff, check}` to stdout; `--inspect` needs no patch.
+`{rules, files_changed, diff, check}` to stdout; failures print
+`{error: {code, rule, file, range, reason, suggestion}}` to stdout
+(`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files).
+`--inspect` needs no patch.
 
 ## Minimal semantic hunk
 

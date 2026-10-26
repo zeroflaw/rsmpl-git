@@ -2851,6 +2851,17 @@ file: src/lib.rs
 hunk: @@ -1,4 +1,5 @@
 ```
 
+### 25.8 I/O conflict
+
+A filesystem operation failed: the patch file or stdin could not be read,
+a repo file could not be read, or the `--output` file could not be written.
+
+```text
+RSMPL_IO_CONFLICT
+file: change.rsmpl
+reason: cannot read patch file change.rsmpl: No such file or directory (os error 2)
+```
+
 ---
 
 ## 26. Lowering to a Concrete Git Diff
@@ -3683,6 +3694,20 @@ prints one JSON object to stdout:
 - `--output <path>` still writes the diff file in both modes.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
+- Failure envelope: with `--format json`, every patch/IO failure prints
+  one JSON envelope to stdout and exits 2, so an agent can repair without
+  parsing stderr prose:
+
+```json
+{"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "check the range and pattern, or add `# optional`"}}
+```
+
+- The envelope always carries all six keys (`code rule file range reason
+  suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
+  codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
+  or output files and stdin failures.
+- Flag-usage errors (bad flag combinations, clap errors) stay plain text
+  on stderr in both modes; enveloping those is future work.
 
 ### D.3 Range discovery (`--inspect <path>`)
 

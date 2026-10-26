@@ -5,6 +5,7 @@
 //! `syn` (1-based lines, inclusive) and cover the attached attribute/doc
 //! envelope the same way matching does.
 
+use rsmpl_patch::{ErrorCode, StructuredError};
 use syn::spanned::Spanned;
 
 /// One listed item: `kind name start-end` (1-based inclusive lines).
@@ -16,11 +17,15 @@ pub struct ItemInfo {
     pub end: u32,
 }
 
-/// Parse `text` and list its items. Errors mention `RSMPL_PARSE_CONFLICT`
-/// so CLI exit codes stay machine-readable.
-pub fn inspect_source(text: &str) -> Result<Vec<ItemInfo>, String> {
+/// Parse `text` and list its items. Failures are structured
+/// `RSMPL_PARSE_CONFLICT` errors so CLI exit codes stay machine-readable
+/// (and `--format json` can envelope them).
+pub fn inspect_source(text: &str) -> Result<Vec<ItemInfo>, StructuredError> {
     let file: syn::File = syn::parse_str(text).map_err(|e| {
-        format!("RSMPL_PARSE_CONFLICT reason: target file does not parse as Rust: {e}")
+        StructuredError::new(
+            ErrorCode::ParseConflict,
+            format!("target file does not parse as Rust: {e}"),
+        )
     })?;
     let mut out = Vec::new();
     collect(&file.items, "", &mut out);
@@ -245,6 +250,7 @@ mod tests {
     #[test]
     fn parse_failure_mentions_conflict_code() {
         let err = inspect_source("fn broken( {}").unwrap_err();
-        assert!(err.contains("RSMPL_PARSE_CONFLICT"));
+        assert_eq!(err.code, ErrorCode::ParseConflict);
+        assert!(err.render().contains("RSMPL_PARSE_CONFLICT"));
     }
 }

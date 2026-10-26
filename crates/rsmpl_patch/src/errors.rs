@@ -12,6 +12,8 @@ pub enum ErrorCode {
     SymbolConflict,
     CaptureConflict,
     GitHunkConflict,
+    /// I/O failure reading the patch, a repo file, or writing output (SPEC 25.8).
+    IoConflict,
 }
 
 impl ErrorCode {
@@ -24,6 +26,7 @@ impl ErrorCode {
             Self::SymbolConflict => "RSMPL_SYMBOL_CONFLICT",
             Self::CaptureConflict => "RSMPL_CAPTURE_CONFLICT",
             Self::GitHunkConflict => "GIT_HUNK_CONFLICT",
+            Self::IoConflict => "RSMPL_IO_CONFLICT",
         }
     }
 }
@@ -72,6 +75,20 @@ impl StructuredError {
         self
     }
 
+    /// Machine-readable form for `--format json` failure envelopes (SPEC D.2):
+    /// `{"code","rule","file","range","reason","suggestion"}`.
+    /// Absent optionals serialize as `null` so agents see a stable key set.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "code": self.code.as_str(),
+            "rule": self.rule,
+            "file": self.file,
+            "range": self.range,
+            "reason": self.message,
+            "suggestion": self.suggestion,
+        })
+    }
+
     /// Render in the SPEC section 25 text-block style.
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -97,5 +114,42 @@ impl StructuredError {
 impl std::fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn io_code_renders() {
+        assert_eq!(ErrorCode::IoConflict.as_str(), "RSMPL_IO_CONFLICT");
+    }
+
+    #[test]
+    fn to_json_has_stable_keys_with_nulls() {
+        let e = StructuredError::new(ErrorCode::MatchConflict, "no match found");
+        let v = e.to_json();
+        assert_eq!(v["code"], serde_json::json!("RSMPL_MATCH_CONFLICT"));
+        assert_eq!(v["reason"], serde_json::json!("no match found"));
+        assert!(v["rule"].is_null(), "got: {v}");
+        assert!(v["file"].is_null(), "got: {v}");
+        assert!(v["range"].is_null(), "got: {v}");
+        assert!(v["suggestion"].is_null(), "got: {v}");
+    }
+
+    #[test]
+    fn to_json_carries_context() {
+        let e = StructuredError::new(ErrorCode::RangeConflict, "old range exceeds file")
+            .with_rule("r")
+            .with_file("src/lib.rs")
+            .with_range("40..47")
+            .with_suggestion("run --inspect");
+        let v = e.to_json();
+        assert_eq!(v["code"], serde_json::json!("RSMPL_RANGE_CONFLICT"));
+        assert_eq!(v["rule"], serde_json::json!("r"));
+        assert_eq!(v["file"], serde_json::json!("src/lib.rs"));
+        assert_eq!(v["range"], serde_json::json!("40..47"));
+        assert_eq!(v["suggestion"], serde_json::json!("run --inspect"));
     }
 }
