@@ -7,10 +7,21 @@
 use rsmpl_patch::{Directive, ErrorCode, MetavarKind, RsmplHunk, StructuredError};
 use std::collections::HashSet;
 
-use crate::expr_pattern::{classify_call_pattern, ExprPatternKind};
+use crate::expr_pattern::{classify_call_pattern, ExprPattern, ExprPatternKind, PlaceholderMaps};
 use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
-use crate::quote_utils::validate_quoting;
+use crate::quote_utils::{mask_literal_spans, unmask_literal_spans, validate_quoting};
+
+/// Shape of a generalized (non-call) pattern (T10 v1 subset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneralShape {
+    /// A `let` statement (`syn::Stmt::Local`, no `let-else`).
+    Stmt,
+    /// A general Rust expression (bounded engine variant set).
+    Expr,
+    /// A general Rust type (bounded engine variant set).
+    Type,
+}
 
 /// Top-level pattern kind for a hunk side.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +54,24 @@ pub enum PatternKind {
     ImplContext { impl_header: String },
     /// Macro token-tree / invocation patterns.
     Macro { minus_raw: String, plus_raw: String },
+    /// Generalized statement/expression/type rewrite (`let x = E`, `a + E`,
+    /// `Vec<T>`). `minus_sub` holds the placeholder-substituted pattern
+    /// (`__RSMPL_E` idents, backtick literals restored as literal text).
+    General {
+        shape: GeneralShape,
+        minus_sub: String,
+        plus_raw: String,
+        /// Placeholder idents per metavariable, for substitution checks.
+        placeholders: Vec<(String, String)>,
+        /// Backtick literals in the minus pattern.
+        literals: Vec<String>,
+        /// Leading `#[...]` attribute lines split off minus/plus (Stmts).
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+        /// True when a trailing `;` was stripped to match an expression
+        /// statement as an expression (deletions remove whole lines).
+        had_semi: bool,
+    },
     /// Fallback raw-text pattern (kept for diagnostics).
     Raw { minus: String, plus: String },
 }
@@ -248,6 +277,11 @@ fn classify(
             }
             "expr" => {
                 let (minus, maps, lits) = classify_call_pattern(m, table)?;
+                if matches!(minus, ExprPatternKind::Raw { .. }) {
+                    if let Some(g) = try_general(m, p, table, Some(GeneralShape::Expr))? {
+                        return Ok(g);
+                    }
+                }
                 return Ok(PatternKind::Expr {
                     minus,
                     plus_raw: p.to_string(),
@@ -259,6 +293,24 @@ fn classify(
                     literals: lits,
                     has_path_ellipsis: has_path_ellipsis(m),
                 });
+            }
+            "stmt" => {
+                return match try_general(m, p, table, Some(GeneralShape::Stmt))? {
+                    Some(g) => Ok(g),
+                    None => Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+                    )),
+                };
+            }
+            "type" => {
+                return match try_general(m, p, table, Some(GeneralShape::Type))? {
+                    Some(g) => Ok(g),
+                    None => Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "`# root=type` requires a Rust type pattern",
+                    )),
+                };
             }
             _ => {}
         }
@@ -341,6 +393,14 @@ fn classify(
     // Default: expression/call rewrite.
     if !m.is_empty() {
         let (minus, maps, lits) = classify_call_pattern(m, table)?;
+        // Non-call shapes (`Raw`) get a second chance as generalized
+        // stmt/expr/type patterns (T10). Call/method/macro routing is
+        // untouched, including `foo(E);` (which classifies as `Call`).
+        if matches!(minus, ExprPatternKind::Raw { .. }) {
+            if let Some(g) = try_general(m, p, table, None)? {
+                return Ok(g);
+            }
+        }
         return Ok(PatternKind::Expr {
             minus,
             plus_raw: p.to_string(),
@@ -364,6 +424,279 @@ fn classify(
 /// to argument/body ellipsis `foo(...)`.
 fn has_path_ellipsis(text: &str) -> bool {
     text.contains("::...") || text.contains("...::")
+}
+
+/// Upgrade a non-call `Raw` shape to a generalized Stmt/Expr/Type pattern.
+///
+/// Returns `None` when the text is none of those (caller keeps `Raw`, which
+/// the engine rejects with an unsupported-shape diagnostic).
+///
+/// Routing (forced by `# root=` or heuristic): a `syn::Stmt::Local` (`let`,
+/// no `let-else`) becomes `Stmt`; otherwise a Rust `Type` when forced or when
+/// a type-level metavariable is declared; otherwise a Rust `Expr`.
+/// `...` is rejected: v1 general patterns are concrete-or-metavariable only.
+#[allow(clippy::too_many_lines)]
+fn try_general(
+    minus_raw: &str,
+    plus_raw: &str,
+    table: &MetavarTable,
+    forced: Option<GeneralShape>,
+) -> Result<Option<PatternKind>, StructuredError> {
+    if minus_raw.contains("...") || plus_raw.contains("...") {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
+        ));
+    }
+    let (minus_attrs, minus_rest) = split_leading_attrs(minus_raw);
+    let (plus_attrs, plus_rest) = split_leading_attrs(plus_raw);
+    // Mask backtick literals so substitution cannot mistake them for
+    // metavariables, then restore them in the substituted pattern.
+    let (masked, sentinels) = mask_literal_spans(&minus_rest)?;
+    let (mut sub, maps) = ExprPattern::placeholder_expr(&masked, table);
+    sub = unmask_literal_spans(&sub, &sentinels);
+
+    let want = |s: GeneralShape| forced.is_none_or(|f| f == s);
+    let has_type_decl = table.declared.iter().any(|(k, _)| {
+        matches!(
+            k,
+            MetavarKind::Type | MetavarKind::Lifetime | MetavarKind::GenericParams
+        )
+    });
+
+    // 1. `let` statements (only `Stmt::Local`). Other statement shapes fall
+    // through so existing routing is untouched.
+    if want(GeneralShape::Stmt) {
+        match syn::parse_str::<syn::Stmt>(&sub) {
+            Ok(syn::Stmt::Local(local)) => {
+                if local.init.as_ref().is_some_and(|i| i.diverge.is_some()) {
+                    return Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "v1 general patterns do not support `let-else` statements",
+                    ));
+                }
+                check_let_pat(&local)?;
+                return Ok(Some(build_general(
+                    GeneralShape::Stmt,
+                    sub,
+                    plus_raw,
+                    &maps,
+                    minus_attrs,
+                    plus_attrs,
+                    false,
+                )));
+            }
+            // Any other statement shape (or unparsable text) falls through so
+            // existing routing is untouched; `# root=stmt` fails fast.
+            _ => {
+                if forced == Some(GeneralShape::Stmt) {
+                    return Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+                    ));
+                }
+            }
+        }
+    }
+
+    // 2. Expression statements with `;` match as expressions; the engine
+    // preserves (or whole-line-deletes) the semicolon via `had_semi`.
+    // (Call-like `foo(E);` shapes never reach here: they classify as `Call`.)
+    let mut expr_src: Option<String> = None;
+    let mut had_semi = false;
+    if let Ok(syn::Stmt::Expr(e, Some(_))) = syn::parse_str::<syn::Stmt>(&sub) {
+        expr_src = Some(quote::quote!(#e).to_string());
+        had_semi = true;
+    }
+
+    // 3. Types before expressions when the author declared type-level
+    // metavariables (so `Vec<T>` with `# type T` is a type pattern).
+    let type_first = forced == Some(GeneralShape::Type) || (forced.is_none() && has_type_decl);
+    if want(GeneralShape::Type) && type_first && syn::parse_str::<syn::Type>(&sub).is_ok() {
+        return check_type_deletion(plus_rest.trim(), || {
+            build_general(
+                GeneralShape::Type,
+                sub,
+                plus_raw,
+                &maps,
+                minus_attrs,
+                plus_attrs,
+                false,
+            )
+        });
+    }
+
+    // 4. Expressions.
+    if want(GeneralShape::Expr) {
+        let src = expr_src.unwrap_or(sub);
+        if syn::parse_str::<syn::Expr>(&src).is_ok() {
+            if plus_rest.trim().is_empty() && !had_semi {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "v1 expression deletion (empty `+` side) is only supported for `...;` statement shapes; match a `let` statement or write an explicit replacement",
+                ));
+            }
+            return Ok(Some(build_general(
+                GeneralShape::Expr,
+                src,
+                plus_raw,
+                &maps,
+                minus_attrs,
+                plus_attrs,
+                had_semi,
+            )));
+        }
+        if forced == Some(GeneralShape::Expr) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "`# root=expr` requires a Rust expression pattern",
+            ));
+        }
+        // Fall through: the text may still be a `Type` (step 5 re-derives it).
+    }
+
+    // 5. Types (expression-first order).
+    if want(GeneralShape::Type) && !type_first {
+        // Re-parse: `sub` may have been moved above; re-derive cheaply.
+        let (masked2, sentinels2) = mask_literal_spans(&minus_rest)?;
+        let (mut sub2, _) = ExprPattern::placeholder_expr(&masked2, table);
+        sub2 = unmask_literal_spans(&sub2, &sentinels2);
+        if syn::parse_str::<syn::Type>(&sub2).is_ok() {
+            return check_type_deletion(plus_rest.trim(), || {
+                build_general(
+                    GeneralShape::Type,
+                    sub2,
+                    plus_raw,
+                    &maps,
+                    minus_attrs,
+                    plus_attrs,
+                    false,
+                )
+            });
+        }
+    }
+    if forced == Some(GeneralShape::Type) {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "`# root=type` requires a Rust type pattern",
+        ));
+    }
+    Ok(None)
+}
+
+fn check_type_deletion(
+    plus_trimmed: &str,
+    build: impl FnOnce() -> PatternKind,
+) -> Result<Option<PatternKind>, StructuredError> {
+    if plus_trimmed.is_empty() {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type",
+        ));
+    }
+    Ok(Some(build()))
+}
+
+fn build_general(
+    shape: GeneralShape,
+    minus_sub: String,
+    plus_raw: &str,
+    maps: &PlaceholderMaps,
+    minus_attrs: Vec<String>,
+    plus_attrs: Vec<String>,
+    had_semi: bool,
+) -> PatternKind {
+    PatternKind::General {
+        shape,
+        minus_sub,
+        plus_raw: plus_raw.to_string(),
+        placeholders: maps
+            .expr_placeholders
+            .iter()
+            .map(|(ph, n)| (n.clone(), ph.clone()))
+            .collect(),
+        // Backticked spans were masked during substitution and restored as
+        // literal text in `minus_sub`; nothing further to record.
+        literals: Vec::new(),
+        minus_attrs,
+        plus_attrs,
+        had_semi,
+    }
+}
+
+/// Reject `let` patterns the v1 engine cannot match: embedded metavariables
+/// inside the bound pattern (other than a whole-pattern placeholder, or a
+/// `P: T` shape whose parts are each whole-placeholder/concrete).
+fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
+    let pat = &local.pat;
+    let (inner, ty) = match pat {
+        syn::Pat::Type(pt) => (&*pt.pat, Some(&*pt.ty)),
+        _ => (pat, None),
+    };
+    if matches!(inner, syn::Pat::Ident(_)) {
+        if let Some(t) = ty {
+            let rendered = quote::quote!(#t).to_string();
+            if rendered.contains("__RSMPL_") && !is_single_placeholder_type(t) {
+                return Err(embedded_pat_err());
+            }
+        }
+        return Ok(());
+    }
+    let rendered = quote::quote!(#pat).to_string();
+    if rendered.contains("__RSMPL_") {
+        return Err(embedded_pat_err());
+    }
+    Ok(())
+}
+
+fn is_single_placeholder_type(t: &syn::Type) -> bool {
+    if let syn::Type::Path(tp) = t {
+        if tp.qself.is_none() && tp.path.segments.len() == 1 {
+            let seg = &tp.path.segments[0];
+            return seg.arguments.is_none() && seg.ident.to_string().starts_with("__RSMPL_");
+        }
+    }
+    false
+}
+
+fn embedded_pat_err() -> StructuredError {
+    StructuredError::new(
+        ErrorCode::PatternConflict,
+        "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
+    )
+}
+
+/// Split leading `#[...]` attribute lines (possibly multi-line) from pattern
+/// text; returns (attrs, rest).
+fn split_leading_attrs(text: &str) -> (Vec<String>, String) {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut attrs = Vec::new();
+    let mut idx = 0;
+    while idx < lines.len() {
+        if !lines[idx].trim_start().starts_with("#[") {
+            break;
+        }
+        let mut depth = 0i32;
+        let start = idx;
+        while idx < lines.len() {
+            for c in lines[idx].chars() {
+                if c == '[' {
+                    depth += 1;
+                } else if c == ']' {
+                    depth -= 1;
+                }
+            }
+            idx += 1;
+            if depth <= 0 {
+                break;
+            }
+        }
+        attrs.extend(lines[start..idx].iter().map(ToString::to_string));
+        if depth > 0 {
+            break;
+        }
+    }
+    (attrs, lines[idx..].join("\n"))
 }
 
 fn is_single_meta(text: &str, table: &MetavarTable) -> bool {
@@ -495,5 +828,120 @@ mod tests {
         );
         let c = compile(&h).unwrap();
         assert!(c.repeated.contains(&"E".to_string()));
+    }
+
+    #[test]
+    fn let_shape_compiles_to_general_stmt() {
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let x = E;\n+ let y = E;\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(
+                &c.kind,
+                PatternKind::General {
+                    shape: GeneralShape::Stmt,
+                    ..
+                }
+            ),
+            "got: {:?}",
+            c.kind
+        );
+        assert!(c.unbound_plus.is_empty());
+    }
+
+    #[test]
+    fn binary_expr_compiles_to_general_expr() {
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- E + 1\n+ E.wrapping_add(1)\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(
+                &c.kind,
+                PatternKind::General {
+                    shape: GeneralShape::Expr,
+                    ..
+                }
+            ),
+            "got: {:?}",
+            c.kind
+        );
+    }
+
+    #[test]
+    fn type_with_type_metavar_compiles_to_general_type() {
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# type T\n- Vec<T>\n+ Box<[T]>\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(
+                &c.kind,
+                PatternKind::General {
+                    shape: GeneralShape::Type,
+                    ..
+                }
+            ),
+            "got: {:?}",
+            c.kind
+        );
+    }
+
+    #[test]
+    fn call_with_semi_stays_call() {
+        // `foo(E);` must keep call-matcher routing (not Stmt/GeneralExpr).
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E);\n+ bar(E);\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(&c.kind, PatternKind::Expr { .. }),
+            "got: {:?}",
+            c.kind
+        );
+    }
+
+    #[test]
+    fn root_stmt_forces_let() {
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root=stmt\n# stmt S\n- let x = 1;\n+ let y = 1;\n",
+        );
+        assert!(matches!(
+            compile(&h).unwrap().kind,
+            PatternKind::General {
+                shape: GeneralShape::Stmt,
+                ..
+            }
+        ));
+        let bad = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root=stmt\n- foo\n+ bar\n",
+        );
+        assert!(compile(&bad).is_err());
+    }
+
+    #[test]
+    fn ellipsis_rejected_in_general_shapes() {
+        // `...` still works in call routing...
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- foo(..., E)\n+ bar(E)\n",
+        );
+        assert!(matches!(
+            compile(&h).unwrap().kind,
+            PatternKind::Expr { .. }
+        ));
+        // ...but not in general shapes.
+        let h2 = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- E + ...\n+ E\n",
+        );
+        assert!(compile(&h2).is_err());
+    }
+
+    #[test]
+    fn type_deletion_rejected() {
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,0 @@ rule=x\n# lang=rust\n# type T\n- Vec<T>\n",
+        );
+        assert!(compile(&h).is_err());
     }
 }

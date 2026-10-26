@@ -13,5 +13,7 @@ mod quote_utils;
 pub use expr_pattern::{try_parse_expr, ArgPat, ExprPattern, ExprPatternKind, PlaceholderMaps};
 pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, VisPat, WherePat};
 pub use metavar::{MetavarTable, TokenKind};
-pub use pattern::{compile, CompiledPattern, PatternKind};
-pub use quote_utils::{strip_literal_quotes, validate_quoting, LiteralToken};
+pub use pattern::{compile, CompiledPattern, GeneralShape, PatternKind};
+pub use quote_utils::{
+    mask_literal_spans, strip_literal_quotes, unmask_literal_spans, validate_quoting, LiteralToken,
+};

@@ -65,6 +65,10 @@ Key rules for authors:
   explicit); attributes/doc comments are preserved by default.
 - Call rewrites (`- foo(E)` / `+ bar(E)`) need `# allow=many` for multiple
   sites and `# optional` to tolerate zero matches.
+- Beyond calls: `let` statements (`- let x = E;` / `+ let y = E;`), general
+  expressions (`- E + 1` / `+ E.wrapping_add(1)`), and types
+  (`- Vec<T>` / `+ Box<[T]>` with `# type T`) rewrite structurally. A bare
+  `P` never matches an annotated `x: T` — write `P: T`.
 - Moves use `# item I` + `# bind=Name` (cut) and `# use=Name` (paste);
   paste hunks may precede cut hunks.
 - Ordinary Git hunks and semantic hunks can mix but must not overlap.

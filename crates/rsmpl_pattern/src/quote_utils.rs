@@ -69,6 +69,48 @@ pub fn strip_literal_quotes(text: &str) -> Result<(String, Vec<LiteralToken>), S
     Ok((out, literals))
 }
 
+/// Replace each backtick-quoted span with a unique sentinel ident so later
+/// whole-token substitution cannot mistake literals for metavariables.
+/// Returns the masked text plus (sentinel -> literal) pairs for restoration.
+pub fn mask_literal_spans(text: &str) -> Result<(String, Vec<(String, String)>), StructuredError> {
+    validate_quoting(text)?;
+    let mut out = String::with_capacity(text.len());
+    let mut map = Vec::new();
+    let mut i = 0;
+    let mut n = 0usize;
+    while i < text.len() {
+        let c = text[i..].chars().next().unwrap();
+        if c == '`' {
+            let rest = &text[i + c.len_utf8()..];
+            let rel = rest.find('`').ok_or_else(|| {
+                StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("unbalanced backtick quoting in pattern `{text}`"),
+                )
+            })?;
+            let inner = &rest[..rel];
+            let sent = format!("__RSMPLQLIT{n}Q");
+            n += 1;
+            map.push((sent.clone(), inner.to_string()));
+            out.push_str(&sent);
+            i += c.len_utf8() + rel + 1;
+        } else {
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    Ok((out, map))
+}
+
+/// Restore masked sentinels to their literal text.
+pub fn unmask_literal_spans(text: &str, map: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (sent, lit) in map {
+        out = out.replace(sent, lit);
+    }
+    out
+}
+
 fn quoted_sections(text: &str) -> Result<Vec<(String, usize)>, StructuredError> {
     let mut out = Vec::new();
     let mut i = 0;

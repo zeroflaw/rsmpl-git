@@ -1037,7 +1037,7 @@ Examples:
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is an item rename; a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture and `# root=expr` forces expression rewrite for ambiguous shapes.
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is an item rename; a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 If the parse context is ambiguous, the engine may require an explicit directive:
 
@@ -2100,6 +2100,10 @@ In `# macro=token_tree` mode, raw token-tree matching does not automatically tre
 A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 
 > **v0.1 implementation note:** function-item hunks may differ only in the function name (rename-only). Visibility, qualifiers, generic parameters, return type, and where-clause slots must be identical between the `-` and `+` sides unless abstracted with the same metavariable on both sides; `# returns=none` constrains only the `-` side. Other slot changes are rejected rather than guessed.
+>
+> Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
+>
+> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, and `?`. General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, and `_` (which matches any type). Anything else (blocks, `if`/`match`/loops/closures, `let-else` targets, turbofish placeholders like `P::<...>`, `...` wildcards in these shapes) rejects the candidate rather than guessing. Lifetimes are wildcards in v1 and are not compared. An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous).
 
 Example:
 
