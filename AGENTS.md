@@ -3,6 +3,8 @@
 Agent? Start here. This file alone suffices for rename + call-rewrite +
 move patches. SPEC.md is the full contract; citations below name the
 normative section (SPEC 9.3, SPEC 14.1, SPEC 18.6, SPEC D.3, …).
+Skill: `skills/rsmpl-git/SKILL.md` teaches the patch-first loop
+(inspect → author → check → apply) for tool-driven agents.
 
 ## Patch skeleton
 

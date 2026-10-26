@@ -104,4 +104,34 @@ fn agents_md_citations_resolve() {
         spec.contains("AGENTS.md"),
         "SPEC.md Appendix D should point to AGENTS.md"
     );
+
+    // T117 anti-rot: the patch-first skill exists and teaches the token
+    // loop (scope=file over inspect, budget flags) plus the repair path.
+    let skill = read_root("skills/rsmpl-git/SKILL.md");
+    assert!(
+        skill.lines().count() <= 150,
+        "skill budget is 150 lines, got {}",
+        skill.lines().count()
+    );
+    for needle in [
+        "scope=file",
+        "RSMPL_MATCH_CONFLICT",
+        "--diff-max-lines 0",
+        "--context 0",
+        "TASKS.md",
+    ] {
+        assert!(skill.contains(needle), "skill missing needle {needle:?}");
+    }
+    assert!(
+        agents.contains("skills/rsmpl-git/SKILL.md"),
+        "AGENTS.md should point to the skill"
+    );
+    assert!(
+        readme.contains("skills/rsmpl-git/SKILL.md"),
+        "README.md should point to the skill"
+    );
+    assert!(
+        spec.contains("skills/rsmpl-git/SKILL.md"),
+        "SPEC.md Appendix D should point to the skill"
+    );
 }

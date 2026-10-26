@@ -8,7 +8,8 @@ rewrite hunks) and applies it to a repository by first lowering it to an
 ordinary Git patch, then running `git apply`. See `SPEC.md` for the full
 patch format (v0.1 notes mark the implemented subset). Agent? Start with
 `AGENTS.md` (one-page authoring reference, ~140 lines); `SPEC.md` is the
-full contract.
+full contract; `skills/rsmpl-git/SKILL.md` is the tool-driven patch-first
+loop (inspect → author → check → apply).
 
 ## Install
 

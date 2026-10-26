@@ -1,0 +1,113 @@
+---
+name: rsmpl-git
+description: Patch-first Rust refactoring with rsmpl-git semantic hunks (inspect, author, check, apply).
+---
+
+# rsmpl-git skill
+
+Use `rsmpl-git` for every Rust refactoring or modification — never hand-edit
+what a semantic hunk can express. Text edits that need no semantics still go
+through `rsmpl-git` as ordinary hunks, so one tool owns every change.
+
+## When to use / when not to
+
+- Use: rename (fn/item), call rewrites, moves, signature evolution,
+  `let`/expr/type rewrites — anything with `-`/`+` pattern lines.
+- Viewing only: prefer a targeted file read over `--inspect`; inspect
+  exists only to mint `@@ -old,len` ranges for files you do not hold.
+- Small file already held: skip inspect entirely — `@@ -1,1 @@` plus
+  `# scope=file` searches the whole file (SPEC 17.3).
+
+## Minimal patch
+
+```diff
+diff --git src/lib.rs
+@@ -10,7 @@ rule=rename_foo
+# lang=rust
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }
+```
+
+Single path suffices; `---`/`+++`/`index` are optional metadata; `rule=`
+may be omitted for single hunks; elide the `+new,len` side (ignored for
+RSmPL hunks, SPEC 10.4). Every `@@ -old,len @@` cites ORIGINAL pre-patch
+lines, never rebased (SPEC 10). Bare renames keep `# lang=rust` as the
+marker; hunks with other directives omit it (SPEC 7.1).
+
+## Directives (SPEC 9.3)
+
+| Directive | Meaning |
+|---|---|
+| `# allow=many` | many matches may rewrite (default `one`) |
+| `# optional` | zero matches OK (default: error) |
+| `# scope=file` | whole-file search; dummy `@@ -1,1 @@`, no inspect |
+| `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable |
+| `# item I` + `# bind=N` / `# use=N` | cut / paste a moved item |
+| `# attrs=preserve` | default: ignore + preserve attrs/doc comments |
+| `# root=item\|expr\|stmt\|type` | force parse context |
+| `# fallback=syntax` | syntactic match when `# symbol` can't resolve |
+| `# returns=none` | minus-side requires no return type (fn only) |
+
+## Shapes (SPEC 14/15/16/18.6)
+
+```diff
+@@ -5,5 @@ rule=rename_calls
+# allow=many
+# expr E
+- foo(E)
++ bar(E)
+```
+
+- Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/
+  generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
+  preserved, bodies never rewritten (SPEC 14.7).
+- Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
+  `const`/`static`/`mod`/`union`/`impl` self-ty), one ident edit (SPEC 14.8).
+- Move: cut `- I` (`# item I` + `# bind=N`), paste `+ N` (`# use=N`);
+  paste may precede cut; cross-file = two sections (SPEC 20).
+- Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
+  `+ Box<[T]>` (`# type T`). Bare `P` never matches `x: T` — write `P: T`.
+  Full supported-vs-rejected table: SPEC 18.6.
+
+## Loop (SPEC D.3.3)
+
+```sh
+rsmpl-git --inspect src/lib.rs            # only for ranges you lack
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --context 0 --check
+rsmpl-git --file change.rsmpl --output full.patch   # full diff while preview stays small
+rsmpl-git --file change.rsmpl                       # apply for real
+```
+
+- `--context 0` shrinks the lowering itself (still appliable);
+  `--diff-max-lines` trims only the preview; truncated stdout is
+  review-only, never pipe it to `git apply` (SPEC D.2.1/D.2.2).
+- Lint without a checkout: `--repo /tmp/empty --check` — `no match found`
+  is the pass signal (SPEC D.2.4); re-check against the real repo after.
+- Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --patch -`
+  (canonical stdin spelling; `--file -` is the symmetric alias, SPEC D.1).
+
+## Errors: code → fix (SPEC 25)
+
+| Code | Fix |
+|---|---|
+| `RSMPL_RANGE_CONFLICT` | re-run the suggested `--inspect` command, fix the range |
+| `RSMPL_PARSE_CONFLICT` | target doesn't parse / empty patch — read file, add `diff --git` |
+| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected |
+| `RSMPL_MATCH_CONFLICT` | `no match found` — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many` |
+| `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
+| `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |
+| `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
+| `RSMPL_IO_CONFLICT` | unreadable path or `--inspect` flag misuse — fix per suggestion |
+
+JSON failures (`--format json`) print `{error: {code, rule, file, range,
+reason, suggestion}}` to stdout only, exit 2.
+
+## Dogfood rule
+
+Every future Rust refactor starts here. Any failure, missing shape, or
+confusing diagnostic becomes a TASKS.md work item before working around
+it — the tool improves instead of the workaround sticking.
+
+Full contract: SPEC.md. One-page reference: AGENTS.md.

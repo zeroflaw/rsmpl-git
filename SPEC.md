@@ -4172,6 +4172,15 @@ sees. Spans are 1-based inclusive; the hunk length is
 `L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`), so an inspect
 span converts to an `@@ -start,len` old-side range with one subtraction.
 
+Surface freeze (patching focus): inspect stays at items + `--calls`
+preview + dir scan + `--max-items` budget — no type-site listing (use a
+targeted read, D.3.1), no single/dir shape unification (both shapes stay
+as documented, D.3.2), no callee-anchored call spans (match scope is the
+whole call, D.3.1), no `use`-name truncation (grep-ability wins, D.3),
+no `path` canonicalization (as-given echo stays, D.3.2). Whole-file
+rewrites skip inspect entirely via `# scope=file` + `@@ -1,1 @@` (17.3).
+Agent workflow detail lives in `skills/rsmpl-git/SKILL.md`.
+
 #### D.3.1 Call-site preview (`--inspect <path> --calls`)
 
 Item spans locate definitions, but call rewrites target call sites inside
