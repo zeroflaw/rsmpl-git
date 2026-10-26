@@ -346,6 +346,28 @@ fn only_rename(rule: &str) -> StructuredError {
     .with_rule(rule)
 }
 
+/// Find item targets (function or other items) for an item-capture hunk.
+///
+/// v0.1 matches any item (fn, struct, mod, use, ...) by line-span
+/// containment; only functions are structurally verified elsewhere.
+pub(crate) fn find_item_targets(
+    parsed: &syn::File,
+    scope: Scope,
+    old_start: u32,
+    old_len: u32,
+) -> Vec<(u32, u32)> {
+    let mut candidates: Vec<(u32, u32)> = Vec::new();
+    for c in collect_fns(parsed) {
+        if in_scope(&c, scope, old_start, old_len) {
+            candidates.push((c.start_line, c.end_line));
+        }
+    }
+    candidates.extend(collect_non_fn_item_spans(parsed, scope, old_start, old_len));
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
 /// Delete the single matched item for a bare `- I` hunk (SPEC 18.2).
 pub fn apply_item_delete(
     parsed: &syn::File,
@@ -355,61 +377,57 @@ pub fn apply_item_delete(
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
 ) -> Result<usize, StructuredError> {
-    let meta = match &compiled.kind {
-        PatternKind::ItemCapture { meta } => meta.clone(),
+    match &compiled.kind {
+        PatternKind::ItemCapture { .. } => {}
         _ => {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected item capture pattern".to_string(),
             ))
         }
-    };
-    let _ = meta;
+    }
     let rule = hunk.rule_name();
     let old_start = hunk.header.old_start;
     let old_len = hunk.header.old_len;
-    // v0.1: match any single item (fn, struct, mod, use, ...) fully contained
-    // in the range. Only functions are structurally verified; other items are
-    // matched by line-span containment.
-    let mut candidates: Vec<(u32, u32)> = Vec::new();
-    for c in collect_fns(parsed) {
-        if in_scope(&c, hunk.scope(), old_start, old_len) {
-            candidates.push((c.start_line, c.end_line));
-        }
-    }
-    candidates.extend(collect_non_fn_item_spans(
-        parsed,
-        index,
-        hunk.scope(),
-        old_start,
-        old_len,
-    ));
-    candidates.sort();
-    candidates.dedup();
+    let candidates = find_item_targets(parsed, hunk.scope(), old_start, old_len);
     if candidates.is_empty() {
         return Ok(0);
     }
-    // allow=one requires exactly one; take outermost/first for many? For
-    // deletion, `many` deletes all contained items.
+    // allow=one requires exactly one; for deletion, `many` deletes all
+    // contained items.
     let targets: Vec<(u32, u32)> = match hunk.allow() {
         rsmpl_patch::Allow::One => vec![candidates[0]],
         rsmpl_patch::Allow::Many => candidates,
     };
     let n = targets.len();
     for (sl, el) in targets {
-        let start = index.line_start(sl).ok_or_else(|| range_err(&rule, sl))?;
-        // Delete whole lines: end at the start of the following line (this
-        // swallows the trailing newline); at EOF use EOF.
-        let end = index.line_start(el + 1).unwrap_or_else(|| index.eof());
-        edits.push(TextEdit::new(start, end, String::new()));
+        edits.push(delete_lines(index, sl, el, &rule)?);
     }
     Ok(n)
+}
+
+/// Whole-line deletion edit from `start_line` through `end_line` (inclusive),
+/// swallowing the trailing newline.
+pub(crate) fn delete_lines(
+    index: &LineIndex,
+    start_line: u32,
+    end_line: u32,
+    rule: &str,
+) -> Result<TextEdit, StructuredError> {
+    let start = index
+        .line_start(start_line)
+        .ok_or_else(|| range_err(rule, start_line))?;
+    // End at the start of the following line (this swallows the trailing
+    // newline); at EOF use EOF.
+    let end = index
+        .line_start(end_line + 1)
+        .unwrap_or_else(|| index.eof());
+    Ok(TextEdit::new(start, end, String::new()))
 }
 
 /// Non-function item spans (struct/enum/mod/use/...) via syn item spans.
 fn collect_non_fn_item_spans(
     parsed: &syn::File,
-    _index: &LineIndex,
     scope: Scope,
     old_start: u32,
     old_len: u32,
