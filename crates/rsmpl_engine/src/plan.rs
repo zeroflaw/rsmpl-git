@@ -362,7 +362,6 @@ pub fn apply_with_captures(
             .with_file(path)
         })?;
         files.insert(path.clone(), updated);
-        report.files_changed.push(path.clone());
     }
 
     Ok(report)

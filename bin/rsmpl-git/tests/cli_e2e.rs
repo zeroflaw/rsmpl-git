@@ -1694,6 +1694,84 @@ fn context_help_documents_default_manually() {
 }
 
 #[test]
+fn text_apply_summary_matches_json_files() {
+    // T65 (+T78): text `applied …` and JSON `files[].path` share one
+    // diff-based source (old-vs-new contents differ). A rename touches
+    // one file in both modes; an `# optional` zero-match hunk touches
+    // none in both modes (`(no changes)` vs `files: []`).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    // JSON --check on a clone: pin `files[].path` without applying.
+    let dir_json = init_repo();
+    write(
+        &dir_json.path().join(""),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    let json_out = run(
+        dir_json.path(),
+        &["--patch", patch, "--format", "json", "--check"],
+    );
+    assert!(
+        json_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout)).unwrap();
+    let paths: Vec<&str> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["src/lib.rs"], "got: {v}");
+    // Text apply on the real repo: same single path on stderr.
+    let out = run(dir.path(), &["--patch", patch]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("applied 1 file(s): src/lib.rs"),
+        "got: {stderr}"
+    );
+    // Zero-change case: both modes agree on empty.
+    let noop = "diff --git src/lib.rs\n@@ -1,1 @@ rule=noop\n# lang=rust\n# optional\n- fn missing_xyz(...) {\n+ fn renamed_xyz(...) {\n      ...\n  }\n";
+    let dir_noop = init_repo();
+    write(&dir_noop.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let json_noop = run(
+        dir_noop.path(),
+        &["--patch", noop, "--format", "json", "--check"],
+    );
+    assert!(
+        json_noop.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json_noop.stderr)
+    );
+    let v2: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json_noop.stdout)).unwrap();
+    assert_eq!(v2["files"].as_array().unwrap().len(), 0, "got: {v2}");
+    let dir_noop2 = init_repo();
+    write(&dir_noop2.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let text_noop = run(dir_noop2.path(), &["--patch", noop, "--check"]);
+    assert!(
+        text_noop.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text_noop.stderr)
+    );
+    let stdout_noop = String::from_utf8_lossy(&text_noop.stdout).to_string();
+    assert!(stdout_noop.contains("(no changes)"), "got: {stdout_noop}");
+}
+
+#[test]
 fn explicit_default_context_three_rejected_with_inspect() {
     // Even the default value, when passed explicitly, is rejected with
     // `--inspect` — proof the `Option` (absent-vs-explicit) shape is

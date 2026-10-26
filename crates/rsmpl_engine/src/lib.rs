@@ -40,10 +40,13 @@ pub struct RuleReport {
 }
 
 /// Result of applying a patch to an in-memory file tree.
+///
+/// Only per-rule match counts live here. The changed-file set is owned
+/// by the CLI, derived from old-vs-new contents (diff-based observable
+/// truth, SPEC D.2), so text and JSON reports cannot diverge.
 #[derive(Debug, Clone, Default)]
 pub struct ApplyReport {
     pub rules: Vec<RuleReport>,
-    pub files_changed: Vec<String>,
 }
 
 /// Apply `patch` to `files` (path -> contents) in place.

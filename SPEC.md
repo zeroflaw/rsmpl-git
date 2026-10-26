@@ -3865,7 +3865,10 @@ prints one JSON object to stdout:
   the full old/new contents, so counts stay exact even when `diff` is
   truncated or omitted (see D.2.1). Empty when no changes. `files[].path`
   is the single source of changed paths (a former `files_changed` key that
-  duplicated these paths was removed as pure report overhead).
+  duplicated these paths was removed as pure report overhead). The text
+  apply `applied N file(s): …` stderr summary reports this same
+  diff-based set (old-vs-new contents differ); the engine reports only
+  per-rule matches and owns no separate changed list.
 - `diff` is the lowered ordinary Git diff (empty string when no changes).
 - `diff_truncated` is `true` iff the lowered diff is non-empty and the
   reported `diff` string hides any of it (`--diff-max-lines N` cut lines

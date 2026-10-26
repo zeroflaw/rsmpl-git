@@ -371,11 +371,10 @@ fn run() -> Result<(), CliError> {
     // Default: apply the lowered patch with `git apply`, exactly as SPEC 26.1
     // prescribes (convert first, then apply the normal Git patch).
     rsmpl_git::apply_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
-    eprintln!(
-        "applied {} file(s): {}",
-        report.files_changed.len(),
-        report.files_changed.join(", ")
-    );
+    // Single source of truth (T65): diff-based `changed` (old-vs-new
+    // contents differ), the same set JSON reports as `files[].path`.
+    let names: Vec<&str> = changed.iter().map(|(p, _, _)| p.as_str()).collect();
+    eprintln!("applied {} file(s): {}", names.len(), names.join(", "));
     Ok(())
 }
 
