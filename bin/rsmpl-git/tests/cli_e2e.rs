@@ -1407,6 +1407,35 @@ fn repeat_folds_nested_match_json_report() {
 }
 
 #[test]
+fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
+    // T134: header counts need not equal body counts; content is the gate.
+    // Body is 2 context + 1 removal (+ 1 addition); header claims 1,4/1,99
+    // (both fit in the 5-line file but match no body arithmetic). Applies.
+    // One wrong content line still fails with GIT_HUNK_CONFLICT.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\n",
+    );
+    let lenient =
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,99 @@\n fn a() {}\n-fn b() {}\n+fn b2() {}\n fn c() {}\n";
+    let out = run(dir.path(), &["--patch", lenient, "--check"]);
+    assert!(
+        out.status.success(),
+        "lenient counts should pass, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Same file, same (correct) counts, but one wrong content line.
+    let wrong_content =
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-WRONG\n+fn b2() {}\n fn c() {}\n";
+    let out = run(dir.path(), &["--patch", wrong_content, "--check"]);
+    assert!(!out.status.success(), "wrong content must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("GIT_HUNK_CONFLICT"), "got: {stderr}");
+}
+
+#[test]
 fn repeat_with_bind_rejected_json_envelope() {
     // T20: `# repeat` on a capture hunk fails fast with PATTERN conflict.
     let dir = init_repo();

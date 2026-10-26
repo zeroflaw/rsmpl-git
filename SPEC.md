@@ -949,7 +949,7 @@ index 1111111..2222222 100644
  fn main() {}
 ```
 
-An RSmPL-Git engine should apply ordinary hunks using standard unified-diff semantics or delegate them to a Git-compatible patch applier.
+An RSmPL-Git engine should apply ordinary hunks using standard unified-diff semantics or delegate them to a Git-compatible patch applier, with one deliberate divergence: the header counts need not equal the body line counts. The engine positions by `old_start` and verifies every context (` `) and removal (`-`) line byte-for-byte against the original file; an arithmetic mismatch between the header counts and the body (` `+`-` vs ` `+`+`) alone never fails. `old_len` still bounds the file (`old_start-1+old_len` must fit, else `RSMPL_RANGE_CONFLICT`); `new_len` is fully ignored. A content mismatch (wrong `old_start` or wrong line text) fails with `GIT_HUNK_CONFLICT`. Exact line counting is not required — correct `old_start` plus correct body content suffices.
 
 Ordinary hunks may appear before, between, or after RSmPL hunks.
 
