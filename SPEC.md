@@ -369,7 +369,7 @@ diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -750,8 +750,7 @@ A semantic symbol binding is declared with:
 Example:
 
 ```diff
-@@ -80,20 +80,20 @@ rule=rename_symbol
-# lang=rust
+@@ -80,20 @@ rule=rename_symbol
 # allow=many
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
@@ -794,15 +793,13 @@ RSmPL-Git does not use separate `file:` and `lines:` fields.
 The file is determined by the surrounding Git file section:
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs
-+++ b/src/lib.rs
+diff --git src/lib.rs
 ```
 
 The range is determined by the hunk header:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
+@@ -40,8 @@ rule=rename_calls
 ```
 
 This gives the old-side semantic search range:
@@ -847,7 +844,7 @@ defines the region in the original source file where AST matching is permitted. 
 Example:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
+@@ -40,8 @@ rule=rename_calls
 ```
 
 means the engine may search only original old lines:
@@ -875,8 +872,7 @@ Implementations should tolerate new-side line-count drift for RSmPL hunks and co
 For example:
 
 ```diff
-@@ -20,12 +20,0 @@ rule=cut_helper
-# lang=rust
+@@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
@@ -891,8 +887,7 @@ Zero-length old-side ranges are allowed for insertions.
 Example:
 
 ```diff
-@@ -5,0 +5,0 @@ rule=paste_helper
-# lang=rust
+@@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
 ```
@@ -974,7 +969,7 @@ An RSmPL hunk body uses diff prefixes:
 Example:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -991,7 +986,7 @@ Context lines constrain the match but are not removed or added.
 Example:
 
 ```diff
-@@ -20,10 +20,10 @@ rule=rewrite_inside_impl
+@@ -20,10 @@ rule=rewrite_inside_impl
 # lang=rust
   impl Service {
       ...
@@ -1029,8 +1024,7 @@ RSmPL hunk bodies are semantic patterns. The number of `-` and `+` pattern lines
 Example:
 
 ```diff
-@@ -100,50 +20,50 @@ rule=move_large_function
-# lang=rust
+@@ -100,50 @@ rule=move_large_function
 # item I
 # bind=MovedFunction
 - I
@@ -1063,8 +1057,7 @@ Metavariables match AST fragments.
 Example:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # expr E
 - old_api(E)
 + new_api(E)
@@ -1278,8 +1271,7 @@ To require no explicit return type, use:
 Example:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_unit_foo
-# lang=rust
+@@ -10,7 @@ rule=rename_unit_foo
 # returns=none
 - fn foo(...) {
 + fn bar(...) {
@@ -1292,7 +1284,7 @@ Example:
 To match a public function, write `pub`:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_pub_foo
+@@ -10,7 @@ rule=rename_pub_foo
 # lang=rust
 - pub fn foo(...) {
 + pub fn bar(...) {
@@ -1303,7 +1295,7 @@ To match a public function, write `pub`:
 To match `pub(crate)`:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_pub_crate_foo
+@@ -10,7 @@ rule=rename_pub_crate_foo
 # lang=rust
 - pub(crate) fn foo(...) {
 + pub(crate) fn bar(...) {
@@ -1314,8 +1306,7 @@ To match `pub(crate)`:
 To abstract over visibility, declare a visibility metavariable:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_any_visible_foo
-# lang=rust
+@@ -10,7 @@ rule=rename_any_visible_foo
 # visibility V
 - V fn foo(...) {
 + V fn bar(...) {
@@ -1338,7 +1329,7 @@ extern "ABI"
 To match an async function:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_async_foo
+@@ -10,7 @@ rule=rename_async_foo
 # lang=rust
 - async fn foo(...) {
 + async fn bar(...) {
@@ -1349,7 +1340,7 @@ To match an async function:
 To match an unsafe function:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_unsafe_foo
+@@ -10,7 @@ rule=rename_unsafe_foo
 # lang=rust
 - unsafe fn foo(...) {
 + unsafe fn bar(...) {
@@ -1360,7 +1351,7 @@ To match an unsafe function:
 To match an async unsafe function:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_async_unsafe_foo
+@@ -10,7 @@ rule=rename_async_unsafe_foo
 # lang=rust
 - async unsafe fn foo(...) {
 + async unsafe fn bar(...) {
@@ -1371,8 +1362,7 @@ To match an async unsafe function:
 To abstract over qualifiers:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_qualified_foo
-# lang=rust
+@@ -10,7 @@ rule=rename_qualified_foo
 # qualifier_list Q
 - Q fn foo(...) {
 + Q fn bar(...) {
@@ -1387,7 +1377,7 @@ A plain function pattern does not match generic functions.
 To match a specific generic shape:
 
 ```diff
-@@ -20,10 +20,10 @@ rule=rename_generic_foo
+@@ -20,10 @@ rule=rename_generic_foo
 # lang=rust
 - fn foo<T>(...)
 + fn bar<T>(...)
@@ -1399,7 +1389,7 @@ To match a specific generic shape:
 To match a generic function with a where clause:
 
 ```diff
-@@ -20,12 +20,12 @@ rule=rename_where_foo
+@@ -20,12 @@ rule=rename_where_foo
 # lang=rust
 - fn foo<T>(...)
 + fn bar<T>(...)
@@ -1413,8 +1403,7 @@ To match a generic function with a where clause:
 To abstract over generic parameters and where clauses:
 
 ```diff
-@@ -20,12 +20,12 @@ rule=rename_any_generic_foo
-# lang=rust
+@@ -20,12 @@ rule=rename_any_generic_foo
 # generic_params G
 # where_clause W
 - fn foo G (...) W {
@@ -1485,8 +1474,7 @@ let x = compute();
 Patch:
 
 ```diff
-@@ -10,1 +10,1 @@ rule=rename_stmt_initializer
-# lang=rust
+@@ -10,1 @@ rule=rename_stmt_initializer
 # stmt S
 # expr E
 - let x = E;
@@ -1519,7 +1507,7 @@ fn foo(x: i32) -> i32 {
 Patch:
 
 ```diff
-@@ -10,8 +10,8 @@ rule=rename_documented_foo
+@@ -10,8 @@ rule=rename_documented_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -1554,8 +1542,7 @@ fn helper(x: i32) -> i32 {
 Patch:
 
 ```diff
-@@ -20,6 +20,0 @@ rule=cut_helper
-# lang=rust
+@@ -20,6 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
@@ -1568,7 +1555,7 @@ The binding `Helper` contains both the function item and its attached doc commen
 To require a specific attribute, write it explicitly:
 
 ```diff
-@@ -10,8 +10,8 @@ rule=rename_inline_foo
+@@ -10,8 @@ rule=rename_inline_foo
 # lang=rust
 - #[inline]
 - fn foo(...) {
@@ -1581,8 +1568,7 @@ To require a specific attribute, write it explicitly:
 To bind and preserve arbitrary attributes explicitly:
 
 ```diff
-@@ -10,8 +10,8 @@ rule=rename_attributed_foo
-# lang=rust
+@@ -10,8 @@ rule=rename_attributed_foo
 # attributes A
 - A
 - fn foo(...) {
@@ -1595,8 +1581,7 @@ To bind and preserve arbitrary attributes explicitly:
 To require that no attributes or doc comments are attached, use:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_unattributed_foo
-# lang=rust
+@@ -10,7 @@ rule=rename_unattributed_foo
 # attrs=absent
 - fn foo(...) {
 + fn bar(...) {
@@ -1633,7 +1618,7 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 Example (add visibility, generics, and a return type in one hunk, params and body preserved):
 
 ```diff
-@@ -1,2 +1,2 @@ rule=evolve
+@@ -1,2 @@ rule=evolve
 # lang=rust
 - fn compute(...) {
 + pub async fn compute<T>(...) -> Vec<T> {
@@ -1650,7 +1635,7 @@ is the rename fast-path safety rule: a bare `fn foo(...)` → `fn
 bar(...)` must never silently drop return types or where clauses.
 
 ```diff
-@@ -1,1 +1,1 @@ rule=strip_result
+@@ -1,1 @@ rule=strip_result
 # lang=rust
 - fn compute(...) -> Result<Vec<T>, E> {
 + fn compute(...) {
@@ -1675,7 +1660,7 @@ Function renames (14.1–14.7) are strict about explicitly written slots because
 Example (rename a struct without restating its fields):
 
 ```diff
-@@ -1,3 +1,3 @@ rule=rename_struct
+@@ -1,3 @@ rule=rename_struct
 # lang=rust
 - struct Old
 + struct New
@@ -1836,8 +1821,7 @@ A declared metavariable name shadows literal Rust syntax of the same spelling in
 Example:
 
 ```diff
-@@ -50,8 +50,8 @@ rule=box_type
-# lang=rust
+@@ -50,8 @@ rule=box_type
 # type E
 - Result<T, E>
 + Result<T, Box<E>>
@@ -1848,8 +1832,7 @@ In this hunk, `E` is a type metavariable. The pattern does **not** require a lit
 If the pattern must match the literal Rust identifier `E`, the identifier must be escaped with RSmPL literal-token quoting. RSmPL uses backtick quoting for literal tokens whose spelling would otherwise be interpreted as a metavariable:
 
 ~~~diff
-@@ -50,8 +50,8 @@ rule=literal_error_type
-# lang=rust
+@@ -50,8 @@ rule=literal_error_type
 # type T
 # type E
 - Result<T, `E`>
@@ -1910,8 +1893,7 @@ Implementations may support a stricter optional mode:
 In sigiled mode, metavariables must be written with a leading `$` in the pattern body:
 
 ```diff
-@@ -50,8 +50,8 @@ rule=sigiled_example
-# lang=rust
+@@ -50,8 @@ rule=sigiled_example
 # metavars=sigiled
 # expr E
 - old($E)
@@ -1933,8 +1915,7 @@ Bare mode is more token-efficient and is the default for LLM-generated patches. 
 Expression metavariable:
 
 ```diff
-@@ -50,8 +50,8 @@ rule=wrap_expr
-# lang=rust
+@@ -50,8 @@ rule=wrap_expr
 # expr E
 - old(E)
 + new(E)
@@ -1943,8 +1924,7 @@ Expression metavariable:
 Type metavariable:
 
 ```diff
-@@ -50,8 +50,8 @@ rule=box_type
-# lang=rust
+@@ -50,8 @@ rule=box_type
 # type T
 - Vec<T>
 + Box<[T]>
@@ -1953,8 +1933,7 @@ Type metavariable:
 Item metavariable:
 
 ```diff
-@@ -20,12 +20,0 @@ rule=cut_item
-# lang=rust
+@@ -20,12 @@ rule=cut_item
 # item I
 # bind=CutItem
 - I
@@ -1963,8 +1942,7 @@ Item metavariable:
 Pattern metavariable:
 
 ```diff
-@@ -50,8 +50,8 @@ rule=if_let_to_matches
-# lang=rust
+@@ -50,8 @@ rule=if_let_to_matches
 # pat P
 # expr E
 - if let P = E {
@@ -1983,8 +1961,7 @@ This rule is mandatory. Repeated metavariables are not independent wildcards.
 Example:
 
 ```diff
-@@ -40,1 +40,1 @@ rule=dedupe_assert_eq
-# lang=rust
+@@ -40,1 @@ rule=dedupe_assert_eq
 # expr E
 - assert_eq!(E, E)
 + assert_equal_once(E)
@@ -2009,8 +1986,7 @@ For `symbol` metavariables, repeated occurrences must resolve to the same semant
 In a `+` pattern, each occurrence of a bound metavariable inserts the same captured syntax. A `+` pattern may duplicate a captured value intentionally:
 
 ```diff
-@@ -20,1 +20,1 @@ rule=duplicate_arg
-# lang=rust
+@@ -20,1 @@ rule=duplicate_arg
 # expr E
 - once(E)
 + twice(E, E)
@@ -2569,8 +2545,7 @@ diff --git a/src/old.rs b/src/old.rs
 index 1111111..2222222 100644
 --- a/src/old.rs
 +++ b/src/old.rs
-@@ -20,12 +20,0 @@ rule=cut_helper
-# lang=rust
+@@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
@@ -2589,8 +2564,7 @@ diff --git a/src/new.rs b/src/new.rs
 index 3333333..4444444 100644
 --- a/src/new.rs
 +++ b/src/new.rs
-@@ -5,0 +5,0 @@ rule=paste_helper
-# lang=rust
+@@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
 ```
@@ -2663,8 +2637,7 @@ diff --git a/src/old.rs b/src/old.rs
 index 1111111..2222222 100644
 --- a/src/old.rs
 +++ b/src/old.rs
-@@ -20,12 +20,0 @@ rule=cut_helper
-# lang=rust
+@@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
@@ -2673,8 +2646,7 @@ diff --git a/src/new.rs b/src/new.rs
 index 3333333..4444444 100644
 --- a/src/new.rs
 +++ b/src/new.rs
-@@ -5,0 +5,0 @@ rule=paste_helper
-# lang=rust
+@@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
 
@@ -3480,8 +3452,7 @@ diff --git a/src/old.rs b/src/old.rs
 index 1111111..2222222 100644
 --- a/src/old.rs
 +++ b/src/old.rs
-@@ -20,12 +20,0 @@ rule=cut_helper
-# lang=rust
+@@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
@@ -3490,8 +3461,7 @@ diff --git a/src/new.rs b/src/new.rs
 index 3333333..4444444 100644
 --- a/src/new.rs
 +++ b/src/new.rs
-@@ -5,0 +5,0 @@ rule=paste_helper
-# lang=rust
+@@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
 ```
@@ -3503,7 +3473,7 @@ diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
