@@ -34,6 +34,9 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff --check
 rsmpl-git --repo ./my-repo --inspect src/lib.rs
 rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
 
+# Also list call/method/macro sites for tight call-rewrite ranges:
+rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
+
 # Apply and save the concrete diff for review:
 rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch --verbose
 ```

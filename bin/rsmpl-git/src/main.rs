@@ -13,6 +13,8 @@
 //! rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff
 //! # Discover valid @@ ranges without reading whole files:
 //! rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
+//! # Also list call/method/macro sites for tight call-rewrite ranges:
+//! rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
@@ -81,6 +83,12 @@ struct Cli {
     /// (no patch needed). Useful for authoring `@@ -old,len` ranges.
     #[arg(long, value_name = "PATH")]
     inspect: Option<PathBuf>,
+
+    /// With `--inspect`, also list candidate call/method-call/macro sites
+    /// with line spans (for authoring tight call-rewrite ranges without
+    /// reading the whole file). Requires `--inspect`.
+    #[arg(long)]
+    calls: bool,
 }
 
 /// CLI failure: structured patch/IO errors (JSON-enveloped with
@@ -142,6 +150,12 @@ fn wants_json() -> bool {
 #[allow(clippy::too_many_lines)]
 fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
+
+    if cli.calls && cli.inspect.is_none() {
+        return Err(CliError::Usage(
+            "--calls requires --inspect <path>".to_string(),
+        ));
+    }
 
     if let Some(rel) = cli.inspect.clone() {
         return run_inspect(&cli, &rel);
@@ -316,9 +330,21 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
         .map_err(|e| CliError::io_file(format!("cannot read {}: {e}", abs.display()), &rel_str))?;
     let items = inspect::inspect_source(&text)
         .map_err(|e| CliError::Structured(e.with_file(rel_str.clone())))?;
+    let calls = if cli.calls {
+        Some(
+            inspect::inspect_calls(&text)
+                .map_err(|e| CliError::Structured(e.with_file(rel_str.clone())))?,
+        )
+    } else {
+        None
+    };
     match cli.format {
         Format::Json => {
-            let payload = serde_json::json!({ "path": rel_str, "items": items });
+            let payload = if let Some(calls) = calls {
+                serde_json::json!({ "path": rel_str, "items": items, "calls": calls })
+            } else {
+                serde_json::json!({ "path": rel_str, "items": items })
+            };
             println!(
                 "{}",
                 serde_json::to_string(&payload)
@@ -328,6 +354,11 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
         Format::Text => {
             for i in &items {
                 println!("{} {} {}-{}", i.kind, i.name, i.start, i.end);
+            }
+            if let Some(calls) = calls {
+                for c in &calls {
+                    println!("{} {} {}-{}", c.kind, c.name, c.start, c.end);
+                }
             }
         }
     }

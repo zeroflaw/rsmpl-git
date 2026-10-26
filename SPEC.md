@@ -3729,6 +3729,41 @@ inline `mod` contents recurse with `mod::item` names. Spans cover the same
 attached attribute/doc envelope the matcher sees, so an inspect span is
 directly usable as an `@@ -start,len` old-side range.
 
+#### D.3.1 Call-site preview (`--inspect <path> --calls`)
+
+Item spans locate definitions, but call rewrites target call sites inside
+function bodies. `--calls` additionally lists candidate call sites with
+1-based inclusive line spans, so an agent can pick a tight `@@ -old,len`
+range without reading the whole file:
+
+```sh
+rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
+# fn foo 1-3
+# call foo 5-5
+# method try_send 5-5
+# macro assert_eq 9-9
+```
+
+Call kinds:
+
+| Kind | Source | `name` rendering |
+|---|---|---|
+| `call` | `Expr::Call` with a path callee | full path (`a::b::foo`) |
+| `method` | `Expr::MethodCall` | method ident (`try_send`) |
+| `macro` | `Expr::Macro` or `Stmt::Macro` invocation | full macro path (`assert_eq`) |
+
+Rules:
+
+- Text mode prints items first (unchanged), then call sites in ascending
+  start-line order.
+- JSON mode emits `{"path", "items", "calls"}` when `--calls` is set; without
+  the flag the `calls` key is omitted (backward compatible).
+- Only path-callee calls are listed (the shapes the engine's call matcher
+  rewrites); non-path callees such as `(f())()` are skipped. Top-level
+  `Item::Macro` definitions stay in `items` and are not duplicated in `calls`.
+- Type usages are intentionally not listed (every annotation would emit;
+  too noisy). Use a targeted file read for type-rewrite ranges.
+
 Recommended agent loop:
 
 ```text

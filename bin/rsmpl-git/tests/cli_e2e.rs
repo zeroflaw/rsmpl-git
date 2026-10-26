@@ -245,6 +245,83 @@ fn json_envelope_on_inspect_parse_failure() {
 }
 
 #[test]
+fn inspect_calls_lists_sites_in_text_and_json() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo() {}\nfn a() {\n    foo(1);\n    obj.method(x);\n    assert_eq!(a, b);\n}\n",
+    );
+    // Text mode: items first (unchanged), then calls.
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--calls"])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    assert!(stdout.contains("fn foo 1-1"), "got: {stdout}");
+    assert!(stdout.contains("call foo 3-3"), "got: {stdout}");
+    assert!(stdout.contains("method method 4-4"), "got: {stdout}");
+    assert!(stdout.contains("macro assert_eq 5-5"), "got: {stdout}");
+
+    // JSON mode: items + calls.
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--calls", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let calls = v["calls"].as_array().expect("calls array present");
+    assert!(calls
+        .iter()
+        .any(|c| c["kind"] == "call" && c["name"] == "foo"));
+    assert!(calls
+        .iter()
+        .any(|c| c["kind"] == "method" && c["name"] == "method"));
+    assert!(calls
+        .iter()
+        .any(|c| c["kind"] == "macro" && c["name"] == "assert_eq"));
+}
+
+#[test]
+fn inspect_without_calls_omits_calls_key() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert!(v.get("calls").is_none(), "got: {v}");
+}
+
+#[test]
+fn calls_without_inspect_is_usage_error() {
+    let dir = init_repo();
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--calls"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("--calls requires --inspect"),
+        "got: {stderr}"
+    );
+}
+
+#[test]
 fn inspect_lists_item_spans() {
     let dir = init_repo();
     write(

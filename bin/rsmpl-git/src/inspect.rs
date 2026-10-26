@@ -7,10 +7,23 @@
 
 use rsmpl_patch::{ErrorCode, StructuredError};
 use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
 
 /// One listed item: `kind name start-end` (1-based inclusive lines).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ItemInfo {
+    pub kind: String,
+    pub name: String,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// One candidate call site: `call` (free function), `method` (`recv.m(...)`)
+/// or `macro` (`path!(...)` as an expression or `path!(...);` statement).
+/// Names render the callee path (`a::b::foo`), the method ident, or the macro
+/// path; spans are 1-based inclusive lines for `@@` range authoring.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CallInfo {
     pub kind: String,
     pub name: String,
     pub start: u32,
@@ -33,6 +46,93 @@ pub fn inspect_source(text: &str) -> Result<Vec<ItemInfo>, StructuredError> {
         (a.start, a.end, &a.kind, &a.name).cmp(&(b.start, b.end, &b.kind, &b.name))
     });
     Ok(out)
+}
+
+/// Parse `text` and list candidate call/method/macro sites with line spans.
+///
+/// Agent use: run `rsmpl-git --repo X --inspect src/lib.rs --calls` to learn
+/// tight `@@ -old,len` ranges for call rewrites without reading the file.
+/// Only path-callee calls are listed (the engine's call matcher rewrites
+/// path callees only); non-path callees such as `(f())()` are skipped.
+pub fn inspect_calls(text: &str) -> Result<Vec<CallInfo>, StructuredError> {
+    let file: syn::File = syn::parse_str(text).map_err(|e| {
+        StructuredError::new(
+            ErrorCode::ParseConflict,
+            format!("target file does not parse as Rust: {e}"),
+        )
+    })?;
+    let mut collector = CallCollector { out: Vec::new() };
+    collector.visit_file(&file);
+    let mut out = collector.out;
+    out.sort_by(|a: &CallInfo, b: &CallInfo| {
+        (a.start, a.end, &a.kind, &a.name).cmp(&(b.start, b.end, &b.kind, &b.name))
+    });
+    Ok(out)
+}
+
+/// `syn::visit` preorder walk collecting call-like sites. `Item::Macro`
+/// (top-level `macro_rules!` definitions) is intentionally not collected:
+/// it already appears in `items`; here we list expression/statement macro
+/// *invocations* inside code.
+struct CallCollector {
+    out: Vec<CallInfo>,
+}
+
+impl CallCollector {
+    fn push(&mut self, kind: &str, name: String, span: proc_macro2::Span) {
+        // See `span_lines`: lines cannot realistically exceed `u32`.
+        #[allow(clippy::cast_possible_truncation)]
+        let (start, end) = (span.start().line as u32, span.end().line as u32);
+        self.out.push(CallInfo {
+            kind: kind.to_string(),
+            name,
+            start,
+            end,
+        });
+    }
+}
+
+fn path_name(path: &syn::Path) -> String {
+    let mut name = String::new();
+    if path.leading_colon.is_some() {
+        name.push_str("::");
+    }
+    name.push_str(
+        &path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<_>>()
+            .join("::"),
+    );
+    name
+}
+
+impl<'ast> Visit<'ast> for CallCollector {
+    fn visit_expr(&mut self, node: &'ast syn::Expr) {
+        match node {
+            syn::Expr::Call(call) => {
+                if let syn::Expr::Path(p) = &*call.func {
+                    self.push("call", path_name(&p.path), node.span());
+                }
+                visit::visit_expr(self, node);
+            }
+            syn::Expr::MethodCall(m) => {
+                self.push("method", m.method.to_string(), node.span());
+                visit::visit_expr(self, node);
+            }
+            syn::Expr::Macro(m) => {
+                self.push("macro", path_name(&m.mac.path), node.span());
+                visit::visit_expr(self, node);
+            }
+            _ => visit::visit_expr(self, node),
+        }
+    }
+
+    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
+        self.push("macro", path_name(&node.mac.path), node.span());
+        visit::visit_stmt_macro(self, node);
+    }
 }
 
 /// 1-based line span of a syntax node. Line counts cannot realistically
@@ -252,5 +352,46 @@ mod tests {
         let err = inspect_source("fn broken( {}").unwrap_err();
         assert_eq!(err.code, ErrorCode::ParseConflict);
         assert!(err.render().contains("RSMPL_PARSE_CONFLICT"));
+    }
+
+    #[test]
+    fn lists_calls_methods_and_macros() {
+        let calls = inspect_calls(
+            "fn foo() {}\nfn a() {\n    foo(1);\n    obj.method(x);\n    assert_eq!(a, b);\n}\n",
+        )
+        .unwrap();
+        let kinds: Vec<(&str, &str)> = calls
+            .iter()
+            .map(|c| (c.kind.as_str(), c.name.as_str()))
+            .collect();
+        assert!(kinds.contains(&("call", "foo")), "got: {kinds:?}");
+        assert!(kinds.contains(&("method", "method")), "got: {kinds:?}");
+        assert!(kinds.contains(&("macro", "assert_eq")), "got: {kinds:?}");
+        let foo = calls.iter().find(|c| c.kind == "call").unwrap();
+        assert_eq!((foo.start, foo.end), (3, 3));
+        // Sorted by start line.
+        let starts: Vec<u32> = calls.iter().map(|c| c.start).collect();
+        let mut sorted = starts.clone();
+        sorted.sort_unstable();
+        assert_eq!(starts, sorted);
+    }
+
+    #[test]
+    fn call_paths_render_fully_and_multiline_spans() {
+        let calls = inspect_calls("fn a() {\n    crate::b::foo(\n        1,\n    );\n}\n").unwrap();
+        assert_eq!(calls.len(), 1, "got: {calls:?}");
+        assert_eq!(calls[0].kind, "call");
+        assert_eq!(calls[0].name, "crate::b::foo");
+        assert_eq!((calls[0].start, calls[0].end), (2, 4));
+    }
+
+    #[test]
+    fn skips_non_path_callees_and_reports_parse_failure() {
+        // `(|| 1)()` calls a closure value, not a path callee: the engine's
+        // call matcher only rewrites path callees, so nothing is listed.
+        let calls = inspect_calls("fn a() {\n    (|| 1)();\n}\n").unwrap();
+        assert!(calls.is_empty(), "got: {calls:?}");
+        let err = inspect_calls("fn broken( {}").unwrap_err();
+        assert_eq!(err.code, ErrorCode::ParseConflict);
     }
 }
