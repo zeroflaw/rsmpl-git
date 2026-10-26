@@ -8,10 +8,33 @@
 use syn::spanned::Spanned;
 
 use rsmpl_patch::{AttrsPolicy, ErrorCode, RsmplHunk, Scope, StructuredError};
-use rsmpl_pattern::{CompiledPattern, FnPattern, PatternKind, RetPat, VisPat};
+use rsmpl_pattern::{
+    CompiledPattern, FnPattern, GenericPat, PatternKind, RetPat, VisPat, WherePat,
+};
 
 use crate::edits::TextEdit;
 use crate::lines::LineIndex;
+
+/// Whitespace-insensitive normalization for signature slot comparison.
+/// Both sides are token text; stripping all whitespace makes `pub(crate)`,
+/// `x : i32`, and `< T >` compare equal to their canonical spellings.
+fn norm_slot(s: &str) -> String {
+    s.split_whitespace().collect()
+}
+
+/// Compact pattern slot text into valid Rust (`< T >` -> `<T>`,
+/// `x : i32` -> `x: i32`). Input is token-joined pattern text.
+fn compact_slot(s: &str) -> String {
+    let t = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    t.replace("< ", "<")
+        .replace(" >", ">")
+        .replace(" ,", ",")
+        .replace("( ", "(")
+        .replace(" )", ")")
+        .replace(" :", ":")
+        .replace(" ::", "::")
+        .replace(":: ", "::")
+}
 
 /// A function item with its source span lines and attribute lines.
 struct FnCandidate<'a> {
@@ -203,6 +226,543 @@ fn slot_metas(compiled: &CompiledPattern) -> (Vec<String>, Vec<String>, Vec<Stri
     (vis, qual, gen, wh)
 }
 
+/// Byte range of `span` in the original text, or `None` when the span
+/// falls outside the file (never guesses).
+fn span_bytes(
+    original: &str,
+    index: &LineIndex,
+    span: proc_macro2::Span,
+) -> Option<(usize, usize)> {
+    let s = span.start();
+    let e = span.end();
+    let a = index.offset(s.line as u32, s.column)?;
+    let b = index.offset(e.line as u32, e.column)?;
+    if a <= b && b <= original.len() {
+        Some((a, b))
+    } else {
+        None
+    }
+}
+
+/// Slice original text covered by `span`.
+fn span_text(original: &str, index: &LineIndex, span: proc_macro2::Span) -> Option<String> {
+    let (a, b) = span_bytes(original, index, span)?;
+    original.get(a..b).map(|t| t.to_string())
+}
+
+/// Start line/column and end line/column of the qualifier token sequence
+/// (`const`/`async`/`unsafe`/`extern ["ABI"]`), or `None` when the
+/// signature has no qualifiers.
+fn qualifier_span_ends(sig: &syn::Signature) -> Option<(proc_macro2::Span, proc_macro2::Span)> {
+    let mut starts: Vec<proc_macro2::Span> = Vec::new();
+    let mut ends: Vec<proc_macro2::Span> = Vec::new();
+    if let Some(c) = &sig.constness {
+        starts.push(c.span());
+        ends.push(c.span());
+    }
+    if let Some(a) = &sig.asyncness {
+        starts.push(a.span());
+        ends.push(a.span());
+    }
+    if let Some(u) = &sig.unsafety {
+        starts.push(u.span());
+        ends.push(u.span());
+    }
+    if let Some(abi) = &sig.abi {
+        starts.push(abi.span());
+        ends.push(abi.span());
+    }
+    if starts.is_empty() {
+        return None;
+    }
+    // Signatures store qualifiers in fixed order; first start / last end
+    // covers the whole qualifier run.
+    let first = starts.into_iter().next()?;
+    let last = ends.into_iter().next_back()?;
+    Some((first, last))
+}
+
+/// Byte range covering the qualifier run, or `None` when absent.
+fn qualifier_bytes(
+    original: &str,
+    index: &LineIndex,
+    sig: &syn::Signature,
+) -> Option<(usize, usize)> {
+    let (first, last) = qualifier_span_ends(sig)?;
+    let s = first.start();
+    let e = last.end();
+    let a = index.offset(s.line as u32, s.column)?;
+    let b = index.offset(e.line as u32, e.column)?;
+    if a <= b && b <= original.len() {
+        Some((a, b))
+    } else {
+        None
+    }
+}
+
+/// Byte range inside the parameter parentheses (empty for `()`).
+fn params_inner_bytes(index: &LineIndex, sig: &syn::Signature) -> Option<(usize, usize)> {
+    let open_end = sig.paren_token.span.open().end();
+    let close_start = sig.paren_token.span.close().start();
+    let a = index.offset(open_end.line as u32, open_end.column)?;
+    let b = index.offset(close_start.line as u32, close_start.column)?;
+    if a <= b {
+        Some((a, b))
+    } else {
+        None
+    }
+}
+
+/// Byte range of `<...>` (inclusive), or `None` when no generics.
+fn generics_bytes(
+    original: &str,
+    index: &LineIndex,
+    sig: &syn::Signature,
+) -> Option<(usize, usize)> {
+    let (lt, gt) = (
+        sig.generics.lt_token.as_ref()?,
+        sig.generics.gt_token.as_ref()?,
+    );
+    let s = lt.span().start();
+    let e = gt.span().end();
+    let a = index.offset(s.line as u32, s.column)?;
+    let b = index.offset(e.line as u32, e.column)?;
+    if a <= b && b <= original.len() {
+        Some((a, b))
+    } else {
+        None
+    }
+}
+
+/// Byte range of `-> Ty` (inclusive), or `None` when no return type.
+fn return_bytes(original: &str, index: &LineIndex, sig: &syn::Signature) -> Option<(usize, usize)> {
+    match &sig.output {
+        syn::ReturnType::Type(arrow, ty) => {
+            let s = arrow.span().start();
+            let e = ty.span().end();
+            let a = index.offset(s.line as u32, s.column)?;
+            let b = index.offset(e.line as u32, e.column)?;
+            if a <= b && b <= original.len() {
+                Some((a, b))
+            } else {
+                None
+            }
+        }
+        syn::ReturnType::Default => None,
+    }
+}
+
+/// Byte range of the `where ...` clause, or `None` when absent.
+fn where_bytes(original: &str, index: &LineIndex, sig: &syn::Signature) -> Option<(usize, usize)> {
+    let w = sig.generics.where_clause.as_ref()?;
+    span_bytes(original, index, w.span())
+}
+
+/// Extend `end` over one following ASCII space so slot deletions do not
+/// leave doubled spacing (`fn foo()  {`).
+fn swallow_one_space(original: &str, end: usize) -> usize {
+    if original.as_bytes().get(end) == Some(&b' ') {
+        end + 1
+    } else {
+        end
+    }
+}
+
+/// Strict minus-side slot check (SPEC 14 explicit-syntax rule).
+///
+/// `matches_item_fn` already enforces presence/absence and qualifier
+/// identity; this refines `Concrete` slots to normalized text equality
+/// and adds parameter-list checking (previously unchecked), slicing the
+/// target slot text from the original. Any failure rejects the candidate
+/// (fail over guessing); un-sliceable spans also reject.
+fn minus_matches_strict(
+    minus: &FnPattern,
+    vis: &syn::Visibility,
+    sig: &syn::Signature,
+    original: &str,
+    index: &LineIndex,
+) -> bool {
+    // Visibility: Concrete requires normalized equality (stricter than the
+    // presence-only check in `matches_item_fn`).
+    if let rsmpl_pattern::VisPat::Concrete(want) = &minus.visibility {
+        match vis {
+            syn::Visibility::Inherited => return false,
+            _ => {
+                let Some(got) = span_text(original, index, vis.span()) else {
+                    return false;
+                };
+                if norm_slot(&got) != norm_slot(want) {
+                    return false;
+                }
+            }
+        }
+    }
+    // Generics: Concrete requires normalized equality.
+    if let GenericPat::Concrete(want) = &minus.generics {
+        let Some((a, b)) = generics_bytes(original, index, sig) else {
+            return false;
+        };
+        let got = original.get(a..b).unwrap_or("");
+        if norm_slot(got) != norm_slot(want) {
+            return false;
+        }
+    }
+    // Parameters: concrete (including empty `()`) requires normalized
+    // equality with the sliced parameter list.
+    if !minus.params_ellipsis {
+        let Some((a, b)) = params_inner_bytes(index, sig) else {
+            return false;
+        };
+        let got = original.get(a..b).unwrap_or("");
+        let want = minus.params_text.as_deref().unwrap_or("");
+        if norm_slot(got) != norm_slot(want) {
+            return false;
+        }
+    }
+    // Return type: Concrete requires normalized equality of the type
+    // (sliced text minus the leading `->`).
+    if let RetPat::Concrete(want) = &minus.ret {
+        let Some((a, b)) = return_bytes(original, index, sig) else {
+            return false;
+        };
+        let got = original.get(a..b).unwrap_or("");
+        let got_ty = norm_slot(got).strip_prefix("->").unwrap_or("").to_string();
+        if got_ty != norm_slot(want) {
+            return false;
+        }
+    }
+    // Where clause: Concrete requires normalized equality of the
+    // predicates (sliced text minus the leading `where`).
+    if let rsmpl_pattern::WherePat::Concrete(want) = &minus.where_clause {
+        let Some((a, b)) = where_bytes(original, index, sig) else {
+            return false;
+        };
+        let got = original.get(a..b).unwrap_or("");
+        let got_preds = norm_slot(got)
+            .strip_prefix("where")
+            .unwrap_or("")
+            .to_string();
+        if got_preds != norm_slot(want) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Plan signature edits for one matched function (free or `impl` method).
+///
+/// Compares the minus/plus `FnPattern` slot pairs and emits minimal
+/// disjoint byte-range edits over the original text:
+/// - identical (normalized) slots: no edit (rename fast-path preserved);
+/// - plus `...`/Meta-same/Any: preserve original (no edit);
+/// - plus explicit text differing from target: insert/replace/delete.
+///
+/// `minus_name`/`plus_name` carry the `$Meta` convention (`$Name` means
+/// "keep original"). Returns the edits (possibly only the name edit).
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
+fn plan_sig_edits(
+    vis: &syn::Visibility,
+    sig: &syn::Signature,
+    minus: &FnPattern,
+    plus: &FnPattern,
+    minus_name: &str,
+    plus_name: &str,
+    original: &str,
+    index: &LineIndex,
+    rule: &str,
+) -> Result<Vec<TextEdit>, StructuredError> {
+    let mut edits = Vec::new();
+    let range_err = |line: u32| {
+        StructuredError::new(
+            ErrorCode::RangeConflict,
+            format!("span line {line} outside file"),
+        )
+        .with_rule(rule)
+    };
+
+    // ---- Name (unchanged rename semantics). ----
+    if !plus_name.starts_with('$') && minus_name != plus_name {
+        let ns = sig.ident.span();
+        let (sl, sc, el, ec) = (
+            ns.start().line as u32,
+            ns.start().column,
+            ns.end().line as u32,
+            ns.end().column,
+        );
+        let start = index.offset(sl, sc).ok_or_else(|| range_err(sl))?;
+        let end = index.offset(el, ec).ok_or_else(|| range_err(el))?;
+        if sig.ident != original[start..end] {
+            return Err(StructuredError::new(
+                ErrorCode::MatchConflict,
+                "function name span mismatch (file changed during matching?)",
+            )
+            .with_rule(rule));
+        }
+        edits.push(TextEdit::new(start, end, plus_name.to_string()));
+    }
+
+    // ---- Visibility. ----
+    // Plus-side `V` preserves (covers both-sides-`V`); a minus-side `V`
+    // with explicit plus text sets that text. Omission preserves.
+    if !matches!(plus.visibility, VisPat::Meta(_)) {
+        let plus_vis = match &plus.visibility {
+            VisPat::Concrete(t) => Some(t.clone()),
+            VisPat::Absent => None,
+            VisPat::Meta(_) => None,
+        };
+        let minus_vis = match &minus.visibility {
+            VisPat::Concrete(t) => Some(t.clone()),
+            VisPat::Absent => None,
+            VisPat::Meta(_) => None,
+        };
+        if plus_vis != minus_vis {
+            let next_start = qualifier_span_ends(sig)
+                .map(|(first, _)| first.start())
+                .unwrap_or_else(|| sig.fn_token.span().start());
+            let next_off = index
+                .offset(next_start.line as u32, next_start.column)
+                .ok_or_else(|| range_err(next_start.line as u32))?;
+            match (vis, plus_vis) {
+                (syn::Visibility::Inherited, Some(want)) => {
+                    edits.push(TextEdit::new(next_off, next_off, format!("{want} ")));
+                }
+                (syn::Visibility::Inherited, None) => {}
+                (_, Some(want)) => {
+                    let (a, b) = span_bytes(original, index, vis.span())
+                        .ok_or_else(|| range_err(vis.span().start().line as u32))?;
+                    if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&want) {
+                        edits.push(TextEdit::new(a, b, want));
+                    }
+                }
+                (_, None) => {
+                    let (a, _) = span_bytes(original, index, vis.span())
+                        .ok_or_else(|| range_err(vis.span().start().line as u32))?;
+                    if next_off > a {
+                        edits.push(TextEdit::new(a, next_off, String::new()));
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Qualifiers. ----
+    // Plus-side `Q` preserves; minus-side `Q` with explicit plus text sets
+    // it. Omission preserves. (A concrete-minus/plus-`Q` mix is rejected
+    // earlier as an unbound metavariable.)
+    if plus.qualifier_meta.is_none() {
+        let minus_q = minus.qualifiers.join(" ");
+        let plus_q = plus.qualifiers.join(" ");
+        if norm_slot(&minus_q) != norm_slot(&plus_q) {
+            let fn_start = sig.fn_token.span().start();
+            let fn_off = index
+                .offset(fn_start.line as u32, fn_start.column)
+                .ok_or_else(|| range_err(fn_start.line as u32))?;
+            match qualifier_bytes(original, index, sig) {
+                Some((a, b)) => {
+                    if plus_q.trim().is_empty() {
+                        if fn_off > a {
+                            edits.push(TextEdit::new(a, fn_off, String::new()));
+                        }
+                    } else if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&plus_q) {
+                        edits.push(TextEdit::new(a, b, compact_slot(&plus_q)));
+                    }
+                }
+                None => {
+                    if !plus_q.trim().is_empty() {
+                        let text = format!("{} ", compact_slot(&plus_q));
+                        // A same-anchor visibility insertion may already exist
+                        // (target had neither vis nor qualifiers); merge to keep
+                        // canonical `vis quals` order, since same-point inserts
+                        // materialize last-first.
+                        if let Some(v) = edits
+                            .iter_mut()
+                            .find(|e| e.is_insertion() && e.start == fn_off)
+                        {
+                            v.replacement = format!("{}{}", v.replacement, text);
+                        } else {
+                            edits.push(TextEdit::new(fn_off, fn_off, text));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Generics. ----
+    // Plus-side `G` preserves; minus-side `G` with an explicit plus side
+    // sets it. Omission preserves.
+    if !matches!(plus.generics, GenericPat::Meta(_)) {
+        let minus_g = match &minus.generics {
+            GenericPat::Concrete(t) => Some(t.clone()),
+            _ => None,
+        };
+        let plus_g = match &plus.generics {
+            GenericPat::Concrete(t) => Some(t.clone()),
+            _ => None,
+        };
+        if minus_g.as_deref().map(norm_slot) != plus_g.as_deref().map(norm_slot) {
+            let ident_end = sig.ident.span().end();
+            let ident_off = index
+                .offset(ident_end.line as u32, ident_end.column)
+                .ok_or_else(|| range_err(ident_end.line as u32))?;
+            match (generics_bytes(original, index, sig), plus_g) {
+                (Some((a, b)), Some(want)) => {
+                    let want_c = compact_slot(&want);
+                    if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&want_c) {
+                        edits.push(TextEdit::new(a, b, want_c));
+                    }
+                }
+                (Some((a, b)), None) => {
+                    edits.push(TextEdit::new(a, b, String::new()));
+                }
+                (None, Some(want)) => {
+                    edits.push(TextEdit::new(ident_off, ident_off, compact_slot(&want)));
+                }
+                (None, None) => {}
+            }
+        }
+    }
+
+    // ---- Parameters. ----
+    // Plus `...` preserves; minus `...` matches any. Otherwise the sliced
+    // inner list must equal the minus text (checked in
+    // `minus_matches_strict`); replace when the plus text differs.
+    if !plus.params_ellipsis {
+        let want = plus.params_text.as_deref().unwrap_or("");
+        let (a, b) = params_inner_bytes(index, sig)
+            .ok_or_else(|| range_err(sig.paren_token.span.open().start().line as u32))?;
+        if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(want) {
+            edits.push(TextEdit::new(a, b, compact_slot(want)));
+        }
+    }
+    // ---- Return type. ----
+    // Plus-side `R` preserves; minus-side `R` with an explicit plus side
+    // sets it.
+    if !matches!(plus.ret, RetPat::Meta(_)) {
+        let minus_r = match &minus.ret {
+            RetPat::Concrete(t) => Some(t.clone()),
+            _ => None,
+        };
+        let plus_is_any = matches!(plus.ret, RetPat::Any);
+        let plus_r = match &plus.ret {
+            RetPat::Concrete(t) => Some(t.clone()),
+            _ => None,
+        };
+        let cur = return_bytes(original, index, sig);
+        if plus_is_any {
+            // Plus wrote no `->`: preserve, except explicit removal when
+            // the minus side named a concrete return type.
+            if minus_r.is_some() {
+                if let Some((a, b)) = cur {
+                    edits.push(TextEdit::new(
+                        a,
+                        swallow_one_space(original, b),
+                        String::new(),
+                    ));
+                }
+            }
+        } else if minus_r.as_deref().map(norm_slot) != plus_r.as_deref().map(norm_slot) {
+            match (cur, plus_r) {
+                (Some((a, b)), Some(want)) => {
+                    let rep = format!("-> {}", compact_slot(&want));
+                    if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&rep) {
+                        edits.push(TextEdit::new(a, b, rep));
+                    }
+                }
+                (Some((a, b)), None) => {
+                    edits.push(TextEdit::new(
+                        a,
+                        swallow_one_space(original, b),
+                        String::new(),
+                    ));
+                }
+                (None, Some(want)) => {
+                    let close_end = sig.paren_token.span.close().end();
+                    let anchor = index
+                        .offset(close_end.line as u32, close_end.column)
+                        .ok_or_else(|| range_err(close_end.line as u32))?;
+                    edits.push(TextEdit::new(
+                        anchor,
+                        anchor,
+                        format!(" -> {}", compact_slot(&want)),
+                    ));
+                }
+                (None, None) => {}
+            }
+        }
+    }
+
+    // ---- Where clause. ----
+    // Plus-side `W` preserves; minus-side `W` with an explicit plus side
+    // sets it. Omission preserves.
+    if !matches!(plus.where_clause, rsmpl_pattern::WherePat::Meta(_)) {
+        let minus_w = match &minus.where_clause {
+            rsmpl_pattern::WherePat::Concrete(t) => Some(t.clone()),
+            _ => None,
+        };
+        let plus_w = match &plus.where_clause {
+            rsmpl_pattern::WherePat::Concrete(t) => Some(t.clone()),
+            rsmpl_pattern::WherePat::Absent => None,
+            rsmpl_pattern::WherePat::Meta(_) => None,
+            rsmpl_pattern::WherePat::Any => None,
+        };
+        // Plus Absent with minus Absent/Any: preserve (no delete signal).
+        // Plus Absent with minus Concrete: delete the clause.
+        let plus_absent = matches!(plus.where_clause, WherePat::Absent);
+        if minus_w.as_deref().map(norm_slot) != plus_w.as_deref().map(norm_slot) {
+            match (where_bytes(original, index, sig), plus_w) {
+                (Some((a, b)), Some(want)) => {
+                    let rep = format!("where {}", compact_slot(&want));
+                    if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&rep) {
+                        edits.push(TextEdit::new(a, b, rep));
+                    }
+                }
+                (Some((a, b)), None) => {
+                    if plus_absent && minus_w.is_some() {
+                        edits.push(TextEdit::new(
+                            a,
+                            swallow_one_space(original, b),
+                            String::new(),
+                        ));
+                    }
+                }
+                (None, Some(want)) => {
+                    let anchor = match &sig.output {
+                        syn::ReturnType::Type(_, ty) => {
+                            let e = ty.span().end();
+                            index
+                                .offset(e.line as u32, e.column)
+                                .ok_or_else(|| range_err(e.line as u32))?
+                        }
+                        syn::ReturnType::Default => {
+                            let e = sig.paren_token.span.close().end();
+                            index
+                                .offset(e.line as u32, e.column)
+                                .ok_or_else(|| range_err(e.line as u32))?
+                        }
+                    };
+                    let text = format!(" where {}", compact_slot(&want));
+                    // A same-anchor return-type insertion may already exist
+                    // (plus adds both `-> R` and `where ...`); merge so the
+                    // return type stays before the where clause.
+                    if let Some(r) = edits
+                        .iter_mut()
+                        .find(|e| e.is_insertion() && e.start == anchor)
+                    {
+                        r.replacement = format!("{}{}", r.replacement, text);
+                    } else {
+                        edits.push(TextEdit::new(anchor, anchor, text));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+    }
+
+    Ok(edits)
+}
+
 /// Apply a function-rename hunk. Returns the number of matches rewritten.
 pub fn apply_fn_hunk(
     parsed: &syn::File,
@@ -228,42 +788,25 @@ pub fn apply_fn_hunk(
     let rule = hunk.rule_name();
     let file = "";
     let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
+    let full_plus: String = hunk
+        .lines
+        .iter()
+        .filter(|l| l.is_addition() || l.is_context())
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (vis, qual, gen, wh) = slot_metas(compiled);
+    let plus_pat = rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, false)
+        .map_err(|e| e.with_rule(&rule))?;
 
-    // v0.1: only the name may differ between minus and plus.
-    {
-        let full_plus: String = hunk
-            .lines
-            .iter()
-            .filter(|l| l.is_addition() || l.is_context())
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let (vis, qual, gen, wh) = slot_metas(compiled);
-        let plus_pat = rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, false)
-            .map_err(|e| e.with_rule(&rule))?;
-        if minus_pat.visibility != plus_pat.visibility
-            && !matches!(
-                (&minus_pat.visibility, &plus_pat.visibility),
-                (VisPat::Meta(_), _) | (_, VisPat::Meta(_))
-            )
-        {
-            return Err(only_rename(&rule));
-        }
-        // `# returns=none` constrains the minus side only; the plus side
-        // keeps `Any` (no `->` written means "preserve absence").
-        let ret_compatible = hunk.returns_none()
-            || minus_pat.ret == plus_pat.ret
-            || matches!(
-                (&minus_pat.ret, &plus_pat.ret),
-                (RetPat::Meta(_), _) | (_, RetPat::Meta(_))
-            );
-        if minus_pat.qualifiers != plus_pat.qualifiers
-            || minus_pat.generics != plus_pat.generics
-            || minus_pat.where_clause != plus_pat.where_clause
-            || !ret_compatible
-        {
-            return Err(only_rename(&rule));
-        }
+    // Bodies are preserved, never rewritten: both sides must be `...`
+    // (or `;`). A concrete body would be silently ignored, so fail fast.
+    if !minus_pat.body_ellipsis || !plus_pat.body_ellipsis {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)",
+        )
+        .with_rule(&rule));
     }
 
     let old_start = hunk.header.old_start;
@@ -285,6 +828,11 @@ pub fn apply_fn_hunk(
         if !minus_pat.matches_item_fn(c.item) {
             continue;
         }
+        // Strict slot refinement: explicit minus-side slot text must equal
+        // the target (fail over guessing).
+        if !minus_matches_strict(&minus_pat, &c.item.vis, &c.item.sig, original, index) {
+            continue;
+        }
         check_attrs(
             &c,
             hunk.attrs_policy(),
@@ -295,29 +843,20 @@ pub fn apply_fn_hunk(
         if hunk.returns_none() && !matches!(c.item.sig.output, syn::ReturnType::Default) {
             continue;
         }
-        // Rewrite: replace the name ident bytes. Plus name may be `$Meta`
-        // (abstracted) meaning "keep original" — only concrete renames
-        // change text.
-        if !plus_name.starts_with('$') && c.item.sig.ident != plus_name {
-            let ns = c.item.sig.ident.span();
-            let (sl, sc, el, ec) = (
-                ns.start().line as u32,
-                ns.start().column,
-                ns.end().line as u32,
-                ns.end().column,
-            );
-            let start = index.offset(sl, sc).ok_or_else(|| range_err(&rule, sl))?;
-            let end = index.offset(el, ec).ok_or_else(|| range_err(&rule, el))?;
-            // Safety: the sliced text must be the old name.
-            if c.item.sig.ident != original[start..end] {
-                return Err(StructuredError::new(
-                    ErrorCode::MatchConflict,
-                    "function name span mismatch (file changed during matching?)",
-                )
-                .with_rule(&rule));
-            }
-            edits.push(TextEdit::new(start, end, plus_name.clone()));
-        }
+        // Signature evolution: name plus any explicitly changed slots.
+        // Plus name may be `$Meta` (abstracted) meaning "keep original".
+        let mut new_edits = plan_sig_edits(
+            &c.item.vis,
+            &c.item.sig,
+            &minus_pat,
+            &plus_pat,
+            &minus_name,
+            &plus_name,
+            original,
+            index,
+            &rule,
+        )?;
+        edits.append(&mut new_edits);
         // `# attrs=strip`: delete attribute lines above the fn item.
         if hunk.attrs_policy() == AttrsPolicy::Strip && !c.item.attrs.is_empty() {
             let start = index
@@ -336,14 +875,6 @@ pub fn apply_fn_hunk(
         }
     }
     Ok(matched)
-}
-
-fn only_rename(rule: &str) -> StructuredError {
-    StructuredError::new(
-        ErrorCode::PatternConflict,
-        "v0.1 function hunks may differ only in the function name (same visibility, qualifiers, generics, return type, where clause)",
-    )
-    .with_rule(rule)
 }
 
 /// Find item targets (function or other items) for an item-capture hunk.
@@ -567,31 +1098,43 @@ pub fn apply_impl_context_hunk(
                 continue;
             }
         }
-        // Match methods inside.
+        // Match methods inside (same slot-evolution semantics as free
+        // functions, via the shared planner).
         let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
+        let (pvis, pqual, pgen, pwh) = slot_metas(compiled);
+        let full_plus_all: String = hunk
+            .lines
+            .iter()
+            .filter(|l| l.is_addition() || l.is_context())
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let plus_pat = rsmpl_pattern::parse_fn_pattern(
+            &extract_fn_block(&full_plus_all),
+            &pvis,
+            &pqual,
+            &pgen,
+            &pwh,
+            false,
+        )
+        .map_err(|e| e.with_rule(&rule))?;
+        if !minus_pat.body_ellipsis || !plus_pat.body_ellipsis {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)",
+            )
+            .with_rule(&rule));
+        }
+        let minus_name = pattern_name(&minus_pat.name);
+        let plus_name = pattern_name(&plus_pat.name);
         for item in &imp.items {
             let syn::ImplItem::Fn(m) = item else { continue };
-            // Wrap as ItemFn-like check: name + modifiers via a synthetic
-            // Name check against minus name.
-            let (minus_name, plus_name) = {
-                // Re-derive from patterns (ImplContext stores header only).
-                let full_minus: String = hunk
-                    .lines
-                    .iter()
-                    .filter(|l| l.is_removal() || l.is_context())
-                    .map(|l| l.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let full_plus: String = hunk
-                    .lines
-                    .iter()
-                    .filter(|l| l.is_addition() || l.is_context())
-                    .map(|l| l.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                (extract_fn_name(&full_minus), extract_fn_name(&full_plus))
+            let name_ok = if minus_name.starts_with('$') {
+                true
+            } else {
+                m.sig.ident == minus_name.as_str()
             };
-            if m.sig.ident != minus_name {
+            if !name_ok {
                 continue;
             }
             // Scope: method span within old range.
@@ -621,64 +1164,37 @@ pub fn apply_impl_context_hunk(
             if !minus_pat.matches_item_fn(&synth) {
                 continue;
             }
-            let ns = m.sig.ident.span();
-            let start = index
-                .offset(ns.start().line as u32, ns.start().column)
-                .ok_or_else(|| range_err(&rule, ns.start().line as u32))?;
-            let endb = index
-                .offset(ns.end().line as u32, ns.end().column)
-                .ok_or_else(|| range_err(&rule, ns.end().line as u32))?;
-            if m.sig.ident != original[start..endb] {
-                return Err(StructuredError::new(
-                    ErrorCode::MatchConflict,
-                    "method name span mismatch",
-                )
-                .with_rule(&rule));
+            if !minus_matches_strict(&minus_pat, &m.vis, &m.sig, original, index) {
+                continue;
             }
-            if m.sig.ident != plus_name {
-                edits.push(TextEdit::new(start, endb, plus_name.clone()));
+            if hunk.returns_none() && !matches!(m.sig.output, syn::ReturnType::Default) {
+                continue;
             }
+            // Signature evolution: name plus any explicitly changed slots.
+            let mut new_edits = plan_sig_edits(
+                &m.vis,
+                &m.sig,
+                &minus_pat,
+                &plus_pat,
+                &minus_name,
+                &plus_name,
+                original,
+                index,
+                &rule,
+            )?;
+            edits.append(&mut new_edits);
             matched += 1;
         }
     }
     Ok(matched)
 }
 
-/// Extract the function name from a (possibly multi-line) fn pattern block.
-fn extract_fn_name(block: &str) -> String {
-    for line in block.lines() {
-        let t = line.trim();
-        // Strip attributes.
-        if t.starts_with("#[") || t.starts_with("///") || t.starts_with("//!") {
-            continue;
-        }
-        // Find `fn <name>`.
-        let mut toks = t
-            .split(|c: char| c.is_whitespace() || c == '(' || c == '<')
-            .filter(|s| !s.is_empty());
-        let mut prev = String::new();
-        for tok in &mut toks {
-            if prev == "fn" {
-                return tok.trim_matches('$').to_string();
-            }
-            if tok == "fn" {
-                prev = "fn".to_string();
-                continue;
-            }
-            // qualifiers/vis: keep scanning
-            if ["pub", "async", "unsafe", "const", "extern"].contains(&tok) {
-                continue;
-            }
-            if tok.starts_with("pub(") {
-                continue;
-            }
-            prev = tok.to_string();
-        }
-        if prev == "fn" {
-            continue;
-        }
+/// Pattern function name as match text (`$Meta` stays sigiled).
+fn pattern_name(name: &rsmpl_pattern::NamePat) -> String {
+    match name {
+        rsmpl_pattern::NamePat::Concrete(n) => n.clone(),
+        rsmpl_pattern::NamePat::Meta(n) => format!("${n}"),
     }
-    String::new()
 }
 
 /// Render a signature without its body for synthetic parsing.
@@ -814,5 +1330,210 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n\n@@ -1,1 +1,1 @@\n-fn foo() {}\n+fn foo() { 1; }\n";
         let src = "fn foo() {}\n";
         assert!(apply(patch, src).is_err());
+    }
+
+    fn sig_patch(minus: &str, plus: &str, range: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n{range} rule=evolve\n# lang=rust\n{minus}\n{plus}\n      ...\n  }}\n"
+        )
+    }
+
+    #[test]
+    fn adds_visibility() {
+        let patch = sig_patch("- fn foo(...) {", "+ pub fn foo(...) {", "@@ -1,1 +1,1 @@");
+        let out = apply(&patch, "fn foo() {}\n").unwrap();
+        assert_eq!(out, "pub fn foo() {}\n");
+    }
+
+    #[test]
+    fn removes_visibility() {
+        let patch = sig_patch("- pub fn foo(...) {", "+ fn foo(...) {", "@@ -1,1 +1,1 @@");
+        let out = apply(&patch, "pub fn foo() {}\n").unwrap();
+        assert_eq!(out, "fn foo() {}\n");
+    }
+
+    #[test]
+    fn changes_visibility() {
+        let patch = sig_patch(
+            "- pub fn foo(...) {",
+            "+ pub(crate) fn foo(...) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        let out = apply(&patch, "pub fn foo() {}\n").unwrap();
+        assert_eq!(out, "pub(crate) fn foo() {}\n");
+    }
+
+    #[test]
+    fn rejects_wrong_concrete_visibility() {
+        // Strictness (was presence-only): `pub` does not match `pub(crate)`.
+        let patch = sig_patch(
+            "- pub fn foo(...) {",
+            "+ pub fn bar(...) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert!(apply(&patch, "pub(crate) fn foo() {}\n").is_err());
+    }
+
+    #[test]
+    fn adds_and_removes_qualifier() {
+        let add = sig_patch(
+            "- fn foo(...) {",
+            "+ async fn foo(...) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert_eq!(apply(&add, "fn foo() {}\n").unwrap(), "async fn foo() {}\n");
+        let del = sig_patch(
+            "- async fn foo(...) {",
+            "+ fn foo(...) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert_eq!(apply(&del, "async fn foo() {}\n").unwrap(), "fn foo() {}\n");
+    }
+
+    #[test]
+    fn adds_and_removes_generics() {
+        let add = sig_patch("- fn foo(...) {", "+ fn foo<T>(...) {", "@@ -1,1 +1,1 @@");
+        assert_eq!(apply(&add, "fn foo() {}\n").unwrap(), "fn foo<T>() {}\n");
+        let del = sig_patch("- fn foo<T>(...) {", "+ fn foo(...) {", "@@ -1,1 +1,1 @@");
+        assert_eq!(apply(&del, "fn foo<T>() {}\n").unwrap(), "fn foo() {}\n");
+    }
+
+    #[test]
+    fn rejects_wrong_concrete_generics() {
+        let patch = sig_patch(
+            "- fn foo<T>(...) {",
+            "+ fn foo<T>(...) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        // Target has different generics: no match (fail over guessing).
+        assert!(apply(&patch, "fn foo<U>() {}\n").is_err());
+    }
+
+    #[test]
+    fn adds_changes_removes_return() {
+        let add = sig_patch(
+            "- fn foo(...) {",
+            "+ fn foo(...) -> i32 {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert_eq!(
+            apply(&add, "fn foo() {}\n").unwrap(),
+            "fn foo() -> i32 {}\n"
+        );
+        let chg = sig_patch(
+            "- fn foo(...) -> i32 {",
+            "+ fn foo(...) -> String {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert_eq!(
+            apply(&chg, "fn foo() -> i32 { 1 }\n").unwrap(),
+            "fn foo() -> String { 1 }\n"
+        );
+        // Minus names a concrete return, plus omits it: explicit removal.
+        let del = sig_patch(
+            "- fn foo(...) -> i32 {",
+            "+ fn foo(...) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert_eq!(
+            apply(&del, "fn foo() -> i32 { 1 }\n").unwrap(),
+            "fn foo() { 1 }\n"
+        );
+    }
+
+    #[test]
+    fn preserves_return_when_both_omit() {
+        // Rename fast-path: no `->` on either side keeps the return type.
+        let patch = sig_patch("- fn foo(...) {", "+ fn bar(...) {", "@@ -1,1 +1,1 @@");
+        assert_eq!(
+            apply(&patch, "fn foo() -> i32 { 1 }\n").unwrap(),
+            "fn bar() -> i32 { 1 }\n"
+        );
+    }
+
+    #[test]
+    fn evolves_where_clause() {
+        let src = "fn foo<T>(x: T) {\n    x\n}\n";
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evolve\n# lang=rust\n- fn foo<T>(...) {\n+ fn foo<T>(...) where T: Clone {\n      ...\n  }\n";
+        assert_eq!(
+            apply(add, src).unwrap(),
+            "fn foo<T>(x: T) where T: Clone {\n    x\n}\n"
+        );
+        let del = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evolve\n# lang=rust\n- fn foo<T>(...) where T: Clone {\n+ fn foo<T>(...) {\n      ...\n  }\n";
+        let src2 = "fn foo<T>(x: T) where T: Clone {\n    x\n}\n";
+        assert_eq!(apply(del, src2).unwrap(), "fn foo<T>(x: T) {\n    x\n}\n");
+    }
+
+    #[test]
+    fn concretizes_and_preserves_params() {
+        // Minus `...`, plus concrete: replace the parameter list.
+        let patch = sig_patch("- fn foo(...) {", "+ fn foo(x: i32) {", "@@ -1,3 +1,3 @@");
+        let out = apply(&patch, "fn foo(a: i32) {\n    a\n}\n").unwrap();
+        assert_eq!(out, "fn foo(x: i32) {\n    a\n}\n");
+        // Plus `...` preserves the original parameters (rename only).
+        let keep = sig_patch("- fn foo(a: i32) {", "+ fn bar(...) {", "@@ -1,3 +1,3 @@");
+        let out = apply(&keep, "fn foo(a: i32) {\n    a\n}\n").unwrap();
+        assert_eq!(out, "fn bar(a: i32) {\n    a\n}\n");
+    }
+
+    #[test]
+    fn rejects_wrong_concrete_params() {
+        let patch = sig_patch(
+            "- fn foo(a: i32) {",
+            "+ fn bar(a: i32) {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert!(apply(&patch, "fn foo(b: String) {}\n").is_err());
+    }
+
+    #[test]
+    fn combined_rename_vis_qual_ret() {
+        let patch = sig_patch(
+            "- fn foo(...) {",
+            "+ pub async fn bar(...) -> i32 {",
+            "@@ -1,1 +1,1 @@",
+        );
+        assert_eq!(
+            apply(&patch, "fn foo() {}\n").unwrap(),
+            "pub async fn bar() -> i32 {}\n"
+        );
+    }
+
+    #[test]
+    fn rejects_concrete_body() {
+        // Body evolution is unsupported: fail fast instead of silently
+        // preserving the body.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evolve\n# lang=rust\n- fn foo(...) {\n-     1\n- }\n+ fn bar(...) {\n      ...\n  }\n";
+        assert!(apply(patch, "fn foo() {\n    1\n}\n").is_err());
+    }
+
+    #[test]
+    fn visibility_metavar_sets_and_preserves() {
+        // Minus `V`, plus concrete: set visibility and rename.
+        let set = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# visibility V\n- V fn foo(...) {\n+ pub fn bar(...) {\n      ...\n  }\n";
+        assert_eq!(apply(set, "fn foo() {}\n").unwrap(), "pub fn bar() {}\n");
+        // Same `V` on both sides: preserve the original visibility.
+        let keep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# visibility V\n- V fn foo(...) {\n+ V fn bar(...) {\n      ...\n  }\n";
+        assert_eq!(
+            apply(keep, "pub(crate) fn foo() {}\n").unwrap(),
+            "pub(crate) fn bar() {}\n"
+        );
+    }
+
+    #[test]
+    fn qualifier_and_generic_metavars_set() {
+        let qual = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# qualifier_list Q\n- Q fn foo(...) {\n+ async fn foo(...) {\n      ...\n  }\n";
+        assert_eq!(apply(qual, "fn foo() {}\n").unwrap(), "async fn foo() {}\n");
+        let gen = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# generic_params G\n- fn foo G (...) {\n+ fn foo<T>(...) {\n      ...\n  }\n";
+        assert_eq!(apply(gen, "fn foo() {}\n").unwrap(), "fn foo<T>() {}\n");
+    }
+
+    #[test]
+    fn evolves_method_inside_impl() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=x\n# lang=rust\n  impl Service {\n      ...\n-     fn old(...) {\n+     fn old(...) -> i32 {\n           ...\n       }\n  }\n";
+        let src = "impl Service {\n    fn old(&self) {}\n    fn other(&self) {}\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("fn old(&self) -> i32"), "got: {out}");
+        assert!(out.contains("fn other(&self)"));
     }
 }

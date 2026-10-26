@@ -338,13 +338,13 @@ fn classify(
     }
 
     // Impl-context: context lines mention `impl`.
-    if c.contains("impl ") && looks_like_fn(m) {
+    if c.contains("impl ") && looks_like_fn(m, table) {
         let impl_header = c.lines().next().unwrap_or("").to_string();
         return Ok(PatternKind::ImplContext { impl_header });
     }
 
     // Function patterns (minus starts with fn-ish, possibly with vis/attrs).
-    if looks_like_fn(m) && looks_like_fn(p) {
+    if looks_like_fn(m, table) && looks_like_fn(p, table) {
         let (vis_metas, qual_metas, gen_metas, where_metas) = slot_metas(table);
         let minus_fn = parse_fn_pattern(
             &first_fn_block(m),
@@ -722,7 +722,34 @@ fn slot_metas(table: &MetavarTable) -> (Vec<String>, Vec<String>, Vec<String>, V
     (vis, qual, gen, wh)
 }
 
-fn looks_like_fn(text: &str) -> bool {
+fn looks_like_fn(text: &str, table: &MetavarTable) -> bool {
+    // Leading slot metavariables (`V fn foo`, `Q fn foo`): the first token
+    // names a declared visibility/qualifier(-list) metavariable and `fn`
+    // follows. This keeps SPEC 14.3/14.4 abstracted patterns routable.
+    let slot_meta_lead = text.lines().any(|l| {
+        let t = l.trim().trim_start_matches("#[");
+        let mut toks = t
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .filter(|s| !s.is_empty());
+        // Only a leading slot metavariable followed by `fn` counts, so an
+        // expression pattern that merely starts with `V`/`Q` is not
+        // misrouted into the function classifier.
+        match toks.next() {
+            Some(head) => {
+                let bare = head.trim_start_matches('$');
+                t.contains("fn ")
+                    && matches!(
+                        table.kind_of(bare),
+                        Some(
+                            MetavarKind::Visibility
+                                | MetavarKind::Qualifier
+                                | MetavarKind::QualifierList
+                        )
+                    )
+            }
+            None => false,
+        }
+    });
     text.lines().any(|l| {
         let t = l.trim().trim_start_matches("#[");
         t.starts_with("fn ")
@@ -734,6 +761,7 @@ fn looks_like_fn(text: &str) -> bool {
             || (t.starts_with("pub("))
     }) || text.contains("\nfn ")
         || text.trim_start().starts_with("fn ")
+        || slot_meta_lead
 }
 
 fn first_fn_block(text: &str) -> String {
@@ -762,6 +790,20 @@ mod tests {
         );
         let c = compile(&h).unwrap();
         assert!(matches!(c.kind, PatternKind::Fn { .. }));
+    }
+
+    #[test]
+    fn compiles_visibility_meta_fn() {
+        // `V fn foo` routes to a function pattern, not Raw/Expr.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,7 +10,7 @@ rule=x\n# lang=rust\n# visibility V\n- V fn foo(...) {\n+ pub fn bar(...) {\n      ...\n  }\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(c.kind, PatternKind::Fn { .. }),
+            "got: {:?}",
+            c.kind
+        );
     }
 
     #[test]

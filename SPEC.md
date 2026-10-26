@@ -1037,7 +1037,7 @@ Examples:
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is an item rename; a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 If the parse context is ambiguous, the engine may require an explicit directive:
 
@@ -1548,6 +1548,34 @@ Supported attribute policies are:
 | `# attrs=strip` | Match like `preserve`, but do not copy attributes to the replacement. This must be rejected unless the replacement target can legally omit the attributes. |
 
 `# attrs=strip` is intentionally explicit because accidentally deleting documentation or attributes is high-risk.
+
+### 14.7 Signature evolution
+
+A function hunk whose `-` and `+` sides differ in more than the name evolves each explicitly written slot independently. Slots not written differently are preserved byte-for-byte (including the body, which is never rewritten). The reference implementation compares slots whitespace-insensitively against target text sliced from the original source:
+
+| Slot | `-` matches target when | `+` effect when different from `-` |
+|---|---|---|
+| name | equal, or `$Meta` binds any | replaced with the `+` name (`$Meta` preserves) |
+| visibility | absent requires inherited; concrete requires normalized equality; `V` matches any | insert/replace/delete `pub…` (`V` on `+` preserves) |
+| qualifiers | same set (with `extern "ABI"`); `Q` matches any | insert/replace/delete qualifier run |
+| generics | absent requires none; concrete requires normalized equality; `G` matches any | insert after name / replace `<…>` / delete |
+| parameters | `...` matches any; concrete (incl. `()`) requires normalized equality | `...` preserves; concrete replaces the parenthesized list |
+| return type | `...`-shorthand (no `->`) matches any; absent (via `# returns=none`) requires none; concrete requires normalized equality | `+` with no `->` preserves, except minus-concrete/`+`-omitted deletes `-> T`; concrete inserts after `)` or replaces `-> T` |
+| where clause | absent requires none; concrete requires normalized equality of the predicates; `W` matches any | insert before `{` / replace / delete (minus-concrete/`+`-omitted) |
+| body | must be `...` (or `;`) on both sides | always preserved; any concrete body is a pattern error |
+
+Example (add visibility, generics, and a return type in one hunk, params and body preserved):
+
+```diff
+@@ -1,2 +1,2 @@ rule=evolve
+# lang=rust
+- fn compute(...) {
++ pub async fn compute<T>(...) -> Vec<T> {
+      ...
+  }
+```
+
+> **v0.1 implementation note:** evolved slots are emitted with canonical spacing (`<T>`, `x: i32`, `where T: Clone`); only `# format=preserve` is implemented, so no `rustfmt` normalization pass runs. Deleting a slot absorbs one following space to avoid doubled spacing. There is no syntax to delete a return type while matching any return type with the `...` shorthand.
 
 ---
 
@@ -2099,7 +2127,7 @@ In `# macro=token_tree` mode, raw token-tree matching does not automatically tre
 
 A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 
-> **v0.1 implementation note:** function-item hunks may differ only in the function name (rename-only). Visibility, qualifiers, generic parameters, return type, and where-clause slots must be identical between the `-` and `+` sides unless abstracted with the same metavariable on both sides; `# returns=none` constrains only the `-` side. Other slot changes are rejected rather than guessed.
+> **v0.1 implementation note:** function-item hunks support signature evolution, not just renames. Each explicitly written slot evolves independently: an explicit `-`/`+` slot difference inserts, replaces, or deletes that slot's source bytes while all other slots (including the body and, unless `...` is replaced by concrete text, the parameter list) are preserved. Slot comparison is whitespace-insensitive against target text sliced from the original source; a concrete `-` slot must equal the target or the candidate is rejected (fail over guessing). `...` (parameters) and the same metavariable on both sides (visibility, qualifiers, generics, where) mean "preserve". A concrete body on either side is a compile error (bodies are always preserved). Minus-concrete/plus-omitted deletes the slot for parameters-as-`...`-removed, generics, and `where` clauses; for the return type, minus-concrete/plus-omitted deletes `-> T`, while plus-omitted with minus-`...` preserves the return type (rename fast-path). There is no syntax to delete a return type while matching any return with `...`; `# returns=none` constrains only the `-` side. Impl-block methods (`impl` context hunks) share the same slot semantics, including `self`/receiver parameters.
 >
 > Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >

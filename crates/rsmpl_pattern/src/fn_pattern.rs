@@ -101,14 +101,8 @@ impl FnPattern {
         if let Some(_q) = &self.qualifier_meta {
             // Abstracted: always matches at syntax level.
         } else if !self.qualifiers.is_empty() {
-            let have: Vec<&str> = fn_qualifiers(item).collect();
-            if have
-                != self
-                    .qualifiers
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-            {
+            let have: Vec<String> = fn_qualifiers(item).collect();
+            if have != self.qualifiers {
                 return false;
             }
         } else if item.sig.constness.is_some()
@@ -174,19 +168,24 @@ impl FnPattern {
     }
 }
 
-fn fn_qualifiers(item: &syn::ItemFn) -> impl Iterator<Item = &str> {
+/// Rendered qualifier list in pattern-token form (`extern "C"` keeps its
+/// ABI literal, matching what `parse_fn_pattern` stores).
+fn fn_qualifiers(item: &syn::ItemFn) -> impl Iterator<Item = String> {
     let mut v = Vec::new();
     if item.sig.constness.is_some() {
-        v.push("const");
+        v.push("const".to_string());
     }
     if item.sig.asyncness.is_some() {
-        v.push("async");
+        v.push("async".to_string());
     }
     if item.sig.unsafety.is_some() {
-        v.push("unsafe");
+        v.push("unsafe".to_string());
     }
-    if item.sig.abi.is_some() {
-        v.push("extern");
+    if let Some(abi) = &item.sig.abi {
+        match &abi.name {
+            Some(lit) => v.push(format!("extern {}", lit.token())),
+            None => v.push("extern".to_string()),
+        }
     }
     v.into_iter()
 }

@@ -62,7 +62,11 @@ Key rules for authors:
   interpreted in **original-source coordinates** (never rebased by earlier
   hunks in the same patch).
 - `fn foo(...) { ... }` matches only plain functions (modifiers are
-  explicit); attributes/doc comments are preserved by default.
+  explicit); attributes/doc comments are preserved by default. Writing
+  slots explicitly evolves the signature (`- fn f(...)` /
+  `+ pub async fn f<T>(...) -> Vec<T>` keeps params/body, changes the
+  rest); `...`/same-metavariable slots are preserved, bodies never
+  rewritten.
 - Call rewrites (`- foo(E)` / `+ bar(E)`) need `# allow=many` for multiple
   sites and `# optional` to tolerate zero matches.
 - Beyond calls: `let` statements (`- let x = E;` / `+ let y = E;`), general
