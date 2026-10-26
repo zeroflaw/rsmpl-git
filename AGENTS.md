@@ -78,6 +78,18 @@ is declared (SPEC 15.4):
 + bar(E)
 ```
 
+Method-call rewrite — same directives; bind the receiver explicitly
+(SPEC 18.5):
+
+```diff
+@@ -5,5 @@ rule=method_to_function
+# allow=many
+# expr Receiver
+# expr Arg
+- Receiver.old_method(Arg)
++ new_function(Receiver, Arg)
+```
+
 Move — cut with `# item I` + `# bind=Helper` + `- I`, paste with
 `# use=Helper` + `+ Helper`; paste hunks may precede cut hunks; cross-file
 moves are two file sections (SPEC 9.3, SPEC 10.5).

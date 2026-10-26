@@ -81,8 +81,8 @@ fn agents_md_citations_resolve() {
         );
     }
 
-    // The three recipe skeletons, verbatim.
-    for skeleton in ["fn foo(...)", "foo(E)", "bind="] {
+    // The four recipe skeletons, verbatim.
+    for skeleton in ["fn foo(...)", "foo(E)", "old_method", "bind="] {
         assert!(
             agents.contains(skeleton),
             "AGENTS.md missing recipe skeleton {skeleton:?}"

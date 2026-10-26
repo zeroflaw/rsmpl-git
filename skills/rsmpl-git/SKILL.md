@@ -60,11 +60,22 @@ marker; hunks with other directives omit it (SPEC 7.1).
 + bar(E)
 ```
 
+```diff
+@@ -5,5 @@ rule=method_to_function
+# allow=many
+# expr Receiver
+# expr Arg
+- Receiver.old_method(Arg)
++ new_function(Receiver, Arg)
+```
+
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/
   generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
   preserved, bodies never rewritten (SPEC 14.7).
 - Call rewrite: add `# repeat` to fold nested same-rule matches in one
   hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8).
+- Method-call rewrite: bind the receiver explicitly
+  (`Receiver.old_method(Arg)` → `new_function(Receiver, Arg)`, SPEC 18.5).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
   `const`/`static`/`mod`/`union`/`impl` self-ty), one ident edit (SPEC 14.8).
 - Move: cut `- I` (`# item I` + `# bind=N`), paste `+ N` (`# use=N`);
