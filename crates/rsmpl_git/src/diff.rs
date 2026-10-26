@@ -5,9 +5,8 @@
 
 /// Build a `diff --git` section for one file, or `None` when unchanged.
 ///
-/// Uses the default context radius of 3 surrounding lines per hunk.
-/// See [`unified_diff_for_file_with_context`] for the token-budget lever
-/// (`--context N`, SPEC 26.2 / D.2.2).
+/// Library default keeps the conventional radius of 3; the reference CLI
+/// always lowers at 0 (T128 fixed lowering, SPEC D.2.2).
 pub fn unified_diff_for_file(path: &str, old: &str, new: &str) -> Option<String> {
     unified_diff_for_file_with_context(path, old, new, 3)
 }

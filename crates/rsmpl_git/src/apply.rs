@@ -15,8 +15,8 @@ fn git_error(code: ErrorCode, message: String) -> StructuredError {
 
 fn run_git_apply(repo: &Path, patch: &str, check_only: bool) -> Result<String, StructuredError> {
     let mut cmd = Command::new("git");
-    // `--unidiff-zero` permits zero-context hunks (SPEC D.2.2 `--context 0`
-    // lowerings); it is a no-op for hunks that do carry context, so it is
+    // `--unidiff-zero` permits the always-0-context lowering (SPEC D.2.2);
+    // it is a no-op for hunks that do carry context, so it is
     // passed unconditionally rather than threaded through every caller.
     cmd.args(["apply", "--unidiff-zero"]);
     if check_only {

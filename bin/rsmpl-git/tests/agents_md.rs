@@ -71,7 +71,6 @@ fn agents_md_citations_resolve() {
         "--check",
         "--format",
         "--diff-max-lines",
-        "--context",
         "--output",
     ] {
         assert!(agents.contains(flag), "AGENTS.md should cite {flag}");
@@ -111,7 +110,6 @@ fn agents_md_citations_resolve() {
         "scope=file",
         "RSMPL_MATCH_CONFLICT",
         "--diff-max-lines 0",
-        "--context 0",
         "TASKS.md",
     ] {
         assert!(skill.contains(needle), "skill missing needle {needle:?}");

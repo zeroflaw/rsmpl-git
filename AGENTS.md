@@ -122,7 +122,6 @@ rsmpl-git --patch - < change.rsmpl
 rsmpl-git --file change.rsmpl --check
 rsmpl-git --file change.rsmpl --format json --check
 rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
-rsmpl-git --file change.rsmpl --check --context 0
 rsmpl-git --file change.rsmpl --output full.patch
 ```
 
@@ -133,8 +132,8 @@ lines; stderr keeps `warning:` lines only); `--output` writes
 the full diff before `--check` runs but nothing when the lowering is empty;
 truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
 `--diff-max-lines N` (`0` omits) bounds only the reported diff while
-`--check`/`--output`/apply use the full lowering (SPEC D.2.1); `--context N`
-(default 3, `0` allowed) shrinks the lowering itself (SPEC D.2.2, SPEC 26.1).
+`--check`/`--output`/apply use the full lowering (SPEC D.2.1); the lowering
+itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
 
 ## Errors: code → fix (SPEC 25)
 

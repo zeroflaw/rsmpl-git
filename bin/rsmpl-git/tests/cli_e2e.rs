@@ -846,7 +846,12 @@ fn output_file_stays_full_when_report_truncated() {
     assert!(saved.contains("-    foo(1);"), "got: {saved}");
     assert!(saved.contains("-    foo(2);"), "got: {saved}");
     let check = Command::new("git")
-        .args(["apply", "--check", full_patch.to_str().unwrap()])
+        .args([
+            "apply",
+            "--check",
+            "--unidiff-zero",
+            full_patch.to_str().unwrap(),
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -889,10 +894,10 @@ fn output_creates_missing_parent_dirs() {
     assert!(text.contains("fn bar(x: i32)"), "got: {text}");
 }
 
-// --- T37 lowering context (D.2.2): --context N ---
+// --- T128 fixed 0-context lowering (D.2.2): no --context flag ---
 
 #[test]
-fn text_context_zero_omits_context_but_stays_check_clean() {
+fn text_lowering_is_zero_context_but_stays_check_clean() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -903,13 +908,7 @@ fn text_context_zero_omits_context_but_stays_check_clean() {
     fs::write(&patch_file, two_call_patch()).unwrap();
     let out = run(
         dir.path(),
-        &[
-            "--file",
-            patch_file.to_str().unwrap(),
-            "--check",
-            "--context",
-            "0",
-        ],
+        &["--file", patch_file.to_str().unwrap(), "--check"],
     );
     assert!(
         out.status.success(),
@@ -932,7 +931,7 @@ fn text_context_zero_omits_context_but_stays_check_clean() {
 }
 
 #[test]
-fn context_zero_applies_for_real() {
+fn zero_context_applies_for_real() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -941,10 +940,7 @@ fn context_zero_applies_for_real() {
     );
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, two_call_patch()).unwrap();
-    let out = run(
-        dir.path(),
-        &["--file", patch_file.to_str().unwrap(), "--context", "0"],
-    );
+    let out = run(dir.path(), &["--file", patch_file.to_str().unwrap()]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -956,7 +952,7 @@ fn context_zero_applies_for_real() {
 }
 
 #[test]
-fn context_zero_output_file_is_git_apply_clean() {
+fn zero_context_output_file_is_git_apply_clean() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -973,8 +969,6 @@ fn context_zero_output_file_is_git_apply_clean() {
             patch_file.to_str().unwrap(),
             "--format",
             "json",
-            "--context",
-            "0",
             "--output",
             saved_patch.to_str().unwrap(),
         ],
@@ -1010,7 +1004,7 @@ fn context_zero_output_file_is_git_apply_clean() {
 }
 
 #[test]
-fn json_context_zero_shrinks_diff_stats_stay_exact() {
+fn json_lowering_is_zero_context_stats_stay_exact() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -1019,20 +1013,6 @@ fn json_context_zero_shrinks_diff_stats_stay_exact() {
     );
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, two_call_patch()).unwrap();
-    let full = run(
-        dir.path(),
-        &[
-            "--file",
-            patch_file.to_str().unwrap(),
-            "--format",
-            "json",
-            "--check",
-        ],
-    );
-    assert!(full.status.success());
-    let full_v: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&full.stdout)).expect("stdout is JSON");
-
     let out = run(
         dir.path(),
         &[
@@ -1041,72 +1021,52 @@ fn json_context_zero_shrinks_diff_stats_stay_exact() {
             "--format",
             "json",
             "--check",
-            "--context",
-            "0",
         ],
     );
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success());
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    let full_lines = full_v["diff"].as_str().unwrap().lines().count();
-    let shown_lines = v["diff"].as_str().unwrap().lines().count();
-    assert!(shown_lines > 0, "got: {v}");
-    assert!(
-        shown_lines < full_lines,
-        "context 0 should shrink the diff: {shown_lines} vs {full_lines}"
+    let diff = v["diff"].as_str().unwrap();
+    assert!(diff.contains("-    foo(1);"), "got: {v}");
+    // Zero-context: unchanged surroundings are not shown ...
+    assert!(!diff.contains("fn a() {"), "got: {v}");
+    // ... but stats stay exact (computed from full contents, not hunks).
+    assert_eq!(
+        v["files"],
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        "got: {v}"
     );
-    // Stats come from the full contents, not the hunk rendering.
-    assert_eq!(v["files"], full_v["files"], "got: {v} vs {full_v}");
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
     assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
 }
 
 #[test]
-fn explicit_context_three_matches_default() {
+fn context_flag_is_gone() {
+    // T128: `--context` was removed; the lowering is always 0-context.
+    let out = Command::new(binary()).arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(!help.contains("--context"), "got: {help}");
+    // Passing it is now a clap usage error (exit 2 path, T26 owns the envelope).
     let dir = init_repo();
     write(
         &dir.path().join(""),
         "src/lib.rs",
-        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+        "fn a() {\n    foo(1);\n}\n",
     );
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, two_call_patch()).unwrap();
-    let base = run(
-        dir.path(),
-        &["--file", patch_file.to_str().unwrap(), "--check"],
-    );
-    let explicit = run(
+    let out = run(
         dir.path(),
         &[
             "--file",
             patch_file.to_str().unwrap(),
             "--check",
             "--context",
-            "3",
+            "0",
         ],
     );
-    assert!(base.status.success() && explicit.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&base.stdout),
-        String::from_utf8_lossy(&explicit.stdout)
-    );
-}
-
-#[test]
-fn context_help_documents_default_value() {
-    // The default (3) is rendered by clap's `[default: 3]` now that the
-    // absent-vs-explicit distinction is gone with the inspect surface.
-    let out = Command::new(binary()).arg("--help").output().unwrap();
-    assert!(out.status.success());
-    let help = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        help.contains("--context") && help.contains("[default: 3]"),
-        "got: {help}"
-    );
+    assert!(!out.status.success(), "removed flag must fail");
 }
 
 #[test]

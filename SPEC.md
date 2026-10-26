@@ -3182,16 +3182,15 @@ Output after lowering might be:
  }
 ```
 
-The lowered hunks carry a unified-diff context radius: the number of
-unchanged lines shown around each change. The default radius is 3, matching
-conventional unified diffs. A smaller radius (down to `0`, which shows only
-changed lines) spends fewer review tokens; per-file added/removed line counts
-are computed from the full old/new contents and never change with the radius.
-A zero-context lowering is still a valid unified diff, but plain
+The lowered hunks carry a unified-diff context radius of 0: only changed
+lines are shown around each change (T128 fixed lowering — no radius lever).
+This spends the fewest review tokens; per-file added/removed line counts
+are computed from the full old/new contents and never change with the report
+budget. A zero-context lowering is still a valid unified diff, but plain
 `git apply` rejects zero-context hunks by default as a safety measure — it
 needs `git apply --unidiff-zero` (which the reference CLI passes
 automatically for every check/apply). Lowering stays deterministic given the
-same inputs plus the same radius (see D.2.2 for the `--context N` CLI lever).
+same inputs (see D.2.2).
 
 ### 26.3 Determinism
 
@@ -4076,12 +4075,12 @@ prints one JSON object to stdout:
   full appliable lowering while the preview stays truncated.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
-- Defaults audit: `--format text`, `--context 3`, and `--repo .` all
-  stay. Text keeps human review working (JSON is a ~4-token opt-in);
-  default-3 keeps saved patches bare-`git apply`-compatible (explicit
-  `--context 0` is the ~3-token opt-in, D.2.2); `--repo` defaults to
-  `.`, so run from the worktree root and omit it, adding `--repo DIR`
-  only when invoking from elsewhere.
+- Defaults audit: `--format text` and `--repo .` stay; the lowering is
+  always 0-context (T128: the former `--context 3` default is gone — minimal
+  tokens by default, still appliable via the `--unidiff-zero` wrapper,
+  D.2.2). Text keeps human review working (JSON is a ~4-token opt-in);
+  `--repo` defaults to `.`, so run from the worktree root and omit it,
+  adding `--repo DIR` only when invoking from elsewhere.
 - Failure envelope: with `--format json`, every patch/IO failure prints
   one JSON envelope to stdout and exits 2, so an agent can repair without
   parsing stderr prose. The failure is stdout-only: no stderr `error:`
@@ -4140,55 +4139,46 @@ Rules:
   with zero diff tokens, and `--diff-max-lines 1 --output full.patch`
   saves the appliable patch while showing one line. With no changes the
   flag is a no-op (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
-- To shrink the lowering itself rather than the report, use `--context N`
-  (D.2.2): the budget flag above applies *after* lowering and composes with it.
+- The lowering itself is always 0-context (D.2.2): the budget flag above
+  applies *after* lowering.
 
-#### D.2.2 Lowering context (`--context N`)
+#### D.2.2 Lowering context (always 0)
 
-D.2.1 bounds the *reported* diff; `--context N` shapes the *lowered* diff
-itself by setting the unified-diff context radius (default `3` when the flag
-is absent, `0` allowed):
+D.2.1 bounds the *reported* diff; the *lowered* diff itself is always
+0-context (T128: the former `--context N` flag is removed — one fewer flag,
+minimal tokens by default):
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-# Minimal tokens, still a real appliable patch:
-rsmpl-git --file change.rsmpl --check --context 0
-
-# One context line for a quick skim; check still verifies the N-context diff:
-rsmpl-git --file change.rsmpl --format json --context 1 --check
+# Minimal tokens by default, still a real appliable patch:
+rsmpl-git --file change.rsmpl --check
 ```
 
 Rules:
 
-- `--context N` sets the number of unchanged lines shown around each lowered
-  hunk. `--context 0` shows only changed (`-`/`+`) lines; hunk headers stay
+- The lowering shows only changed (`-`/`+`) lines; hunk headers stay
   `@@ -a,b +c,d @@`. rsmpl-git's own `--check`/apply/`--output` path handles
-  any N (it passes `git apply --unidiff-zero`, which plain `git apply`
-  requires for zero-context hunks); piping a saved `--context 0` patch to a
+  it (it passes `git apply --unidiff-zero`, which plain `git apply`
+  requires for zero-context hunks); piping a saved patch to a
   bare `git apply` needs that same flag.
-- Unlike `--diff-max-lines`, `--context` changes what is checked, applied,
-  and saved: `--check`, apply, and `--output` all see the N-context
+- `--check`, apply, and `--output` all see the same 0-context
   lowering. A truncated report (`diff_truncated: true`) is review-only,
-  but an N-context diff is appliable — to recover full context, re-run
-  without the flag. The default stays 3 (audit, D.2): saved patches
-  apply with a bare `git apply`; pass `--context 0` explicitly when
-  tokens matter.
+  but a 0-context diff is appliable. Bare-`git apply` compatibility is
+  intentionally traded for token minimalism (agent-centric default).
 - Per-file `{path, added, removed}` stats are computed
-  from the full old/new contents, so they are identical for every N.
-- Layering: the D.2.1 report budget applies after lowering. `--context 0
-  --diff-max-lines 2` shows the first 2 lines of the 0-context diff;
-  `--context 0 --diff-max-lines 0` omits with `diff_truncated: true` iff
-  changes exist. With no changes `--context` is a no-op like the budget flag.
-- Four-lever summary: `--format` chooses the report language (text diff
+  from the full old/new contents, so they stay exact under any report budget.
+- Layering: the D.2.1 report budget applies after lowering.
+  `--diff-max-lines 2` shows the first 2 lines of the 0-context diff;
+  `--diff-max-lines 0` omits with `diff_truncated: true` iff
+  changes exist. With no changes the budget flag is a no-op.
+- Three-lever summary: `--format` chooses the report language (text diff
   vs JSON object), `--diff-max-lines` trims only the reported `diff`
-  preview, `--context` reshapes the lowering that `--check`/apply/
-  `--output` all consume, and `--output` always saves the full lowering —
-  so `--format json --diff-max-lines 0 --context 0 --check --output
+  preview, and `--output` always saves the full lowering —
+  so `--format json --diff-max-lines 0 --check --output
   full.patch` verifies with zero preview tokens while keeping the
   appliable patch on disk.
-- `--context` is always accepted (it shapes the apply path); non-numeric
-  values stay plain-text clap parse errors. The default is a clap
-  `default_value_t = 3`, so `--help` shows it automatically.
+- The removed `--context` spelling is now a plain-text clap usage error
+  (unknown argument); enveloping usage errors stays future work (T26).
 
 #### D.2.3 Output streams and empty lowerings
 
@@ -4269,8 +4259,8 @@ Recommended agent loop:
 
 ```text
 read file -> author hunks in original-source coordinates
--> apply with --format json --context 0 --diff-max-lines 0 --check -> review files[] stats
--> widen with --context 1 (or --diff-max-lines N / --output full.patch) only if needed
+-> apply with --format json --diff-max-lines 0 --check -> review files[] stats
+-> widen with --diff-max-lines N / --output full.patch only if needed
 -> apply for real
 ```
 

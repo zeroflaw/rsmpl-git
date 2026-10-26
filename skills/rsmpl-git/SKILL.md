@@ -94,12 +94,12 @@ marker; hunks with other directives omit it (SPEC 7.1).
 
 ```sh
 # read the target file first — note the 1-based spans to rewrite
-rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --context 0 --check
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
 rsmpl-git --file change.rsmpl --output full.patch   # full diff while preview stays small
 rsmpl-git --file change.rsmpl                       # apply for real
 ```
 
-- `--context 0` shrinks the lowering itself (still appliable);
+- The lowering itself is always 0-context (minimal tokens, still appliable);
   `--diff-max-lines` trims only the preview; truncated stdout is
   review-only, never pipe it to `git apply` (SPEC D.2.1/D.2.2).
 - Lint without a checkout: `--repo /tmp/empty --check` — `no match found`

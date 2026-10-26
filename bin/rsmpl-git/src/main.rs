@@ -10,8 +10,6 @@
 //! cat change.rsmpl | rsmpl-git --patch -
 //! # From a file, printing the lowered diff without applying:
 //! rsmpl-git --file change.rsmpl --check
-//! # Minimal-token review (no context lines, still appliable):
-//! rsmpl-git --file change.rsmpl --check --context 0
 //! # Machine-readable report:
 //! rsmpl-git --file change.rsmpl --format json --check
 //! ```
@@ -66,10 +64,6 @@ struct Cli {
     /// Report-only diff cap N (`0` omits; stats/output stay full; SPEC D.2.1).
     #[arg(long, value_name = "N")]
     diff_max_lines: Option<usize>,
-
-    /// Lowering context radius (default 3, `0` valid; SPEC D.2.2).
-    #[arg(long, value_name = "N", default_value_t = 3)]
-    context: usize,
 
     /// Report format: text or json (default text).
     #[arg(long, value_enum, default_value = "text")]
@@ -202,9 +196,10 @@ fn run() -> Result<(), CliError> {
         rsmpl_engine::apply_patch_to_tree(&mut updated, &patch).map_err(CliError::Structured)?;
 
     // Lower to a concrete Git patch (SPEC 26.2): only changed files, no RSmPL.
+    // The lowering is always 0-context (SPEC D.2.2): minimal tokens by
+    // default, still appliable via the `--unidiff-zero` wrapper below.
     // Per-file stats are computed from the full old/new contents so they stay
-    // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1)
-    // or the lowering uses a smaller context radius (SPEC D.2.2).
+    // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1).
     // `changed` follows patch section order (`order`). The engine only
     // mutates paths already in `order`, so no spillover branch is needed.
     let mut changed: Vec<(String, usize, usize)> = Vec::new();
@@ -216,9 +211,9 @@ fn run() -> Result<(), CliError> {
         // mode` headers so `git apply` creates them (SPEC 27.6); an
         // existing-but-empty file keeps the ordinary headers.
         let section = if is_new.contains(rel) {
-            rsmpl_git::unified_diff_for_new_file_with_context(rel, new, cli.context)
+            rsmpl_git::unified_diff_for_new_file_with_context(rel, new, 0)
         } else {
-            rsmpl_git::unified_diff_for_file_with_context(rel, old, new, cli.context)
+            rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0)
         };
         if let Some(s) = section {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
@@ -228,8 +223,7 @@ fn run() -> Result<(), CliError> {
     }
     let lowered = rsmpl_git::assemble_patch(sections);
     // `--diff-max-lines` only bounds the *reported* diff. `--check`,
-    // `--output` and apply always use the full `lowered` diff. (`--context`
-    // is not a report budget: it shaped `lowered` itself above.)
+    // `--output` and apply always use the full `lowered` diff.
     let (reported, diff_truncated) = reported_diff(&lowered, cli.diff_max_lines);
     let total_lines = lowered.lines().count();
 

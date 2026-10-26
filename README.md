@@ -43,13 +43,10 @@ rsmpl-git --file change.rsmpl --check
   rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
   # ... or skim the first 40 diff lines (stats stay exact, --output stays full):
   rsmpl-git --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
-  # Shrink the lowering itself (still appliable): 0 context lines, stats exact:
-  rsmpl-git --file change.rsmpl --check --context 0
   # Rule of thumb: `--format` picks text vs JSON, `--diff-max-lines`
-  # trims the preview only, `--context` shrinks the lowering itself,
-  # `--output` always saves the full diff.
-  # Defaults stay: text report, `--context 3` (bare-`git apply`
-  # compatible); `--repo` defaults to `.`.
+  # trims the preview only (the lowering itself is always 0-context,
+  # still appliable), `--output` always saves the full diff.
+  # Defaults stay: text report; `--repo` defaults to `.`.
   # Lint authoring without a checkout (parse/directives/captures):
   # mkdir -p /tmp/empty && rsmpl-git --file change.rsmpl --repo /tmp/empty --check
   # (`no match found` = well-formed; triage table: SPEC D.2.4).
@@ -73,10 +70,10 @@ diff to stdout (plain apply stays quiet); `--format json` prints
 `--diff-max-lines N` (`0` omits) bounds the reported diff only
 (`--check`/apply/`--output` always use the full diff — but `--output`
 writes nothing when the lowering is empty, and it is written before
-`--check` runs so a failing check still leaves the full diff);
-`--context N` (default 3, `0` allowed) instead shrinks the lowering itself
-(`--check`/apply handle any N via `git apply --unidiff-zero`; piping a saved
-`--context 0` patch elsewhere needs that flag) (stats unaffected); JSON
+`--check` runs so a failing check still leaves the full diff).
+The lowering itself is always 0-context (minimal tokens, still appliable:
+`--check`/apply use `git apply --unidiff-zero`; piping a saved patch
+elsewhere needs that flag) (stats unaffected); JSON
 mode is stdout-only for both success and failure (no stderr `check:` or
 `error:` lines — the `"check":"ok"` payload or the `{error: {...}}`
 envelope is the signal), while `warning:` lines stay stderr-only in both
