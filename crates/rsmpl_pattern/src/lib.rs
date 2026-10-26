@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err)]
 //! Rust pattern language (SPEC sections 13-16).
 //!
 //! Compiles raw RSmPL hunk pattern text into structured patterns.
@@ -9,7 +10,7 @@ mod metavar;
 mod pattern;
 mod quote_utils;
 
-pub use expr_pattern::{ArgPat, ExprPattern, ExprPatternKind, PlaceholderMaps};
+pub use expr_pattern::{try_parse_expr, ArgPat, ExprPattern, ExprPatternKind, PlaceholderMaps};
 pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, VisPat, WherePat};
 pub use metavar::{MetavarTable, TokenKind};
 pub use pattern::{compile, CompiledPattern, PatternKind};

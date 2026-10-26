@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err)]
 //! RSmPL-Git patch document model and parser.
 //!
 //! Implements SPEC sections 5-11 (patch structure, hunk detection,

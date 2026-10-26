@@ -144,10 +144,6 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     })
 }
 
-fn minus_raw_with_context(minus: &str, context: &str) -> String {
-    format!("{context}\n{minus}")
-}
-
 /// Full minus pattern = removal lines + context lines, in hunk order.
 /// This reconstructs multi-line patterns like `fn foo(...) {` / `...` / `}`.
 fn full_minus_text(hunk: &RsmplHunk) -> String {

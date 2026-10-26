@@ -459,6 +459,12 @@ pub fn parse_fn_pattern(
         body_ellipsis = true; // declaration without body matches any body
         i += 1;
     }
+    if i < toks.len() {
+        return Err(fail(format!(
+            "unexpected trailing tokens in fn pattern: `{}`",
+            toks[i..].join(" ")
+        )));
+    }
 
     Ok(FnPattern {
         attrs_written,
