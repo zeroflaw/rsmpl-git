@@ -255,7 +255,8 @@ fn run() -> Result<(), CliError> {
     // Per-file stats are computed from the full old/new contents so they stay
     // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1)
     // or the lowering uses a smaller context radius (SPEC D.2.2).
-    // `changed` follows section order (`order` + sorted `extra`).
+    // `changed` follows patch section order (`order`). The engine only
+    // mutates paths already in `order`, so no spillover branch is needed.
     let context_radius = cli.context.unwrap_or(3);
     let mut changed: Vec<(String, usize, usize)> = Vec::new();
     let mut sections = Vec::new();
@@ -266,22 +267,6 @@ fn run() -> Result<(), CliError> {
             rsmpl_git::unified_diff_for_file_with_context(rel, old, new, context_radius)
         {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
-            changed.push((rel.clone(), added, removed));
-            sections.push(s);
-        }
-    }
-    // Include changed files not in `order` (shouldn't happen, but be safe).
-    let mut extra: Vec<String> = updated
-        .keys()
-        .filter(|k| !originals.contains_key(*k))
-        .cloned()
-        .collect();
-    extra.sort();
-    for rel in &extra {
-        if let Some(s) =
-            rsmpl_git::unified_diff_for_file_with_context(rel, "", &updated[rel], context_radius)
-        {
-            let (added, removed) = rsmpl_git::file_line_stats("", &updated[rel]);
             changed.push((rel.clone(), added, removed));
             sections.push(s);
         }
