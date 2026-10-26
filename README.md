@@ -72,10 +72,11 @@ writes nothing when the lowering is empty, and it is written before
 `--context N` (default 3, `0` allowed) instead shrinks the lowering itself
 (`--check`/apply handle any N via `git apply --unidiff-zero`; piping a saved
 `--context 0` patch elsewhere needs that flag) (stats unaffected); JSON
-`--check` is stdout-only (no stderr `check:` line — the `"check":"ok"`
-payload is the signal), while `warning:` lines stay stderr-only in both
+mode is stdout-only for both success and failure (no stderr `check:` or
+`error:` lines — the `"check":"ok"` payload or the `{error: {...}}`
+envelope is the signal), while `warning:` lines stay stderr-only in both
 modes, so JSON consumers must also read stderr; failures print
-`{error: {code, rule, file, range, reason, suggestion}}` to stdout
+`{error: {code, rule, file, range, reason, suggestion}}` to stdout only
 (`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files).
 `--inspect` needs no patch. Stream/empty/output contract: SPEC D.2.3.
 

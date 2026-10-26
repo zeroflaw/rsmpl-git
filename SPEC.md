@@ -3922,7 +3922,10 @@ prints one JSON object to stdout:
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
 - Failure envelope: with `--format json`, every patch/IO failure prints
   one JSON envelope to stdout and exits 2, so an agent can repair without
-  parsing stderr prose:
+  parsing stderr prose. The failure is stdout-only: no stderr `error:`
+  line is printed in JSON mode (T89 symmetry with the silenced success
+  `check:` line); stderr carries `warning:` lines only. Text mode keeps
+  the stderr diagnostic.
 
 ```json
 {"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "run `rsmpl-git --inspect src/lib.rs` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"}}
@@ -4033,8 +4036,8 @@ exactly which bytes land on which stream. The contract, per mode:
 |---|---|---|
 | text apply | empty (quiet by default) | `applied N file(s): …` (kept: one line of human reassurance) |
 | text `--check` | reported diff (empty when omitted/no changes) | budget markers + `check: lowered patch applies cleanly` |
-| JSON apply | report object | warnings + errors only |
-| JSON `--check` | report object with `"check":"ok"` | warnings + errors only (no `check:` line: stdout is the signal) |
+| JSON apply | report object | `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
+| JSON `--check` | report object with `"check":"ok"` | `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
 
 Rules:
 

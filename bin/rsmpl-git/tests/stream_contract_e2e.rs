@@ -212,3 +212,46 @@ fn empty_text_check_prints_no_changes() {
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(stdout.contains("(no changes)"), "got: {stdout}");
 }
+
+#[test]
+fn json_failure_is_stdout_only() {
+    // D.2.3 (T89): JSON failures carry the envelope on stdout only —
+    // no redundant stderr `error:` line (symmetry with the silenced
+    // success `check:` line). `warning:`-only stderr stays allowed.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg("")
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PARSE_CONFLICT"),
+        "got: {v}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !stderr.contains("error:"),
+        "JSON failure must not print a stderr error: line, got: {stderr}"
+    );
+}
+
+#[test]
+fn text_failure_keeps_stderr_code() {
+    // D.2.3 (T89 contrast): text-mode failures keep the human stderr
+    // diagnostic with the structured code.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let out = run(dir.path(), &["--patch", ""]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+}

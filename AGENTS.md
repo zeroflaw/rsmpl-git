@@ -114,7 +114,8 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --output full.patch
 
 Piped patches avoid temp files (SPEC D.1). JSON prints
 `{rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
-JSON `--check` is stdout-only (no stderr `check:` line); `--output` writes
+JSON success and failure are both stdout-only (no stderr `check:`/`error:`
+lines; stderr keeps `warning:` lines only); `--output` writes
 the full diff before `--check` runs but nothing when the lowering is empty;
 truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
 inspect JSON carries `total`/`omitted` next to `truncated` (SPEC D.3.3);
@@ -138,7 +139,7 @@ inspect JSON carries `total`/`omitted` next to `truncated` (SPEC D.3.3);
 | `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths; or inspect flag misuse (`--calls`/`--max-items` without `--inspect`, `--inspect` with `--patch`/`--file`/`--check`/`--output`/`--diff-max-lines`/`--context`) — fix flags per suggestion |
 
 With `--format json`, failures print `{error: {code, rule, file, range,
-reason, suggestion}}` to stdout, exit 2 (SPEC D.2).
+reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
 
 ## Full reference
 

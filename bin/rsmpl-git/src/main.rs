@@ -139,9 +139,12 @@ fn main() {
             }
             CliError::Structured(s) => {
                 if wants_json() {
+                    // JSON failures are stdout-only (T89 symmetry with the
+                    // T85 success silence): the stdout envelope carries the
+                    // machine signal; stderr keeps `warning:` lines only.
+                    // Text mode keeps the human stderr diagnostic.
                     let payload = serde_json::json!({ "error": s.to_json() });
                     println!("{payload}");
-                    eprintln!("error: {}", s.code.as_str());
                 } else {
                     eprintln!("{}", s.render());
                 }
