@@ -1,7 +1,5 @@
 //! Patch document model (SPEC sections 5, 6, 8, 9).
 
-use std::collections::HashMap;
-
 /// Top-level patch document: zero or more file sections.
 #[derive(Debug, Clone, Default)]
 pub struct Patch {
@@ -39,9 +37,6 @@ pub struct HunkHeader {
     /// RSmPL-only (SPEC 8): the new side defaults to the old side.
     pub new_elided: bool,
     pub rule: Option<String>,
-    pub id: Option<String>,
-    pub depends: Option<String>,
-    pub extra_tags: HashMap<String, String>,
     pub raw_tail: String,
 }
 

@@ -611,12 +611,11 @@ Recommended header tags:
 rule=<identifier>
 ```
 
-Optional header tags:
-
-```text
-id=<identifier>
-depends=<rule_name>
-```
+No other header tag is supported in v0.1: any `k=v` token other than
+`rule=` (including former `id=`/`depends=`/`extra` spellings, which the
+engine never read) is rejected with `RSMPL_PATTERN_CONFLICT` — accepting
+dead tags would be a silent no-op against Section 2.6. Bare words without
+`=` are human section text and stay ignored.
 
 Most RSmPL-specific configuration should be placed in directive lines, not the hunk header.
 
@@ -2938,7 +2937,8 @@ reason: target file does not parse as Rust
 
 The RSmPL pattern failed to parse. Unknown directives (`# foo`,
 `# foo=bar`), `# edition=*`, and `# format_scope=*` are rejected here
-(no silent ignore, Section 9.6).
+(no silent ignore, Section 9.6), as is any hunk-header `k=v` tag other
+than `rule=` (no silent dead tags, Section 8.3).
 
 ```text
 RSMPL_PATTERN_CONFLICT

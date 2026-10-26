@@ -9,7 +9,6 @@
 
 use crate::errors::{ErrorCode, StructuredError};
 use crate::model::*;
-use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -414,7 +413,7 @@ fn parse_hunk_header(line: &str) -> std::result::Result<HunkHeader, StructuredEr
         }
         None => (old_start, old_len, true),
     };
-    let (rule, id, depends, extra) = parse_header_tags(&tail);
+    let rule = parse_header_tags(&tail)?;
     Ok(HunkHeader {
         old_start,
         old_len,
@@ -422,9 +421,6 @@ fn parse_hunk_header(line: &str) -> std::result::Result<HunkHeader, StructuredEr
         new_len,
         new_elided,
         rule,
-        id,
-        depends,
-        extra_tags: extra,
         raw_tail: tail,
     })
 }
@@ -450,33 +446,28 @@ fn parse_range(s: &str, expect: char) -> std::result::Result<(u32, u32), Structu
     }
 }
 
-fn parse_header_tags(
-    tail: &str,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    HashMap<String, String>,
-) {
+/// Parse the trailing `rule=<name>` tag (SPEC 8.2/8.3). Any other `k=v`
+/// token is rejected with `RSMPL_PATTERN_CONFLICT`: header tags other
+/// than `rule=` do nothing in v0.1 (T107), so accepting them would be a
+/// silent no-op against SPEC 2.6. Bare words without `=` are human
+/// section text and stay ignored.
+fn parse_header_tags(tail: &str) -> std::result::Result<Option<String>, StructuredError> {
     let mut rule = None;
-    let mut id = None;
-    let mut depends = None;
-    let mut extra = HashMap::new();
     for tok in tail.split_whitespace() {
         if let Some((k, v)) = tok.split_once('=') {
             // Strip trailing commas (e.g. `rule=x,`).
             let v = v.trim_end_matches(',').to_string();
-            match k {
-                "rule" => rule = Some(v),
-                "id" => id = Some(v),
-                "depends" => depends = Some(v),
-                _ => {
-                    extra.insert(k.to_string(), v);
-                }
+            if k == "rule" {
+                rule = Some(v);
+            } else {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("unknown header tag `{k}={v}` (only `rule=` is supported in v0.1; remove it, see SPEC 8.3)"),
+                ));
             }
         }
     }
-    (rule, id, depends, extra)
+    Ok(rule)
 }
 
 /// Parse `# key=value` / `# flag` / `# kind Name` directives (SPEC 9).
@@ -1086,6 +1077,29 @@ mod tests {
                 "directive {directive} got: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_unknown_header_tags() {
+        // T107: dead header tags fail fast (SPEC 2.6/8.3); only `rule=`
+        // is supported. Bare prose tails (no `=`) stay ignored.
+        for tail in ["id=x", "depends=y", "foo=bar"] {
+            let text = format!(
+                "diff --git src/lib.rs\n@@ -1,1 @@ {tail}\n# lang=rust\n- fn foo(...) {{\n+ fn bar(...) {{\n      ...\n  }}\n"
+            );
+            let e = parse_patch(&text).unwrap_err();
+            let msg = format!("{e}");
+            assert!(
+                msg.contains("RSMPL_PATTERN_CONFLICT") && msg.contains("unknown header tag"),
+                "tail {tail} got: {msg}"
+            );
+        }
+        // `rule=` plus bare prose still parses.
+        let p = parse_patch(
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=x fix foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n",
+        )
+        .unwrap();
+        assert_eq!(p.files[0].hunks[0].header().rule.as_deref(), Some("x"));
     }
 
     #[test]
