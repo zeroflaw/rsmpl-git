@@ -10,4 +10,4 @@ mod parser;
 
 pub use errors::{ErrorCode, StructuredError};
 pub use model::*;
-pub use parser::parse_patch;
+pub use parser::{parse_patch, ParseError};

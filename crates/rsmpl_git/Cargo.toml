@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 rsmpl_patch = { workspace = true }
 similar = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

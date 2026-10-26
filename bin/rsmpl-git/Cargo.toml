@@ -10,9 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
 rsmpl_patch = { workspace = true }
 rsmpl_pattern = { workspace = true }
 rsmpl_engine = { workspace = true }
 rsmpl_git = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
