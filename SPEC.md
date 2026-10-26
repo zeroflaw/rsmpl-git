@@ -2670,13 +2670,27 @@ Supported macro modes:
 ### 21.3 Token-tree rewrite
 
 ```diff
-@@ -30,6 @@ rule=rewrite_inside_macro
+@@ -30,1 @@ rule=rename_macro_body
 # macro=token_tree
-- old_token
-+ new_token
+- old_mac!(...)
++ new_mac!(...)
 ```
 
+In token-tree mode the body must be a bare `...` (verbatim
+preservation); anything else is rejected with `RSMPL_PATTERN_CONFLICT`.
 This is less structured than AST mode and should be used cautiously.
+
+Composition (permanent answer, T133): invocation mode already binds
+metavariables where the body is well-defined — comma-separated args
+(`- assert_eq!(E, E)` / `+ assert_equal_once(E)`, with repeated-metavar
+equality) and the lone whole-body capture (`- M!(TT)` / `+ new_macro!(TT)`
+with `# macro M` + `# token_tree TT`). `# macro=token_tree` stays
+verbatim-only (`NAME!(...)`, body preserved) by design: token-tree bodies
+are token soup, not Rust lists (§21.4), so there is no delimiter contract
+for binding `# expr`-style metavars inside them. Anything else nested in
+a macro body goes through ordinary hunks — the same one-tool composition
+as §14.9 (no new flags or directives; extending the macro matcher with a
+token-level expression splitter is rejected, not deferred).
 
 ### 21.4 Ellipsis in token-tree mode
 

@@ -612,4 +612,23 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n# macro=expanded\n- m!(...)\n+ n!(...)\n";
         assert!(apply(patch, "fn a() { m!(x); }\n").is_err());
     }
+
+    #[test]
+    fn token_tree_nonverbatim_rejected() {
+        // T133: `# macro=token_tree` is verbatim-only by design; binding
+        // metavars inside token soup is rejected, not silently ignored.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n# macro=token_tree\n# expr E\n- old!(E)\n+ new!(E)\n";
+        let err = apply(patch, "fn a() {\n    old!(1);\n}\n").unwrap_err();
+        assert!(err.contains("verbatim body"), "got: {err}");
+    }
+
+    #[test]
+    fn ordinary_hunk_edits_inside_macro_body() {
+        // T133 permanent answer: token soup inside a macro body goes
+        // through an ordinary hunk (no `#` directives).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn a() {\n-    old!(foo(bar));\n+    old!(foo(baz));\n }\n";
+        let src = "fn a() {\n    old!(foo(bar));\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("old!(foo(baz));"), "got: {out}");
+    }
 }
