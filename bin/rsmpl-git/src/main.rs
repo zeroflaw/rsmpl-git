@@ -667,8 +667,15 @@ fn rel_display(repo: &std::path::Path, abs: &std::path::Path) -> String {
         .replace('\\', "/")
 }
 
+/// Heuristic for the missing-`--inspect`-path hint: trailing `/`/`.`/`""`
+/// plus extension-less final segments (a missing `src` is a dir-or-file
+/// typo; a missing `foo.rs` keeps the generic read error).
 fn looks_like_dir_request(rel: &str) -> bool {
-    rel.ends_with('/') || rel == "." || rel.is_empty()
+    if rel.ends_with('/') || rel == "." || rel.is_empty() {
+        return true;
+    }
+    let last = rel.rsplit('/').next().unwrap_or(rel);
+    !last.contains('.')
 }
 
 fn read_stdin() -> Result<String, CliError> {

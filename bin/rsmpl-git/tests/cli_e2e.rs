@@ -661,15 +661,21 @@ fn inspect_dir_skips_broken_file_with_warning() {
 #[test]
 fn inspect_missing_path_is_io_conflict() {
     let dir = init_repo();
-    let out = Command::new(binary())
-        .arg("--repo")
-        .arg(dir.path())
-        .args(["--inspect", "does-not-exist/"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    for probe in ["does-not-exist/", "does-not-exist"] {
+        let out = Command::new(binary())
+            .arg("--repo")
+            .arg(dir.path())
+            .args(["--inspect", probe])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "probe: {probe}");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+        assert!(
+            stderr.contains("no such directory"),
+            "probe {probe} got: {stderr}"
+        );
+    }
 }
 
 #[test]
