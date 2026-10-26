@@ -3191,6 +3191,11 @@ and later:
 
 ## 29. Examples
 
+Examples below use the verbose compatible spelling (two-path headers,
+copied new sides, explicit `# lang=rust`); the diet-minimal recipe from
+Section 6 (single-path header, elided new side, optional `rule=` /
+`# lang=rust`) applies throughout and is what agents should emit.
+
 ### 29.1 Rename a plain function
 
 ```diff
@@ -3712,16 +3717,26 @@ The process of applying RSmPL semantic transformations and emitting a concrete o
 
 ## Appendix A: Canonical Minimal Syntax
 
-The canonical RSmPL hunk shape is:
+The canonical RSmPL hunk shape is the diet minimal from Section 6:
 
 ```diff
-@@ -old_start,old_len +new_start,new_len @@ rule=name
-# lang=rust
+diff --git src/lib.rs
+@@ -old_start,old_len @@ rule=name
 # optional-directive
 # metavariable-kind Name
 - old_pattern
 + new_pattern
 ```
+
+Notes: `diff --git <path>` alone suffices (the two-path form stays for
+renames and Git-tooling compatibility); the `+new_start,new_len` side is
+elided (RSmPL-only — it is ignored per Section 10.4, and ordinary hunks
+must keep both ranges); `rule=name` is recommended for multi-hunk patches
+but optional (a hunk without it is valid; diagnostics show `<unnamed>`);
+`# lang=rust` is the marker only for otherwise directive-free hunks (bare
+renames) and is omitted when other directives are present (Sections 7.1,
+9.2). The verbose compatible spelling used in the Section 29 examples
+(two-path headers, copied new sides, explicit `# lang=rust`) stays valid.
 
 The canonical ordinary hunk shape remains:
 
