@@ -19,7 +19,7 @@ use rsmpl_pattern::PatternKind;
 use crate::capture::CaptureStore;
 use crate::edits::{apply_edits, TextEdit};
 use crate::lines::LineIndex;
-use crate::validate::ensure_match_count;
+use crate::validate::{ensure_match_count, ZeroMatchHint};
 use crate::{matcher_expr, matcher_fn, matcher_general, matcher_item, matcher_macro};
 use crate::{ordinary_hunk_edits, RuleReport};
 
@@ -139,6 +139,12 @@ pub fn apply_with_captures(
             } else {
                 None
             };
+            // T67: nearest-item excerpt so the retry often needs no read.
+            let preview = if targets.is_empty() {
+                candidate_preview(state, rh, &compiled)
+            } else {
+                None
+            };
             ensure_match_count(
                 targets.len(),
                 rsmpl_patch::Allow::One,
@@ -146,7 +152,7 @@ pub fn apply_with_captures(
                 &rh.rule_name(),
                 path,
                 &range_desc,
-                wide,
+                ZeroMatchHint { wide, preview },
             )?;
             let (sl, el) = targets[0];
             // Capture the exact item span (no blank-line absorption); the
@@ -240,6 +246,12 @@ pub fn apply_with_captures(
                     } else {
                         None
                     };
+                    // T67: diagnostic-only excerpt; happy/optional paths pay nothing.
+                    let preview = if found == 0 && !rh.is_optional() {
+                        candidate_preview(state, rh, &compiled)
+                    } else {
+                        None
+                    };
                     ensure_match_count(
                         found,
                         rh.allow(),
@@ -247,7 +259,7 @@ pub fn apply_with_captures(
                         &rule,
                         path,
                         &range_desc,
-                        wide,
+                        ZeroMatchHint { wide, preview },
                     )?;
                     rule_order.push((
                         (sec_idx, hunk_idx),
@@ -429,6 +441,187 @@ fn probe_whole_file(
         &mut probe_edits,
     )
     .ok()
+}
+
+/// T67 candidate preview: nearest same-kind item header (or nearest
+/// non-empty source line as fallback) for zero-match diagnostics.
+///
+/// Diagnostic-only: returns a preformatted, pre-capped excerpt such as
+/// `fn foo at line 5: 'fn foo() {}'`. Single line, at most 200 chars of
+/// source plus an ellipsis marker. `None` when the file has nothing to
+/// show (empty file). Callers fire this only on the hard zero-match path,
+/// so successful and `# optional` hunks pay nothing.
+fn candidate_preview(
+    state: &FileState,
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+) -> Option<String> {
+    let old_start = rh.header.old_start;
+    let kind_specific = matches!(
+        &compiled.kind,
+        PatternKind::Fn { .. }
+            | PatternKind::ImplContext { .. }
+            | PatternKind::ItemCapture { .. }
+            | PatternKind::ItemRename { .. }
+    );
+    if kind_specific {
+        let mut headers = Vec::new();
+        collect_item_headers(&state.parsed.items, &mut headers);
+        if let Some((line, label)) = nearest_header(&headers, old_start) {
+            if let Some(excerpt) = source_line(state, line) {
+                return Some(cap_preview(format!("{label} at line {line}: '{excerpt}'")));
+            }
+        }
+    }
+    nearest_source(state, old_start).map(cap_preview)
+}
+
+/// `(line, label)` item headers for the T67 kind-aware tier.
+fn collect_item_headers(items: &[syn::Item], out: &mut Vec<(u32, String)>) {
+    use syn::spanned::Spanned;
+    for it in items {
+        match it {
+            syn::Item::Fn(f) => {
+                let line = f.sig.fn_token.span().start().line as u32;
+                out.push((line, format!("fn {}", f.sig.ident)));
+            }
+            syn::Item::Struct(s) => {
+                out.push((
+                    s.ident.span().start().line as u32,
+                    format!("struct {}", s.ident),
+                ));
+            }
+            syn::Item::Enum(e) => {
+                out.push((
+                    e.ident.span().start().line as u32,
+                    format!("enum {}", e.ident),
+                ));
+            }
+            syn::Item::Trait(t) => {
+                out.push((
+                    t.ident.span().start().line as u32,
+                    format!("trait {}", t.ident),
+                ));
+            }
+            syn::Item::Union(u) => {
+                out.push((
+                    u.ident.span().start().line as u32,
+                    format!("union {}", u.ident),
+                ));
+            }
+            syn::Item::Type(t) => {
+                out.push((
+                    t.ident.span().start().line as u32,
+                    format!("type {}", t.ident),
+                ));
+            }
+            syn::Item::Const(c) => {
+                out.push((
+                    c.ident.span().start().line as u32,
+                    format!("const {}", c.ident),
+                ));
+            }
+            syn::Item::Static(s) => {
+                out.push((
+                    s.ident.span().start().line as u32,
+                    format!("static {}", s.ident),
+                ));
+            }
+            syn::Item::Mod(m) => {
+                out.push((
+                    m.ident.span().start().line as u32,
+                    format!("mod {}", m.ident),
+                ));
+                if let Some((_, inner)) = &m.content {
+                    collect_item_headers(inner, out);
+                }
+            }
+            syn::Item::Impl(imp) => {
+                let line = imp.self_ty.span().start().line as u32;
+                out.push((line, "impl".to_string()));
+                for it in &imp.items {
+                    if let syn::ImplItem::Fn(m) = it {
+                        let line = m.sig.fn_token.span().start().line as u32;
+                        out.push((line, format!("fn {}", m.sig.ident)));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn nearest_header(headers: &[(u32, String)], old_start: u32) -> Option<(u32, String)> {
+    headers
+        .iter()
+        .min_by_key(|(line, _)| line.abs_diff(old_start))
+        .map(|(line, label)| (*line, label.clone()))
+}
+
+/// First source line at 1-based `line`, trimmed, capped at 200 chars.
+fn source_line(state: &FileState, line: u32) -> Option<String> {
+    let start = state.index.line_start(line)?;
+    let end = state
+        .index
+        .line_start(line + 1)
+        .unwrap_or_else(|| state.index.eof());
+    let raw = state.original.get(start..end.min(state.original.len()))?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Single-line excerpt: a header line never legitimately spans lines
+    // here (`source_line` slices one line); cut at the first newline anyway.
+    let first = trimmed.lines().next().unwrap_or("");
+    Some(truncate_excerpt(first))
+}
+
+fn truncate_excerpt(s: &str) -> String {
+    const MAX: usize = 200;
+    if s.chars().count() > MAX {
+        let mut out: String = s.chars().take(MAX).collect();
+        out.push('…');
+        out
+    } else {
+        s.to_string()
+    }
+}
+
+/// Hard bound on the whole preview string: pathological idents (a 300-char
+/// fn name) would otherwise blow past the 200-char excerpt cap via the
+/// `kind name` label. Single line, token-bounded failure output.
+fn cap_preview(s: String) -> String {
+    const MAX: usize = 320;
+    if s.chars().count() > MAX {
+        let mut out: String = s.chars().take(MAX).collect();
+        out.push('…');
+        out
+    } else {
+        s
+    }
+}
+
+/// Fallback tier: nearest non-empty source line to `old_start`.
+fn nearest_source(state: &FileState, old_start: u32) -> Option<String> {
+    let n = state.index.line_count() as u32;
+    let mut best: Option<(u32, u32)> = None; // (distance, line)
+    for line in 1..=n {
+        let start = state.index.line_start(line)?;
+        let end = state
+            .index
+            .line_start(line + 1)
+            .unwrap_or_else(|| state.index.eof());
+        let raw = state.original.get(start..end.min(state.original.len()))?;
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let d = line.abs_diff(old_start);
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, line));
+        }
+    }
+    let (_, line) = best?;
+    source_line(state, line).map(|excerpt| format!("source at line {line}: '{excerpt}'"))
 }
 
 /// v0.1 capability gate (SPEC 22-23): only `format=preserve` and AST matching
@@ -696,5 +889,44 @@ mod tests {
         let out = &files["src/lib.rs"];
         assert_eq!(out.matches("bar(").count(), 2, "got: {out}");
         assert!(!out.contains("foo("), "got: {out}");
+    }
+
+    #[test]
+    fn zero_match_fn_preview_names_nearest() {
+        // T67: wrong-name fn rename names the real fn + line in `reason`,
+        // so the retry often needs no file read.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn nosuchfn(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let src = "fn a() {}\nfn b() {}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("no match found"), "got: {err}");
+        assert!(err.contains("nearest"), "got: {err}");
+        assert!(err.contains("line 1"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_call_preview_shows_source_line() {
+        // T67 fallback tier: a call rewrite with no same-kind header walk
+        // still previews the nearest non-empty source line.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n# expr E\n- nosuchcall(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1);\n}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("nearest source at line"), "got: {err}");
+    }
+
+    #[test]
+    fn preview_truncates_long_lines() {
+        // T67 caps: a 300-char call line previews at most 200 chars +
+        // ellipsis (fallback tier keeps the label fixed, isolating the
+        // excerpt cap; pathological idents are bound by `cap_preview`).
+        let long_arg = "a".repeat(300);
+        let src = format!("fn a() {{\n    foo({long_arg});\n}}\n");
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- nosuchcall(E)\n+ bar(E)\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src.as_str())]).unwrap_err();
+        assert!(err.contains("nearest source at line 2"), "got: {err}");
+        let excerpt = err.split("nearest ").nth(1).expect("preview");
+        assert!(excerpt.chars().count() <= 330, "got: {err}");
+        assert!(excerpt.contains('…'), "got: {err}");
     }
 }

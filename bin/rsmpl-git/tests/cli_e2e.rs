@@ -205,6 +205,26 @@ fn no_match_exits_two_with_structured_error() {
 }
 
 #[test]
+fn zero_match_reason_carries_candidate_preview_text() {
+    // T67: the text failure names the nearest candidate in `reason`, so the
+    // retry often needs no file read.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {}\nfn b() {}\nfn foo() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,1 @@ rule=r\n# lang=rust\n- fn nosuchfn(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("no match found"), "got: {stderr}");
+    assert!(stderr.contains("nearest"), "got: {stderr}");
+    assert!(stderr.contains("fn foo"), "got: {stderr}");
+}
+
+#[test]
 fn json_report_arrays_follow_document_order() {
     // T36/T45: `rules` and `files` follow patch document order
     // (section order, hunk order within a section) — never sorted.
@@ -406,6 +426,11 @@ fn json_envelope_on_match_failure() {
     assert_eq!(err["file"], serde_json::json!("src/lib.rs"));
     assert!(
         err["reason"].as_str().unwrap().contains("no match"),
+        "got: {err}"
+    );
+    // T67: the JSON envelope carries the same nearest-candidate preview.
+    assert!(
+        err["reason"].as_str().unwrap().contains("nearest"),
         "got: {err}"
     );
     assert!(err["suggestion"].is_string(), "got: {err}");

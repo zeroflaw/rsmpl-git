@@ -4,13 +4,30 @@ use rsmpl_patch::{Allow, ErrorCode, FileSection, Hunk, Scope, StructuredError};
 
 use crate::lines::LineIndex;
 
+/// Zero-match diagnostic context (SPEC 25.4).
+///
+/// Bundled so `ensure_match_count` stays at 7 arguments (clippy
+/// `too_many_arguments`): both fields are diagnostic-only and computed only
+/// on the hard zero-match path.
+pub struct ZeroMatchHint {
+    /// Whole-file (`# scope=file`) probe count for the same pattern (T62).
+    pub wide: Option<usize>,
+    /// T67 candidate excerpt, already truncated (e.g.
+    /// `fn foo at line 5: 'fn foo() {}'`). `None` keeps the bare reason.
+    pub preview: Option<String>,
+}
+
 /// Validate `allow` / `optional` match counts (SPEC 17.5, 24.3).
 ///
-/// `wide` is the whole-file (`# scope=file`) probe count for the same
+/// `hint.wide` is the whole-file (`# scope=file`) probe count for the same
 /// pattern, when the caller ran one (T62): `Some(1)` means the pattern is
 /// fine but the range is wrong, so the suggestion offers the zero-discovery
 /// `# scope=file` retry; `Some(n > 1)` suggests widening + `# allow=many`;
 /// `Some(0)`/`None` keep the generic file-read suggestion.
+///
+/// `hint.preview` is the T67 candidate excerpt, appended to the zero-match
+/// reason so the next attempt often needs no discovery roundtrip. `None`
+/// keeps the bare `no match found` reason (e.g. empty file).
 pub fn ensure_match_count(
     found: usize,
     allow: Allow,
@@ -18,17 +35,18 @@ pub fn ensure_match_count(
     rule: &str,
     file: &str,
     range: &str,
-    wide: Option<usize>,
+    hint: ZeroMatchHint,
 ) -> Result<(), StructuredError> {
     match (found, allow, optional) {
         (0, _, true) => Ok(()),
-        (0, _, false) => Err(
-            StructuredError::new(ErrorCode::MatchConflict, "no match found")
-                .with_rule(rule)
-                .with_file(file)
-                .with_range(range)
-                .with_suggestion(zero_match_suggestion(file, wide)),
-        ),
+        (0, _, false) => Err(StructuredError::new(
+            ErrorCode::MatchConflict,
+            zero_match_reason(hint.preview.as_deref()),
+        )
+        .with_rule(rule)
+        .with_file(file)
+        .with_range(range)
+        .with_suggestion(zero_match_suggestion(file, hint.wide))),
         (1, _, _) => Ok(()),
         (_, Allow::Many, _) => Ok(()),
         (_, Allow::One, _) => Err(StructuredError::new(
@@ -75,6 +93,13 @@ pub fn ensure_file_range(
     Ok(())
 }
 
+fn zero_match_reason(preview: Option<&str>) -> String {
+    match preview {
+        Some(p) => format!("no match found — nearest {p}"),
+        None => "no match found".to_string(),
+    }
+}
+
 fn zero_match_suggestion(file: &str, wide: Option<usize>) -> String {
     let base = format!("read `{file}` to list valid ranges; check the pattern or add `# optional`");
     match wide {
@@ -114,7 +139,10 @@ mod tests {
             "r",
             "src/lib.rs",
             "40..47",
-            None,
+            ZeroMatchHint {
+                wide: None,
+                preview: None,
+            },
         )
         .unwrap_err();
         let s = err.suggestion.expect("suggestion");
@@ -133,7 +161,10 @@ mod tests {
             "r",
             "src/lib.rs",
             "1..2",
-            Some(1),
+            ZeroMatchHint {
+                wide: Some(1),
+                preview: None,
+            },
         )
         .unwrap_err();
         let s = err.suggestion.expect("suggestion");
@@ -151,7 +182,10 @@ mod tests {
             "r",
             "src/lib.rs",
             "1..2",
-            Some(3),
+            ZeroMatchHint {
+                wide: Some(3),
+                preview: None,
+            },
         )
         .unwrap_err();
         let s = err.suggestion.expect("suggestion");
@@ -168,6 +202,45 @@ mod tests {
         let s = err.suggestion.expect("suggestion");
         assert!(s.contains("read `src/lib.rs`"), "got: {s}");
         assert!(!s.contains("--inspect"), "got: {s}");
+    }
+
+    #[test]
+    fn preview_appends_to_reason() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            ZeroMatchHint {
+                wide: None,
+                preview: Some("fn foo at line 5: 'fn foo() {}'".to_string()),
+            },
+        )
+        .unwrap_err();
+        let reason = err.message.clone();
+        assert!(reason.contains("no match found"), "got: {reason}");
+        assert!(reason.contains("nearest fn foo"), "got: {reason}");
+        assert!(reason.contains("line 5"), "got: {reason}");
+    }
+
+    #[test]
+    fn no_preview_keeps_bare_reason() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            ZeroMatchHint {
+                wide: None,
+                preview: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.message, "no match found");
     }
 
     #[test]

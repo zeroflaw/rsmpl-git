@@ -125,7 +125,7 @@ truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
 | `RSMPL_RANGE_CONFLICT` | range exceeds file — read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target file doesn't parse as Rust — read the file; empty patch — provide a `diff --git` section (empty input is rejected, not a no-op) |
 | `RSMPL_PATTERN_CONFLICT` | pattern doesn't parse — check SPEC 18.6 table; unknown directive (`# foo`, `# edition`, `# format_scope`) is rejected, check SPEC 9.3; unknown header tag (anything but `rule=`) is rejected, check SPEC 8.3; unknown `# root=` (only `item/expr/stmt/type`) is rejected, check SPEC 13.4; `# identifier/# path/# lifetime/# field` is rejected, check SPEC 15.1 |
-| `RSMPL_MATCH_CONFLICT` | `no match found` — read the file, then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@`; too many matches — add `# allow=many` |
+| `RSMPL_MATCH_CONFLICT` | `no match found` (+ nearest-candidate preview in `reason`) — read the file, then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@`; too many matches — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
