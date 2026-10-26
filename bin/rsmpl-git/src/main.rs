@@ -52,63 +52,47 @@ enum Format {
     about = "Apply RSmPL-Git semantic patches via lowering to Git patches"
 )]
 struct Cli {
-    /// Inline RSmPL-Git patch text, or `-` to read from stdin.
+    /// Inline patch text, or `-` for stdin.
     #[arg(long, conflicts_with = "file")]
     patch: Option<String>,
 
-    /// Path to a file containing the RSmPL-Git patch, or `-` for stdin.
+    /// Patch file path, or `-` for stdin.
     #[arg(long, conflicts_with = "patch")]
     file: Option<PathBuf>,
 
-    /// Repository worktree to modify (default: current directory).
+    /// Repo worktree (default: .).
     #[arg(long, default_value = ".")]
     repo: PathBuf,
 
-    /// Dry run: lower and run `git apply --check` without modifying files.
+    /// Dry run: lower + `git apply --check`, apply nothing.
     #[arg(long)]
     check: bool,
 
-    /// Write the lowered concrete Git patch to this file (always the full
-    /// diff, even with `--diff-max-lines`, which only bounds the stdout /
-    /// JSON `diff` report field).
+    /// Write full lowered diff here (ignores report budget; SPEC D.2.1).
     #[arg(long, value_name = "PATH")]
     output: Option<PathBuf>,
 
-    /// Cap the reported lowered diff at N lines (stdout in text mode with
-    /// `--check`, `diff` field in `--format json`). `0` omits the diff.
-    /// Stats stay full-fidelity; `--output`/`--check`/apply use the full diff.
+    /// Report-only diff cap N (`0` omits; stats/output stay full; SPEC D.2.1).
     #[arg(long, value_name = "N")]
     diff_max_lines: Option<usize>,
 
-    /// Unified-diff context radius for the lowered concrete patch (default 3,
-    /// `0` omits all context lines). Shapes the lowering itself, so `--check`,
-    /// apply, and `--output` all see the N-context diff (unlike
-    /// `--diff-max-lines`, which only bounds the report). Stats stay exact.
-    /// Rejected with `--inspect` (SPEC D.2.2).
+    /// Lowering context radius (default 3, `0` valid; SPEC D.2.2).
     #[arg(long, value_name = "N")]
     context: Option<usize>,
 
-    /// Output format for the result report (`text` default, `json` machine-readable).
+    /// Report format: text or json (default text).
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
 
-    /// Inspect a repo-relative Rust file (or directory, e.g. `src/` or `.`,
-    /// to scan every `.rs` file beneath it in one call) and list its items
-    /// with line spans (no patch needed). Useful for authoring
-    /// `@@ -old,len` ranges.
+    /// List item spans for PATH (file or dir); no patch needed (SPEC D.3).
     #[arg(long, value_name = "PATH")]
     inspect: Option<PathBuf>,
 
-    /// With `--inspect`, also list candidate call/method-call/macro sites
-    /// with line spans (for authoring tight call-rewrite ranges without
-    /// reading the whole file). Requires `--inspect`.
+    /// With --inspect: also list call/method/macro sites (SPEC D.3.1).
     #[arg(long)]
     calls: bool,
 
-    /// With `--inspect`, cap the total number of listed entries
-    /// (items + calls combined) so large subtree scans stay token-bounded.
-    /// Excess entries are omitted with a stderr `truncated:` marker (text)
-    /// or `"truncated": true` (JSON). Requires `--inspect`.
+    /// With --inspect: cap entries at N (SPEC D.3.3).
     #[arg(long, value_name = "N")]
     max_items: Option<usize>,
 }
