@@ -121,7 +121,7 @@ Piped patches avoid temp files (SPEC D.1). JSON prints
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
-| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths |
+| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths; or inspect flag misuse (`--calls`/`--max-items` without `--inspect`, `--inspect` with `--patch`/`--file`/`--check`/`--output`/`--diff-max-lines`/`--context`) — fix flags per suggestion |
 
 With `--format json`, failures print `{error: {code, rule, file, range,
 reason, suggestion}}` to stdout, exit 2 (SPEC D.2).

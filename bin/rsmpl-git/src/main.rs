@@ -97,9 +97,11 @@ struct Cli {
     max_items: Option<usize>,
 }
 
-/// CLI failure: structured patch/IO errors (JSON-enveloped with
-/// `--format json`, SPEC D.2) vs. flag-usage errors (plain text, same class
-/// as clap's own errors; enveloping those is T26).
+/// CLI failure: structured patch/IO/inspect-usage errors (JSON-enveloped with
+/// `--format json`, SPEC D.2) vs. input-shape usage errors (plain text, same
+/// class as clap's own errors; enveloping those is T26). Inspect flag misuse
+/// (T47) is `Structured` `RSMPL_IO_CONFLICT`, not `Usage`, so JSON-mode agents
+/// get the same `{error:{...}}` envelope as every other checkable failure.
 enum CliError {
     Structured(StructuredError),
     Usage(String),
@@ -112,6 +114,16 @@ impl CliError {
 
     fn io_file(message: String, file: &str) -> Self {
         Self::Structured(StructuredError::new(ErrorCode::IoConflict, message).with_file(file))
+    }
+
+    /// Inspect flag-misuse rejection (T47): same `RSMPL_IO_CONFLICT` shape as
+    /// other checkable failures. `reason` keeps the historic usage message so
+    /// existing text greps keep matching; `suggestion` states the fix.
+    fn inspect_usage(message: &str, suggestion: &str) -> Self {
+        Self::Structured(
+            StructuredError::new(ErrorCode::IoConflict, message.to_string())
+                .with_suggestion(suggestion.to_string()),
+        )
     }
 }
 
@@ -158,14 +170,16 @@ fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
 
     if cli.calls && cli.inspect.is_none() {
-        return Err(CliError::Usage(
-            "--calls requires --inspect <path>".to_string(),
+        return Err(CliError::inspect_usage(
+            "--calls requires --inspect <path>",
+            "retry with --inspect <path> --calls",
         ));
     }
 
     if cli.max_items.is_some() && cli.inspect.is_none() {
-        return Err(CliError::Usage(
-            "--max-items requires --inspect <path>".to_string(),
+        return Err(CliError::inspect_usage(
+            "--max-items requires --inspect <path>",
+            "retry with --inspect <path> --max-items N",
         ));
     }
 
@@ -354,18 +368,21 @@ fn run() -> Result<(), CliError> {
 
 fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
     if cli.patch.is_some() || cli.file.is_some() {
-        return Err(CliError::Usage(
-            "--inspect does not take --patch/--file".to_string(),
+        return Err(CliError::inspect_usage(
+            "--inspect does not take --patch/--file",
+            "drop --patch/--file; --inspect needs no patch",
         ));
     }
     if cli.check || cli.output.is_some() {
-        return Err(CliError::Usage(
-            "--inspect does not take --check/--output".to_string(),
+        return Err(CliError::inspect_usage(
+            "--inspect does not take --check/--output",
+            "drop --check/--output; --inspect only lists spans",
         ));
     }
     if cli.diff_max_lines.is_some() || cli.context.is_some() {
-        return Err(CliError::Usage(
-            "--inspect does not take --diff-max-lines/--context".to_string(),
+        return Err(CliError::inspect_usage(
+            "--inspect does not take --diff-max-lines/--context",
+            "drop --diff-max-lines/--context; budgets shape the apply path only",
         ));
     }
     let rel_str = rel.to_string_lossy().to_string();

@@ -350,6 +350,26 @@ fn calls_without_inspect_is_usage_error() {
         stderr.contains("--calls requires --inspect"),
         "got: {stderr}"
     );
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    // JSON mode: same failure as a structured envelope on stdout.
+    let json_out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--calls", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(json_out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout))
+        .expect("failure stdout must be a JSON envelope");
+    assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--calls requires --inspect"),
+        "got: {v}"
+    );
+    assert!(v["error"]["suggestion"].is_string(), "got: {v}");
 }
 
 #[test]
@@ -692,6 +712,26 @@ fn max_items_without_inspect_is_usage_error() {
         stderr.contains("--max-items requires --inspect"),
         "got: {stderr}"
     );
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    // JSON mode: same failure as a structured envelope on stdout.
+    let json_out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--max-items", "5", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(json_out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout))
+        .expect("failure stdout must be a JSON envelope");
+    assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--max-items requires --inspect"),
+        "got: {v}"
+    );
+    assert!(v["error"]["suggestion"].is_string(), "got: {v}");
 }
 
 #[test]
@@ -1074,6 +1114,65 @@ fn budget_flags_rejected_with_inspect() {
             stderr.contains("--inspect does not take --diff-max-lines/--context"),
             "got: {stderr}"
         );
+        assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+        // JSON mode: same failure as a structured envelope on stdout.
+        let mut json_args = args.clone();
+        json_args.extend(["--format", "json"]);
+        let json_out = run(dir.path(), &json_args);
+        assert_eq!(json_out.status.code(), Some(2), "args: {json_args:?}");
+        let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout))
+            .expect("failure stdout must be a JSON envelope");
+        assert_eq!(
+            v["error"]["code"],
+            serde_json::json!("RSMPL_IO_CONFLICT"),
+            "args: {json_args:?}, got: {v}"
+        );
+        assert!(
+            v["error"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("--inspect does not take --diff-max-lines/--context"),
+            "got: {v}"
+        );
+        assert!(v["error"]["suggestion"].is_string(), "got: {v}");
+    }
+}
+
+#[test]
+fn inspect_rejects_patch_and_check_flags_in_both_modes() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    for (args, needle) in [
+        (
+            vec!["--inspect", "src/lib.rs", "--patch", "x"],
+            "--inspect does not take --patch/--file",
+        ),
+        (
+            vec!["--inspect", "src/lib.rs", "--check"],
+            "--inspect does not take --check/--output",
+        ),
+    ] {
+        let out = run(dir.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "args: {args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(stderr.contains(needle), "got: {stderr}");
+        assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+        let mut json_args = args.clone();
+        json_args.extend(["--format", "json"]);
+        let json_out = run(dir.path(), &json_args);
+        assert_eq!(json_out.status.code(), Some(2), "args: {json_args:?}");
+        let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout))
+            .expect("failure stdout must be a JSON envelope");
+        assert_eq!(
+            v["error"]["code"],
+            serde_json::json!("RSMPL_IO_CONFLICT"),
+            "args: {json_args:?}, got: {v}"
+        );
+        assert!(
+            v["error"]["reason"].as_str().unwrap().contains(needle),
+            "got: {v}"
+        );
+        assert!(v["error"]["suggestion"].is_string(), "got: {v}");
     }
 }
 

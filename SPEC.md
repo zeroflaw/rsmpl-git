@@ -2929,6 +2929,10 @@ hunk: @@ -1,4 +1,5 @@
 
 A filesystem operation failed: the patch file or stdin could not be read,
 a repo file could not be read, or the `--output` file could not be written.
+Inspect flag misuse (for example `--calls` without `--inspect`, or
+`--inspect` combined with `--patch`/`--file`, `--check`/`--output`, or
+`--diff-max-lines`/`--context`) is also reported under this code so JSON-mode
+agents always receive a machine-readable envelope.
 
 ```text
 RSMPL_IO_CONFLICT
@@ -3806,9 +3810,12 @@ prints one JSON object to stdout:
 - The envelope always carries all six keys (`code rule file range reason
   suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
-  or output files and stdin failures.
-- Flag-usage errors (bad flag combinations, clap errors) stay plain text
-  on stderr in both modes; enveloping those is future work.
+  or output files, stdin failures, and inspect flag misuse (for example
+  `--calls` without `--inspect`, or `--inspect` with `--patch`/`--file`,
+  `--check`/`--output`, or `--diff-max-lines`/`--context`).
+- Remaining flag-usage errors (no input at all, `--patch` plus `--file`
+  together, clap parse errors) stay plain text on stderr in both modes;
+  enveloping those is future work.
 
 #### D.2.1 Output budget (`--diff-max-lines N`)
 
@@ -3848,7 +3855,8 @@ Rules:
   flag is a no-op (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
 - The budget flag is rejected with `--inspect`
   (`--inspect does not take --diff-max-lines/--context`, exit 2, same
-  usage-error class as `--inspect` + `--check`).
+  `RSMPL_IO_CONFLICT` envelope in JSON / text block in text mode as other
+  inspect flag misuse).
 - To shrink the lowering itself rather than the report, use `--context N`
   (D.2.2): the budget flag above applies *after* lowering and composes with it.
 
@@ -3886,7 +3894,8 @@ Rules:
   `--context 0 --diff-max-lines 0` omits with `diff_truncated: true` iff
   changes exist. With no changes `--context` is a no-op like the budget flag.
 - `--context` is rejected with `--inspect` (same message and exit 2 as the
-  D.2.1 flag); non-numeric values stay plain-text clap parse errors.
+  D.2.1 flag, same `RSMPL_IO_CONFLICT` envelope); non-numeric values stay
+  plain-text clap parse errors.
 
 ### D.3 Range discovery (`--inspect <path>`)
 
@@ -3999,8 +4008,8 @@ Rules:
   emits no entries (coverage/headers only). Absent flag means unbounded
   (backward compatible).
 - Requires `--inspect`; otherwise the CLI exits 2 with
-  `--max-items requires --inspect <path>` (same usage-error class as
-  `--calls` without `--inspect`).
+  `--max-items requires --inspect <path>` (same `RSMPL_IO_CONFLICT`
+  envelope as `--calls` without `--inspect`).
 - Text mode prints at most `N` entry lines to stdout (pure
   `kind name s-e` / `rel: kind name s-e` lines). When entries were
   omitted, one stderr marker is printed:
