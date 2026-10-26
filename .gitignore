@@ -27,3 +27,4 @@ rustc-ice-*.txt
 TASKS.md
 PLAN.md
 REVIEW.md
+agent_loop.*

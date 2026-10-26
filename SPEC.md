@@ -3729,7 +3729,7 @@ Modifiers and structural signature features must be explicitly written or explic
 ## Appendix D: Agent CLI Surface (stdin, JSON report, inspect)
 
 The patch format above is engine-agnostic, but the reference `rsmpl-git`
-binary exposes three agent-oriented conveniences. They do not change patch
+binary exposes agent-oriented conveniences. They do not change patch
 semantics; they reduce the tokens and round-trips an LLM needs to author
 valid `@@ -old,len` ranges and verify results.
 
@@ -3880,11 +3880,13 @@ rsmpl-git --repo ./my-repo --inspect src/lib.rs
 ```
 
 JSON mode emits `{"path": ..., "items": [{"kind","name","start","end"}]}`.
-Kinds include `fn struct enum trait impl type const static mod use macro
-method union item`; `impl` methods are listed as `method SelfTy::method` and
-inline `mod` contents recurse with `mod::item` names. Spans cover the same
-attached attribute/doc envelope the matcher sees, so an inspect span is
-directly usable as an `@@ -start,len` old-side range.
+Kinds are the closed set `fn struct enum trait impl type const static mod
+use macro method union item extern_crate foreign_mod trait_alias` (any other
+`syn::Item` variant falls back to `item`); `impl` methods are listed as
+`method SelfTy::method` and inline `mod` contents recurse with `mod::item`
+names. Spans cover the same attached attribute/doc envelope the matcher
+sees, so an inspect span is directly usable as an `@@ -start,len` old-side
+range.
 
 #### D.3.1 Call-site preview (`--inspect <path> --calls`)
 

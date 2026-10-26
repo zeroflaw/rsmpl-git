@@ -431,6 +431,64 @@ mod tests {
         assert_eq!(err.code, ErrorCode::ParseConflict);
     }
 
+    /// Closed kind set pinned in SPEC D.3. Every kind `collect`/`other_kind`
+    /// can emit must appear in the D.3 kinds sentence so agents matching on
+    /// an exotic item (e.g. `extern crate foo;`) find it documented.
+    const DOCUMENTED_KINDS: [&str; 17] = [
+        "fn",
+        "struct",
+        "enum",
+        "trait",
+        "impl",
+        "type",
+        "const",
+        "static",
+        "mod",
+        "use",
+        "macro",
+        "method",
+        "union",
+        "item",
+        "extern_crate",
+        "foreign_mod",
+        "trait_alias",
+    ];
+
+    #[test]
+    fn exotic_item_kinds_match_spec_closed_set() {
+        let items = inspect_source(
+            "extern crate foo;\nextern \"C\" {\n    fn ffi();\n}\ntrait Alias = Send;\nfn foo() {}\n",
+        )
+        .unwrap();
+        let kinds: Vec<&str> = items.iter().map(|i| i.kind.as_str()).collect();
+        assert!(
+            kinds.contains(&"extern_crate"),
+            "missing extern_crate, got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"foreign_mod"),
+            "missing foreign_mod, got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"trait_alias"),
+            "missing trait_alias, got: {kinds:?}"
+        );
+        for k in &kinds {
+            assert!(
+                DOCUMENTED_KINDS.contains(k),
+                "undocumented kind {k}, got: {kinds:?}"
+            );
+        }
+        // Fallback arm never emits an empty kind.
+        let verbatim = syn::Item::Verbatim(proc_macro2::TokenStream::new());
+        assert_eq!(other_kind(&verbatim), "item");
+        // Anti-rot: every kind in the closed set is named in SPEC.md.
+        let spec = include_str!("../../../SPEC.md");
+        for k in DOCUMENTED_KINDS {
+            assert!(spec.contains(k), "SPEC.md no longer documents kind {k}");
+        }
+    }
+
     #[test]
     fn collect_rs_files_skips_noise_and_sorts() {
         let dir = tempfile::tempdir().unwrap();
