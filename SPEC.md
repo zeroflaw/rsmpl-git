@@ -1576,7 +1576,32 @@ Example (add visibility, generics, and a return type in one hunk, params and bod
   }
 ```
 
-> **v0.1 implementation note:** evolved slots are emitted with canonical spacing (`<T>`, `x: i32`, `where T: Clone`); only `# format=preserve` is implemented, so no `rustfmt` normalization pass runs. Deleting a slot absorbs one following space to avoid doubled spacing. There is no syntax to delete a return type while matching any return type with the `...` shorthand.
+#### Slot removal
+
+Omitting a slot on the `+` side deletes it **only when the `-` side
+names the slot concretely**. A wildcard minus (`...` parameters, no
+`->` written, no `where` written) plus omission always preserves — this
+is the rename fast-path safety rule: a bare `fn foo(...)` → `fn
+bar(...)` must never silently drop return types or where clauses.
+
+```diff
+@@ -1,1 +1,1 @@ rule=strip_result
+# lang=rust
+- fn compute(...) -> Result<Vec<T>, E> {
++ fn compute(...) {
+      ...
+  }
+```
+
+The agent names the concrete `-> Result<Vec<T>, E>` on the minus side
+(it has read the file to cite the range) and omits it on the plus
+side. There is deliberately no wildcard-minus removal spelling: match
+any return type *and* delete it would require a second removal syntax
+for a corner case (Rust has no overloading, so multi-target stripping
+is rare), and `# returns=none` stays a minus-side constraint (requires
+absence; pairs with a concrete plus side for insertion).
+
+> **v0.1 implementation note:** evolved slots are emitted with canonical spacing (`<T>`, `x: i32`, `where T: Clone`); only `# format=preserve` is implemented, so no `rustfmt` normalization pass runs. Deleting a slot absorbs one following space to avoid doubled spacing.
 
 ### 14.8 Other item renames
 
