@@ -692,6 +692,12 @@ fn read_stdin() -> Result<String, CliError> {
 /// verbatim (the agent typed that exact spelling, so it re-runs from the
 /// same cwd); the default `.` keeps the shortest suggestion. No quoting:
 /// README examples are unquoted throughout.
+///
+/// T92 needle note: this matches on the exact substring
+/// `rsmpl-git --inspect {file}`. The `text_range_failure_suggestion_carries_repo`
+/// and `json_match_failure_suggestion_carries_repo_and_scope_file_hint` e2e
+/// tests pin the composed output end-to-end (T81), so any engine rewording
+/// that breaks the needle fails the suite instead of silently no-opping.
 fn with_repo_hint(
     mut err: rsmpl_patch::StructuredError,
     repo: &Path,
