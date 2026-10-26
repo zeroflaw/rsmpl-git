@@ -33,7 +33,7 @@ mod inspect;
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
 use rsmpl_patch::{ErrorCode, StructuredError};
@@ -244,8 +244,8 @@ fn run() -> Result<(), CliError> {
     }
 
     let mut updated = originals.clone();
-    let report =
-        rsmpl_engine::apply_patch_to_tree(&mut updated, &patch).map_err(CliError::Structured)?;
+    let report = rsmpl_engine::apply_patch_to_tree(&mut updated, &patch)
+        .map_err(|e| CliError::Structured(with_repo_hint(e, &cli.repo)))?;
 
     // Lower to a concrete Git patch (SPEC 26.2): only changed files, no RSmPL.
     // Per-file stats are computed from the full old/new contents so they stay
@@ -683,6 +683,38 @@ fn read_stdin() -> Result<String, CliError> {
         .read_to_string(&mut buf)
         .map_err(|e| CliError::io(format!("cannot read stdin: {e}")))?;
     Ok(buf)
+}
+
+/// Prefix the suggested `rsmpl-git --inspect <file>` command with the
+/// as-given `--repo <dir>` when the CLI repo is not `.` (SPEC 25.4).
+///
+/// The engine builds repo-relative hints without knowing the CLI repo path;
+/// an agent that invoked with `--repo ./my-repo` from another cwd would
+/// otherwise get a command that inspects the wrong tree. The repo is echoed
+/// verbatim (the agent typed that exact spelling, so it re-runs from the
+/// same cwd); the default `.` keeps the shortest suggestion. No quoting:
+/// README examples are unquoted throughout.
+fn with_repo_hint(
+    mut err: rsmpl_patch::StructuredError,
+    repo: &Path,
+) -> rsmpl_patch::StructuredError {
+    if repo == Path::new(".") {
+        return err;
+    }
+    let (Some(file), Some(suggestion)) = (err.file.clone(), err.suggestion.clone()) else {
+        return err;
+    };
+    let needle = format!("rsmpl-git --inspect {file}");
+    if !suggestion.contains(&needle) {
+        return err;
+    }
+    let repo_display = repo.to_string_lossy();
+    err.suggestion = Some(suggestion.replacen(
+        &needle,
+        &format!("rsmpl-git --repo {repo_display} --inspect {file}"),
+        1,
+    ));
+    err
 }
 
 fn parse_err(e: rsmpl_patch::ParseError) -> CliError {

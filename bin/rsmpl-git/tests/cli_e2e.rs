@@ -455,6 +455,72 @@ fn json_envelope_on_range_failure_carries_inspect_command() {
 }
 
 #[test]
+fn text_range_failure_suggestion_carries_repo() {
+    // T81: with `--repo <dir>` (dir != `.`), the suggested inspect command
+    // must re-run against the same tree, not the caller's cwd.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -90,8 +90,8 @@ rule=r\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .arg("--check")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let want = format!(
+        "rsmpl-git --repo {} --inspect src/lib.rs",
+        dir.path().display()
+    );
+    assert!(
+        stderr.contains(&want),
+        "suggestion must carry the repo, got: {stderr}"
+    );
+}
+
+#[test]
+fn json_match_failure_suggestion_carries_repo_and_scope_file_hint() {
+    // T81 x T62: the whole-file retry hint composes with the repo prefix.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {}\nfn b() {}\nfn foo() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    let err = &v["error"];
+    assert_eq!(err["code"], serde_json::json!("RSMPL_MATCH_CONFLICT"));
+    let suggestion = err["suggestion"].as_str().unwrap();
+    let want = format!(
+        "rsmpl-git --repo {} --inspect src/lib.rs",
+        dir.path().display()
+    );
+    assert!(
+        suggestion.contains(&want),
+        "suggestion must carry the repo, got: {err}"
+    );
+    assert!(
+        suggestion.contains("# scope=file"),
+        "scope=file retry must compose with the repo prefix, got: {err}"
+    );
+}
+
+#[test]
 fn json_envelope_on_missing_patch_file() {
     let dir = init_repo();
     let out = Command::new(binary())

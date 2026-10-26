@@ -2918,7 +2918,10 @@ suggestion: run `rsmpl-git --inspect src/lib.rs` to list valid ranges
 ```
 
 The `suggestion` carries the exact discovery command (repo-relative
-path) so an agent repairs without guessing flags.
+path) so an agent repairs without guessing flags. When the CLI repo is not
+`.`, the command carries that repo verbatim as given
+(`run `rsmpl-git --repo <dir> --inspect src/lib.rs` …`) so it inspects the
+same tree from the caller's cwd; the default `.` omits `--repo`.
 
 ### 25.2 Parse conflict
 
@@ -2973,7 +2976,9 @@ exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`
 (no inspect needed)`; several matches elsewhere append `— multiple matches
 exist outside this range; widen the range (or add `# scope=file`) and add
 `# allow=many` if intended`. (Counts saturate: matchers stop counting at 2
-under `# allow=one`, so the many-case never claims an exact number.)
+under `# allow=one`, so the many-case never claims an exact number.) As in
+25.1, the `rsmpl-git --inspect` command in every suggestion carries
+`--repo <dir>` verbatim when the CLI repo is not `.`.
 
 ### 25.5 Symbol conflict
 

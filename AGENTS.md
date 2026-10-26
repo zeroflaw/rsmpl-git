@@ -124,10 +124,10 @@ Piped patches avoid temp files (SPEC D.1). JSON prints
 
 | Code | Fix |
 |---|---|
-| `RSMPL_RANGE_CONFLICT` | range exceeds file — re-run the suggested `rsmpl-git --inspect <file>` command |
+| `RSMPL_RANGE_CONFLICT` | range exceeds file — re-run the suggested `rsmpl-git --inspect <file>` command (`--repo <dir>` is included when used) |
 | `RSMPL_PARSE_CONFLICT` | target file doesn't parse as Rust — read the file; empty patch — provide a `diff --git` section (empty input is rejected, not a no-op) |
 | `RSMPL_PATTERN_CONFLICT` | pattern doesn't parse — check SPEC 18.6 table |
-| `RSMPL_MATCH_CONFLICT` | `no match found` — re-run the suggested `rsmpl-git --inspect <file>` (add `--calls` for calls), then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@` (no inspect needed); too many matches — add `# allow=many` |
+| `RSMPL_MATCH_CONFLICT` | `no match found` — re-run the suggested `rsmpl-git --inspect <file>` (add `--calls` for calls), then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@` (no inspect needed); too many matches — add `# allow=many` (suggestion includes `--repo <dir>` when used) |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
