@@ -59,7 +59,7 @@ struct Cli {
     #[arg(long)]
     check: bool,
 
-    /// Write full lowered diff here (ignores report budget; SPEC D.2.1).
+    /// Write full lowered diff here (cwd-relative, not --repo-joined; ignores report budget; SPEC D.2.1).
     #[arg(long, value_name = "PATH")]
     output: Option<PathBuf>,
 
@@ -164,19 +164,26 @@ fn run() -> Result<(), CliError> {
     let patch = rsmpl_patch::parse_patch(&patch_text).map_err(parse_err)?;
 
     // Load every targeted file from the repo (missing -> empty, so new files
-    // can be created by insertion hunks).
+    // can be created by insertion hunks). Patch targets must stay inside
+    // the worktree (SPEC 27.6): absolute or `..`-escaping paths are
+    // rejected before any read (lexical check, symlinks unresolved).
     let mut originals: HashMap<String, String> = HashMap::new();
+    let mut is_new: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut order: Vec<String> = Vec::new();
     for section in &patch.files {
         let rel = section.target_path.clone();
         if originals.contains_key(&rel) {
             continue;
         }
+        if let Some(reason) = reject_escaped_target(&rel) {
+            return Err(CliError::io_file(reason, &rel));
+        }
         let abs = cli.repo.join(&rel);
         let text = match std::fs::read_to_string(&abs) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 eprintln!("warning: {rel} not found, treating as new (empty) file");
+                is_new.insert(rel.clone());
                 String::new()
             }
             Err(e) => {
@@ -205,7 +212,15 @@ fn run() -> Result<(), CliError> {
     for rel in &order {
         let old = &originals[rel];
         let new = &updated[rel];
-        if let Some(s) = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, cli.context) {
+        // Created files (missing before the patch) lower with `new file
+        // mode` headers so `git apply` creates them (SPEC 27.6); an
+        // existing-but-empty file keeps the ordinary headers.
+        let section = if is_new.contains(rel) {
+            rsmpl_git::unified_diff_for_new_file_with_context(rel, new, cli.context)
+        } else {
+            rsmpl_git::unified_diff_for_file_with_context(rel, old, new, cli.context)
+        };
+        if let Some(s) = section {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
             changed.push((rel.clone(), added, removed));
             sections.push(s);
@@ -338,6 +353,35 @@ fn reported_diff(full: &str, max_lines: Option<usize>) -> (String, bool) {
         }
     }
     (full.to_string(), false)
+}
+
+/// Lexical worktree-containment check for patch `target_path` values
+/// (SPEC 27.6). Returns `Some(reason)` when the path must be rejected:
+/// absolute paths (which would discard `--repo` under `Path::join`) or
+/// `..` segments that escape the repo root. Purely lexical: `.`/empty
+/// segments are ignored, symlinks are not resolved.
+fn reject_escaped_target(rel: &str) -> Option<String> {
+    if std::path::Path::new(rel).is_absolute() {
+        return Some(format!(
+            "target path is absolute ({rel}); use a repo-relative path without leading /"
+        ));
+    }
+    let mut depth: i32 = 0;
+    for seg in rel.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return Some(format!(
+                        "target path escapes the repo ({rel}); use a repo-relative path without ../"
+                    ));
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+    None
 }
 
 fn read_stdin() -> Result<String, CliError> {

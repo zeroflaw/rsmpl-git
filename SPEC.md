@@ -3038,6 +3038,9 @@ file: change.rsmpl
 reason: cannot read patch file change.rsmpl: No such file or directory (os error 2)
 ```
 
+Patch `target_path` values that are absolute or escape the worktree
+root fail here too (see 27.6) — before any file is read.
+
 ---
 
 ## 26. Lowering to a Concrete Git Diff
@@ -3121,6 +3124,23 @@ A full Rust semantic environment may require running build scripts. Implementati
 ### 27.5 Reviewability
 
 All semantic changes should be lowerable to concrete Git diffs before commit.
+
+### 27.6 Path containment and new-file creation
+
+Patch `target_path` values must be repo-relative: no leading `/`
+(which would discard `--repo` under path joining) and no `..`
+segments that escape the worktree root. The check is lexical
+(`.`/empty segments ignored, symlinks unresolved); violations fail
+with `RSMPL_IO_CONFLICT`. `--repo` itself is a trusted invoker
+argument, not patch content. A missing target file warns
+(`treating as new (empty) file`) and is treated as empty, so a
+typo'd path creates a stray file on apply — read the warning before
+committing; `--format json` consumers must also read stderr, where
+all `warning:` lines live (see D.2.3). Created files lower with
+`new file mode 100644` + `--- /dev/null` headers so the concrete
+diff applies with a bare `git apply`. `--output <PATH>` is resolved
+against the caller cwd, never joined to `--repo`: it is the agent's
+local artifact, not repo content.
 
 ---
 
@@ -3950,6 +3970,8 @@ prints one JSON object to stdout:
   `--check` runs, so a failing `--check` still leaves the full appliable
   diff for debugging (see D.2.3). Missing parent directories are created
   automatically; unwritable targets stay `RSMPL_IO_CONFLICT` (25.8).
+  The path is resolved against the caller cwd, never joined to `--repo`
+  (see 27.6).
   Shell redirection does not replace it: text `--check` stdout is the
   diff and is redirectable, but with `--format json --diff-max-lines 0`
   stdout is the JSON report, not the diff — only `--output` saves the

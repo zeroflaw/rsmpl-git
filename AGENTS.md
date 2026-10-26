@@ -129,7 +129,7 @@ truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
-| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths |
+| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
 
 With `--format json`, failures print `{error: {code, rule, file, range,
 reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).

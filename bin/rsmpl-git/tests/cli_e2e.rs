@@ -1220,3 +1220,121 @@ fn scope_file_dummy_range_applies() {
     let text = read(dir.path(), "src/lib.rs");
     assert!(text.contains("fn bar()"), "got: {text}");
 }
+
+#[test]
+fn absolute_target_path_rejected() {
+    // T94: absolute patch targets would discard `--repo` under
+    // `Path::join` — fail fast with `RSMPL_IO_CONFLICT` instead.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let patch = "diff --git /tmp/evil.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", patch]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("absolute"), "got: {stderr}");
+    // JSON mode: the same failure as a stdout envelope.
+    let json = run(dir.path(), &["--patch", patch, "--format", "json"]);
+    assert_eq!(json.status.code(), Some(2));
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_IO_CONFLICT"),
+        "got: {v}"
+    );
+}
+
+#[test]
+fn traversal_target_path_rejected() {
+    // T94: `..` segments escaping the worktree fail the same way;
+    // a non-escaping `sub/../` prefix stays legal (lexical check).
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let patch = "diff --git ../evil.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", patch]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("escapes"), "got: {stderr}");
+    let json = run(dir.path(), &["--patch", patch, "--format", "json"]);
+    assert_eq!(json.status.code(), Some(2));
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_IO_CONFLICT"),
+        "got: {v}"
+    );
+}
+
+#[test]
+fn missing_target_warns_and_creates_on_apply() {
+    // T98: keep-warn new-file creation works end-to-end — the warning
+    // fires, `--check` passes, the lowered section carries
+    // `new file mode`, and apply creates the file.
+    let dir = init_repo();
+    let patch = "diff --git src/new.rs\n@@ -1,0 @@ rule=insert_use\n# lang=rust\n+ use crate::new_module::Thing;\n";
+    let check = run(dir.path(), &["--patch", patch, "--check"]);
+    assert!(
+        check.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&check.stdout).to_string();
+    assert!(stdout.contains("new file mode"), "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&check.stderr).to_string();
+    assert!(stderr.contains("treating as new"), "got: {stderr}");
+    let out = run(dir.path(), &["--patch", patch]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/new.rs");
+    assert!(
+        text.contains("use crate::new_module::Thing;"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn output_path_is_cwd_relative_not_repo_joined() {
+    // T114: `--output` resolves against the caller cwd, never `--repo`.
+    let repo = init_repo();
+    write(
+        &repo.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\n",
+    );
+    let cwd = tempfile::tempdir().unwrap();
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,2 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = Command::new(binary())
+        .args([
+            "--patch",
+            patch,
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--output",
+            "rel.patch",
+            "--check",
+        ])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        cwd.path().join("rel.patch").exists(),
+        "cwd output missing: {:?}",
+        cwd.path()
+    );
+    assert!(
+        !repo.path().join("rel.patch").exists(),
+        "output must not land in --repo"
+    );
+}

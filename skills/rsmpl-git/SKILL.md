@@ -98,7 +98,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
-| `RSMPL_IO_CONFLICT` | unreadable path — fix per suggestion |
+| `RSMPL_IO_CONFLICT` | unreadable path — fix per suggestion; absolute/`..`-escaping targets rejected |
 
 JSON failures (`--format json`) print `{error: {code, rule, file, range,
 reason, suggestion}}` to stdout only, exit 2.
