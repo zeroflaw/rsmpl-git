@@ -6,7 +6,9 @@ an agent-centric tool for token-efficient code refactoring.
 `rsmpl-git` takes an **RSmPL-Git patch** (Git-like hunks plus Rust semantic
 rewrite hunks) and applies it to a repository by first lowering it to an
 ordinary Git patch, then running `git apply`. See `SPEC.md` for the full
-patch format (v0.1 notes mark the implemented subset).
+patch format (v0.1 notes mark the implemented subset). Agent? Start with
+`AGENTS.md` (one-page authoring reference, ~140 lines); `SPEC.md` is the
+full contract.
 
 ## Install
 

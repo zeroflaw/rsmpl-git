@@ -4000,4 +4000,7 @@ inspect dir -> author hunks in original-source coordinates
 -> apply for real
 ```
 
+New authors: start with `AGENTS.md` (one-page authoring reference); this
+appendix and Sections 9/18.6 are the normative detail behind it.
+
 ---
