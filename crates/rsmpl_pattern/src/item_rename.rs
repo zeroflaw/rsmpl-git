@@ -231,6 +231,7 @@ fn eat_keyword<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
 /// One parsed item-rename side: the item kind, the rename name, any leading
 /// `#[...]` attribute lines, and the normalized `pub…` / `unsafe` / `mut`
 /// prefix spelling (`""` for the bare form).
+#[derive(Debug)]
 pub struct ItemRenameSide {
     /// Item kind (`struct`, `enum`, …).
     pub kind: ItemKind,
@@ -276,6 +277,15 @@ pub fn parse_side(text: &str) -> Result<Option<ItemRenameSide>, StructuredError>
         }
         prefix.push_str("unsafe");
         s = after;
+    }
+    // `auto trait` headers (T23): fail fast instead of falling through to
+    // the call/general routers as a confusing no-match. `auto` is a
+    // reserved keyword, so no other shape starts this way; anything else
+    // `auto`-led keeps today's fallthrough below.
+    if let Some(after) = eat_keyword(s, "auto") {
+        if eat_keyword(after, "trait").is_some() {
+            return err("`auto trait` headers are not supported in v1 (use an ordinary hunk)");
+        }
     }
     // Kind keyword.
     let mut kind: Option<ItemKind> = None;
@@ -496,5 +506,17 @@ mod tests {
     #[test]
     fn rejects_meta_names() {
         assert!(parse_side("struct $S").is_err());
+    }
+
+    #[test]
+    fn rejects_auto_trait_with_needle() {
+        // T23: fail fast instead of falling through to a confusing no-match.
+        for text in ["auto trait Old", "pub auto trait Old"] {
+            let err = parse_side(text).unwrap_err().to_string();
+            assert!(err.contains("`auto trait`"), "got: {err}");
+        }
+        // `auto` + non-`trait` keeps today's fallthrough (no valid Rust
+        // shape starts that way).
+        assert!(parse_side("auto foo").unwrap().is_none());
     }
 }

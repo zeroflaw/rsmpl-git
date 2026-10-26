@@ -78,6 +78,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
   (`Receiver.old_method(Arg)` → `new_function(Receiver, Arg)`, SPEC 18.5).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
   `const`/`static`/`mod`/`union`/`impl`), one ident edit (SPEC 14.8).
+  File, inline-mod, and block-level (fn bodies) items all match.
   A bare `impl Old` / `impl New` pair renames both the self-ty and the
   trait-side path (`impl Old for Foo` → `impl New for Foo`); add
   `# allow=many` when several headers match.

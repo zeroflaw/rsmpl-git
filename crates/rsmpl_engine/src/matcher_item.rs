@@ -10,6 +10,7 @@
 //! the same scope, so a bare `impl Old` pair targets whichever side(s) name it.
 
 use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
 
 use rsmpl_patch::{AttrsPolicy, ErrorCode, RsmplHunk, Scope, StructuredError};
 use rsmpl_pattern::{CompiledPattern, ItemKind, PatternKind};
@@ -57,80 +58,110 @@ fn self_ty_ident(ty: &syn::Type) -> Option<&syn::Ident> {
     None
 }
 
-/// Collect rename candidates of `want` kind from file + inline mods.
+/// Collect rename candidates of `want` kind from file items, inline
+/// modules, and block-level items (T23: fn bodies, closures, method
+/// bodies — anywhere the syntactic walk reaches; macro bodies stay
+/// excluded per T133). Each item node is visited once; the push logic
+/// is unchanged, only the traversal widened.
 fn collect(items: &[syn::Item], want: ItemKind, out: &mut Vec<ItemCandidate>) {
+    struct Collector {
+        want: ItemKind,
+        found: Vec<ItemCandidate>,
+    }
+    impl<'ast> Visit<'ast> for Collector {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            consider(it, self.want, &mut self.found);
+            visit::visit_item(self, it);
+        }
+    }
+    let mut collector = Collector {
+        want,
+        found: Vec::new(),
+    };
     for it in items {
-        match it {
-            syn::Item::Struct(s) if want == ItemKind::Struct => push_candidate(
-                out,
-                s.ident.to_string(),
-                s.ident.span(),
-                s.attrs.clone(),
-                s.span(),
-            ),
-            syn::Item::Enum(e) if want == ItemKind::Enum => push_candidate(
-                out,
-                e.ident.to_string(),
-                e.ident.span(),
-                e.attrs.clone(),
-                e.span(),
-            ),
-            syn::Item::Trait(t) if want == ItemKind::Trait => push_candidate(
-                out,
-                t.ident.to_string(),
-                t.ident.span(),
-                t.attrs.clone(),
-                t.span(),
-            ),
-            syn::Item::Union(u) if want == ItemKind::Union => push_candidate(
-                out,
-                u.ident.to_string(),
-                u.ident.span(),
-                u.attrs.clone(),
-                u.span(),
-            ),
-            syn::Item::Type(t) if want == ItemKind::Type => push_candidate(
-                out,
-                t.ident.to_string(),
-                t.ident.span(),
-                t.attrs.clone(),
-                t.span(),
-            ),
-            syn::Item::Const(c) if want == ItemKind::Const => push_candidate(
-                out,
-                c.ident.to_string(),
-                c.ident.span(),
-                c.attrs.clone(),
-                c.span(),
-            ),
-            syn::Item::Static(s) if want == ItemKind::Static => push_candidate(
-                out,
-                s.ident.to_string(),
-                s.ident.span(),
-                s.attrs.clone(),
-                s.span(),
-            ),
-            syn::Item::Mod(m) if want == ItemKind::Mod => {
+        collector.visit_item(it);
+    }
+    out.extend(collector.found);
+}
+
+/// Push `it` as a rename candidate when it has the wanted kind.
+/// Traversal (inline mods, bodies) is the caller's `Visit` default.
+fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
+    match it {
+        syn::Item::Struct(s) if want == ItemKind::Struct => push_candidate(
+            out,
+            s.ident.to_string(),
+            s.ident.span(),
+            s.attrs.clone(),
+            s.span(),
+        ),
+        syn::Item::Enum(e) if want == ItemKind::Enum => push_candidate(
+            out,
+            e.ident.to_string(),
+            e.ident.span(),
+            e.attrs.clone(),
+            e.span(),
+        ),
+        syn::Item::Trait(t) if want == ItemKind::Trait => push_candidate(
+            out,
+            t.ident.to_string(),
+            t.ident.span(),
+            t.attrs.clone(),
+            t.span(),
+        ),
+        syn::Item::Union(u) if want == ItemKind::Union => push_candidate(
+            out,
+            u.ident.to_string(),
+            u.ident.span(),
+            u.attrs.clone(),
+            u.span(),
+        ),
+        syn::Item::Type(t) if want == ItemKind::Type => push_candidate(
+            out,
+            t.ident.to_string(),
+            t.ident.span(),
+            t.attrs.clone(),
+            t.span(),
+        ),
+        syn::Item::Const(c) if want == ItemKind::Const => push_candidate(
+            out,
+            c.ident.to_string(),
+            c.ident.span(),
+            c.attrs.clone(),
+            c.span(),
+        ),
+        syn::Item::Static(s) if want == ItemKind::Static => push_candidate(
+            out,
+            s.ident.to_string(),
+            s.ident.span(),
+            s.attrs.clone(),
+            s.span(),
+        ),
+        syn::Item::Mod(m) if want == ItemKind::Mod => push_candidate(
+            out,
+            m.ident.to_string(),
+            m.ident.span(),
+            m.attrs.clone(),
+            m.span(),
+        ),
+        syn::Item::Impl(imp) if want == ItemKind::Impl => {
+            if let Some(ident) = self_ty_ident(&imp.self_ty) {
                 push_candidate(
                     out,
-                    m.ident.to_string(),
-                    m.ident.span(),
-                    m.attrs.clone(),
-                    m.span(),
+                    ident.to_string(),
+                    ident.span(),
+                    imp.attrs.clone(),
+                    imp.span(),
                 );
-                // Recurse: `mod outer { struct Inner; }` nests items.
-                if let Some((_, inner)) = &m.content {
-                    collect(inner, want, out);
-                }
             }
-            syn::Item::Mod(m) => {
-                // Even when renaming another kind, nested items are visible.
-                if let Some((_, inner)) = &m.content {
-                    collect(inner, want, out);
-                }
-            }
-            syn::Item::Impl(imp) if want == ItemKind::Impl => {
-                if let Some(ident) = self_ty_ident(&imp.self_ty) {
+            // T19b: trait-side path (`impl Old for Foo`). Match the last
+            // segment ident so renaming a trait updates its impl headers;
+            // generics/qualifiers on the path are preserved. The trait
+            // position is a plain `syn::Path` (no qualified-self form
+            // exists there), so no qself guard is needed.
+            if let Some((_, path, _)) = &imp.trait_ {
+                if let Some(seg) = path.segments.last() {
+                    let ident = &seg.ident;
                     push_candidate(
                         out,
                         ident.to_string(),
@@ -139,26 +170,9 @@ fn collect(items: &[syn::Item], want: ItemKind, out: &mut Vec<ItemCandidate>) {
                         imp.span(),
                     );
                 }
-                // T19b: trait-side path (`impl Old for Foo`). Match the last
-                // segment ident so renaming a trait updates its impl headers;
-                // generics/qualifiers on the path are preserved. The trait
-                // position is a plain `syn::Path` (no qualified-self form
-                // exists there), so no qself guard is needed.
-                if let Some((_, path, _)) = &imp.trait_ {
-                    if let Some(seg) = path.segments.last() {
-                        let ident = &seg.ident;
-                        push_candidate(
-                            out,
-                            ident.to_string(),
-                            ident.span(),
-                            imp.attrs.clone(),
-                            imp.span(),
-                        );
-                    }
-                }
             }
-            _ => {}
         }
+        _ => {}
     }
 }
 
@@ -578,5 +592,28 @@ mod tests {
         let call = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
         let out = apply(call, "fn a() {\n    foo(1);\n}\n").unwrap();
         assert!(out.contains("bar(1)"), "got: {out}");
+    }
+
+    #[test]
+    fn renames_block_level_struct() {
+        // T23: items nested in fn bodies are collected by the syntactic walk.
+        let patch = rename_patch("struct Local", "struct Renamed", "@@ -2,1 @@");
+        let src = "fn outer() {\n    struct Local;\n    let _ = 1;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("struct Renamed;"), "got: {out}");
+        assert!(out.contains("fn outer() {"));
+        assert!(out.contains("let _ = 1;"));
+        assert!(!out.contains("Local"));
+    }
+
+    #[test]
+    fn allow_many_reaches_block_and_top_level() {
+        // T23: one hunk, `# allow=many`, renames the top-level item and the
+        // same-named local together (traversal + allow semantics compose).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=many\n# allow=many\n- struct Old\n+ struct New\n";
+        let src = "struct Old;\nfn outer() {\n    struct Old;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches("struct New").count(), 2, "got: {out}");
+        assert!(!out.contains("Old"));
     }
 }

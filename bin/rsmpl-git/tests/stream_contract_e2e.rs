@@ -29,15 +29,6 @@ fn write(dir: &Path, rel: &str, text: &str) {
     fs::write(dir.join(rel), text).unwrap();
 }
 
-fn run(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(binary())
-        .args(args)
-        .arg("--repo")
-        .arg(dir)
-        .output()
-        .unwrap()
-}
-
 fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
