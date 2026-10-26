@@ -104,8 +104,9 @@ rsmpl-git --file change.rsmpl                       # apply for real
   review-only, never pipe it to `git apply` (SPEC D.2.1/D.2.2).
 - Lint without a checkout: `--repo /tmp/empty --check` — `no match found`
   is the pass signal (SPEC D.2.4); re-check against the real repo after.
-- Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --patch -`
-  (canonical stdin spelling; `--file -` is the symmetric alias, SPEC D.1).
+- Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
+  (no input flags means stdin; `--patch -` is the explicit alias,
+  `--file -` the symmetric alias, SPEC D.1).
 
 ## Errors: code → fix (SPEC 25)
 

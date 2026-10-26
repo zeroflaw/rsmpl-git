@@ -118,14 +118,15 @@ searches the whole file (SPEC 17.3).
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-rsmpl-git --patch - < change.rsmpl
+cat change.rsmpl | rsmpl-git --check
 rsmpl-git --file change.rsmpl --check
 rsmpl-git --file change.rsmpl --format json --check
 rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
 rsmpl-git --file change.rsmpl --output full.patch
 ```
 
-Piped patches avoid temp files (SPEC D.1). JSON prints
+Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
+`--patch '<diff>'` inlines small patches; `--file` avoids quoting for large ones. JSON prints
 `{rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
 JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes

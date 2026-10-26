@@ -4005,19 +4005,25 @@ whole-file scope (D.3), not a CLI listing mode.
 
 ### D.1 Piped patches (stdin)
 
-`--patch -` and `--file -` read the RSmPL-Git patch from stdin instead of
-from an argument or a temp file:
+No `--patch`/`--file` flags means stdin (Unix filter default), so the
+cheapest spelling needs no input flag at all:
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-cat change.rsmpl | rsmpl-git --patch -
+cat change.rsmpl | rsmpl-git --check
 ```
+
+`--patch -` and `--file -` spell the same stdin read explicitly. Empty
+stdin is rejected with the T59 `RSMPL_PARSE_CONFLICT` (empty input is an
+authoring typo, never silent success). A bare interactive call with no pipe
+blocks on stdin like any Unix filter — pipe or pass `--patch`/`--file`.
 
 Both sources stay: `--patch` keeps small patches temp-file-free while
 `--file` avoids shell-quoting for large patches; a unified
 `<text|@file|->` spelling would add quoting ambiguity for zero token
-savings. Canonical stdin spelling is `--patch -`; `--file -` is the
-symmetric alias (same bytes, same behavior).
+savings. Canonical stdin spelling is bare stdin (no flags); `--patch -`
+is the explicit alias, `--file -` the symmetric alias (same bytes, same
+behavior).
 
 ### D.2 Machine-readable reports (`--format json`)
 
@@ -4097,9 +4103,10 @@ prints one JSON object to stdout:
   suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
   or output files and stdin failures.
-- Remaining flag-usage errors (no input at all, `--patch` plus `--file`
+- Remaining flag-usage errors (`--patch` plus `--file`
   together, clap parse errors) stay plain text on stderr in both modes;
-  enveloping those is future work.
+  enveloping those is future work. (No-input is not an error: bare stdin
+  is the default, D.1.)
 
 #### D.2.1 Output budget (`--diff-max-lines N`)
 

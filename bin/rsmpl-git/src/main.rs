@@ -6,8 +6,8 @@
 //! # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 //! # Inline patch:
 //! rsmpl-git --patch '<diff text>'
-//! # Piped patch (no temp file):
-//! cat change.rsmpl | rsmpl-git --patch -
+//! # Piped patch, no temp file (no input flags means stdin):
+//! cat change.rsmpl | rsmpl-git --check
 //! # From a file, printing the lowered diff without applying:
 //! rsmpl-git --file change.rsmpl --check
 //! # Machine-readable report:
@@ -41,11 +41,11 @@ enum Format {
     about = "Apply RSmPL-Git semantic patches via lowering to Git patches"
 )]
 struct Cli {
-    /// Inline patch text, or `-` for stdin.
+    /// Inline patch text, or `-` for stdin (no input flags also reads stdin).
     #[arg(long, conflicts_with = "file")]
     patch: Option<String>,
 
-    /// Patch file path, or `-` for stdin.
+    /// Patch file path, or `-` for stdin (no input flags also reads stdin).
     #[arg(long, conflicts_with = "patch")]
     file: Option<PathBuf>,
 
@@ -144,13 +144,17 @@ fn run() -> Result<(), CliError> {
             )
         })?,
         (None, None) => {
-            return Err(CliError::Usage(
-                "provide exactly one of --patch <text> or --file <path>".to_string(),
-            ));
+            // Unix filter default (T129): no input flags means stdin, so
+            // `cat change.rsmpl | rsmpl-git --check` just works. Empty stdin
+            // surfaces as the T59 empty-patch `RSMPL_PARSE_CONFLICT`, not
+            // silent success. Like any filter, a bare interactive call
+            // blocks on stdin — pipe or pass `--patch`/`--file` instead.
+            read_stdin()?
         }
         (Some(_), Some(_)) => {
             return Err(CliError::Usage(
-                "provide exactly one of --patch <text> or --file <path>".to_string(),
+                "--patch and --file conflict: provide only one (or neither, to read stdin)"
+                    .to_string(),
             ));
         }
     };

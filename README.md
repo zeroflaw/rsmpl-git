@@ -30,8 +30,8 @@ need no git.
 # Inline patch (no restatement of unchanged bodies needed):
 rsmpl-git --patch "$(cat change.rsmpl)"
 
-# Piped patch, no temp file:
-cat change.rsmpl | rsmpl-git --patch -
+# Piped patch, no temp file (no input flags means stdin):
+cat change.rsmpl | rsmpl-git --check
 
 # From a file, preview the lowered Git diff without applying:
 rsmpl-git --file change.rsmpl --check
