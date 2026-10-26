@@ -27,8 +27,13 @@ cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 # From a file, preview the lowered Git diff without applying:
 rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
 
-# Machine-readable result (rules, files_changed, diff, check):
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff --check
+  # Machine-readable result (rules, files_changed, files stats, diff, check):
+  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff --check
+
+  # Token-bounded verification: stats + check, no diff tokens ...
+  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --no-diff --check
+  # ... or skim the first 40 diff lines (stats stay exact, --output stays full):
+  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check --output full.patch
 
 # Discover valid @@ ranges without reading whole files:
 rsmpl-git --repo ./my-repo --inspect src/lib.rs
@@ -49,7 +54,11 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch --verbose
 
 Exit codes: `0` applied/clean, `2` patch error (structured
 `RSMPL_*`/`GIT_*` diagnostic on stderr). `--format json` prints
-`{rules, files_changed, diff, check}` to stdout; failures print
+`{rules, files_changed, files, diff, diff_truncated, check}` to stdout
+(`files` = per-file `added`/`removed`; `diff_truncated` = reported diff
+hides a non-empty lowering); `--no-diff` / `--diff-max-lines N` bound the
+reported diff only (`--check`/apply/`--output` always use the full diff);
+failures print
 `{error: {code, rule, file, range, reason, suggestion}}` to stdout
 (`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files).
 `--inspect` needs no patch.

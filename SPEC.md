@@ -3682,16 +3682,25 @@ prints one JSON object to stdout:
 {
   "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1}],
   "files_changed": ["src/lib.rs"],
+  "files": [{"path": "src/lib.rs", "added": 1, "removed": 1}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
+  "diff_truncated": false,
   "check": "ok"
 }
 ```
 
 - `rules` mirrors the per-rule match report (`--verbose` on stderr).
 - `files_changed` lists repo-relative paths actually rewritten.
+- `files` lists per-file `{path, added, removed}` line stats computed from
+  the full old/new contents, so counts stay exact even when `diff` is
+  truncated or omitted (see D.2.1). Empty when no changes.
 - `diff` is the lowered ordinary Git diff (empty string when no changes).
+- `diff_truncated` is `true` iff the lowered diff is non-empty and the
+  reported `diff` string hides any of it (`--no-diff`, or
+  `--diff-max-lines N` cut lines off); else `false` (including no-changes).
 - `check` is `"ok"` when `--check` was passed, else `null`.
-- `--output <path>` still writes the diff file in both modes.
+- `--output <path>` always writes the full diff file in both modes, even
+  when the reported `diff` is truncated or omitted.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
 - Failure envelope: with `--format json`, every patch/IO failure prints
@@ -3708,6 +3717,51 @@ prints one JSON object to stdout:
   or output files and stdin failures.
 - Flag-usage errors (bad flag combinations, clap errors) stay plain text
   on stderr in both modes; enveloping those is future work.
+
+#### D.2.1 Output budget (`--no-diff`, `--diff-max-lines N`)
+
+One large move can produce a lowered diff that exceeds an agent's context
+all by itself. Two apply-path flags bound only the *reported* diff; they
+never change what is checked, applied, or saved:
+
+```sh
+# Stats + check only, no diff tokens at all:
+rsmpl-git --file change.rsmpl --repo ./my-repo --format json --no-diff --check
+
+# First 40 lines of diff for a quick skim, stats stay exact:
+rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check
+
+# Text equivalents (stdout is the reported diff, markers on stderr):
+rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --no-diff
+rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --diff-max-lines 40
+```
+
+Rules:
+
+- `--no-diff` suppresses the reported diff (empty stdout with
+  `--emit-diff`; `"diff": ""` in JSON). `--diff-max-lines N` keeps the
+  first N lines (`0` omits). A truncated diff is review-only: it is not
+  guaranteed to apply with `git apply`.
+- `diff_truncated` (JSON) is `true` iff the lowered diff is non-empty and
+  the reported `diff` hides any of it; the marker is exact, not heuristic.
+- Text mode prints stdout as pure diff-or-empty (untruncated output still
+  pipes to `git apply`); budget markers go to stderr: `diff omitted
+  (--no-diff/--diff-max-lines 0): {n} file(s) changed` plus per-file
+  `  {path}: +{added} -{removed}` lines, or `diff truncated: showing
+  {shown} of {total} lines (full diff in --output file if given, else
+  re-run without --diff-max-lines)`.
+- `--check`, apply, and `--output` always use the FULL lowered diff, so
+  `--format json --no-diff --check` verifies clean application with zero
+  diff tokens, and `--diff-max-lines 1 --output full.patch` saves the
+  appliable patch while showing one line.
+- `--no-diff` wins over `--emit-diff` in text mode (no error, nothing
+  printed to stdout); in JSON mode `--emit-diff` is accepted but ignored
+  (the `diff` field carries the report). Combined `--no-diff
+  --diff-max-lines N` omits (omit outranks truncate). With no changes both
+  flags are no-ops (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
+- Budget flags are rejected with `--inspect` (`--inspect does not take
+  --no-diff/--diff-max-lines`, exit 2, same usage-error class as
+  `--inspect` + `--check`).
 
 ### D.3 Range discovery (`--inspect <path>`)
 
@@ -3838,7 +3892,8 @@ Recommended agent loop:
 
 ```text
 inspect dir -> author hunks in original-source coordinates
--> apply with --format json --check --emit-diff -> review lowered diff
+-> apply with --format json --no-diff --check -> review files[] stats
+-> widen with --diff-max-lines N (or --output full.patch) only if needed
 -> apply for real
 ```
 

@@ -725,3 +725,355 @@ fn inspect_max_items_zero_yields_truncated() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(v["truncated"], serde_json::json!(false), "got: {v}");
 }
+
+// --- T33 output budget (D.2.1): --no-diff / --diff-max-lines + files[] ---
+
+fn two_call_patch() -> &'static str {
+    "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n"
+}
+
+#[test]
+fn json_no_diff_omits_diff_but_keeps_stats_and_check() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--no-diff",
+            "--check",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
+    assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
+    assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
+    assert_eq!(
+        v["files"],
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["files_changed"],
+        serde_json::json!(["src/lib.rs"]),
+        "got: {v}"
+    );
+    // --check must not modify the file even though the diff was omitted.
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn json_no_diff_wins_over_diff_max_lines() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--no-diff",
+            "--diff-max-lines",
+            "40",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    // Omit outranks truncate (SPEC D.2.1), stats still exact.
+    assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
+    assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
+    assert_eq!(
+        v["files"],
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        "got: {v}"
+    );
+}
+
+#[test]
+fn json_no_diff_no_changes_is_not_truncated() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# optional\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run(
+        dir.path(),
+        &["--patch", patch, "--format", "json", "--no-diff"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
+    assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
+    assert_eq!(v["files"], serde_json::json!([]), "got: {v}");
+}
+
+#[test]
+fn json_diff_max_lines_truncates_but_stats_stay_exact() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+
+    let full = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--check",
+        ],
+    );
+    assert!(full.status.success());
+    let full_v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&full.stdout)).expect("stdout is JSON");
+    let full_lines: Vec<&str> = full_v["diff"].as_str().unwrap().lines().collect();
+    assert!(full_lines.len() > 2, "got: {full_v}");
+
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--check",
+            "--diff-max-lines",
+            "2",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let shown: Vec<&str> = v["diff"].as_str().unwrap().lines().collect();
+    assert_eq!(shown.len(), 2, "got: {v}");
+    assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
+    // Stats are computed from the full contents, not the truncated string.
+    assert_eq!(v["files"], full_v["files"], "got: {v} vs {full_v}");
+    assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn json_default_report_carries_files_and_untruncated() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--check",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
+    assert_eq!(
+        v["files"],
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        "got: {v}"
+    );
+    // `files_changed` stays the path list for compat, in the same order.
+    let paths: Vec<&str> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        v["files_changed"],
+        serde_json::Value::Array(paths.iter().map(|p| serde_json::json!(p)).collect()),
+        "got: {v}"
+    );
+}
+
+#[test]
+fn text_emit_diff_max_lines_truncates_with_marker() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--emit-diff",
+            "--check",
+            "--diff-max-lines",
+            "2",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(stdout.lines().count(), 2, "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("diff truncated:"), "got: {stderr}");
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn text_emit_diff_no_diff_omits_with_stats_marker() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--emit-diff",
+            "--check",
+            "--no-diff",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).is_empty(),
+        "got: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("diff omitted"), "got: {stderr}");
+    assert!(stderr.contains("src/lib.rs: +2 -2"), "got: {stderr}");
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn output_file_stays_full_when_report_truncated() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let full_patch = dir.path().join("full.patch");
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--diff-max-lines",
+            "1",
+            "--output",
+            full_patch.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["diff"].as_str().unwrap().lines().count(), 1);
+    assert_eq!(v["diff_truncated"], serde_json::json!(true));
+    // The saved file holds the complete, appliable diff.
+    let saved = fs::read_to_string(&full_patch).unwrap();
+    assert!(saved.contains("-    foo(1);"), "got: {saved}");
+    assert!(saved.contains("-    foo(2);"), "got: {saved}");
+    let check = Command::new("git")
+        .args(["apply", "--check", full_patch.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "saved patch must apply: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    // JSON mode is report-only (no apply): the repo file is untouched, and
+    // the saved full patch is what the agent reviews/applies separately.
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(2);"));
+}
+
+#[test]
+fn budget_flags_rejected_with_inspect() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    for args in [
+        vec!["--inspect", "src/lib.rs", "--no-diff"],
+        vec!["--inspect", "src/lib.rs", "--diff-max-lines", "5"],
+    ] {
+        let out = run(dir.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "args: {args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(
+            stderr.contains("--inspect does not take --no-diff/--diff-max-lines"),
+            "got: {stderr}"
+        );
+    }
+}
