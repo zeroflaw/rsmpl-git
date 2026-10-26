@@ -3637,6 +3637,15 @@ Comments are trivia. By default:
 
 Implementations should document their exact comment attachment algorithm.
 
+### 31.7 External `git` dependency
+
+The reference CLI shells out to bare `git apply` / `git apply --check`
+(`PATH` lookup, no `--git-path` override) for its final check/apply step, so
+`git` must be on `PATH`; without it that step fails with
+`` failed to run `git apply` (is git installed?) `` under
+`GIT_HUNK_CONFLICT`. Matching, lowering, `--inspect`, and `--output` are
+pure and never spawn git.
+
 ---
 
 ## 32. Non-Goals
@@ -3686,7 +3695,6 @@ Possible future extensions:
 - multi-language support;
 - typed semantic constraints;
 - cargo-feature-specific symbol resolution;
-- structured diagnostics in JSON;
 - conflict markers for semantic patches;
 - automatic import management;
 - semantic move with path rewriting;

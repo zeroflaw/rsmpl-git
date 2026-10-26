@@ -17,6 +17,11 @@ cargo install --path bin/rsmpl-git
 # or: cargo build --release -p rsmpl-git
 ```
 
+Requires `git` on `PATH` for the check/apply step (the CLI shells out to
+`git apply`); without it that step fails with ``failed to run `git apply`
+(is git installed?)``. Matching, lowering, `--inspect`, and `--output`
+need no git.
+
 ## Usage (agent-oriented)
 
 ```sh
