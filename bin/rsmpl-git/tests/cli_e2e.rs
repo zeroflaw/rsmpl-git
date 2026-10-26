@@ -1338,3 +1338,58 @@ fn output_path_is_cwd_relative_not_repo_joined() {
         "output must not land in --repo"
     );
 }
+
+#[test]
+fn repeat_folds_nested_match_json_report() {
+    // T20: one hunk folds `Box::new(Box::new(x))` to `x`; the report
+    // counts the single outermost edit.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    let v = Box::new(Box::new(x));\n}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,3 @@ rule=unbox\n# repeat\n# expr E\n- Box::new(E)\n+ E\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json", "--check"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
+    assert!(v["diff"].as_str().unwrap().contains("+    let v = x;"));
+}
+
+#[test]
+fn repeat_with_bind_rejected_json_envelope() {
+    // T20: `# repeat` on a capture hunk fails fast with PATTERN conflict.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=cut\n# repeat\n# item I\n# bind=H\n- I\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PATTERN_CONFLICT")
+    );
+}

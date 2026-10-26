@@ -687,6 +687,7 @@ hunks that already carry other directives omit it.
 | `# optional` | Zero matches are allowed. |
 | `# optional=true` | Equivalent to `# optional`. |
 | `# optional=false` | Zero matches are an error. Default. |
+| `# repeat` | Re-apply the same rewrite inside captured bindings, bottom-up: one hunk folds nested matches (Section 17.8). Call/method-call shapes in v0.1; `...` bodies are opaque. |
 | `# scope=contained` | Matched AST node must be fully inside the old range. Default. |
 | `# scope=anchor` | First concrete non-ellipsis token must be inside the old range. |
 | `# scope=overlap` | Matched AST node may overlap the old range. |
@@ -2212,7 +2213,7 @@ Box::new(x)
 
 The result is not `x`, because the inner `Box::new(x)` is a descendant of the accepted outer match and is skipped during the same hunk application.
 
-To rewrite both layers, the patch author must emit two ordered RSmPL hunks or use a future explicit repeat mode.
+To rewrite both layers, the patch author must emit two ordered RSmPL hunks or add `# repeat` (Section 17.8).
 
 For safety, implementations should report the number of accepted matches for every `allow=many` hunk.
 
@@ -2259,6 +2260,43 @@ The formatter or pretty-printer selected by `# format=...` is responsible for ca
 
 In `# macro=token_tree` mode, raw token-tree matching does not automatically treat commas as Rust list separators unless the implementation parses a nested token sequence as a Rust syntactic list. Token-tree wildcard behavior is defined separately in Section 21.4.
 
+### 17.8 Nested re-application (`# repeat`)
+
+Without `# repeat`, one hunk is one outermost-wins pass (Section 17.6):
+nested matches need a second ordered hunk. With `# repeat`, the engine
+folds nested matches into the same hunk by re-applying the same
+minus/plus rule inside each captured binding, bottom-up, before
+substitution:
+
+```diff
+@@ -10,1 @@ rule=unbox_nested
+# repeat
+# expr E
+- Box::new(E)
++ E
+```
+
+Given `Box::new(Box::new(x))`, the outer match binds `E =
+Box::new(x)`; the rule re-applies inside the binding (`E = x`); the
+outer substitution then yields `x`. One hunk replaces two.
+
+Rules:
+
+- Only named-metavar bindings are revisited (pre-bound `# symbol`
+  paths are skipped). A binding that does not parse as an expression is
+  kept verbatim. `...` ellipsis bodies are opaque arg-list text, not a
+  single expression: to let repeat reach inside, bind the positions
+  with named `# expr` metavariables instead of `...`.
+- The produced output is never re-scanned, so self-reproducing rules
+  (`foo(E)` -> `foo(foo(E))`) apply exactly one level and terminate;
+  recursion depth is bounded by the AST (backstop: 64 levels).
+- The per-rule match count is the outermost accepted sites (one edit
+  each); nested folds ride the outer edit and are visible in the diff.
+  `allow`/`optional` validation is unchanged.
+- In v0.1, only call/method-call shapes accept `# repeat`; any other
+  shape (function, item, general-expr/type, macro, insertion, deletion,
+  capture) is rejected with `RSMPL_PATTERN_CONFLICT` (Sections 9.6,
+  24.4). Extending repeat to other shapes is future work.
 
 ---
 
@@ -2897,6 +2935,7 @@ Reject if:
 4. a scalar `# bind` hunk matches more than one AST object or is combined with `# allow=many`;
 5. a rewrite would produce duplicate or invalid syntax;
 6. a move would remove a required node and fail to insert it.
+7. a `# repeat` hunk is not a call/method-call rewrite, is combined with `# bind=`/`# use=`, or has an empty minus/plus side.
 
 ### 24.5 Ordinary Git validation
 
@@ -2942,8 +2981,11 @@ The RSmPL pattern failed to parse. Unknown directives (`# foo`,
 (no silent ignore, Section 9.6), as is any hunk-header `k=v` tag other
 than `rule=` (no silent dead tags, Section 8.3), any `# root=` value other
 than `item/expr/stmt/type` (no silent heuristic fallthrough, Section 13.4),
-and any `# identifier/# path/# lifetime/# field` metavariable declaration
-(no kind-specific binding in v0.1, Section 15.1).
+any `# identifier/# path/# lifetime/# field` metavariable declaration
+(no kind-specific binding in v0.1, Section 15.1), any `# repeat=<value>`
+(write bare `# repeat`, Section 17.8), and any `# repeat` on a
+non-call/method-call shape, on a capture hunk, or with an empty
+minus/plus side (no silent no-op repeat, Sections 17.8, 24.4).
 
 ```text
 RSMPL_PATTERN_CONFLICT

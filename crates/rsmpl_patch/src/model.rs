@@ -204,6 +204,7 @@ pub enum Directive {
     LangRust,
     Allow(Allow),
     Optional(bool),
+    Repeat,
     Scope(Scope),
     Bind(String),
     Use(String),
@@ -289,6 +290,12 @@ impl RsmplHunk {
         self.directives
             .iter()
             .any(|d| matches!(d, Directive::Optional(true)))
+    }
+
+    pub fn repeats(&self) -> bool {
+        self.directives
+            .iter()
+            .any(|d| matches!(d, Directive::Repeat))
     }
 
     pub fn scope(&self) -> Scope {

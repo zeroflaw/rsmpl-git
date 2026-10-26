@@ -510,6 +510,7 @@ fn parse_directive(line: &str) -> Result<Directive> {
         )
         .into()),
         ["optional"] => Ok(Directive::Optional(true)),
+        ["repeat"] => Ok(Directive::Repeat),
         ["lang=rust"] => Ok(Directive::LangRust),
         [single] => {
             // Bare flag or `kind` with missing name.
@@ -688,6 +689,12 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
             )
             .into()),
         },
+        "repeat" => Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!("invalid repeat value `{v}` (write bare `# repeat`): {line}"),
+        )
+        .with_suggestion("write bare `# repeat` with no value".to_string())
+        .into()),
         "scope" => match v {
             "contained" => Ok(Directive::Scope(Scope::Contained)),
             "anchor" => Ok(Directive::Scope(Scope::Anchor)),
@@ -948,6 +955,31 @@ fn validate_patch(patch: &Patch) -> Result<()> {
                         .into());
                     }
                 }
+                // T20: `# repeat` folds nested matches into a rewrite hunk.
+                // It is meaningless on captures (verbatim moves) and on
+                // insertions/deletions (which already cover nested matches).
+                if rh.repeats() {
+                    if !rh.binds().is_empty() || !rh.uses().is_empty() {
+                        return Err(StructuredError::new(
+                            ErrorCode::PatternConflict,
+                            "`# repeat` cannot be combined with `# bind=`/`# use=` (captures move verbatim)".to_string(),
+                        )
+                        .with_rule(rh.rule_name())
+                        .with_file(&f.target_path)
+                        .with_suggestion("remove `# repeat` from the cut/paste hunk".to_string())
+                        .into());
+                    }
+                    if rh.minus_text().trim().is_empty() || rh.plus_text().trim().is_empty() {
+                        return Err(StructuredError::new(
+                            ErrorCode::PatternConflict,
+                            "`# repeat` requires both `-` and `+` patterns (insertions/deletions already cover nested matches)".to_string(),
+                        )
+                        .with_rule(rh.rule_name())
+                        .with_file(&f.target_path)
+                        .with_suggestion("remove `# repeat`, or write a rewrite hunk".to_string())
+                        .into());
+                    }
+                }
             }
         }
     }
@@ -1008,6 +1040,38 @@ mod tests {
         ])
         .unwrap();
         assert!(d.iter().any(|x| x.is_lang_rust()));
+    }
+
+    #[test]
+    fn parses_repeat_flag() {
+        // T20: bare `# repeat` parses; any value form is rejected.
+        let d = parse_directives(&["# repeat".to_string()]).unwrap();
+        assert!(d.iter().any(|x| matches!(x, Directive::Repeat)));
+        assert!(parse_directives(&["# repeat=true".to_string()]).is_err());
+    }
+
+    #[test]
+    fn rejects_repeat_with_bind() {
+        // T20: `# repeat` folds rewrites; captures move verbatim.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,0 @@ rule=cut\n# repeat\n# item I\n# bind=H\n- I\n";
+        let err = parse_patch(text).unwrap_err();
+        assert!(err.to_string().contains("bind"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_repeat_with_deletion() {
+        // T20: deletions already remove nested matches; repeat is vacuous.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=del\n# repeat\n# expr E\n- Box::new(E)\n";
+        let err = parse_patch(text).unwrap_err();
+        assert!(err.to_string().contains("both `-` and `+`"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_repeat_with_insertion() {
+        // T20: insertions have no minus side to re-apply.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 +1,0 @@ rule=ins\n# repeat\n+ use crate::x;\n";
+        let err = parse_patch(text).unwrap_err();
+        assert!(err.to_string().contains("both `-` and `+`"), "got: {err}");
     }
 
     #[test]

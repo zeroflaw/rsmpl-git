@@ -424,32 +424,10 @@ pub fn apply_expr_hunk(
         ) {
             continue;
         }
-        let mut bindings: HashMap<String, String> = HashMap::new();
-        // Seed symbol bindings (symbols are pre-bound to their path).
-        for (n, p) in &compiled.table.symbols {
-            bindings.insert(n.clone(), p.clone());
-        }
-        let ok = match minus {
-            ExprPatternKind::Call { callee, args } => {
-                !cand.is_method
-                    && match_callee(callee, &cand.callee_segments, compiled, &mut bindings)
-                    && match_args(args, &cand.arg_texts, &reverse_map, &mut bindings)
-            }
-            ExprPatternKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => {
-                cand.is_method
-                    && match_receiver_or_method(receiver, method, cand, &reverse_map, &mut bindings)
-                    && match_args(args, &cand.arg_texts, &reverse_map, &mut bindings)
-            }
-            ExprPatternKind::Macro { .. } => false, // routed to macro matcher
-            ExprPatternKind::Raw { .. } => false,
+        let mut bindings = match match_candidate(minus, cand, compiled, &reverse_map) {
+            Some(b) => b,
+            None => continue,
         };
-        if !ok {
-            continue;
-        }
         // Partial-overlap guard (SPEC 17.6.5).
         for &(s, e) in &accepted {
             let overlap = cand.start < e && s < cand.end;
@@ -462,16 +440,37 @@ pub fn apply_expr_hunk(
                 .with_rule(&rule));
             }
         }
-        // Build replacement.
-        let replacement = if let Some(fast) =
-            try_callee_only_rewrite(minus, plus_raw, cand, original, &reverse_map)
-        {
-            fast
-        } else {
+        // T20 `# repeat`: fold nested matches by rewriting each bound
+        // fragment with the same rule before substitution (bottom-up).
+        if hunk.repeats() {
+            fold_bindings(
+                &mut bindings,
+                compiled,
+                minus,
+                plus_raw,
+                &reverse_map,
+                0,
+                &rule,
+            )?;
+        }
+        // Build replacement. Under `# repeat` the callee-only fast path
+        // is skipped: it splices the original slice and would discard
+        // folded bindings.
+        let replacement = if hunk.repeats() {
             substitute_plus(
                 plus_raw,
                 &bindings,
                 &cand.ellipsis_body,
+                compiled.table.sigiled,
+            )
+        } else {
+            build_replacement(
+                minus,
+                plus_raw,
+                cand,
+                original,
+                &bindings,
+                &reverse_map,
                 compiled.table.sigiled,
             )
         };
@@ -483,6 +482,184 @@ pub fn apply_expr_hunk(
         }
     }
     Ok(matched)
+}
+
+/// Backstop for `# repeat` nesting. Bindings are strict sub-slices of the
+/// matched candidate, so structural descent terminates on its own; this
+/// only guards pathological spans.
+const MAX_REPEAT_DEPTH: usize = 64;
+
+/// Match one call/method-call candidate, returning its bindings
+/// (symbol seeds included). `None` means this candidate does not match.
+fn match_candidate(
+    minus: &ExprPatternKind,
+    cand: &Candidate<'_>,
+    compiled: &CompiledPattern,
+    reverse_map: &HashMap<String, String>,
+) -> Option<HashMap<String, String>> {
+    let mut bindings: HashMap<String, String> = HashMap::new();
+    // Seed symbol bindings (symbols are pre-bound to their path).
+    for (n, p) in &compiled.table.symbols {
+        bindings.insert(n.clone(), p.clone());
+    }
+    let ok = match minus {
+        ExprPatternKind::Call { callee, args } => {
+            !cand.is_method
+                && match_callee(callee, &cand.callee_segments, compiled, &mut bindings)
+                && match_args(args, &cand.arg_texts, reverse_map, &mut bindings)
+        }
+        ExprPatternKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            cand.is_method
+                && match_receiver_or_method(receiver, method, cand, reverse_map, &mut bindings)
+                && match_args(args, &cand.arg_texts, reverse_map, &mut bindings)
+        }
+        ExprPatternKind::Macro { .. } => false, // routed to macro matcher
+        ExprPatternKind::Raw { .. } => false,
+    };
+    ok.then_some(bindings)
+}
+
+/// Build the replacement text for a matched candidate: the callee-only
+/// fast path when just the callee changed, else full substitution.
+fn build_replacement(
+    minus: &ExprPatternKind,
+    plus_raw: &str,
+    cand: &Candidate<'_>,
+    source: &str,
+    bindings: &HashMap<String, String>,
+    reverse_map: &HashMap<String, String>,
+    sigiled: bool,
+) -> String {
+    if let Some(fast) = try_callee_only_rewrite(minus, plus_raw, cand, source, reverse_map) {
+        fast
+    } else {
+        substitute_plus(plus_raw, bindings, &cand.ellipsis_body, sigiled)
+    }
+}
+
+/// T20 `# repeat`: rewrite every non-symbol binding with the same rule
+/// (bottom-up fold). Symbol seeds are pre-bound paths, not matchable
+/// fragments, so they are skipped.
+fn fold_bindings(
+    bindings: &mut HashMap<String, String>,
+    compiled: &CompiledPattern,
+    minus: &ExprPatternKind,
+    plus_raw: &str,
+    reverse_map: &HashMap<String, String>,
+    depth: usize,
+    rule: &str,
+) -> Result<(), StructuredError> {
+    if depth > MAX_REPEAT_DEPTH {
+        return Err(StructuredError::new(
+            ErrorCode::MatchConflict,
+            "repeat nesting exceeds 64 levels (pathological nesting?)",
+        )
+        .with_rule(rule)
+        .with_suggestion("remove `# repeat` or simplify the nesting"));
+    }
+    // Snapshot names: rewriting mutates the map.
+    let names: Vec<String> = bindings.keys().cloned().collect();
+    for name in names {
+        if compiled.table.symbols.contains_key(&name) {
+            continue;
+        }
+        if let Some(current) = bindings.get(&name).cloned() {
+            let rewritten = rewrite_nested(
+                &current,
+                compiled,
+                minus,
+                plus_raw,
+                reverse_map,
+                depth,
+                rule,
+            )?;
+            bindings.insert(name, rewritten);
+        }
+    }
+    Ok(())
+}
+
+/// Re-apply the same call rewrite inside one binding fragment: collect
+/// candidates over the fragment, rewrite outermost-first with recursive
+/// descent into sub-bindings, and splice the result. The produced output
+/// is never re-scanned, so self-reproducing rules
+/// (`foo(E)` -> `foo(foo(E))`) terminate after one level by construction.
+/// Unparseable fragments are kept verbatim (conservative).
+fn rewrite_nested(
+    text: &str,
+    compiled: &CompiledPattern,
+    minus: &ExprPatternKind,
+    plus_raw: &str,
+    reverse_map: &HashMap<String, String>,
+    depth: usize,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let expr: syn::Expr = match syn::parse_str(text) {
+        Ok(e) => e,
+        Err(_) => return Ok(text.to_string()),
+    };
+    let index = LineIndex::new(text);
+    let mut collector = Collector {
+        original: text,
+        index: &index,
+        out: Vec::new(),
+    };
+    collector.visit_expr(&expr);
+    let mut cands = collector.out;
+    cands.sort_by_key(|c| (c.start, c.end));
+    let mut accepted: Vec<(usize, usize)> = Vec::new();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    for cand in &cands {
+        // Outermost-wins, like the file-level pass (SPEC 17.6).
+        if accepted
+            .iter()
+            .any(|&(s, e)| s <= cand.start && cand.end <= e)
+        {
+            continue;
+        }
+        let mut bindings = match match_candidate(minus, cand, compiled, reverse_map) {
+            Some(b) => b,
+            None => continue,
+        };
+        for &(s, e) in &accepted {
+            let overlap = cand.start < e && s < cand.end;
+            let nested = (s <= cand.start && cand.end <= e) || (cand.start <= s && e <= cand.end);
+            if overlap && !nested {
+                return Err(StructuredError::new(
+                    ErrorCode::MatchConflict,
+                    "partially overlapping matches cannot be merged",
+                )
+                .with_rule(rule));
+            }
+        }
+        fold_bindings(
+            &mut bindings,
+            compiled,
+            minus,
+            plus_raw,
+            reverse_map,
+            depth + 1,
+            rule,
+        )?;
+        // Nested folds always substitute: the callee-only fast path
+        // would splice the unfolded slice and discard folded bindings.
+        let replacement = substitute_plus(
+            plus_raw,
+            &bindings,
+            &cand.ellipsis_body,
+            compiled.table.sigiled,
+        );
+        edits.push(TextEdit::new(cand.start, cand.end, replacement));
+        accepted.push((cand.start, cand.end));
+    }
+    if edits.is_empty() {
+        return Ok(text.to_string());
+    }
+    crate::edits::apply_edits(text, edits)
 }
 
 fn build_reverse_map(compiled: &CompiledPattern) -> HashMap<String, String> {
@@ -710,6 +887,73 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert!(out.contains("Box::new(x)"), "got: {out}");
         assert!(!out.contains("let v = x;"), "must not recurse: {out}");
+    }
+
+    #[test]
+    fn repeat_folds_nested_unbox() {
+        // T20: `# repeat` folds the nested match into the outer edit.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=unbox\n# repeat\n# expr E\n- Box::new(E)\n+ E\n";
+        let src = "fn a() {\n    let v = Box::new(Box::new(x));\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let v = x;"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_many_folds_each_site() {
+        // T20: `allow=many` sites each fold their own nesting.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=unbox\n# repeat\n# allow=many\n# expr E\n- Box::new(E)\n+ E\n";
+        let src = "fn a() {\n    let x = Box::new(Box::new(1));\n    let y = Box::new(2);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let x = 1;"), "got: {out}");
+        assert!(out.contains("let y = 2;"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_same_rule_nests_in_args() {
+        // T20: the same rule re-applies inside bound arguments.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=wrap\n# repeat\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(foo(x));\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(bar(x));"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_self_reproducing_terminates() {
+        // T20: the produced output is never re-scanned, so
+        // `foo(E)` -> `foo(foo(E))` applies exactly one level.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=dup\n# repeat\n# expr E\n- foo(E)\n+ foo(foo(E))\n";
+        let src = "fn a() {\n    foo(x);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("foo(foo(x));"), "got: {out}");
+        assert!(!out.contains("foo(foo(foo("), "must terminate: {out}");
+    }
+
+    #[test]
+    fn repeat_keeps_non_matching_binding_verbatim() {
+        // T20: a binding that matches nothing (here `1 + 2`) is kept as-is.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=wrap\n# repeat\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1 + 2);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1 + 2);"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_counts_outermost_sites_only() {
+        // T20: nested folds ride the outer edit; the report counts edits.
+        let patch = parse_patch("diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=unbox\n# repeat\n# expr E\n- Box::new(E)\n+ E\n")
+        .unwrap();
+        let mut files = HashMap::new();
+        files.insert(
+            "src/lib.rs".to_string(),
+            "fn a() {\n    let v = Box::new(Box::new(x));\n}\n".to_string(),
+        );
+        let report = crate::apply_patch_to_tree(&mut files, &patch).unwrap();
+        assert_eq!(report.rules.len(), 1);
+        assert_eq!(
+            report.rules[0].matches, 1,
+            "nested folds are not separate matches"
+        );
+        assert!(files["src/lib.rs"].contains("let v = x;"));
     }
 
     #[test]
