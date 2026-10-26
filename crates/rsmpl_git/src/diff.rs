@@ -3,14 +3,6 @@
 //! The lowered patch must contain no RSmPL directives (guaranteed: it is
 //! generated from materialized file text, never from the input patch).
 
-/// Build a `diff --git` section for one file, or `None` when unchanged.
-///
-/// Library default keeps the conventional radius of 3; the reference CLI
-/// always lowers at 0 (T128 fixed lowering, SPEC D.2.2).
-pub fn unified_diff_for_file(path: &str, old: &str, new: &str) -> Option<String> {
-    unified_diff_for_file_with_context(path, old, new, 3)
-}
-
 /// Build a `diff --git` section for one file with an explicit unified-diff
 /// context radius, or `None` when unchanged.
 ///
@@ -112,7 +104,9 @@ mod tests {
 
     #[test]
     fn emits_git_sections_without_directives() {
-        let d = unified_diff_for_file("src/lib.rs", "fn foo() {}\n", "fn bar() {}\n").unwrap();
+        let d =
+            unified_diff_for_file_with_context("src/lib.rs", "fn foo() {}\n", "fn bar() {}\n", 3)
+                .unwrap();
         assert!(d.contains("diff --git a/src/lib.rs b/src/lib.rs"));
         assert!(d.contains("--- a/src/lib.rs"));
         assert!(d.contains("+++ b/src/lib.rs"));
@@ -122,7 +116,7 @@ mod tests {
 
     #[test]
     fn unchanged_returns_none() {
-        assert!(unified_diff_for_file("x", "a\n", "a\n").is_none());
+        assert!(unified_diff_for_file_with_context("x", "a\n", "a\n", 3).is_none());
     }
 
     #[test]
@@ -150,16 +144,6 @@ mod tests {
         let old = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
         let new = "L1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nL10\n";
         assert_eq!(file_line_stats(old, new), (2, 2));
-    }
-
-    #[test]
-    fn default_wrapper_pins_context_three() {
-        let old = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n";
-        let new = "l1\nl2\nl3\nCHANGED\nl5\nl6\nl7\nl8\n";
-        assert_eq!(
-            unified_diff_for_file("x", old, new),
-            unified_diff_for_file_with_context("x", old, new, 3)
-        );
     }
 
     #[test]
