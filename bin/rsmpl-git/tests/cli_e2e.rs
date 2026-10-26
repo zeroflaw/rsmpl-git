@@ -120,6 +120,30 @@ fn single_path_and_range_elision_applies() {
 }
 
 #[test]
+fn diet_extreme_call_rewrite_applies() {
+    // T73: the four header-diet relaxations compose freely — single-path
+    // header (T68) + elided new side (T64) + lang-less directive block
+    // (T69) + rule-less header (T60). This is the cheapest possible
+    // call-rewrite hunk an agent can emit.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("-    foo(1);"), "got: {stdout}");
+    assert!(stdout.contains("+    bar(1);"), "got: {stdout}");
+}
+
+#[test]
 fn single_range_ordinary_hunk_rejected() {
     // T64: new-side elision is RSmPL-only; ordinary hunks need both ranges.
     let dir = init_repo();
