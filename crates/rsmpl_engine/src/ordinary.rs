@@ -107,9 +107,7 @@ pub fn ordinary_hunk_edits(
                 let ls = index
                     .line_start(cur_line)
                     .ok_or_else(|| fail("bad range".into()))?;
-                let le = index
-                    .line_start(cur_line + 1)
-                    .unwrap_or_else(|| original.len());
+                let le = index.line_start(cur_line + 1).unwrap_or(original.len());
                 if del_start.is_none() {
                     del_start = Some(ls);
                 }
@@ -122,7 +120,7 @@ pub fn ordinary_hunk_edits(
                     let pos = if cur_line == 0 {
                         0
                     } else {
-                        index.line_start(cur_line).unwrap_or_else(|| original.len())
+                        index.line_start(cur_line).unwrap_or(original.len())
                     };
                     del_end = pos;
                 }

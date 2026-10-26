@@ -198,19 +198,18 @@ pub fn apply_with_captures(
                             edits,
                         )
                         .map_err(|e| e.with_file(path))?,
-                        PatternKind::Expr { minus, .. }
-                            if matches!(minus, rsmpl_pattern::ExprPatternKind::Macro { .. }) =>
-                        {
-                            matcher_macro::apply_macro_hunk(
-                                &state.parsed,
-                                &state.original,
-                                &state.index,
-                                rh,
-                                &compiled,
-                                edits,
-                            )
-                            .map_err(|e| e.with_file(path))?
-                        }
+                        PatternKind::Expr {
+                            minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
+                            ..
+                        } => matcher_macro::apply_macro_hunk(
+                            &state.parsed,
+                            &state.original,
+                            &state.index,
+                            rh,
+                            &compiled,
+                            edits,
+                        )
+                        .map_err(|e| e.with_file(path))?,
                         PatternKind::Expr { .. } => matcher_expr::apply_expr_hunk(
                             &state.parsed,
                             &state.original,
@@ -484,7 +483,7 @@ mod tests {
     fn cross_file_move_with_import_hunk() {
         let patch = "diff --git a/src/old.rs b/src/old.rs\n--- a/src/old.rs\n+++ b/src/old.rs\n@@ -1,1 +1,0 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n\ndiff --git a/src/new.rs b/src/new.rs\n--- a/src/new.rs\n+++ b/src/new.rs\n@@ -1,0 +1,0 @@ rule=paste_helper\n# lang=rust\n# use=Helper\n+ Helper\n\n@@ -1,1 +1,2 @@\n use crate::common;\n+use crate::old_dependency;\n";
         let files = apply_multi(
-            &patch,
+            patch,
             vec![
                 ("src/old.rs", "fn helper() {}\nfn stays() {}\n"),
                 ("src/new.rs", "use crate::common;\n"),
@@ -516,7 +515,7 @@ mod tests {
     #[test]
     fn unresolved_use_fails() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 +1,0 @@ rule=paste\n# lang=rust\n# use=Missing\n+ Missing\n";
-        let err = apply_multi(&patch, vec![("src/lib.rs", "fn a() {}\n")]).unwrap_err();
+        let err = apply_multi(patch, vec![("src/lib.rs", "fn a() {}\n")]).unwrap_err();
         assert!(err.contains("RSMPL_CAPTURE_CONFLICT"), "got: {err}");
         assert!(err.contains("Missing"), "got: {err}");
     }
@@ -528,7 +527,7 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,1 +3,4 @@ rule=wrap_call\n# lang=rust\n# allow=many\n# expr E\n- old_function(E)\n+ new_function_that_spans(\n+     E,\n+ )\n\n@@ -5,1 +5,1 @@ rule=rename_second_function\n# lang=rust\n- fn second_function(...) {\n+ fn renamed_function(...) {\n      ...\n  }\n";
         let src =
             "fn top() {}\nfn old_wrapper() {\n    old_function(1);\n}\nfn second_function() {}\n";
-        let files = apply_multi(&patch, vec![("src/lib.rs", src)]).unwrap();
+        let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
         let out = &files["src/lib.rs"];
         assert!(out.contains("new_function_that_spans("), "got: {out}");
         assert!(out.contains("fn renamed_function()"), "got: {out}");
@@ -538,7 +537,7 @@ mod tests {
     fn use_on_non_insertion_hunk_rejected() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# expr E\n# use=Helper\n- foo(E)\n+ bar(E)\n";
         let err =
-            apply_multi(&patch, vec![("src/lib.rs", "fn a() {\n    foo(1);\n}\n")]).unwrap_err();
+            apply_multi(patch, vec![("src/lib.rs", "fn a() {\n    foo(1);\n}\n")]).unwrap_err();
         assert!(err.contains("RSMPL_CAPTURE_CONFLICT"), "got: {err}");
     }
 }

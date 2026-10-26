@@ -154,8 +154,8 @@ fn split_top_level(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut cur = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
+    let chars = s.chars().peekable();
+    for c in chars {
         match c {
             '(' | '[' | '{' | '<' => {
                 depth += 1;

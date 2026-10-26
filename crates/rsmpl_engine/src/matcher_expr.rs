@@ -221,9 +221,9 @@ fn match_args(
             // arg matches (greedy first-fit).
             let next = &pattern[pi + 1];
             let mut found = None;
-            for k in ti..targets.len() {
+            for (k, target) in targets.iter().enumerate().skip(ti) {
                 let mut probe = bindings.clone();
-                if match_single_arg(next, &targets[k], reverse_map, &mut probe) {
+                if match_single_arg(next, target, reverse_map, &mut probe) {
                     found = Some((k, probe));
                     break;
                 }

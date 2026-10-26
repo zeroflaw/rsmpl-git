@@ -449,9 +449,9 @@ fn match_macro_args(
             }
             let next = &pattern[pi + 1];
             let mut found = None;
-            for k in ti..targets.len() {
+            for (k, target) in targets.iter().enumerate().skip(ti) {
                 let mut probe = bindings.clone();
-                if match_one(next, &targets[k], reverse_map, &mut probe) {
+                if match_one(next, target, reverse_map, &mut probe) {
                     found = Some((k, probe));
                     break;
                 }

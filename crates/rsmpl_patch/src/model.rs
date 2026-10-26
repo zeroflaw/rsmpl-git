@@ -288,11 +288,11 @@ impl RsmplHunk {
     pub fn allow(&self) -> Allow {
         self.directives
             .iter()
-            .filter_map(|d| match d {
+            .rev()
+            .find_map(|d| match d {
                 Directive::Allow(a) => Some(*a),
                 _ => None,
             })
-            .last()
             .unwrap_or(Allow::One)
     }
 
@@ -305,55 +305,55 @@ impl RsmplHunk {
     pub fn scope(&self) -> Scope {
         self.directives
             .iter()
-            .filter_map(|d| match d {
+            .rev()
+            .find_map(|d| match d {
                 Directive::Scope(s) => Some(*s),
                 _ => None,
             })
-            .last()
             .unwrap_or_default()
     }
 
     pub fn attrs_policy(&self) -> AttrsPolicy {
         self.directives
             .iter()
-            .filter_map(|d| match d {
+            .rev()
+            .find_map(|d| match d {
                 Directive::Attrs(a) => Some(*a),
                 _ => None,
             })
-            .last()
             .unwrap_or_default()
     }
 
     pub fn macro_mode(&self) -> MacroMode {
         self.directives
             .iter()
-            .filter_map(|d| match d {
+            .rev()
+            .find_map(|d| match d {
                 Directive::MacroMode(m) => Some(*m),
                 _ => None,
             })
-            .last()
             .unwrap_or_default()
     }
 
     pub fn parse_mode(&self) -> ParseMode {
         self.directives
             .iter()
-            .filter_map(|d| match d {
+            .rev()
+            .find_map(|d| match d {
                 Directive::Mode(m) => Some(*m),
                 _ => None,
             })
-            .last()
             .unwrap_or_default()
     }
 
     pub fn format_mode(&self) -> FormatMode {
         self.directives
             .iter()
-            .filter_map(|d| match d {
+            .rev()
+            .find_map(|d| match d {
                 Directive::Format(f) => Some(*f),
                 _ => None,
             })
-            .last()
             .unwrap_or_default()
     }
 

@@ -298,7 +298,7 @@ pub fn apply_fn_hunk(
         // Rewrite: replace the name ident bytes. Plus name may be `$Meta`
         // (abstracted) meaning "keep original" — only concrete renames
         // change text.
-        if !plus_name.starts_with('$') && plus_name != c.item.sig.ident.to_string() {
+        if !plus_name.starts_with('$') && c.item.sig.ident != plus_name {
             let ns = c.item.sig.ident.span();
             let (sl, sc, el, ec) = (
                 ns.start().line as u32,
@@ -309,7 +309,7 @@ pub fn apply_fn_hunk(
             let start = index.offset(sl, sc).ok_or_else(|| range_err(&rule, sl))?;
             let end = index.offset(el, ec).ok_or_else(|| range_err(&rule, el))?;
             // Safety: the sliced text must be the old name.
-            if &original[start..end] != c.item.sig.ident.to_string() {
+            if c.item.sig.ident != original[start..end] {
                 return Err(StructuredError::new(
                     ErrorCode::MatchConflict,
                     "function name span mismatch (file changed during matching?)",
@@ -533,16 +533,6 @@ pub fn apply_impl_context_hunk(
     let mut matched = 0;
     for it in &parsed.items {
         let syn::Item::Impl(imp) = it else { continue };
-        // Render `impl [generics] [trait] self_ty` for comparison.
-        let header = {
-            let self_ty = quote::quote!(#imp).to_string();
-            self_ty
-        };
-        let _ = &header;
-        // Cheap check: the source slice of the impl header line contains the
-        // pattern's trait/self type tokens.
-        let is = imp.span().start();
-        let _ = is;
         let header_tokens: Vec<&str> = want.split_whitespace().collect();
         // Verify the impl's self type + optional trait match the pattern by
         // comparing normalized renderings.
@@ -582,31 +572,26 @@ pub fn apply_impl_context_hunk(
         for item in &imp.items {
             let syn::ImplItem::Fn(m) = item else { continue };
             // Wrap as ItemFn-like check: name + modifiers via a synthetic
-            // ItemFn parse of the method signature.
-            let sig_str = quote::quote!(#m.sig).to_string();
-            let _ = sig_str;
             // Name check against minus name.
-            let (minus_name, plus_name) = match &compiled.kind {
-                _ => {
-                    // Re-derive from patterns (ImplContext stores header only).
-                    let full_minus: String = hunk
-                        .lines
-                        .iter()
-                        .filter(|l| l.is_removal() || l.is_context())
-                        .map(|l| l.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let full_plus: String = hunk
-                        .lines
-                        .iter()
-                        .filter(|l| l.is_addition() || l.is_context())
-                        .map(|l| l.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    (extract_fn_name(&full_minus), extract_fn_name(&full_plus))
-                }
+            let (minus_name, plus_name) = {
+                // Re-derive from patterns (ImplContext stores header only).
+                let full_minus: String = hunk
+                    .lines
+                    .iter()
+                    .filter(|l| l.is_removal() || l.is_context())
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let full_plus: String = hunk
+                    .lines
+                    .iter()
+                    .filter(|l| l.is_addition() || l.is_context())
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (extract_fn_name(&full_minus), extract_fn_name(&full_plus))
             };
-            if m.sig.ident.to_string() != minus_name {
+            if m.sig.ident != minus_name {
                 continue;
             }
             // Scope: method span within old range.
@@ -643,14 +628,14 @@ pub fn apply_impl_context_hunk(
             let endb = index
                 .offset(ns.end().line as u32, ns.end().column)
                 .ok_or_else(|| range_err(&rule, ns.end().line as u32))?;
-            if &original[start..endb] != m.sig.ident.to_string() {
+            if m.sig.ident != original[start..endb] {
                 return Err(StructuredError::new(
                     ErrorCode::MatchConflict,
                     "method name span mismatch",
                 )
                 .with_rule(&rule));
             }
-            if plus_name != m.sig.ident.to_string() {
+            if m.sig.ident != plus_name {
                 edits.push(TextEdit::new(start, endb, plus_name.clone()));
             }
             matched += 1;

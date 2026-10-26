@@ -94,7 +94,7 @@ fn fixtures_apply_through_binary() {
         collect_files(&expected, &expected, &mut files);
         assert!(!files.is_empty(), "[{name}] expected/ is empty");
         for rel in files {
-            let want = fs::read(&expected.join(&rel)).unwrap();
+            let want = fs::read(expected.join(&rel)).unwrap();
             let got = fs::read(tmp.path().join(&rel))
                 .unwrap_or_else(|_| panic!("[{name}] missing output file {}", rel.display()));
             assert!(

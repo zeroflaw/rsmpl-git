@@ -77,7 +77,7 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             Directive::Root(r) => Some(r.clone()),
             _ => None,
         })
-        .last();
+        .next_back();
 
     let minus_raw = full_minus_text(hunk);
     let plus_raw = full_plus_text(hunk);
@@ -98,7 +98,7 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         bound.insert(u.to_string());
     }
     // Symbol-declared names used as callee in minus are bound by declaration.
-    for (k, _) in &table.symbols {
+    for k in table.symbols.keys() {
         bound.insert(k.clone());
     }
     let plus_bindings = table.bound_in_text(&plus_raw);

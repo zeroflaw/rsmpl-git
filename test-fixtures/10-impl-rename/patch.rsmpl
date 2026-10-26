@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@ rule=rename_impl_method
+# lang=rust
+  impl Service {
+      ...
+-     fn old_name(...) {
++     fn new_name(...) {
+           ...
+       }
+  }

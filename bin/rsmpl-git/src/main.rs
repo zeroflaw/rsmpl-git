@@ -76,7 +76,7 @@ fn run() -> Result<(), String> {
         }
     };
 
-    let patch = rsmpl_patch::parse_patch(&patch_text).map_err(|e| render_parse_error(e))?;
+    let patch = rsmpl_patch::parse_patch(&patch_text).map_err(render_parse_error)?;
 
     // Load every targeted file from the repo (missing -> empty, so new files
     // can be created by insertion hunks).
