@@ -4,7 +4,7 @@ Agent? Start here. This file alone suffices for rename + call-rewrite +
 move patches. SPEC.md is the full contract; citations below name the
 normative section (SPEC 9.3, SPEC 14.1, SPEC 18.6, SPEC D.3, …).
 Skill: `skills/rsmpl-git/SKILL.md` teaches the patch-first loop
-(inspect → author → check → apply) for tool-driven agents.
+(read → author → check → apply) for tool-driven agents.
 
 ## Patch skeleton
 
@@ -39,7 +39,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 |---|---|
 | `# lang=rust` | optional: marker for directive-free hunks; omit when other `#` lines present (SPEC 7.1) |
 | `# allow=many` | many matches may rewrite (default `one`) |
-| `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no inspect needed (SPEC 17.3) |
+| `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3) |
 | `# optional` | zero matches OK (default: error) |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable (SPEC 15) |
 | `# item I` + `# bind=Name` / `# use=Name` | cut / paste a moved item (SPEC 9.3) |
@@ -86,23 +86,15 @@ A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
 set: full supported-vs-rejected table with exact errors is SPEC 18.6;
 ellipsis positions are SPEC 16.
 
-## Ranges without reading files
+## Ranges (file reads, not a CLI listing)
 
 ```sh
-# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-rsmpl-git --inspect src/lib.rs
-rsmpl-git --inspect src/lib.rs --calls
-rsmpl-git --inspect src/ --calls
-rsmpl-git --inspect src --calls --max-items 20
+# Read the target file, note the 1-based spans to rewrite, cite
+# @@ -start,len with L = end-start+1 (e.g. fn foo 1-3 → @@ -1,3 @@).
 ```
 
-Item spans locate definitions, `--calls` lists call/method/macro sites for
-tight rewrite ranges, directory scan covers a subtree in one call, and
-`--max-items N` bounds large scans (SPEC D.3, SPEC D.3.1, SPEC D.3.2,
-SPEC D.3.3). Spans are 1-based inclusive; the hunk length is
-`L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`). Small file
-already held? Skip inspect: `@@ -1,1 @@` + `# scope=file` searches
-the whole file (SPEC 17.3).
+Small file already held? Skip discovery: `@@ -1,1 @@` + `# scope=file`
+searches the whole file (SPEC 17.3).
 
 ## Verify cheaply
 
@@ -122,25 +114,22 @@ JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes
 the full diff before `--check` runs but nothing when the lowering is empty;
 truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
-inspect JSON carries `total`/`omitted` next to `truncated` (SPEC D.3.3);
 `--diff-max-lines N` (`0` omits) bounds only the reported diff while
 `--check`/`--output`/apply use the full lowering (SPEC D.2.1); `--context N`
 (default 3, `0` allowed) shrinks the lowering itself (SPEC D.2.2, SPEC 26.1).
-`--inspect` takes no patch and rejects `--check`/`--output`/
-`--diff-max-lines`/`--context`.
 
 ## Errors: code → fix (SPEC 25)
 
 | Code | Fix |
 |---|---|
-| `RSMPL_RANGE_CONFLICT` | range exceeds file — re-run the suggested `rsmpl-git --inspect <file>` command (`--repo <dir>` is included when used) |
+| `RSMPL_RANGE_CONFLICT` | range exceeds file — read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target file doesn't parse as Rust — read the file; empty patch — provide a `diff --git` section (empty input is rejected, not a no-op) |
 | `RSMPL_PATTERN_CONFLICT` | pattern doesn't parse — check SPEC 18.6 table; unknown directive (`# foo`, `# edition`, `# format_scope`) is rejected, check SPEC 9.3; unknown header tag (anything but `rule=`) is rejected, check SPEC 8.3; unknown `# root=` (only `item/expr/stmt/type`) is rejected, check SPEC 13.4; `# identifier/# path/# lifetime/# field` is rejected, check SPEC 15.1 |
-| `RSMPL_MATCH_CONFLICT` | `no match found` — re-run the suggested `rsmpl-git --inspect <file>` (add `--calls` for calls), then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@` (no inspect needed); too many matches — add `# allow=many` (suggestion includes `--repo <dir>` when used) |
+| `RSMPL_MATCH_CONFLICT` | `no match found` — read the file, then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@`; too many matches — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
-| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths; or inspect flag misuse (`--calls`/`--max-items` without `--inspect`, `--inspect` with `--patch`/`--file`/`--check`/`--output`/`--diff-max-lines`/`--context`) — fix flags per suggestion |
+| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths |
 
 With `--format json`, failures print `{error: {code, rule, file, range,
 reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
@@ -152,5 +141,5 @@ Format: SPEC 9.3 (directives), SPEC 13.4 (parse contexts), SPEC 14.1
 (ellipsis), SPEC 17.7 (equality), SPEC 18.6 (reject table), SPEC 19
 (symbols), SPEC 25 (errors), SPEC 26.1 (lowering). CLI: SPEC D.1 (stdin),
 SPEC D.2 (JSON), SPEC D.2.1 (budget), SPEC D.2.2 (context), SPEC D.3
-(inspect), SPEC D.3.1 (calls), SPEC D.3.2 (dir), SPEC D.3.3 (budget).
-Recommended loop: SPEC D.3.3 (inspect → author → check → apply).
+(ranges).
+Recommended loop: SPEC D.3 (read → author → check → apply).

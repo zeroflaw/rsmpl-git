@@ -14,14 +14,6 @@
 //! rsmpl-git --file change.rsmpl --check --context 0
 //! # Machine-readable report:
 //! rsmpl-git --file change.rsmpl --format json --check
-//! # Discover valid @@ ranges without reading whole files:
-//! rsmpl-git --inspect src/lib.rs --format json
-//! # Also list call/method/macro sites for tight call-rewrite ranges:
-//! rsmpl-git --inspect src/lib.rs --calls
-//! # Scan a whole subtree in one call (grep-style `file: kind name s-e`):
-//! rsmpl-git --inspect src/ --calls
-//! # Bound large scans so they stay token-efficient:
-//! rsmpl-git --inspect src --calls --max-items 20
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
@@ -30,11 +22,9 @@
 
 #![allow(clippy::result_large_err)]
 
-mod inspect;
-
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 use rsmpl_patch::{ErrorCode, StructuredError};
@@ -78,35 +68,17 @@ struct Cli {
     diff_max_lines: Option<usize>,
 
     /// Lowering context radius (default 3, `0` valid; SPEC D.2.2).
-    // NOTE: stays `Option` (not `default_value_t = 3`) so absent-vs-explicit
-    // is detectable: `--inspect` rejects an explicitly passed `--context`
-    // (even `--context 3`); the default is applied via `unwrap_or(3)`.
-    // Plain `//` (not `///`) keeps this out of `--help` (T46 token budget).
-    #[arg(long, value_name = "N")]
-    context: Option<usize>,
+    #[arg(long, value_name = "N", default_value_t = 3)]
+    context: usize,
 
     /// Report format: text or json (default text).
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
-
-    /// List item spans for PATH (file or dir); no patch needed (SPEC D.3).
-    #[arg(long, value_name = "PATH")]
-    inspect: Option<PathBuf>,
-
-    /// With --inspect: also list call/method/macro sites (SPEC D.3.1).
-    #[arg(long)]
-    calls: bool,
-
-    /// With --inspect: cap entries at N (SPEC D.3.3).
-    #[arg(long, value_name = "N")]
-    max_items: Option<usize>,
 }
 
-/// CLI failure: structured patch/IO/inspect-usage errors (JSON-enveloped with
+/// CLI failure: structured patch/IO errors (JSON-enveloped with
 /// `--format json`, SPEC D.2) vs. input-shape usage errors (plain text, same
-/// class as clap's own errors; enveloping those is T26). Inspect flag misuse
-/// (T47) is `Structured` `RSMPL_IO_CONFLICT`, not `Usage`, so JSON-mode agents
-/// get the same `{error:{...}}` envelope as every other checkable failure.
+/// class as clap's own errors; enveloping those is T26).
 enum CliError {
     Structured(StructuredError),
     Usage(String),
@@ -119,16 +91,6 @@ impl CliError {
 
     fn io_file(message: String, file: &str) -> Self {
         Self::Structured(StructuredError::new(ErrorCode::IoConflict, message).with_file(file))
-    }
-
-    /// Inspect flag-misuse rejection (T47): same `RSMPL_IO_CONFLICT` shape as
-    /// other checkable failures. `reason` keeps the historic usage message so
-    /// existing text greps keep matching; `suggestion` states the fix.
-    fn inspect_usage(message: &str, suggestion: &str) -> Self {
-        Self::Structured(
-            StructuredError::new(ErrorCode::IoConflict, message.to_string())
-                .with_suggestion(suggestion.to_string()),
-        )
     }
 }
 
@@ -177,24 +139,6 @@ fn wants_json() -> bool {
 fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
 
-    if cli.calls && cli.inspect.is_none() {
-        return Err(CliError::inspect_usage(
-            "--calls requires --inspect <path>",
-            "retry with --inspect <path> --calls",
-        ));
-    }
-
-    if cli.max_items.is_some() && cli.inspect.is_none() {
-        return Err(CliError::inspect_usage(
-            "--max-items requires --inspect <path>",
-            "retry with --inspect <path> --max-items N",
-        ));
-    }
-
-    if let Some(rel) = cli.inspect.clone() {
-        return run_inspect(&cli, &rel);
-    }
-
     let patch_text = match (&cli.patch, &cli.file) {
         (Some(p), None) if p == "-" => read_stdin()?,
         (Some(p), None) => p.clone(),
@@ -207,8 +151,7 @@ fn run() -> Result<(), CliError> {
         })?,
         (None, None) => {
             return Err(CliError::Usage(
-                "provide exactly one of --patch <text> or --file <path> (or use --inspect <path>)"
-                    .to_string(),
+                "provide exactly one of --patch <text> or --file <path>".to_string(),
             ));
         }
         (Some(_), Some(_)) => {
@@ -248,8 +191,8 @@ fn run() -> Result<(), CliError> {
     }
 
     let mut updated = originals.clone();
-    let report = rsmpl_engine::apply_patch_to_tree(&mut updated, &patch)
-        .map_err(|e| CliError::Structured(with_repo_hint(e, &cli.repo)))?;
+    let report =
+        rsmpl_engine::apply_patch_to_tree(&mut updated, &patch).map_err(CliError::Structured)?;
 
     // Lower to a concrete Git patch (SPEC 26.2): only changed files, no RSmPL.
     // Per-file stats are computed from the full old/new contents so they stay
@@ -257,15 +200,12 @@ fn run() -> Result<(), CliError> {
     // or the lowering uses a smaller context radius (SPEC D.2.2).
     // `changed` follows patch section order (`order`). The engine only
     // mutates paths already in `order`, so no spillover branch is needed.
-    let context_radius = cli.context.unwrap_or(3);
     let mut changed: Vec<(String, usize, usize)> = Vec::new();
     let mut sections = Vec::new();
     for rel in &order {
         let old = &originals[rel];
         let new = &updated[rel];
-        if let Some(s) =
-            rsmpl_git::unified_diff_for_file_with_context(rel, old, new, context_radius)
-        {
+        if let Some(s) = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, cli.context) {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
             changed.push((rel.clone(), added, removed));
             sections.push(s);
@@ -375,260 +315,6 @@ fn run() -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
-    if cli.patch.is_some() || cli.file.is_some() {
-        return Err(CliError::inspect_usage(
-            "--inspect does not take --patch/--file",
-            "drop --patch/--file; --inspect needs no patch",
-        ));
-    }
-    if cli.check || cli.output.is_some() {
-        return Err(CliError::inspect_usage(
-            "--inspect does not take --check/--output",
-            "drop --check/--output; --inspect only lists spans",
-        ));
-    }
-    if cli.diff_max_lines.is_some() || cli.context.is_some() {
-        return Err(CliError::inspect_usage(
-            "--inspect does not take --diff-max-lines/--context",
-            "drop --diff-max-lines/--context; budgets shape the apply path only",
-        ));
-    }
-    let rel_str = rel.to_string_lossy().to_string();
-    let abs = cli.repo.join(rel);
-    if abs.is_dir() {
-        return run_inspect_dir(cli, rel, &abs);
-    }
-    if !abs.exists() && looks_like_dir_request(&rel_str) {
-        return Err(CliError::io_file(
-            format!(
-                "cannot read {}: no such directory (did you mean an existing file or directory?)",
-                abs.display()
-            ),
-            &rel_str,
-        ));
-    }
-    let text = std::fs::read_to_string(&abs)
-        .map_err(|e| CliError::io_file(format!("cannot read {}: {e}", abs.display()), &rel_str))?;
-    let items = inspect::inspect_source(&text)
-        .map_err(|e| CliError::Structured(e.with_file(rel_str.clone())))?;
-    let calls = if cli.calls {
-        Some(
-            inspect::inspect_calls(&text)
-                .map_err(|e| CliError::Structured(e.with_file(rel_str.clone())))?,
-        )
-    } else {
-        None
-    };
-    let cap = cli.max_items.unwrap_or(usize::MAX);
-    let total = items.len() + calls.as_ref().map_or(0, Vec::len);
-    let truncated = total > cap;
-    let omitted = total.saturating_sub(cap.min(total));
-    let (items_out, calls_out) = truncate_single(items, calls, cap);
-    match cli.format {
-        Format::Json => {
-            // T56: exact entry counts so agents can size the next
-            // `--max-items N` without guessing (`total` pre-cap, `omitted` hidden).
-            let payload = if let Some(calls) = calls_out {
-                serde_json::json!({ "path": rel_str, "items": items_out, "calls": calls, "truncated": truncated, "total": total, "omitted": omitted })
-            } else {
-                serde_json::json!({ "path": rel_str, "items": items_out, "truncated": truncated, "total": total, "omitted": omitted })
-            };
-            println!(
-                "{}",
-                serde_json::to_string(&payload)
-                    .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
-            );
-        }
-        Format::Text => {
-            for i in &items_out {
-                println!("{} {} {}-{}", i.kind, i.name, i.start, i.end);
-            }
-            if let Some(calls) = calls_out {
-                for c in &calls {
-                    println!("{} {} {}-{}", c.kind, c.name, c.start, c.end);
-                }
-            }
-            if truncated {
-                eprintln!(
-                    "truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)"
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Truncate a single-file inspect result to a global `cap` over
-/// `items ++ calls` (items first, today's order). Returns the kept slices.
-fn truncate_single(
-    items: Vec<inspect::ItemInfo>,
-    calls: Option<Vec<inspect::CallInfo>>,
-    cap: usize,
-) -> (Vec<inspect::ItemInfo>, Option<Vec<inspect::CallInfo>>) {
-    let take_items = items.len().min(cap);
-    let remaining = cap.saturating_sub(take_items);
-    let items_out = items.into_iter().take(take_items).collect();
-    let calls_out = calls.map(|c| c.into_iter().take(remaining).collect());
-    (items_out, calls_out)
-}
-
-/// Directory scan for `--inspect <dir>`: one call lists items (+ calls
-/// with `--calls`) for every `.rs` file under the directory.
-///
-/// Text mode prints grep-style `rel: kind name s-e` lines (files sorted,
-/// items-then-calls within each file; files with no entries emit nothing).
-/// JSON mode prints `{"path","files":[{"path","items"[, "calls"]}],
-/// "truncated": bool}` with one entry per successfully parsed `.rs` file.
-/// Unreadable/unparseable files are skipped with a stderr warning so one
-/// broken file never blocks the whole scan (single-inspect it for the full
-/// parse detail). With `--max-items N` at most `N` entries are emitted
-/// globally (text: stderr `truncated:` marker; JSON: `"truncated": true`).
-fn run_inspect_dir(
-    cli: &Cli,
-    rel: &std::path::Path,
-    abs: &std::path::Path,
-) -> Result<(), CliError> {
-    let rel_str = rel.to_string_lossy().to_string();
-    let mut abs_files = inspect::collect_rs_files(abs);
-    abs_files.sort_by_key(|a| rel_display(&cli.repo, a));
-    // Pass 1: parse everything (warn-and-skip broken files), so the global
-    // `--max-items` cap can be applied deterministically in sorted order.
-    let mut parsed: Vec<(
-        String,
-        Vec<inspect::ItemInfo>,
-        Option<Vec<inspect::CallInfo>>,
-    )> = Vec::new();
-    for abs_file in &abs_files {
-        let rel_file = rel_display(&cli.repo, abs_file);
-        let text = match std::fs::read_to_string(abs_file) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("warning: skipping {rel_file}: cannot read: {e}");
-                continue;
-            }
-        };
-        let items = match inspect::inspect_source(&text) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("warning: skipping {rel_file}: {}", e.message);
-                continue;
-            }
-        };
-        let calls = if cli.calls {
-            match inspect::inspect_calls(&text) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    eprintln!("warning: skipping calls for {rel_file}: {}", e.message);
-                    continue;
-                }
-            }
-        } else {
-            None
-        };
-        parsed.push((rel_file, items, calls));
-    }
-    let cap = cli.max_items.unwrap_or(usize::MAX);
-    let total: usize = parsed
-        .iter()
-        .map(|(_, items, calls)| items.len() + calls.as_ref().map_or(0, Vec::len))
-        .sum();
-    let truncated = total > cap;
-    let omitted = total.saturating_sub(cap.min(total));
-    if cli.format == Format::Json {
-        let files = truncate_dir_entries(parsed, cap, cli.calls);
-        let payload = serde_json::json!({ "path": rel_str, "files": files, "truncated": truncated, "total": total, "omitted": omitted });
-        println!(
-            "{}",
-            serde_json::to_string(&payload)
-                .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
-        );
-    } else {
-        let mut remaining = cap;
-        for (rel_file, items, calls) in &parsed {
-            for i in items.iter().take(remaining.min(items.len())) {
-                println!("{}: {} {} {}-{}", rel_file, i.kind, i.name, i.start, i.end);
-            }
-            let used_items = items.len().min(remaining);
-            remaining = remaining.saturating_sub(used_items);
-            if let Some(calls) = calls {
-                for c in calls.iter().take(remaining.min(calls.len())) {
-                    println!("{}: {} {} {}-{}", rel_file, c.kind, c.name, c.start, c.end);
-                }
-                remaining = remaining.saturating_sub(calls.len().min(remaining));
-            }
-            if remaining == 0 && truncated {
-                // Stop at the cap; later files are omitted (empty files emit
-                // nothing in text mode anyway).
-                break;
-            }
-        }
-        if truncated {
-            eprintln!(
-                "truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)"
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Truncate directory entries to a global `cap` over `items ++ calls`,
-/// preserving sorted file order and items-then-calls order within a file.
-/// Empty files (no entries) are always kept for coverage; files after the
-/// budget is exhausted are omitted.
-fn truncate_dir_entries(
-    parsed: Vec<(
-        String,
-        Vec<inspect::ItemInfo>,
-        Option<Vec<inspect::CallInfo>>,
-    )>,
-    cap: usize,
-    with_calls: bool,
-) -> Vec<serde_json::Value> {
-    let mut files = Vec::new();
-    let mut remaining = cap;
-    for (rel_file, items, calls) in parsed {
-        if with_calls {
-            let calls = calls.unwrap_or_default();
-            let entry_total = items.len() + calls.len();
-            if entry_total == 0 {
-                files.push(serde_json::json!({ "path": rel_file, "items": [], "calls": [] }));
-                continue;
-            }
-            if remaining == 0 {
-                continue;
-            }
-            let take_items = items.len().min(remaining);
-            remaining = remaining.saturating_sub(take_items);
-            let take_calls = calls.len().min(remaining);
-            remaining = remaining.saturating_sub(take_calls);
-            let items_out: Vec<_> = items.into_iter().take(take_items).collect();
-            let calls_out: Vec<_> = calls.into_iter().take(take_calls).collect();
-            files.push(
-                serde_json::json!({ "path": rel_file, "items": items_out, "calls": calls_out }),
-            );
-            if remaining == 0 {
-                // Later non-empty files are omitted; trailing empty files
-                // would still be appended by later iterations (they cost 0),
-                // which is intended for coverage.
-            }
-        } else {
-            if items.is_empty() {
-                files.push(serde_json::json!({ "path": rel_file, "items": [] }));
-                continue;
-            }
-            if remaining == 0 {
-                continue;
-            }
-            let take_items = items.len().min(remaining);
-            remaining = remaining.saturating_sub(take_items);
-            let items_out: Vec<_> = items.into_iter().take(take_items).collect();
-            files.push(serde_json::json!({ "path": rel_file, "items": items_out }));
-        }
-    }
-    files
-}
-
 /// Bound the *reported* diff for token budget (SPEC D.2.1).
 ///
 /// Returns `(reported, truncated)` where `truncated` is true iff the lowered
@@ -654,71 +340,12 @@ fn reported_diff(full: &str, max_lines: Option<usize>) -> (String, bool) {
     (full.to_string(), false)
 }
 
-/// Repo-relative display path with `/` separators for inspect output.
-fn rel_display(repo: &std::path::Path, abs: &std::path::Path) -> String {
-    abs.strip_prefix(repo)
-        .map_or_else(
-            |_| abs.to_string_lossy().into_owned(),
-            |r| r.to_string_lossy().into_owned(),
-        )
-        .replace('\\', "/")
-}
-
-/// Heuristic for the missing-`--inspect`-path hint: trailing `/`/`.`/`""`
-/// plus extension-less final segments (a missing `src` is a dir-or-file
-/// typo; a missing `foo.rs` keeps the generic read error).
-fn looks_like_dir_request(rel: &str) -> bool {
-    if rel.ends_with('/') || rel == "." || rel.is_empty() {
-        return true;
-    }
-    let last = rel.rsplit('/').next().unwrap_or(rel);
-    !last.contains('.')
-}
-
 fn read_stdin() -> Result<String, CliError> {
     let mut buf = String::new();
     std::io::stdin()
         .read_to_string(&mut buf)
         .map_err(|e| CliError::io(format!("cannot read stdin: {e}")))?;
     Ok(buf)
-}
-
-/// Prefix the suggested `rsmpl-git --inspect <file>` command with the
-/// as-given `--repo <dir>` when the CLI repo is not `.` (SPEC 25.4).
-///
-/// The engine builds repo-relative hints without knowing the CLI repo path;
-/// an agent that invoked with `--repo ./my-repo` from another cwd would
-/// otherwise get a command that inspects the wrong tree. The repo is echoed
-/// verbatim (the agent typed that exact spelling, so it re-runs from the
-/// same cwd); the default `.` keeps the shortest suggestion. No quoting:
-/// README examples are unquoted throughout.
-///
-/// T92 needle note: this matches on the exact substring
-/// `rsmpl-git --inspect {file}`. The `text_range_failure_suggestion_carries_repo`
-/// and `json_match_failure_suggestion_carries_repo_and_scope_file_hint` e2e
-/// tests pin the composed output end-to-end (T81), so any engine rewording
-/// that breaks the needle fails the suite instead of silently no-opping.
-fn with_repo_hint(
-    mut err: rsmpl_patch::StructuredError,
-    repo: &Path,
-) -> rsmpl_patch::StructuredError {
-    if repo == Path::new(".") {
-        return err;
-    }
-    let (Some(file), Some(suggestion)) = (err.file.clone(), err.suggestion.clone()) else {
-        return err;
-    };
-    let needle = format!("rsmpl-git --inspect {file}");
-    if !suggestion.contains(&needle) {
-        return err;
-    }
-    let repo_display = repo.to_string_lossy();
-    err.suggestion = Some(suggestion.replacen(
-        &needle,
-        &format!("rsmpl-git --repo {repo_display} --inspect {file}"),
-        1,
-    ));
-    err
 }
 
 fn parse_err(e: rsmpl_patch::ParseError) -> CliError {

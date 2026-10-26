@@ -1,6 +1,6 @@
 ---
 name: rsmpl-git
-description: Patch-first Rust refactoring with rsmpl-git semantic hunks (inspect, author, check, apply).
+description: Patch-first Rust refactoring with rsmpl-git semantic hunks (read, author, check, apply).
 ---
 
 # rsmpl-git skill
@@ -13,9 +13,8 @@ through `rsmpl-git` as ordinary hunks, so one tool owns every change.
 
 - Use: rename (fn/item), call rewrites, moves, signature evolution,
   `let`/expr/type rewrites — anything with `-`/`+` pattern lines.
-- Viewing only: prefer a targeted file read over `--inspect`; inspect
-  exists only to mint `@@ -old,len` ranges for files you do not hold.
-- Small file already held: skip inspect entirely — `@@ -1,1 @@` plus
+- Viewing only: use a targeted file read — the CLI lists nothing.
+- Small file already held: skip discovery entirely — `@@ -1,1 @@` plus
   `# scope=file` searches the whole file (SPEC 17.3).
 
 ## Minimal patch
@@ -42,7 +41,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
 |---|---|
 | `# allow=many` | many matches may rewrite (default `one`) |
 | `# optional` | zero matches OK (default: error) |
-| `# scope=file` | whole-file search; dummy `@@ -1,1 @@`, no inspect |
+| `# scope=file` | whole-file search; dummy `@@ -1,1 @@`, no discovery |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable |
 | `# item I` + `# bind=N` / `# use=N` | cut / paste a moved item |
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments |
@@ -74,7 +73,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
 ## Loop (SPEC D.3.3)
 
 ```sh
-rsmpl-git --inspect src/lib.rs            # only for ranges you lack
+# read the target file first — note the 1-based spans to rewrite
 rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --context 0 --check
 rsmpl-git --file change.rsmpl --output full.patch   # full diff while preview stays small
 rsmpl-git --file change.rsmpl                       # apply for real
@@ -92,14 +91,14 @@ rsmpl-git --file change.rsmpl                       # apply for real
 
 | Code | Fix |
 |---|---|
-| `RSMPL_RANGE_CONFLICT` | re-run the suggested `--inspect` command, fix the range |
+| `RSMPL_RANGE_CONFLICT` | read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target doesn't parse / empty patch — read file, add `diff --git` |
 | `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected |
 | `RSMPL_MATCH_CONFLICT` | `no match found` — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
-| `RSMPL_IO_CONFLICT` | unreadable path or `--inspect` flag misuse — fix per suggestion |
+| `RSMPL_IO_CONFLICT` | unreadable path — fix per suggestion |
 
 JSON failures (`--format json`) print `{error: {code, rule, file, range,
 reason, suggestion}}` to stdout only, exit 2.

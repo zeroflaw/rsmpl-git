@@ -972,7 +972,7 @@ mod tests {
             reason: &'static str,
             suggestion: Option<&'static str>,
         }
-        const NO_MATCH: Option<&str> = Some("run `rsmpl-git --inspect src/lib.rs`");
+        const NO_MATCH: Option<&str> = Some("read `src/lib.rs` to list valid ranges");
         const ATTR_SUGGESTION: Option<&str> =
             Some("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`");
         let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";

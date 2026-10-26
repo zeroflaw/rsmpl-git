@@ -2133,7 +2133,7 @@ Useful for precise item movement.
 
 Search the whole file. The `@@ -old,len` old range is a dummy
 (canonical `@@ -1,1 @@`) and range-bounds validation is skipped for
-that hunk, so no `--inspect` roundtrip is needed when the agent
+that hunk, so no range discovery is needed when the agent
 already holds the file. Matching, `allow`/`optional` count
 validation, and edit-level overlap checks are unchanged; only the
 range pre-filter is lifted. Insertion anchors (`-old_start,0`) still
@@ -2352,8 +2352,7 @@ General `let`-statement, expression, and type patterns (Section 18.1, v0.1
 note) cover a bounded shape set. Anything outside it fails fast: either at
 compile time with the exact diagnostic below, or at match time as a silent
 candidate rejection that surfaces as `RSMPL_MATCH_CONFLICT` with reason `no
-match found` and a suggestion carrying the exact `rsmpl-git --inspect
-<file>` discovery command.
+match found` and a suggestion naming the file to read for valid ranges.
 There is no partial matching and no guessing; check this table before
 authoring instead of iterating against `--check`.
 
@@ -2919,14 +2918,11 @@ rule: rename_calls
 file: src/lib.rs
 old_range: 40..47
 reason: range exceeds file length
-suggestion: run `rsmpl-git --inspect src/lib.rs` to list valid ranges
+suggestion: read `src/lib.rs` to list valid ranges
 ```
 
-The `suggestion` carries the exact discovery command (repo-relative
-path) so an agent repairs without guessing flags. When the CLI repo is not
-`.`, the command carries that repo verbatim as given
-(`run `rsmpl-git --repo <dir> --inspect src/lib.rs` …`) so it inspects the
-same tree from the caller's cwd; the default `.` omits `--repo`.
+The `suggestion` names the file to read (repo-relative path) so an
+agent repairs without guessing flags.
 
 ### 25.2 Parse conflict
 
@@ -2969,7 +2965,7 @@ actual: three
 suggestion: add "# allow=many" if multiple rewrites are intended
 ```
 
-A zero-match failure carries the exact discovery command instead:
+A zero-match failure names the file to read instead:
 
 ```text
 RSMPL_MATCH_CONFLICT
@@ -2977,19 +2973,17 @@ rule: rename_calls
 file: src/lib.rs
 old_range: 40..47
 reason: no match found
-suggestion: run `rsmpl-git --inspect src/lib.rs` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`
+suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`
 ```
 
 When the engine can prove the range (not the pattern) is wrong, it appends
 a zero-discovery retry (T62 probe: the same matcher re-run whole-file,
 count-only). Exactly one match elsewhere appends `— exactly one match
-exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`
-(no inspect needed)`; several matches elsewhere append `— multiple matches
+exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`;
+several matches elsewhere append `— multiple matches
 exist outside this range; widen the range (or add `# scope=file`) and add
 `# allow=many` if intended`. (Counts saturate: matchers stop counting at 2
-under `# allow=one`, so the many-case never claims an exact number.) As in
-25.1, the `rsmpl-git --inspect` command in every suggestion carries
-`--repo <dir>` verbatim when the CLI repo is not `.`.
+under `# allow=one`, so the many-case never claims an exact number.)
 
 ### 25.5 Symbol conflict
 
@@ -3027,10 +3021,8 @@ hunk: @@ -1,4 +1,5 @@
 
 A filesystem operation failed: the patch file or stdin could not be read,
 a repo file could not be read, or the `--output` file could not be written.
-Inspect flag misuse (for example `--calls` without `--inspect`, or
-`--inspect` combined with `--patch`/`--file`, `--check`/`--output`, or
-`--diff-max-lines`/`--context`) is also reported under this code so JSON-mode
-agents always receive a machine-readable envelope.
+Filesystem failures use this code so JSON-mode agents always receive a
+machine-readable envelope.
 
 ```text
 RSMPL_IO_CONFLICT
@@ -3154,7 +3146,7 @@ directives — Sections 7.1, 10.4):
 ### 28.3 Use ranges aggressively
 
 Keep RSmPL ranges tight: cite the smallest range that contains the match
-(discover spans with `--inspect`, SPEC D.3). When the agent already holds
+(read the file for exact spans). When the agent already holds
 a small file, skip range discovery entirely with whole-file scope:
 
 ```diff
@@ -3168,7 +3160,7 @@ diff --git src/lib.rs
 ```
 
 The `@@ -1,1 @@` range is a dummy (SPEC 17.3) — no line counting, no
-inspect roundtrip.
+discovery roundtrip.
 
 Better (tight range):
 
@@ -3668,7 +3660,7 @@ The reference CLI shells out to bare `git apply` / `git apply --check`
 (`PATH` lookup, no `--git-path` override) for its final check/apply step, so
 `git` must be on `PATH`; without it that step fails with
 `` failed to run `git apply` (is git installed?) `` under
-`GIT_HUNK_CONFLICT`. Matching, lowering, `--inspect`, and `--output` are
+`GIT_HUNK_CONFLICT`. Matching, lowering, and `--output` are
 pure and never spawn git.
 
 ---
@@ -3881,12 +3873,14 @@ Modifiers and structural signature features must be explicitly written or explic
 
 ---
 
-## Appendix D: Agent CLI Surface (stdin, JSON report, inspect)
+## Appendix D: Agent CLI Surface (stdin, JSON report, ranges)
 
 The patch format above is engine-agnostic, but the reference `rsmpl-git`
 binary exposes agent-oriented conveniences. They do not change patch
 semantics; they reduce the tokens and round-trips an LLM needs to author
-valid `@@ -old,len` ranges and verify results.
+valid `@@ -old,len` ranges and verify results. The tool is patching-only:
+range discovery is a targeted file read (the agent's own tooling) plus
+whole-file scope (D.3), not a CLI listing mode.
 
 ### D.1 Piped patches (stdin)
 
@@ -3959,13 +3953,10 @@ prints one JSON object to stdout:
   full appliable lowering while the preview stays truncated.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
-- Defaults audit: `--format text`, `--context 3`, unbounded
-  `--max-items`, and `--repo .` all stay. Text keeps human review
-  working (JSON is a ~4-token opt-in); default-3 keeps saved patches
-  bare-`git apply`-compatible (explicit `--context 0` is the ~3-token
-  opt-in, D.2.2); unbounded inspect plus exact `total`/`omitted` beats
-  silent truncation (SPEC 2.6 — scope to a subtree or pass
-  `--max-items N` when `total` warrants, D.3.3); `--repo` defaults to
+- Defaults audit: `--format text`, `--context 3`, and `--repo .` all
+  stay. Text keeps human review working (JSON is a ~4-token opt-in);
+  default-3 keeps saved patches bare-`git apply`-compatible (explicit
+  `--context 0` is the ~3-token opt-in, D.2.2); `--repo` defaults to
   `.`, so run from the worktree root and omit it, adding `--repo DIR`
   only when invoking from elsewhere.
 - Failure envelope: with `--format json`, every patch/IO failure prints
@@ -3976,16 +3967,14 @@ prints one JSON object to stdout:
   the stderr diagnostic.
 
 ```json
-{"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "run `rsmpl-git --inspect src/lib.rs` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"}}
+{"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
 
 ```
 
 - The envelope always carries all six keys (`code rule file range reason
   suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
-  or output files, stdin failures, and inspect flag misuse (for example
-  `--calls` without `--inspect`, or `--inspect` with `--patch`/`--file`,
-  `--check`/`--output`, or `--diff-max-lines`/`--context`).
+  or output files and stdin failures.
 - Remaining flag-usage errors (no input at all, `--patch` plus `--file`
   together, clap parse errors) stay plain text on stderr in both modes;
   enveloping those is future work.
@@ -4028,10 +4017,6 @@ Rules:
   with zero diff tokens, and `--diff-max-lines 1 --output full.patch`
   saves the appliable patch while showing one line. With no changes the
   flag is a no-op (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
-- The budget flag is rejected with `--inspect`
-  (`--inspect does not take --diff-max-lines/--context`, exit 2, same
-  `RSMPL_IO_CONFLICT` envelope in JSON / text block in text mode as other
-  inspect flag misuse).
 - To shrink the lowering itself rather than the report, use `--context N`
   (D.2.2): the budget flag above applies *after* lowering and composes with it.
 
@@ -4078,13 +4063,9 @@ Rules:
   so `--format json --diff-max-lines 0 --context 0 --check --output
   full.patch` verifies with zero preview tokens while keeping the
   appliable patch on disk.
-- `--context` is rejected with `--inspect` (same message and exit 2 as the
-  D.2.1 flag, same `RSMPL_IO_CONFLICT` envelope); non-numeric values stay
-  plain-text clap parse errors. The flag stays an `Option` (default applied
-  as 3 when absent) rather than a clap `default_value_t` so the CLI can tell
-  absent from explicitly passed (even an explicit `--context 3` is rejected
-  with `--inspect`); hence the default is documented manually in the help
-  text instead of clap's automatic `[default: 3]` marker.
+- `--context` is always accepted (it shapes the apply path); non-numeric
+  values stay plain-text clap parse errors. The default is a clap
+  `default_value_t = 3`, so `--help` shows it automatically.
 
 #### D.2.3 Output streams and empty lowerings
 
@@ -4148,163 +4129,23 @@ patches always need the real repo for the final check. No `--lint`
 / `--no-repo` flag is needed, so the T34 lint gap closes with zero
 flags added.
 
-### D.3 Range discovery (`--inspect <path>`)
+### D.3 Range discovery (file reads + whole-file scope)
 
-`rsmpl-git --repo <dir> --inspect <rel-path> [--format json]` parses the
-target file with the same Rust frontend the engine uses and lists its items
-with 1-based inclusive line spans:
+The CLI lists nothing: range discovery is a targeted file read with the
+agent's own tooling. Read the target file, note the 1-based inclusive
+spans of the items to rewrite, and cite `@@ -start,len` old-side ranges
+with `L = end-start+1` (e.g. a `fn foo` on lines 1-3 → `@@ -1,3 @@`).
 
-```sh
-# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-rsmpl-git --inspect src/lib.rs
-# fn foo 1-3
-# struct Config 5-9
-# method Config::load 11-15
-```
+When the agent already holds a small file, skip discovery entirely:
+`@@ -1,1 @@` + `# scope=file` searches the whole file (17.3) with
+zero line counting.
 
-JSON mode emits `{"path": ..., "items": [{"kind","name","start","end"}]}`.
-Kinds are the closed set `fn struct enum trait impl type const static mod
-use macro method union item extern_crate foreign_mod trait_alias` (any other
-`syn::Item` variant falls back to `item`); `impl` methods are listed as
-`method SelfTy::method` and inline `mod` contents recurse with `mod::item`
-names. Spans cover the same attached attribute/doc envelope the matcher
-sees. Spans are 1-based inclusive; the hunk length is
-`L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`), so an inspect
-span converts to an `@@ -start,len` old-side range with one subtraction.
-
-Surface freeze (patching focus): inspect stays at items + `--calls`
-preview + dir scan + `--max-items` budget — no type-site listing (use a
-targeted read, D.3.1), no single/dir shape unification (both shapes stay
-as documented, D.3.2), no callee-anchored call spans (match scope is the
-whole call, D.3.1), no `use`-name truncation (grep-ability wins, D.3),
-no `path` canonicalization (as-given echo stays, D.3.2). Whole-file
-rewrites skip inspect entirely via `# scope=file` + `@@ -1,1 @@` (17.3).
 Agent workflow detail lives in `skills/rsmpl-git/SKILL.md`.
-
-#### D.3.1 Call-site preview (`--inspect <path> --calls`)
-
-Item spans locate definitions, but call rewrites target call sites inside
-function bodies. `--calls` additionally lists candidate call sites with
-1-based inclusive line spans, so an agent can pick a tight `@@ -old,len`
-range without reading the whole file:
-
-```sh
-# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-rsmpl-git --inspect src/lib.rs --calls
-# fn foo 1-3
-# call foo 5-5
-# method try_send 5-5
-# macro assert_eq 9-9
-```
-
-Call kinds:
-
-| Kind | Source | `name` rendering |
-|---|---|---|
-| `call` | `Expr::Call` with a path callee | full path (`a::b::foo`) |
-| `method` | `Expr::MethodCall` | method ident (`try_send`) |
-| `macro` | `Expr::Macro` or `Stmt::Macro` invocation | full macro path (`assert_eq`) |
-
-Rules:
-
-- Text mode prints items first (unchanged), then call sites in ascending
-  start-line order.
-- JSON mode emits `{"path", "items", "calls"}` when `--calls` is set; without
-  the flag the `calls` key is omitted (backward compatible).
-- Only path-callee calls are listed (the shapes the engine's call matcher
-  rewrites); non-path callees such as `(f())()` are skipped. Top-level
-  `Item::Macro` definitions stay in `items` and are not duplicated in `calls`.
-- Type usages are intentionally not listed (every annotation would emit;
-  too noisy). Use a targeted file read for type-rewrite ranges.
-
-#### D.3.2 Directory scan (`--inspect <dir>`)
-
-Passing a directory (e.g. `--inspect src/`, `--inspect src`,
-`--inspect .`) scans every `.rs` file beneath it in one call, so agents
-skip `git ls-files` plus N per-file inspects:
-
-```sh
-# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-rsmpl-git --inspect src/ --calls
-# src/lib.rs: fn foo 1-1
-# src/lib.rs: call foo 3-3
-# src/a.rs: struct S 1-2
-```
-
-Rules:
-
-- Only `.rs` files are scanned. Dot-directories (`.git/`, …) and
-  `target/` are skipped, as are non-`.rs` files. Symlinked directories
-  are not followed.
-- Files are processed in lexicographic repo-relative order; entries
-  within a file keep the single-file order (items sorted, then calls
-  sorted when `--calls` is set). Sort contract (single-file mode
-  included): files in lexicographic repo-relative path order; within a
-  file, items sorted by (start line, end line, kind, name), then calls in
-  the same key order when `--calls` is set; text lines and JSON arrays
-  both follow this order.
-- Text mode prints grep-style `rel: kind name start-end` lines. Files
-  with no entries emit no lines (token-efficient); use JSON mode to
-  confirm coverage.
-- JSON mode emits `{"path", "files": [{"path", "items"[, "calls"]}]}`
-  with one entry per successfully parsed `.rs` file (empty `items: []`
-  included). The per-file `calls` key follows the same omission rule as
-  single-file mode. The single-file shape (`{"path", "items"…}`) is
-  unchanged.
-- Unreadable or unparseable files are skipped with a stderr
-  `warning: skipping <rel>: …` so one broken file never blocks the
-  scan; single-inspect that file for the full `RSMPL_PARSE_CONFLICT`.
-- On huge repos scope to a subtree (`--inspect src/net/`) rather than
-  the root, or bound the output with `--max-items N` (D.3.3).
-
-#### D.3.3 Output budget (`--inspect <path> --max-items N`)
-
-Directory scans and call previews are unbounded by default, which can
-exceed an agent's context on large repos. `--max-items N` caps the total
-number of listed entries (`items` + `calls` combined) in deterministic
-sorted order (files lexicographic, items-then-calls within each file):
-
-```sh
-# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-rsmpl-git --inspect src --calls --max-items 20
-rsmpl-git --inspect src/lib.rs --max-items 5 --format json
-```
-
-Rules:
-
-- `N` is a global cap, not per-file. The first `N` entries in the
-  single/dir order are emitted; the rest are omitted. `--max-items 0`
-  emits no entries (coverage/headers only). Absent flag means unbounded
-  (backward compatible). Unbounded stays the default (audit, D.2):
-  capping by default would silently hide entries, against SPEC 2.6; the
-  exact `total`/`omitted` counts tell the agent when to scope to a
-  subtree or re-run with `--max-items N`.
-- Requires `--inspect`; otherwise the CLI exits 2 with
-  `--max-items requires --inspect <path>` (same `RSMPL_IO_CONFLICT`
-  envelope as `--calls` without `--inspect`).
-- Text mode prints at most `N` entry lines to stdout (pure
-  `kind name s-e` / `rel: kind name s-e` lines). When entries were
-  omitted, one stderr marker is printed:
-  `truncated: {omitted} more entries omitted (use --max-items N or scope to a subtree)`.
-- JSON mode adds top-level `"truncated": bool` plus exact counts
-  `"total"` (pre-cap entries, `items` + `calls` combined) and `"omitted"`
-  (entries hidden by the cap; `0` when uncapped or under cap) to both
-  shapes: single `{"path", "items"[, "calls"], "truncated", "total",
-  "omitted"}` and directory `{"path", "files": [{"path", "items"[,
-  "calls"]}], "truncated", "total", "omitted"}`. JSON consumers size the
-  next `--max-items N` as `total - omitted` shown vs hidden instead of
-  guessing.
-  Truncated runs contain fewer entries (partial file arrays, later files
-  omitted); empty files (`items: []`, plus `calls: []` when `--calls`)
-  are still included for coverage because they cost no budget.
-  Uncapped small outputs report `"truncated": false` so agents can always
-  check the key. The per-file `calls` omission rule (D.3.1/D.3.2) is
-  unchanged.
 
 Recommended agent loop:
 
 ```text
-inspect dir -> author hunks in original-source coordinates
+read file -> author hunks in original-source coordinates
 -> apply with --format json --context 0 --diff-max-lines 0 --check -> review files[] stats
 -> widen with --context 1 (or --diff-max-lines N / --output full.patch) only if needed
 -> apply for real

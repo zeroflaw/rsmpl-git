@@ -10,7 +10,7 @@ use crate::lines::LineIndex;
 /// pattern, when the caller ran one (T62): `Some(1)` means the pattern is
 /// fine but the range is wrong, so the suggestion offers the zero-discovery
 /// `# scope=file` retry; `Some(n > 1)` suggests widening + `# allow=many`;
-/// `Some(0)`/`None` keep the generic inspect suggestion.
+/// `Some(0)`/`None` keep the generic file-read suggestion.
 pub fn ensure_match_count(
     found: usize,
     allow: Allow,
@@ -76,12 +76,10 @@ pub fn ensure_file_range(
 }
 
 fn zero_match_suggestion(file: &str, wide: Option<usize>) -> String {
-    let base = format!(
-        "run `rsmpl-git --inspect {file}` (add `--calls` for call-rewrite ranges) to list valid ranges; check the pattern or add `# optional`"
-    );
+    let base = format!("read `{file}` to list valid ranges; check the pattern or add `# optional`");
     match wide {
         Some(1) => format!(
-            "{base} — exactly one match exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@` (no inspect needed)"
+            "{base} — exactly one match exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`"
         ),
         // Note: matchers stop counting at 2 under `# allow=one`, so the
         // wide count saturates — report "multiple", never an exact number.
@@ -100,9 +98,7 @@ fn range_err(rule: &str, file: &str, start: u32, len: u32, n: u32) -> Structured
     .with_rule(rule)
     .with_file(file)
     .with_range(format!("{start}..{}", start + len))
-    .with_suggestion(format!(
-        "run `rsmpl-git --inspect {file}` to list valid ranges"
-    ))
+    .with_suggestion(format!("read `{file}` to list valid ranges"))
 }
 
 #[cfg(test)]
@@ -110,7 +106,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_match_suggestion_carries_inspect_command() {
+    fn no_match_suggestion_names_file_read() {
         let err = ensure_match_count(
             0,
             rsmpl_patch::Allow::One,
@@ -122,9 +118,9 @@ mod tests {
         )
         .unwrap_err();
         let s = err.suggestion.expect("suggestion");
-        assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
-        assert!(s.contains("--calls"), "got: {s}");
+        assert!(s.contains("read `src/lib.rs`"), "got: {s}");
         assert!(s.contains("# optional"), "got: {s}");
+        assert!(!s.contains("--inspect"), "got: {s}");
         assert!(!s.contains("scope=file"), "got: {s}");
     }
 
@@ -141,7 +137,7 @@ mod tests {
         )
         .unwrap_err();
         let s = err.suggestion.expect("suggestion");
-        assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
+        assert!(s.contains("read `src/lib.rs`"), "got: {s}");
         assert!(s.contains("# scope=file"), "got: {s}");
         assert!(s.contains("@@ -1,1 @@"), "got: {s}");
     }
@@ -167,10 +163,11 @@ mod tests {
     }
 
     #[test]
-    fn range_suggestion_carries_inspect_command() {
+    fn range_suggestion_names_file_read() {
         let err = range_err("r", "src/lib.rs", 90, 8, 10);
         let s = err.suggestion.expect("suggestion");
-        assert!(s.contains("rsmpl-git --inspect src/lib.rs"), "got: {s}");
+        assert!(s.contains("read `src/lib.rs`"), "got: {s}");
+        assert!(!s.contains("--inspect"), "got: {s}");
     }
 
     #[test]

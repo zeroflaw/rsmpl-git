@@ -144,12 +144,15 @@ mod tests {
             .with_rule("r")
             .with_file("src/lib.rs")
             .with_range("40..47")
-            .with_suggestion("run --inspect");
+            .with_suggestion("read the file to list valid ranges");
         let v = e.to_json();
         assert_eq!(v["code"], serde_json::json!("RSMPL_RANGE_CONFLICT"));
         assert_eq!(v["rule"], serde_json::json!("r"));
         assert_eq!(v["file"], serde_json::json!("src/lib.rs"));
         assert_eq!(v["range"], serde_json::json!("40..47"));
-        assert_eq!(v["suggestion"], serde_json::json!("run --inspect"));
+        assert_eq!(
+            v["suggestion"],
+            serde_json::json!("read the file to list valid ranges")
+        );
     }
 }

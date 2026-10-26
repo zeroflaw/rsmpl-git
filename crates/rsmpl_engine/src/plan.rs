@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn scope_file_dummy_range_finds_late_item() {
         // T61: `@@ -1,1 @@` + `# scope=file` renames a fn on lines 5-7
-        // with no inspect roundtrip.
+        // with no file-read roundtrip.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
         let src = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn foo() {}\n";
         let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
@@ -683,7 +683,7 @@ mod tests {
         let src = "fn a() {}\nfn b() {}\n";
         let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
-        assert!(err.contains("rsmpl-git --inspect"), "got: {err}");
+        assert!(err.contains("read `src/lib.rs`"), "got: {err}");
         assert!(!err.contains("scope=file"), "got: {err}");
     }
 

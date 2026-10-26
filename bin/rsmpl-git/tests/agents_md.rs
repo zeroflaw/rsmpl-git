@@ -51,9 +51,6 @@ fn agents_md_citations_resolve() {
         ("D.2.1", "D.2.1"),
         ("D.2.2", "D.2.2"),
         ("D.3", "### D.3"),
-        ("D.3.1", "D.3.1"),
-        ("D.3.2", "D.3.2"),
-        ("D.3.3", "D.3.3"),
     ] {
         assert!(agents.contains(cite), "AGENTS.md should cite {cite}");
         assert!(
@@ -73,9 +70,6 @@ fn agents_md_citations_resolve() {
         "--repo",
         "--check",
         "--format",
-        "--inspect",
-        "--calls",
-        "--max-items",
         "--diff-max-lines",
         "--context",
         "--output",
@@ -106,7 +100,7 @@ fn agents_md_citations_resolve() {
     );
 
     // T117 anti-rot: the patch-first skill exists and teaches the token
-    // loop (scope=file over inspect, budget flags) plus the repair path.
+    // loop (scope=file over file reads, budget flags) plus the repair path.
     let skill = read_root("skills/rsmpl-git/SKILL.md");
     assert!(
         skill.lines().count() <= 150,
