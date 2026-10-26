@@ -3515,15 +3515,12 @@ metavariable_directive ::= metavariable_kind identifier constraint?
 
 constraint          ::= "=" value
 
-metavariable_kind   ::= "identifier"
-                      | "path"
-                      | "symbol"
+metavariable_kind   ::= "symbol"
                       | "expr"
                       | "stmt"
                       | "item"
                       | "type"
                       | "pat"
-                      | "lifetime"
                       | "generic_params"
                       | "where_clause"
                       | "visibility"
@@ -3531,7 +3528,6 @@ metavariable_kind   ::= "identifier"
                       | "qualifier_list"
                       | "attributes"
                       | "block"
-                      | "field"
                       | "macro"
                       | "token_tree"
 
@@ -3811,7 +3807,7 @@ A compliant RSmPL-Git v0.1 implementation must:
 6. restrict semantic matching to the declared old-side range;
 7. support concrete Rust syntax matching;
 8. support `...` in defined Rust syntactic positions;
-9. support at least `expr`, `item`, `type`, `pat`, `identifier`, and `path` metavariables;
+9. support at least `expr`, `item`, `type`, and `pat` metavariables;
 10. preserve the rule that modifiers are explicit;
 11. apply ordinary Git hunks using normal unified-diff semantics when they do not conflict with semantic edits;
 12. interpret all RSmPL old-side ranges against the original source coordinate system;
@@ -3939,8 +3935,7 @@ prints one JSON object to stdout:
   top-to-bottom like the patch itself — including move cut/paste
   hunks, which the engine evaluates in a different pass but
   reports in document position.
-- `files` follows patch file-section order, with any extra changed
-  files not named by a section appended in sorted path order.
+- `files` follows patch file-section order.
 - `--output <path>` writes the full diff file in both modes, even when
   the reported `diff` is truncated or omitted — but writes nothing when
   the lowering is empty (no changes, no file). It is written before
