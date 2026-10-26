@@ -322,6 +322,148 @@ fn calls_without_inspect_is_usage_error() {
 }
 
 #[test]
+fn inspect_dir_lists_every_rs_file_in_text_and_json() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(&dir.path().join(""), "src/a.rs", "struct S;\n");
+    fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+    write(
+        &dir.path().join(""),
+        "src/nested/b.rs",
+        "fn b() {\n    foo(1);\n}\n",
+    );
+    write(&dir.path().join(""), "src/notes.txt", "not rust\n");
+    fs::create_dir_all(dir.path().join("target")).unwrap();
+    write(&dir.path().join(""), "target/t.rs", "fn t() {}\n");
+
+    // Text mode: grep-style `file: kind name s-e`, files sorted.
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--calls"])
+        .output()
+        .unwrap();
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    assert!(stdout.contains("src/a.rs: struct S 1-1"), "got: {stdout}");
+    assert!(stdout.contains("src/lib.rs: fn foo 1-1"), "got: {stdout}");
+    assert!(
+        stdout.contains("src/nested/b.rs: fn b 1-3"),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.contains("src/nested/b.rs: call foo 2-2"),
+        "got: {stdout}"
+    );
+    assert!(!stdout.contains("notes.txt"), "got: {stdout}");
+    assert!(!stdout.contains("target/t.rs"), "got: {stdout}");
+    let lib_pos = stdout.find("src/lib.rs").unwrap();
+    let nested_pos = stdout.find("src/nested/b.rs").unwrap();
+    assert!(lib_pos < nested_pos, "files sorted, got: {stdout}");
+
+    // JSON mode: `files` array with per-file items (+ calls).
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--calls", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["path"], serde_json::json!("src"));
+    let files = v["files"].as_array().expect("files array present");
+    assert_eq!(files.len(), 3, "got: {v}");
+    let lib = files.iter().find(|f| f["path"] == "src/lib.rs").unwrap();
+    assert!(lib["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["name"] == "foo"));
+    assert!(lib.get("calls").is_some(), "got: {lib}");
+    let nested = files
+        .iter()
+        .find(|f| f["path"] == "src/nested/b.rs")
+        .unwrap();
+    assert!(nested["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["name"] == "foo"));
+
+    // Without --calls the per-file `calls` key is omitted (compat rule).
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    for f in v["files"].as_array().unwrap() {
+        assert!(f.get("calls").is_none(), "got: {f}");
+    }
+}
+
+#[test]
+fn inspect_dir_skips_broken_file_with_warning() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/good.rs", "fn good() {}\n");
+    write(&dir.path().join(""), "src/broken.rs", "fn broken( {}\n");
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("src/good.rs: fn good 1-1"), "got: {stdout}");
+    assert!(!stdout.contains("broken.rs: fn"), "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("skipping src/broken.rs"), "got: {stderr}");
+
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let files = v["files"].as_array().unwrap();
+    assert!(files.iter().any(|f| f["path"] == "src/good.rs"));
+    assert!(
+        !files.iter().any(|f| f["path"] == "src/broken.rs"),
+        "got: {v}"
+    );
+}
+
+#[test]
+fn inspect_missing_path_is_io_conflict() {
+    let dir = init_repo();
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "does-not-exist/"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+}
+
+#[test]
 fn inspect_lists_item_spans() {
     let dir = init_repo();
     write(

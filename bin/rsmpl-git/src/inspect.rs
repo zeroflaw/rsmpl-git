@@ -1,9 +1,10 @@
 //! `--inspect` helper: list top-level Rust items with line spans.
 //!
 //! Agent use: run `rsmpl-git --repo X --inspect src/lib.rs` to learn valid
-//! `@@ -old,len` ranges without reading the whole file. Spans come from
-//! `syn` (1-based lines, inclusive) and cover the attached attribute/doc
-//! envelope the same way matching does.
+//! `@@ -old,len` ranges without reading the whole file, or
+//! `--inspect src/` (`collect_rs_files`) to scan a whole subtree in one
+//! call. Spans come from `syn` (1-based lines, inclusive) and cover the
+//! attached attribute/doc envelope the same way matching does.
 
 use rsmpl_patch::{ErrorCode, StructuredError};
 use syn::spanned::Spanned;
@@ -132,6 +133,41 @@ impl<'ast> Visit<'ast> for CallCollector {
     fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
         self.push("macro", path_name(&node.mac.path), node.span());
         visit::visit_stmt_macro(self, node);
+    }
+}
+
+/// Collect absolute paths of all `.rs` files under `root`, recursively.
+///
+/// Agent use: backs `--inspect <dir>` so one call scans a whole subtree.
+/// Skips dot-directories (e.g. `.git/`), `target/`, and non-`.rs` files;
+/// does not follow symlinked directories. Output is sorted
+/// lexicographically by display string for determinism.
+pub fn collect_rs_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    collect_rs_into(root, &mut out);
+    out.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    out
+}
+
+fn collect_rs_into(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            collect_rs_into(&path, out);
+        } else if ft.is_file() && path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
     }
 }
 
@@ -393,5 +429,34 @@ mod tests {
         assert!(calls.is_empty(), "got: {calls:?}");
         let err = inspect_calls("fn broken( {}").unwrap_err();
         assert_eq!(err.code, ErrorCode::ParseConflict);
+    }
+
+    #[test]
+    fn collect_rs_files_skips_noise_and_sorts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/nested")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("src/nested/b.rs"), "fn b() {}\n").unwrap();
+        std::fs::write(root.join("src/notes.txt"), "not rust\n").unwrap();
+        std::fs::write(root.join(".git/hidden.rs"), "fn h() {}\n").unwrap();
+        std::fs::write(root.join("target/debug/t.rs"), "fn t() {}\n").unwrap();
+        let files = collect_rs_files(root);
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec!["src/lib.rs", "src/nested/b.rs"],
+            "got: {names:?}"
+        );
     }
 }

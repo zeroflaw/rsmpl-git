@@ -15,6 +15,8 @@
 //! rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
 //! # Also list call/method/macro sites for tight call-rewrite ranges:
 //! rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
+//! # Scan a whole subtree in one call (grep-style `file: kind name s-e`):
+//! rsmpl-git --repo ./my-repo --inspect src/ --calls
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
@@ -79,8 +81,10 @@ struct Cli {
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
 
-    /// Inspect a repo-relative Rust file and list its items with line spans
-    /// (no patch needed). Useful for authoring `@@ -old,len` ranges.
+    /// Inspect a repo-relative Rust file (or directory, e.g. `src/` or `.`,
+    /// to scan every `.rs` file beneath it in one call) and list its items
+    /// with line spans (no patch needed). Useful for authoring
+    /// `@@ -old,len` ranges.
     #[arg(long, value_name = "PATH")]
     inspect: Option<PathBuf>,
 
@@ -326,6 +330,18 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
     }
     let rel_str = rel.to_string_lossy().to_string();
     let abs = cli.repo.join(rel);
+    if abs.is_dir() {
+        return run_inspect_dir(cli, rel, &abs);
+    }
+    if !abs.exists() && looks_like_dir_request(&rel_str) {
+        return Err(CliError::io_file(
+            format!(
+                "cannot read {}: no such directory (did you mean an existing file or directory?)",
+                abs.display()
+            ),
+            &rel_str,
+        ));
+    }
     let text = std::fs::read_to_string(&abs)
         .map_err(|e| CliError::io_file(format!("cannot read {}: {e}", abs.display()), &rel_str))?;
     let items = inspect::inspect_source(&text)
@@ -363,6 +379,113 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Directory scan for `--inspect <dir>`: one call lists items (+ calls
+/// with `--calls`) for every `.rs` file under the directory.
+///
+/// Text mode prints grep-style `rel: kind name s-e` lines (files sorted,
+/// items-then-calls within each file; files with no entries emit nothing).
+/// JSON mode prints `{"path","files":[{"path","items"[, "calls"]}]}` with
+/// one entry per successfully parsed `.rs` file. Unreadable/unparseable
+/// files are skipped with a stderr warning so one broken file never blocks
+/// the whole scan (single-inspect it for the full parse detail).
+fn run_inspect_dir(
+    cli: &Cli,
+    rel: &std::path::Path,
+    abs: &std::path::Path,
+) -> Result<(), CliError> {
+    let rel_str = rel.to_string_lossy().to_string();
+    let mut abs_files = inspect::collect_rs_files(abs);
+    abs_files.sort_by_key(|a| rel_display(&cli.repo, a));
+    if cli.format == Format::Json {
+        let mut files = Vec::new();
+        for abs_file in &abs_files {
+            let rel_file = rel_display(&cli.repo, abs_file);
+            let text = match std::fs::read_to_string(abs_file) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("warning: skipping {rel_file}: cannot read: {e}");
+                    continue;
+                }
+            };
+            let items = match inspect::inspect_source(&text) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("warning: skipping {rel_file}: {}", e.message);
+                    continue;
+                }
+            };
+            if cli.calls {
+                let calls = match inspect::inspect_calls(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("warning: skipping calls for {rel_file}: {}", e.message);
+                        continue;
+                    }
+                };
+                files.push(serde_json::json!({
+                    "path": rel_file, "items": items, "calls": calls
+                }));
+            } else {
+                files.push(serde_json::json!({ "path": rel_file, "items": items }));
+            }
+        }
+        let payload = serde_json::json!({ "path": rel_str, "files": files });
+        println!(
+            "{}",
+            serde_json::to_string(&payload)
+                .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
+        );
+    } else {
+        for abs_file in &abs_files {
+            let rel_file = rel_display(&cli.repo, abs_file);
+            let text = match std::fs::read_to_string(abs_file) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("warning: skipping {rel_file}: cannot read: {e}");
+                    continue;
+                }
+            };
+            let items = match inspect::inspect_source(&text) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("warning: skipping {rel_file}: {}", e.message);
+                    continue;
+                }
+            };
+            for i in &items {
+                println!("{}: {} {} {}-{}", rel_file, i.kind, i.name, i.start, i.end);
+            }
+            if cli.calls {
+                match inspect::inspect_calls(&text) {
+                    Ok(calls) => {
+                        for c in &calls {
+                            println!("{}: {} {} {}-{}", rel_file, c.kind, c.name, c.start, c.end);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("warning: skipping calls for {rel_file}: {}", e.message);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Repo-relative display path with `/` separators for inspect output.
+fn rel_display(repo: &std::path::Path, abs: &std::path::Path) -> String {
+    abs.strip_prefix(repo)
+        .map_or_else(
+            |_| abs.to_string_lossy().into_owned(),
+            |r| r.to_string_lossy().into_owned(),
+        )
+        .replace('\\', "/")
+}
+
+fn looks_like_dir_request(rel: &str) -> bool {
+    rel.ends_with('/') || rel == "." || rel.is_empty()
 }
 
 fn read_stdin() -> Result<String, CliError> {

@@ -3764,10 +3764,45 @@ Rules:
 - Type usages are intentionally not listed (every annotation would emit;
   too noisy). Use a targeted file read for type-rewrite ranges.
 
+#### D.3.2 Directory scan (`--inspect <dir>`)
+
+Passing a directory (e.g. `--inspect src/`, `--inspect src`,
+`--inspect .`) scans every `.rs` file beneath it in one call, so agents
+skip `git ls-files` plus N per-file inspects:
+
+```sh
+rsmpl-git --repo ./my-repo --inspect src/ --calls
+# src/lib.rs: fn foo 1-1
+# src/lib.rs: call foo 3-3
+# src/a.rs: struct S 1-2
+```
+
+Rules:
+
+- Only `.rs` files are scanned. Dot-directories (`.git/`, …) and
+  `target/` are skipped, as are non-`.rs` files. Symlinked directories
+  are not followed.
+- Files are processed in lexicographic repo-relative order; entries
+  within a file keep the single-file order (items sorted, then calls
+  sorted when `--calls` is set).
+- Text mode prints grep-style `rel: kind name start-end` lines. Files
+  with no entries emit no lines (token-efficient); use JSON mode to
+  confirm coverage.
+- JSON mode emits `{"path", "files": [{"path", "items"[, "calls"]}]}`
+  with one entry per successfully parsed `.rs` file (empty `items: []`
+  included). The per-file `calls` key follows the same omission rule as
+  single-file mode. The single-file shape (`{"path", "items"…}`) is
+  unchanged.
+- Unreadable or unparseable files are skipped with a stderr
+  `warning: skipping <rel>: …` so one broken file never blocks the
+  scan; single-inspect that file for the full `RSMPL_PARSE_CONFLICT`.
+- On huge repos scope to a subtree (`--inspect src/net/`) rather than
+  the root; output budgeting is future work.
+
 Recommended agent loop:
 
 ```text
-inspect file -> author hunks in original-source coordinates
+inspect dir -> author hunks in original-source coordinates
 -> apply with --format json --check --emit-diff -> review lowered diff
 -> apply for real
 ```
