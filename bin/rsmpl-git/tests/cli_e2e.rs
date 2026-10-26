@@ -57,6 +57,27 @@ fn inline_fn_rename_applies() {
 }
 
 #[test]
+fn minimal_file_section_header_applies() {
+    // T60: `diff --git` alone suffices (no `---`/`+++`/`index`), `rule=`
+    // may be omitted, new side = copy of old (ignored for RSmPL hunks).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,3 +1,3 @@\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run(dir.path(), &["--patch", patch]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("fn bar(x: i32)"), "got: {text}");
+}
+
+#[test]
 fn check_prints_diff_and_does_not_modify() {
     let dir = init_repo();
     let before = "fn a() {\n    foo(1);\n    foo(2);\n}\n";

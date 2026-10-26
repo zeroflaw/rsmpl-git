@@ -8,15 +8,18 @@ normative section (SPEC 9.3, SPEC 14.1, SPEC 18.6, SPEC D.3, …).
 
 ```diff
 diff --git a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs
-+++ b/src/lib.rs
 @@ -1,5 +1,5 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
       ...
-  }
+   }
 ```
+
+Minimal recipe: `diff --git` alone suffices (`---`/`+++`/`index`
+lines are optional metadata); `rule=` may be omitted (diagnostics
+show `<unnamed>`); for RSmPL hunks copy the old side to the new side
+(`@@ -old,len +old,len @@`, new side is ignored, SPEC 10.4).
 
 Rules: every semantic hunk = `@@ -old,len +new,len @@ rule=name`
 header + `# lang=rust` directive + `-`/`+`/context lines. All `-old,len`

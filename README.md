@@ -75,15 +75,17 @@ diff to stdout (plain apply stays quiet); `--format json` prints
 
 ```diff
 diff --git a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs
-+++ b/src/lib.rs
 @@ -1,5 +1,5 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
       ...
-  }
+   }
 ```
+
+Minimal header: `diff --git` alone suffices (no `---`/`+++`/`index`);
+`rule=` may be omitted; copy the old side to the new side
+(`@@ -old,len +old,len @@`, new side ignored, SPEC 10.4).
 
 Key rules for authors:
 

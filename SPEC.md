@@ -385,6 +385,26 @@ The file contains:
 1. one RSmPL hunk;
 2. one ordinary Git hunk.
 
+The `---` / `+++` / `index` lines above are optional file metadata
+(`git_metadata*` in the grammar); the parser only requires the
+`diff --git` line before the hunks. The canonical agent recipe is
+therefore the 1-line header:
+
+```diff
+diff --git a/src/lib.rs b/src/lib.rs
+@@ -10,7 +10,7 @@
+# lang=rust
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }
+```
+
+No `---` / `+++` / `index` lines, no `rule=` tag (diagnostics then
+show `<unnamed>`; add `rule=name` when a patch has several hunks).
+For RSmPL hunks the `+new,len` side is ignored (Section 10.4), so
+the recipe copies the old side verbatim (`@@ -10,7 +10,7 @@`).
+
 ---
 
 ## 7. RSmPL Hunk Detection
@@ -545,7 +565,7 @@ Example:
 @@ -80,20 +80,20 @@ rule=rename_calls
 ```
 
-The rule name is used for diagnostics, captures, dependency tracking, and review display.
+The rule name is used for diagnostics, captures, dependency tracking, and review display. It is RECOMMENDED for multi-hunk patches but OPTIONAL for single-hunk patches; a hunk without `rule=` is valid and diagnostics show `<unnamed>` for it.
 
 ### 8.3 Header tag syntax
 
@@ -807,7 +827,7 @@ is a review-oriented declaration of the intended output extent. It is not used t
 
 Because RSmPL bodies may contain ellipses, metavariables, captures, moved AST nodes, and formatter output, the new-side line count is an **extent declaration**, not a literal promise that the resulting output will contain exactly that number of lines.
 
-Implementations should tolerate new-side line-count drift for RSmPL hunks and compute the final concrete line counts when lowering the RSmPL-Git patch to an ordinary Git diff.
+Implementations should tolerate new-side line-count drift for RSmPL hunks and compute the final concrete line counts when lowering the RSmPL-Git patch to an ordinary Git diff. The new-side values are not consulted for RSmPL matching at all, so an agent that wants zero decision cost may copy the old side verbatim (e.g. `@@ -10,7 +10,7 @@`).
 
 For example:
 
