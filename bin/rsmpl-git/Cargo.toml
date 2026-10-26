@@ -1,0 +1,18 @@
+[package]
+name = "rsmpl-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rsmpl-git"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+rsmpl_patch = { workspace = true }
+rsmpl_pattern = { workspace = true }
+rsmpl_engine = { workspace = true }
+rsmpl_git = { workspace = true }

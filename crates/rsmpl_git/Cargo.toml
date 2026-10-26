@@ -1,0 +1,11 @@
+[package]
+name = "rsmpl_git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+rsmpl_patch = { workspace = true }
+similar = { workspace = true }

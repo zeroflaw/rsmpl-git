@@ -1,0 +1,15 @@
+[package]
+name = "rsmpl_engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+rsmpl_patch = { workspace = true }
+rsmpl_pattern = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+prettyplease = { workspace = true }
