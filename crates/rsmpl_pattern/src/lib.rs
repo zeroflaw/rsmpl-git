@@ -6,12 +6,14 @@
 
 mod expr_pattern;
 mod fn_pattern;
+mod item_rename;
 mod metavar;
 mod pattern;
 mod quote_utils;
 
 pub use expr_pattern::{try_parse_expr, ArgPat, ExprPattern, ExprPatternKind, PlaceholderMaps};
 pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, VisPat, WherePat};
+pub use item_rename::{parse_side as parse_item_rename_side, ItemKind};
 pub use metavar::{MetavarTable, TokenKind};
 pub use pattern::{compile, CompiledPattern, GeneralShape, PatternKind};
 pub use quote_utils::{

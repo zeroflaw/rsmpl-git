@@ -54,6 +54,16 @@ pub enum PatternKind {
     ImplContext { impl_header: String },
     /// Macro token-tree / invocation patterns.
     Macro { minus_raw: String, plus_raw: String },
+    /// Non-function item rename (`struct Old` -> `struct New`): only the
+    /// name ident is replaced, everything else is preserved. `impl`
+    /// renames the self-ty ident only (trait-side paths are T19).
+    ItemRename {
+        kind: crate::item_rename::ItemKind,
+        minus_name: String,
+        plus_name: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// Generalized statement/expression/type rewrite (`let x = E`, `a + E`,
     /// `Vec<T>`). `minus_sub` holds the placeholder-substituted pattern
     /// (`__RSMPL_E` idents, backtick literals restored as literal text).
@@ -341,6 +351,13 @@ fn classify(
     if c.contains("impl ") && looks_like_fn(m, table) {
         let impl_header = c.lines().next().unwrap_or("").to_string();
         return Ok(PatternKind::ImplContext { impl_header });
+    }
+
+    // Non-function item renames (`struct Old` -> `struct New`). Checked
+    // before fn shapes: `const Old`/`static Old` also satisfy
+    // `looks_like_fn`, and every fn shape falls through here as `None`.
+    if let Some(rename) = classify_item_rename(m, p)? {
+        return Ok(rename);
     }
 
     // Function patterns (minus starts with fn-ish, possibly with vis/attrs).
@@ -770,6 +787,58 @@ fn first_fn_block(text: &str) -> String {
     text.to_string()
 }
 
+/// Classify a non-function item rename (`struct Old` -> `struct New`).
+///
+/// Returns `Ok(None)` when neither side is an item-rename shape (the caller
+/// falls through to fn/macro/call classification). Either side being an
+/// item shape while the other is not — or a kind mismatch — is a hard
+/// `PatternConflict`, never a silent fallthrough.
+fn classify_item_rename(
+    minus_raw: &str,
+    plus_raw: &str,
+) -> Result<Option<PatternKind>, StructuredError> {
+    let minus = crate::item_rename::parse_side(minus_raw)?;
+    let plus = crate::item_rename::parse_side(plus_raw)?;
+    match (minus, plus) {
+        (Some((mk, mn, mattrs)), Some((pk, pn, pattrs))) => {
+            if mk != pk {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "item rename kind mismatch: minus is `{}` but plus is `{}` (kinds must match)",
+                        mk.as_str(),
+                        pk.as_str()
+                    ),
+                ));
+            }
+            if mn == pn {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "item rename minus and plus names are identical (`{mn}`); write the new name on the `+` side"
+                    ),
+                ));
+            }
+            Ok(Some(PatternKind::ItemRename {
+                kind: mk,
+                minus_name: mn,
+                plus_name: pn,
+                minus_attrs: mattrs,
+                plus_attrs: pattrs,
+            }))
+        }
+        (Some(_), None) => Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "item rename plus side must be a bare `<kind> <Name>` pattern matching the minus kind",
+        )),
+        (None, Some(_)) => Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "item rename minus side must be a bare `<kind> <Name>` pattern matching the plus kind",
+        )),
+        (None, None) => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -985,5 +1054,68 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,0 @@ rule=x\n# lang=rust\n# type T\n- Vec<T>\n",
         );
         assert!(compile(&h).is_err());
+    }
+
+    #[test]
+    fn item_rename_shapes_compile() {
+        for (minus, plus) in [
+            ("struct Old", "struct New"),
+            ("enum Old", "enum New"),
+            ("trait Old", "trait New"),
+            ("type Old", "type New"),
+            ("const Old", "const New"),
+            ("static mut Old", "static mut New"),
+            ("mod old", "mod new"),
+            ("impl Old", "impl New"),
+            ("pub struct Old", "pub struct New"),
+            ("struct Old { ... }", "struct New { ... }"),
+        ] {
+            let text = format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- {minus}\n+ {plus}\n"
+            );
+            let c = compile(&hunk_of(&text)).unwrap();
+            assert!(
+                matches!(&c.kind, PatternKind::ItemRename { .. }),
+                "{minus} got: {:?}",
+                c.kind
+            );
+            assert!(c.unbound_plus.is_empty());
+        }
+    }
+
+    #[test]
+    fn item_rename_mismatch_rejected() {
+        // Kind mismatch.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- struct Old\n+ enum New\n",
+        );
+        assert!(compile(&h).is_err());
+        // Identical names.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- struct Old\n+ struct Old\n",
+        );
+        assert!(compile(&h).is_err());
+        // Concrete body.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- struct Old<T>\n+ struct New\n",
+        );
+        assert!(compile(&h).is_err());
+        // `$Meta` names unsupported.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- struct $S\n+ struct New\n",
+        );
+        assert!(compile(&h).is_err());
+    }
+
+    #[test]
+    fn const_fn_still_routes_to_fn() {
+        // `const fn` must not be captured by the item-rename classifier.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- const fn foo(...) {\n+ const fn bar(...) {\n      ...\n  }\n",
+        );
+        assert!(
+            matches!(compile(&h).unwrap().kind, PatternKind::Fn { .. }),
+            "got const-fn routing"
+        );
     }
 }

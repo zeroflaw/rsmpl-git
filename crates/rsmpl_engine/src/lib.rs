@@ -14,6 +14,7 @@ mod lines;
 mod matcher_expr;
 mod matcher_fn;
 mod matcher_general;
+mod matcher_item;
 mod matcher_macro;
 mod ordinary;
 mod plan;

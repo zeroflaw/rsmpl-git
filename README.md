@@ -66,7 +66,9 @@ Key rules for authors:
   slots explicitly evolves the signature (`- fn f(...)` /
   `+ pub async fn f<T>(...) -> Vec<T>` keeps params/body, changes the
   rest); `...`/same-metavariable slots are preserved, bodies never
-  rewritten.
+  rewritten. Other items rename with a bare pair (`- struct Old` /
+  `+ struct New`, also `enum`/`trait`/`type`/`const`/`static`/`mod`/
+  `union`/`impl` self-ty): one ident edit, vis/generics/bodies preserved.
 - Call rewrites (`- foo(E)` / `+ bar(E)`) need `# allow=many` for multiple
   sites and `# optional` to tolerate zero matches.
 - Beyond calls: `let` statements (`- let x = E;` / `+ let y = E;`), general

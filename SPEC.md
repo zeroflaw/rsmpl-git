@@ -1032,12 +1032,13 @@ Examples:
 | Pattern | Parse context |
 |---|---|
 | `fn foo(...) { ... }` | item |
+| `struct Old` | item rename |
 | `old_api(E)` | expression |
 | `let x = E;` | statement |
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 If the parse context is ambiguous, the engine may require an explicit directive:
 
@@ -1576,6 +1577,43 @@ Example (add visibility, generics, and a return type in one hunk, params and bod
 ```
 
 > **v0.1 implementation note:** evolved slots are emitted with canonical spacing (`<T>`, `x: i32`, `where T: Clone`); only `# format=preserve` is implemented, so no `rustfmt` normalization pass runs. Deleting a slot absorbs one following space to avoid doubled spacing. There is no syntax to delete a return type while matching any return type with the `...` shorthand.
+
+### 14.8 Other item renames
+
+Function renames (14.1–14.7) are strict about explicitly written slots because signatures evolve. Renaming any other item kind is rename-only: the author writes a bare `<kind> <Name>` pair and the engine replaces exactly one name-ident span per match, preserving visibility, generics, bodies, attributes, and formatting byte-for-byte (the same fast-path as a name-only function rename).
+
+Example (rename a struct without restating its fields):
+
+```diff
+@@ -1,3 +1,3 @@ rule=rename_struct
+# lang=rust
+- struct Old
++ struct New
+```
+
+Supported kinds:
+
+| Kind | Bare pattern | Also accepted (ignored, must stay `...`/empty) |
+|---|---|---|
+| `struct` | `struct Old` | `struct Old;`, `struct Old(...)`, `struct Old { ... }` |
+| `enum` | `enum Old` | `enum Old { ... }` |
+| `trait` | `trait Old` | `trait Old { ... }` |
+| `union` | `union Old` | `union Old { ... }` |
+| `type` | `type Old` | `type Old = ...;` |
+| `const` | `const Old` | `const Old: ... = ...;` |
+| `static` | `static Old` | `static mut Old`, `static Old: ... = ...;` |
+| `mod` | `mod old` | `mod old;`, `mod old { ... }` |
+| `impl` | `impl Old` | `impl Old { ... }` (self-ty only, see below) |
+
+Rules:
+
+- Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error.
+- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted but ignored for matching: `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident. Unlike function slots, there is no slot to evolve, so requiring the author to restate visibility or generics would only cost tokens. Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
+- `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
+- `impl Old` renames the self-type ident only. It matches `impl Old`, `impl<T> Old<T>`, and `impl Trait for Old`, preserving generics and trait references. It does not match `impl Old for Foo` (where `Old` is the trait, not the self-ty); updating trait-side paths in impl headers is a path rename (a T19-class extension), not an item rename.
+- Matching reuses the function scope modes (`scope=contained/anchor/overlap/exact`, anchor on the ident line), attribute policies (`# attrs=...`), and `allow`/`optional` count validation. Only file- and inline-`mod`-level items are collected; items nested inside function bodies are not matched in v0.1. Each match emits one ident-span edit, so overlapping-match rules are trivially satisfied.
+
+> **v0.1 implementation note:** `const fn` shapes keep routing to the function classifier (the keyword in name position falls through); `impl!(...)` macro shapes keep routing to the macro classifier (a `!` after the kind falls through). Item-rename hunks reject `# returns=none` (function-only). `auto trait` headers and raw-identifier edge cases beyond `` `r#name` `` are not supported; use an ordinary hunk.
 
 ---
 
@@ -2128,6 +2166,8 @@ In `# macro=token_tree` mode, raw token-tree matching does not automatically tre
 A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 
 > **v0.1 implementation note:** function-item hunks support signature evolution, not just renames. Each explicitly written slot evolves independently: an explicit `-`/`+` slot difference inserts, replaces, or deletes that slot's source bytes while all other slots (including the body and, unless `...` is replaced by concrete text, the parameter list) are preserved. Slot comparison is whitespace-insensitive against target text sliced from the original source; a concrete `-` slot must equal the target or the candidate is rejected (fail over guessing). `...` (parameters) and the same metavariable on both sides (visibility, qualifiers, generics, where) mean "preserve". A concrete body on either side is a compile error (bodies are always preserved). Minus-concrete/plus-omitted deletes the slot for parameters-as-`...`-removed, generics, and `where` clauses; for the return type, minus-concrete/plus-omitted deletes `-> T`, while plus-omitted with minus-`...` preserves the return type (rename fast-path). There is no syntax to delete a return type while matching any return with `...`; `# returns=none` constrains only the `-` side. Impl-block methods (`impl` context hunks) share the same slot semantics, including `self`/receiver parameters.
+>
+> Bare `<kind> <Name>` pairs for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, and `impl` (Section 14.8) are item renames, not general shapes: one ident-span edit per match, everything else preserved. `impl` renames the self-ty ident only.
 >
 > Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >
@@ -3527,6 +3567,7 @@ A compliant RSmPL-Git v0.1 implementation must:
 14. plan semantic edits before materializing final files;
 15. fail rather than guess when validation fails;
 16. lower the result to a concrete ordinary Git diff.
+17. support struct/enum/trait/union/type/const/static/mod/impl-self-ty renames via bare `<kind> <Name>` pairs (one ident-span edit per match, all else preserved).
 
 ---
 

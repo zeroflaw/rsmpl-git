@@ -1,0 +1,32 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@ rule=rename_struct
+# lang=rust
+- struct Old
++ struct New
+
+@@ -5,4 +5,4 @@ rule=rename_enum
+# lang=rust
+- enum Shape
++ enum Form
+
+@@ -10,1 +10,1 @@ rule=rename_const
+# lang=rust
+- const LIMIT
++ const MAX
+
+@@ -12,5 +12,5 @@ rule=rename_mod
+# lang=rust
+- mod inner
++ mod core
+
+@@ -13,3 +13,3 @@ rule=rename_nested
+# lang=rust
+- struct Helper
++ struct Aid
+
+@@ -18,5 +18,5 @@ rule=rename_impl
+# lang=rust
+- impl Old
++ impl New

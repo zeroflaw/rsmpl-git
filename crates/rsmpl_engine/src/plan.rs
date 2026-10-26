@@ -20,7 +20,7 @@ use crate::capture::CaptureStore;
 use crate::edits::{apply_edits, TextEdit};
 use crate::lines::LineIndex;
 use crate::validate::ensure_match_count;
-use crate::{matcher_expr, matcher_fn, matcher_general, matcher_macro};
+use crate::{matcher_expr, matcher_fn, matcher_general, matcher_item, matcher_macro};
 use crate::{ordinary_hunk_edits, RuleReport};
 
 /// Parsed original state for one file.
@@ -219,6 +219,15 @@ pub fn apply_with_captures(
                             edits,
                         )
                         .map_err(|e| e.with_file(path))?,
+                        PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
+                            &state.parsed,
+                            &state.original,
+                            &state.index,
+                            rh,
+                            &compiled,
+                            edits,
+                        )
+                        .map_err(|e| e.with_file(path))?,
                         PatternKind::General { .. } => matcher_general::apply_general_hunk(
                             &state.parsed,
                             &state.original,
@@ -280,7 +289,7 @@ pub fn apply_with_captures(
                         PatternKind::Raw { .. } => {
                             return Err(StructuredError::new(
                                 ErrorCode::PatternConflict,
-                                "unsupported pattern shape in v0.1 (only fn rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
+                                "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
                             )
                             .with_rule(rule.clone())
                             .with_file(path));
