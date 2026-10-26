@@ -556,7 +556,7 @@ pub fn apply_general_hunk(
             .unwrap_or_default();
         return Err(StructuredError::new(
             ErrorCode::SymbolConflict,
-            format!("symbol `{name}` could not be resolved (no semantic environment in v1)"),
+            format!("symbol `{name}` could not be resolved (no semantic environment in v0.1)"),
         )
         .with_rule(&rule)
         .with_suggestion("add `# fallback=syntax` to allow syntactic matching"));
@@ -1079,7 +1079,7 @@ mod tests {
                 patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# expr E\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n",
                 file: "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
                 code: "RSMPL_SYMBOL_CONFLICT",
-                reason: "symbol `Old` could not be resolved (no semantic environment in v1)",
+                reason: "symbol `Old` could not be resolved (no semantic environment in v0.1)",
                 suggestion: Some("add `# fallback=syntax` to allow syntactic matching"),
             },
         ];

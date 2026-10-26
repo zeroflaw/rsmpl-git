@@ -2435,7 +2435,7 @@ authoring instead of iterating against `--check`.
 | C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
 | C11 | `+` side writes attributes the `-` side did not match | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
 | C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
-| C13 | `# symbol` declared without `# fallback=syntax` (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Spelling note: the call-matcher symbol gate (Section 19 path) emits the same text with `v0.1` in place of `v1`; the table quotes the general-matcher spelling byte-for-byte. Unifying the two spellings is T24 follow-up. |
+| C13 | `# symbol` declared without `# fallback=syntax` (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Both matchers emit this spelling. |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
