@@ -958,6 +958,12 @@ An RSmPL-Git engine should apply ordinary hunks using standard unified-diff sema
 
 Ordinary hunks may appear before, between, or after RSmPL hunks.
 
+A file section touched only by ordinary hunks is language-agnostic
+(T137): the engine performs no Rust parse of the original file and no
+Rust reparse of the rewritten file, so Markdown, configs, and any other
+plain text flow through the same tool. Any section whose file carries
+>=1 RSmPL hunk requires the target to parse as Rust (Section 25.2).
+
 ---
 
 ## 12. RSmPL Hunk Body Syntax
@@ -2970,6 +2976,10 @@ rule: rename_foo
 file: src/lib.rs
 reason: target file does not parse as Rust
 ```
+
+The Rust-parse gate fires only for files carrying >=1 RSmPL hunk
+(Section 11): ordinary-only sections skip both the original parse and
+the rewritten-file reparse, so non-Rust targets apply cleanly.
 
 A `diff --git a/old b/new` section whose stripped paths differ is also a
 parse conflict (a file rename, rejected fail-fast per Section 2.6 — v0.1

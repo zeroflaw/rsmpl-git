@@ -24,10 +24,15 @@ use crate::{matcher_expr, matcher_fn, matcher_general, matcher_item, matcher_mac
 use crate::{ordinary_hunk_edits, RuleReport};
 
 /// Parsed original state for one file.
+///
+/// `parsed` is `None` for ordinary-only files (T137): a file touched by
+/// no RSmPL hunk is plain text — no Rust parse of the original or the
+/// rewritten file. Any file with >=1 RSmPL hunk keeps `Some` and the
+/// current strict Rust behavior.
 struct FileState {
     original: String,
     index: LineIndex,
-    parsed: syn::File,
+    parsed: Option<syn::File>,
 }
 
 /// Apply `patch` to `files` (path -> contents) in place.
@@ -38,6 +43,9 @@ pub fn apply_with_captures(
     let mut report = crate::ApplyReport::default();
 
     // ---- Pass 0: parse all targeted files. ----
+    // T137: ordinary-only files skip the Rust parse entirely (original +
+    // rewritten). The unit is the file: any RSmPL hunk in any section with
+    // the same target path means Rust.
     let mut states: HashMap<String, FileState> = HashMap::new();
     for section in &patch.files {
         let path = section.target_path.clone();
@@ -52,13 +60,22 @@ pub fn apply_with_captures(
         })?;
         let index = LineIndex::new(&original);
         crate::validate::ensure_file_range(&index, section, &path)?;
-        let parsed: syn::File = syn::parse_str(&original).map_err(|e| {
-            StructuredError::new(
-                ErrorCode::ParseConflict,
-                format!("target file does not parse as Rust: {e}"),
-            )
-            .with_file(&path)
-        })?;
+        let has_semantic = patch
+            .files
+            .iter()
+            .filter(|s| s.target_path == path)
+            .any(|s| s.hunks.iter().any(|h| matches!(h, Hunk::Rsmpl(_))));
+        let parsed: Option<syn::File> = if has_semantic {
+            Some(syn::parse_str(&original).map_err(|e| {
+                StructuredError::new(
+                    ErrorCode::ParseConflict,
+                    format!("target file does not parse as Rust: {e}"),
+                )
+                .with_file(&path)
+            })?)
+        } else {
+            None
+        };
         states.insert(
             path,
             FileState {
@@ -112,8 +129,11 @@ pub fn apply_with_captures(
                 .with_rule(rh.rule_name())
                 .with_file(path));
             }
+            let parsed = state.parsed.as_ref().expect(
+                "T137: RSmPL cut hunk on a file with no parsed AST (ordinary-only files carry no semantic hunks)",
+            );
             let targets = matcher_fn::find_item_targets(
-                &state.parsed,
+                parsed,
                 rh.scope(),
                 rh.header.old_start,
                 rh.header.old_len,
@@ -130,7 +150,7 @@ pub fn apply_with_captures(
             // no edits involved).
             let wide = if targets.is_empty() && rh.scope() != Scope::File {
                 let wide_targets = matcher_fn::find_item_targets(
-                    &state.parsed,
+                    parsed,
                     Scope::File,
                     rh.header.old_start,
                     rh.header.old_len,
@@ -284,6 +304,8 @@ pub fn apply_with_captures(
     report.rules.extend(rule_order.into_iter().map(|(_, r)| r));
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
+    // T137: ordinary-only files (`parsed.is_none()`) skip the Rust
+    // reparse — they are plain text, not Rust.
     for (path, state) in &states {
         let edits = file_edits.remove(path).unwrap_or_default();
         if edits.is_empty() {
@@ -291,13 +313,15 @@ pub fn apply_with_captures(
         }
         check_overlaps(&edits, path)?;
         let updated = apply_edits(&state.original, edits).map_err(|e| e.with_file(path))?;
-        syn::parse_str::<syn::File>(&updated).map_err(|e| {
-            StructuredError::new(
-                ErrorCode::ParseConflict,
-                format!("rewritten file does not parse as Rust: {e}"),
-            )
-            .with_file(path)
-        })?;
+        if state.parsed.is_some() {
+            syn::parse_str::<syn::File>(&updated).map_err(|e| {
+                StructuredError::new(
+                    ErrorCode::ParseConflict,
+                    format!("rewritten file does not parse as Rust: {e}"),
+                )
+                .with_file(path)
+            })?;
+        }
         files.insert(path.clone(), updated);
     }
 
@@ -319,9 +343,12 @@ fn apply_rsmpl_hunk(
     edits: &mut Vec<TextEdit>,
 ) -> Result<usize, StructuredError> {
     let rule = rh.rule_name();
+    let parsed = state.parsed.as_ref().expect(
+        "T137: RSmPL hunk on a file with no parsed AST (ordinary-only files carry no semantic hunks)",
+    );
     match &compiled.kind {
         PatternKind::Fn { .. } => matcher_fn::apply_fn_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -332,7 +359,7 @@ fn apply_rsmpl_hunk(
             minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
             ..
         } => matcher_macro::apply_macro_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -340,7 +367,7 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::Expr { .. } => matcher_expr::apply_expr_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -348,7 +375,7 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -356,7 +383,7 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -364,7 +391,7 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::General { .. } => matcher_general::apply_general_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -372,7 +399,7 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::ItemCapture { .. } => matcher_fn::apply_item_delete(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -397,7 +424,7 @@ fn apply_rsmpl_hunk(
             }
         },
         PatternKind::ImplContext { .. } => matcher_fn::apply_impl_context_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -405,7 +432,7 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::Macro { .. } => matcher_macro::apply_macro_hunk(
-            &state.parsed,
+            parsed,
             &state.original,
             &state.index,
             rh,
@@ -478,11 +505,13 @@ fn candidate_preview(
             | PatternKind::UseRename { .. }
     );
     if kind_specific {
-        let mut headers = Vec::new();
-        collect_item_headers(&state.parsed.items, &mut headers);
-        if let Some((line, label)) = nearest_header(&headers, old_start) {
-            if let Some(excerpt) = source_line(state, line) {
-                return Some(cap_preview(format!("{label} at line {line}: '{excerpt}'")));
+        if let Some(parsed) = state.parsed.as_ref() {
+            let mut headers = Vec::new();
+            collect_item_headers(&parsed.items, &mut headers);
+            if let Some((line, label)) = nearest_header(&headers, old_start) {
+                if let Some(excerpt) = source_line(state, line) {
+                    return Some(cap_preview(format!("{label} at line {line}: '{excerpt}'")));
+                }
             }
         }
     }
@@ -1033,5 +1062,54 @@ mod tests {
         let excerpt = err.split("nearest ").nth(1).expect("preview");
         assert!(excerpt.chars().count() <= 330, "got: {err}");
         assert!(excerpt.contains('…'), "got: {err}");
+    }
+
+    #[test]
+    fn ordinary_only_markdown_applies_without_rust_parse() {
+        // T137: ordinary-only sections are language-agnostic — no Rust
+        // parse of the original or the rewritten file.
+        let patch = "diff --git a/SPEC.md b/SPEC.md\n--- a/SPEC.md\n+++ b/SPEC.md\n@@ -1,2 +1,2 @@\n # Title\n-old line\n+new line\n";
+        let src = "# Title\nold line\n";
+        let files = apply_multi(patch, vec![("SPEC.md", src)]).unwrap();
+        assert_eq!(files["SPEC.md"], "# Title\nnew line\n");
+    }
+
+    #[test]
+    fn mixed_rust_and_markdown_sections() {
+        // T137: one Rust section with an RSmPL hunk + one markdown
+        // ordinary-only section apply together.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n\ndiff --git a/NOTES.md b/NOTES.md\n--- a/NOTES.md\n+++ b/NOTES.md\n@@ -1,1 +1,1 @@\n-old note\n+new note\n";
+        let files = apply_multi(
+            patch,
+            vec![("src/lib.rs", "fn foo() {}\n"), ("NOTES.md", "old note\n")],
+        )
+        .unwrap();
+        assert!(
+            files["src/lib.rs"].contains("fn bar()"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(files["NOTES.md"], "new note\n");
+    }
+
+    #[test]
+    fn ordinary_only_invalid_rust_applies() {
+        // T137 negative shape: the skip is per-file semantic presence,
+        // not extension sniffing — invalid Rust with only ordinary hunks
+        // still applies.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-this is not rust {{{\n+fixed line\n";
+        let files = apply_multi(patch, vec![("src/lib.rs", "this is not rust {{{\n")]).unwrap();
+        assert_eq!(files["src/lib.rs"], "fixed line\n");
+    }
+
+    #[test]
+    fn semantic_hunk_on_non_rust_still_parse_conflicts() {
+        // T137 negative control: an RSmPL hunk on markdown still fails
+        // with RSMPL_PARSE_CONFLICT — the skip covers ordinary-only
+        // files, not a blanket removal of the Rust gate.
+        let patch = "diff --git a/NOTES.md b/NOTES.md\n--- a/NOTES.md\n+++ b/NOTES.md\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let err = apply_multi(patch, vec![("NOTES.md", "# notes\n")]).unwrap_err();
+        assert!(err.contains("RSMPL_PARSE_CONFLICT"), "got: {err}");
+        assert!(err.contains("does not parse as Rust"), "got: {err}");
     }
 }
