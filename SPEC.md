@@ -3758,6 +3758,11 @@ from an argument or a temp file:
 cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 ```
 
+Both sources stay: `--patch` keeps small patches temp-file-free while
+`--file` avoids shell-quoting for large patches; a unified
+`<text|@file|->` spelling would add quoting ambiguity for zero token
+savings.
+
 ### D.2 Machine-readable reports (`--format json`)
 
 `--format text` (default) preserves the existing human output. `--format json`
