@@ -869,7 +869,15 @@ fn classify_item_rename(
     let minus = crate::item_rename::parse_side(minus_raw)?;
     let plus = crate::item_rename::parse_side(plus_raw)?;
     match (minus, plus) {
-        (Some((mk, mn, mattrs)), Some((pk, pn, pattrs))) => {
+        (Some(mside), Some(pside)) => {
+            let mk = mside.kind;
+            let mn = mside.name;
+            let mattrs = mside.attrs;
+            let mprefix = mside.prefix;
+            let pk = pside.kind;
+            let pn = pside.name;
+            let pattrs = pside.attrs;
+            let pprefix = pside.prefix;
             if mk != pk {
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,
@@ -885,6 +893,14 @@ fn classify_item_rename(
                     ErrorCode::PatternConflict,
                     format!(
                         "item rename minus and plus names are identical (`{mn}`); write the new name on the `+` side"
+                    ),
+                ));
+            }
+            if mprefix != pprefix {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "item rename prefixes differ (`{mprefix}` vs `{pprefix}`); item renames are rename-only — write the same prefix on both sides or neither (visibility/generics/bodies are preserved)"
                     ),
                 ));
             }
@@ -1207,6 +1223,34 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- struct $S\n+ struct New\n",
         );
         assert!(compile(&h).is_err());
+    }
+
+    #[test]
+    fn item_rename_prefix_difference_rejected() {
+        // T23a: spelled vis/qualifier differences fail fast (rename-only,
+        // never a silent vis change). Bare-vs-spelled both directions.
+        for (minus, plus) in [
+            ("pub struct Old", "struct New"),
+            ("struct Old", "pub struct New"),
+            ("pub struct Old", "pub(crate) struct New"),
+            ("static Old", "static mut New"),
+            ("unsafe trait Old", "trait New"),
+        ] {
+            let text = format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- {minus}\n+ {plus}\n"
+            );
+            let err = compile(&hunk_of(&text)).unwrap_err();
+            assert!(
+                err.to_string().contains("prefixes differ"),
+                "{minus} / {plus} got: {err}"
+            );
+        }
+        // Same spelled prefix still compiles (`pub (crate)` ≡ `pub(crate)`).
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub (crate) struct Old\n+ pub(crate) struct New\n";
+        assert!(matches!(
+            compile(&hunk_of(text)).unwrap().kind,
+            PatternKind::ItemRename { .. }
+        ));
     }
 
     #[test]

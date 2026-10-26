@@ -359,6 +359,38 @@ fn unknown_directive_fails_fast_text_and_json() {
 }
 
 #[test]
+fn item_rename_prefix_difference_fails_fast_text_and_json() {
+    // T23a: spelled vis/qualifier differences are rename-only violations,
+    // never silent vis changes — text keeps the stderr diagnostic, JSON
+    // carries the envelope on stdout (exit 2 both).
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "pub struct Old;\n");
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ struct New\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("prefixes differ"), "got: {stderr}");
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PATTERN_CONFLICT")
+    );
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("prefixes differ"),
+        "got: {v}"
+    );
+}
+
+#[test]
 fn stdin_patch_applies() {
     use std::io::Write;
     use std::process::Stdio;

@@ -176,10 +176,10 @@ fn skip_ws(s: &str) -> &str {
     &s[n..]
 }
 
-/// Consume `pub` / `pub(...)` visibility prefix; returns the rest.
-/// Only consumes `pub` when followed by a delimiter so `public` (an ident)
-/// is never mistaken for visibility.
-fn skip_visibility(s: &str) -> &str {
+/// Consume `pub` / `pub(...)` visibility prefix; returns the consumed prefix
+/// (un-normalized) plus the rest. Only consumes `pub` when followed by a
+/// delimiter so `public` (an ident) is never mistaken for visibility.
+fn split_visibility(s: &str) -> (&str, &str) {
     if let Some(rest) = s.strip_prefix("pub") {
         let after_ws = skip_ws(rest);
         if let Some(after) = after_ws.strip_prefix('(') {
@@ -192,19 +192,29 @@ fn skip_visibility(s: &str) -> &str {
                 } else if c == ')' {
                     depth -= 1;
                     if depth == 0 {
-                        return skip_ws(&after[i + 1..]);
+                        let tail = skip_ws(&after[i + 1..]);
+                        let consumed = &s[..s.len() - tail.len()];
+                        return (consumed, tail);
                     }
                 }
             }
-            return s; // unbalanced: don't consume
+            return ("", s); // unbalanced: don't consume
         }
         // Lone `pub` or `pub` + whitespace (`pub struct`): consume. `public`
         // (an ident) must not be mistaken for visibility.
         if after_ws.is_empty() || rest.starts_with(char::is_whitespace) {
-            return after_ws;
+            let consumed = &s[..s.len() - after_ws.len()];
+            return (consumed, after_ws);
         }
     }
-    s
+    ("", s)
+}
+
+/// Strip all whitespace so equivalent prefixes compare equal
+/// (`pub (crate)` ≡ `pub(crate)`). Applied per prefix part; parts are
+/// joined with a single space by the caller.
+fn normalize_prefix(raw: &str) -> String {
+    raw.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 /// Consume one lowercase keyword when followed by a delimiter.
@@ -218,25 +228,53 @@ fn eat_keyword<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
     }
 }
 
+/// One parsed item-rename side: the item kind, the rename name, any leading
+/// `#[...]` attribute lines, and the normalized `pub…` / `unsafe` / `mut`
+/// prefix spelling (`""` for the bare form).
+pub struct ItemRenameSide {
+    /// Item kind (`struct`, `enum`, …).
+    pub kind: ItemKind,
+    /// Rename name ident.
+    pub name: String,
+    /// Leading attribute lines.
+    pub attrs: Vec<String>,
+    /// Normalized vis/qualifier prefix (`""` when bare).
+    pub prefix: String,
+}
+
 /// Parse one item-rename side.
 ///
 /// - `Ok(None)` — not an item-rename shape; the caller must try the next
 ///   classifier (fn, macro, call, ...). No diagnostic is produced.
-/// - `Ok(Some((kind, name, attrs)))` — valid rename side.
+/// - `Ok(Some(_))` — valid rename side; the caller rejects minus/plus
+///   prefix differences so a vis change is never silently ignored.
 /// - `Err(_)` — looks like an item rename but is malformed (concrete body,
 ///   `$Meta`, kind problems); fail fast, never fall through.
 #[allow(clippy::too_many_lines)]
-pub fn parse_side(text: &str) -> Result<Option<(ItemKind, String, Vec<String>)>, StructuredError> {
+pub fn parse_side(text: &str) -> Result<Option<ItemRenameSide>, StructuredError> {
     let (attrs, rest) = split_attrs(text);
     let mut s = skip_ws(&rest);
     if s.is_empty() {
         return Ok(None);
     }
-    s = skip_visibility(s);
+    let mut prefix = String::new();
+    let mut saw_vis = false;
+    let mut saw_unsafe = false;
+    let (vis, after_vis) = split_visibility(s);
+    if !vis.is_empty() {
+        saw_vis = true;
+        prefix.push_str(&normalize_prefix(vis));
+    }
+    s = after_vis;
     // `unsafe` precedes `trait`/`impl` (`unsafe trait`, `unsafe impl`);
     // consume it when present so those shapes route here. `unsafe fn`
     // falls through below because `fn` is not an item kind.
     if let Some(after) = eat_keyword(s, "unsafe") {
+        saw_unsafe = true;
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        prefix.push_str("unsafe");
         s = after;
     }
     // Kind keyword.
@@ -253,9 +291,28 @@ pub fn parse_side(text: &str) -> Result<Option<(ItemKind, String, Vec<String>)>,
     let Some(kind) = kind else {
         return Ok(None);
     };
+    // Prefix–kind legality (T23a review): `unsafe` is only legal on
+    // `trait`/`impl` headers, and `impl` blocks take no visibility.
+    // Anything else is invalid Rust — fail fast rather than rename under
+    // a meaningless spelling. Kind is `Some` here, so the `unsafe fn` /
+    // `const fn` fallthrough above is unaffected.
+    if saw_unsafe && kind != ItemKind::Trait && kind != ItemKind::Impl {
+        return err(format!(
+            "`unsafe` is only legal on `trait`/`impl` headers, not `{}` (write the bare `<{}> <Name>` form)",
+            kind.as_str(),
+            kind.as_str()
+        ));
+    }
+    if saw_vis && kind == ItemKind::Impl {
+        return err("`impl` blocks take no visibility (write the bare `impl <Name>` form)");
+    }
     // `static mut NAME`.
     if kind == ItemKind::Static {
         if let Some(after) = eat_keyword(s, "mut") {
+            if !prefix.is_empty() {
+                prefix.push(' ');
+            }
+            prefix.push_str("mut");
             s = after;
         }
     }
@@ -310,7 +367,12 @@ pub fn parse_side(text: &str) -> Result<Option<(ItemKind, String, Vec<String>)>,
         (word.to_string(), skip_ws(&s[end..]))
     };
     validate_suffix(after, kind)?;
-    Ok(Some((kind, name, attrs)))
+    Ok(Some(ItemRenameSide {
+        kind,
+        name,
+        attrs,
+        prefix,
+    }))
 }
 
 /// The text after `<kind> <Name>` must be empty or punctuation/`...` only.
@@ -347,8 +409,12 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> (ItemKind, String) {
-        let (k, n, _) = parse_side(text).unwrap().unwrap();
-        (k, n)
+        let side = parse_side(text).unwrap().unwrap();
+        (side.kind, side.name)
+    }
+
+    fn prefix_of(text: &str) -> String {
+        parse_side(text).unwrap().unwrap().prefix
     }
 
     #[test]
@@ -377,6 +443,28 @@ mod tests {
         assert!(parse_side("public struct Old").unwrap().is_none());
     }
 
+    #[test]
+    fn prefixes_captured_and_normalized() {
+        assert_eq!(prefix_of("struct Old"), "");
+        assert_eq!(prefix_of("pub struct Old"), "pub");
+        assert_eq!(prefix_of("pub(crate) struct Old"), "pub(crate)");
+        assert_eq!(prefix_of("pub (crate) struct Old"), "pub(crate)");
+        assert_eq!(prefix_of("static mut Old"), "mut");
+        assert_eq!(prefix_of("pub static mut Old"), "pub mut");
+        assert_eq!(prefix_of("unsafe trait Old"), "unsafe");
+        assert_eq!(prefix_of("pub unsafe trait Old"), "pub unsafe");
+    }
+    #[test]
+    fn rejects_kind_illegal_prefixes() {
+        // `unsafe` is only legal on `trait`/`impl`; `impl` takes no vis.
+        assert!(parse_side("unsafe struct Old").is_err());
+        assert!(parse_side("unsafe static Old").is_err());
+        assert!(parse_side("pub impl Old").is_err());
+        // Legal combos still parse; fn fallthrough unaffected.
+        assert!(parse_side("unsafe trait Old").unwrap().is_some());
+        assert!(parse_side("unsafe impl Old").unwrap().is_some());
+        assert!(parse_side("unsafe fn foo").unwrap().is_none());
+    }
     #[test]
     fn accepts_ellipsis_suffixes() {
         assert!(parse_side("struct Old;").unwrap().is_some());

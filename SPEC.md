@@ -1688,7 +1688,7 @@ Supported kinds:
 Rules:
 
 - Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error.
-- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted but ignored for matching: `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident. Unlike function slots, there is no slot to evolve, so requiring the author to restate visibility or generics would only cost tokens. Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
+- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. Unlike function slots, there is no slot to evolve, so a *differing* prefix (`pub struct Old` / `struct New`) is a pattern error instead of a silent vis change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
 - `impl Old` renames the self-type ident and the trait-side path's last segment. It matches `impl Old`, `impl<T> Old<T>`, `impl Trait for Old`, and `impl Old for Foo`, rewriting only the `Old` spans while preserving generics, qualifiers, and the other side. Rationale: in valid Rust one name cannot be both a type and a trait in the same scope (type-namespace collision), so the bare pair is unambiguous; matching stays syntactic (Section 19). Generic (`impl Old<T> for Foo`), qualified (`impl crate::Old for Foo`), and negative (`impl !Old for Foo`) trait paths match on the last segment only.
 - Matching reuses the function scope modes (`scope=contained/anchor/overlap/exact`, anchor on the ident line), attribute policies (`# attrs=...`), and `allow`/`optional` count validation. Only file- and inline-`mod`-level items are collected; items nested inside function bodies are not matched in v0.1. Each match emits one ident-span edit, so overlapping-match rules are trivially satisfied.
@@ -2991,9 +2991,13 @@ than `rule=` (no silent dead tags, Section 8.3), any `# root=` value other
 than `item/expr/stmt/type` (no silent heuristic fallthrough, Section 13.4),
 any `# identifier/# path/# lifetime/# field` metavariable declaration
 (no kind-specific binding in v0.1, Section 15.1), any `# repeat=<value>`
-(write bare `# repeat`, Section 17.8), and any `# repeat` on a
+(write bare `# repeat`, Section 17.8), any `# repeat` on a
 non-call/method-call shape, on a capture hunk, or with an empty
-minus/plus side (no silent no-op repeat, Sections 17.8, 24.4).
+minus/plus side (no silent no-op repeat, Sections 17.8, 24.4), any
+item-rename hunk whose minus/plus `pub…` / `unsafe` / `mut` prefixes
+differ (rename-only, no silent vis change — reason carries
+`prefixes differ`), and any item-rename side with a kind-illegal prefix
+(`unsafe` off `trait`/`impl`, visibility on `impl`), all Section 14.8.
 
 ```text
 RSMPL_PATTERN_CONFLICT
