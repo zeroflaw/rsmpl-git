@@ -3,24 +3,25 @@
 //! Agent-centric usage:
 //!
 //! ```sh
+//! # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 //! # Inline patch:
-//! rsmpl-git --patch '<diff text>' --repo ./my-repo
+//! rsmpl-git --patch '<diff text>'
 //! # Piped patch (no temp file):
-//! cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
+//! cat change.rsmpl | rsmpl-git --patch -
 //! # From a file, printing the lowered diff without applying:
-//! rsmpl-git --file change.rsmpl --repo ./my-repo --check
+//! rsmpl-git --file change.rsmpl --check
 //! # Minimal-token review (no context lines, still appliable):
-//! rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
+//! rsmpl-git --file change.rsmpl --check --context 0
 //! # Machine-readable report:
-//! rsmpl-git --file change.rsmpl --repo ./my-repo --format json --check
+//! rsmpl-git --file change.rsmpl --format json --check
 //! # Discover valid @@ ranges without reading whole files:
-//! rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
+//! rsmpl-git --inspect src/lib.rs --format json
 //! # Also list call/method/macro sites for tight call-rewrite ranges:
-//! rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
+//! rsmpl-git --inspect src/lib.rs --calls
 //! # Scan a whole subtree in one call (grep-style `file: kind name s-e`):
-//! rsmpl-git --repo ./my-repo --inspect src/ --calls
+//! rsmpl-git --inspect src/ --calls
 //! # Bound large scans so they stay token-efficient:
-//! rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
+//! rsmpl-git --inspect src --calls --max-items 20
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
