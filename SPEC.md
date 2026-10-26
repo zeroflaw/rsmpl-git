@@ -407,6 +407,10 @@ diff --git a/src/lib.rs b/src/lib.rs
 
 No `---` / `+++` / `index` lines, no `rule=` tag (diagnostics then
 show `<unnamed>`; add `rule=name` when a patch has several hunks).
+The single `# lang=rust` line is the RSmPL marker here: a hunk with
+no `#` lines at all would be an ordinary Git hunk (Section 7.2), so
+a bare rename keeps the marker while hunks that already carry other
+directives (such as `# allow=many` / `# expr E`) omit it.
 For RSmPL hunks the `+new,len` side is ignored (Section 10.4), so
 the recipe copies the old side verbatim (`@@ -10,7 +10,7 @@`).
 
@@ -419,25 +423,36 @@ the recipe copies the old side verbatim (`@@ -10,7 +10,7 @@`).
 A hunk is an RSmPL hunk if and only if:
 
 1. it has a normal unified-diff hunk header; and
-2. immediately after the hunk header, there is at least one unprefixed directive line beginning with `#`; and
-3. one of the directive lines declares:
+2. immediately after the hunk header, there is at least one unprefixed directive line beginning with `#`.
 
-```text
+The tool is Rust-only, so the language defaults to Rust. A
+`# lang=rust` directive may be included for explicitness but is not
+required; `# lang=<other>` is rejected.
+
+Because detection needs at least one `#` line, a hunk whose shape
+requires no other directive (such as a bare rename) still writes one
+marker line:
+
+```diff
+@@ -10,7 +10,7 @@ rule=rename_foo
 # lang=rust
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }
 ```
 
-Example:
+while a hunk that already carries other directives omits it:
 
 ```diff
 @@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
 # allow=many
 # expr E
 - foo(E)
 + bar(E)
 ```
 
-This is an RSmPL hunk.
+Both are RSmPL hunks.
 
 ### 7.2 Ordinary hunk detection
 
@@ -640,19 +655,25 @@ Examples:
 # symbol Old=crate::foo
 ```
 
-### 9.2 Required directive
+### 9.2 Language directive (optional)
 
-Every RSmPL hunk must include:
+RSmPL hunks default to Rust. A hunk may include:
 
 ```text
 # lang=rust
 ```
 
+for explicitness, but it is not required. Any `# lang=` value other
+than `rust` is rejected. Because hunk detection (Section 7.1) needs
+at least one `#` directive line, a hunk whose shape requires no other
+directive (such as a bare rename) keeps `# lang=rust` as its marker;
+hunks that already carry other directives omit it.
+
 ### 9.3 Core directives
 
 | Directive | Meaning |
 |---|---|
-| `# lang=rust` | Marks the hunk as a Rust semantic patch hunk. Required. |
+| `# lang=rust` | Accepted for explicitness; optional — hunks default to Rust, but at least one `#` line is required for detection, so directive-free hunks keep this line as their marker (Section 7.1). `# lang=<other>` is rejected. |
 | `# allow=one` | Exactly one match is expected. Default. |
 | `# allow=many` | Multiple matches may be rewritten. |
 | `# optional` | Zero matches are allowed. |
@@ -2809,7 +2830,7 @@ An implementation must reject an RSmPL hunk if any required validation fails.
 Reject if:
 
 1. hunk header cannot be parsed;
-2. RSmPL directive block lacks `# lang=rust`;
+2. a `# lang=` directive names a language other than `rust`;
 3. directive syntax is invalid;
 4. metavariable declarations are malformed;
 5. literal-token quoting is malformed, including invalid raw-identifier quoting such as `` r#`type` `` instead of `` `r#type` ``;
@@ -3703,7 +3724,7 @@ A compliant RSmPL-Git v0.1 implementation must:
 
 1. parse Git-style file sections;
 2. distinguish ordinary hunks from RSmPL hunks;
-3. require `# lang=rust` for RSmPL hunks;
+3. treat any `#` directive block as an RSmPL hunk (Rust by default; `# lang=rust` accepted, `# lang=<other>` rejected);
 4. treat directive lines as metadata, not source lines;
 5. derive file and range from Git patch structure;
 6. restrict semantic matching to the declared old-side range;

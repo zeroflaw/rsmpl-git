@@ -78,6 +78,27 @@ fn minimal_file_section_header_applies() {
 }
 
 #[test]
+fn lang_directive_optional_applies() {
+    // T69: hunks that already carry other directives omit `# lang=rust`.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=rename_calls\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run(dir.path(), &["--patch", patch, "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("-    foo(1);"), "got: {stdout}");
+    assert!(stdout.contains("+    bar(1);"), "got: {stdout}");
+}
+
+#[test]
 fn check_prints_diff_and_does_not_modify() {
     let dir = init_repo();
     let before = "fn a() {\n    foo(1);\n    foo(2);\n}\n";

@@ -18,11 +18,14 @@ diff --git a/src/lib.rs b/src/lib.rs
 
 Minimal recipe: `diff --git` alone suffices (`---`/`+++`/`index`
 lines are optional metadata); `rule=` may be omitted (diagnostics
-show `<unnamed>`); for RSmPL hunks copy the old side to the new side
-(`@@ -old,len +old,len @@`, new side is ignored, SPEC 10.4).
+show `<unnamed>`; add `rule=name` when a patch has several hunks).
+For RSmPL hunks the `+new,len` side is ignored (SPEC 10.4), so
+the recipe copies the old side verbatim (`@@ -old,len +old,len @@`).
 
 Rules: every semantic hunk = `@@ -old,len +new,len @@ rule=name`
-header + `# lang=rust` directive + `-`/`+`/context lines. All `-old,len`
+header + at least one `#` directive line + `-`/`+`/context lines
+(`# lang=rust` alone is the marker for bare renames; hunks that
+already carry other directives omit it, SPEC 7.1). All `-old,len`
 ranges cite the ORIGINAL pre-patch file, never rebased by earlier hunks
 (SPEC 10). Ordinary Git hunks (no `#` directives) may mix in but must not
 overlap semantic ranges (SPEC 10.6, SPEC 11).
@@ -31,7 +34,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 
 | Directive | Meaning (SPEC 9.3) |
 |---|---|
-| `# lang=rust` | required: marks a semantic hunk |
+| `# lang=rust` | optional: marker for directive-free hunks; omit when other `#` lines present (SPEC 7.1) |
 | `# allow=many` | many matches may rewrite (default `one`) |
 | `# optional` | zero matches OK (default: error) |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable (SPEC 15) |
@@ -63,7 +66,6 @@ is declared (SPEC 15.4):
 
 ```diff
 @@ -5,5 +5,5 @@ rule=rename_calls
-# lang=rust
 # allow=many
 # expr E
 - foo(E)

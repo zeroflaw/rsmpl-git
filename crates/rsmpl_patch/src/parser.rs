@@ -3,8 +3,8 @@
 //! Grammar (SPEC section 30):
 //! `patch ::= file_section*`, file sections start with `diff --git`,
 //! hunks start with `@@ -a,b +c,d @@ tail`. A hunk is RSmPL iff the
-//! first line after the header is an unprefixed `#` directive and one
-//! of the directives is `# lang=rust` (SPEC 7.1).
+//! first line after the header is an unprefixed `#` directive (SPEC
+//! 7.1); `# lang=rust` is accepted but optional (Rust is the default).
 
 use crate::errors::{ErrorCode, StructuredError};
 use crate::model::*;
@@ -243,20 +243,12 @@ fn parse_hunk(lines: &[&str], at: usize) -> Result<(Hunk, usize)> {
     }
 
     if is_rsmpl_candidate {
+        // Per SPEC 7.1 any unprefixed `#` directive block makes the hunk
+        // RSmPL (Rust is the default language); `# lang=rust` may be
+        // included for explicitness, `# lang=<other>` is rejected by
+        // `parse_directives`. Unknown/typo'd keys are rejected there too,
+        // so omitting the lang line never silently accepts a typo.
         let directives = parse_directives(&raw_directives)?;
-        let has_lang = directives.iter().any(|d| d.is_lang_rust());
-        if !has_lang {
-            // Has `#` lines but no lang=rust: per SPEC 7.1 this is NOT an
-            // RSmPL hunk, but unprefixed `#` lines are invalid in ordinary
-            // hunks, so reject with a helpful error.
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "hunk has `#` directive lines but is missing required `# lang=rust`",
-            )
-            .with_rule(header.rule.clone().unwrap_or_default())
-            .with_suggestion("add `# lang=rust` or remove the `#` lines")
-            .into());
-        }
         // Parse body lines until next hunk/file header or EOF/blank separator.
         let (body, next) = parse_body_lines(lines, idx, true)?;
         if body.is_empty() {
@@ -962,8 +954,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_lang() {
-        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,7 +10,7 @@ rule=x\n# allow=many\n- foo(E)\n+ bar(E)\n";
+    fn parses_langless_hunk_as_rsmpl() {
+        // T69: `# lang=rust` is optional (Rust is the default); any `#`
+        // directive block makes the hunk RSmPL.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,7 +10,7 @@ rule=x\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let p = parse_patch(text).unwrap();
+        assert!(p.files[0].hunks[0].is_rsmpl());
+    }
+
+    #[test]
+    fn rejects_non_rust_lang() {
+        // T69: omitting the lang line defaults to Rust, but naming a
+        // different language is still an error.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,7 +10,7 @@ rule=x\n# lang=python\n- foo(E)\n+ bar(E)\n";
         assert!(parse_patch(text).is_err());
     }
 
