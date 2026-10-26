@@ -3934,8 +3934,21 @@ prints one JSON object to stdout:
   `--check` runs, so a failing `--check` still leaves the full appliable
   diff for debugging (see D.2.3). Missing parent directories are created
   automatically; unwritable targets stay `RSMPL_IO_CONFLICT` (25.8).
+  Shell redirection does not replace it: text `--check` stdout is the
+  diff and is redirectable, but with `--format json --diff-max-lines 0`
+  stdout is the JSON report, not the diff — only `--output` saves the
+  full appliable lowering while the preview stays truncated.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
+- Defaults audit: `--format text`, `--context 3`, unbounded
+  `--max-items`, and `--repo .` all stay. Text keeps human review
+  working (JSON is a ~4-token opt-in); default-3 keeps saved patches
+  bare-`git apply`-compatible (explicit `--context 0` is the ~3-token
+  opt-in, D.2.2); unbounded inspect plus exact `total`/`omitted` beats
+  silent truncation (SPEC 2.6 — scope to a subtree or pass
+  `--max-items N` when `total` warrants, D.3.3); `--repo` defaults to
+  `.`, so run from the worktree root and omit it, adding `--repo DIR`
+  only when invoking from elsewhere.
 - Failure envelope: with `--format json`, every patch/IO failure prints
   one JSON envelope to stdout and exits 2, so an agent can repair without
   parsing stderr prose. The failure is stdout-only: no stderr `error:`
@@ -4028,7 +4041,9 @@ Rules:
   and saved: `--check`, apply, and `--output` all see the N-context
   lowering. A truncated report (`diff_truncated: true`) is review-only,
   but an N-context diff is appliable — to recover full context, re-run
-  without the flag.
+  without the flag. The default stays 3 (audit, D.2): saved patches
+  apply with a bare `git apply`; pass `--context 0` explicitly when
+  tokens matter.
 - Per-file `{path, added, removed}` stats are computed
   from the full old/new contents, so they are identical for every N.
 - Layering: the D.2.1 report budget applies after lowering. `--context 0
@@ -4193,7 +4208,10 @@ Rules:
 - `N` is a global cap, not per-file. The first `N` entries in the
   single/dir order are emitted; the rest are omitted. `--max-items 0`
   emits no entries (coverage/headers only). Absent flag means unbounded
-  (backward compatible).
+  (backward compatible). Unbounded stays the default (audit, D.2):
+  capping by default would silently hide entries, against SPEC 2.6; the
+  exact `total`/`omitted` counts tell the agent when to scope to a
+  subtree or re-run with `--max-items N`.
 - Requires `--inspect`; otherwise the CLI exits 2 with
   `--max-items requires --inspect <path>` (same `RSMPL_IO_CONFLICT`
   envelope as `--calls` without `--inspect`).

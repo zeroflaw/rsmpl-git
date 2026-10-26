@@ -25,43 +25,47 @@ need no git.
 ## Usage (agent-oriented)
 
 ```sh
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 # Inline patch (no restatement of unchanged bodies needed):
-rsmpl-git --patch "$(cat change.rsmpl)" --repo ./my-repo
+rsmpl-git --patch "$(cat change.rsmpl)"
 
 # Piped patch, no temp file:
-cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
+cat change.rsmpl | rsmpl-git --patch -
 
 # From a file, preview the lowered Git diff without applying:
-rsmpl-git --file change.rsmpl --repo ./my-repo --check
+rsmpl-git --file change.rsmpl --check
 
   # Machine-readable result (rules, files stats, diff + line counts, check):
-  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --check
+  rsmpl-git --file change.rsmpl --format json --check
 
   # Token-bounded verification: stats + check, no diff tokens ...
-  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 0 --check
+  rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
   # ... or skim the first 40 diff lines (stats stay exact, --output stays full):
-  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check --output full.patch
+  rsmpl-git --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
   # Shrink the lowering itself (still appliable): 0 context lines, stats exact:
-  rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
-  # Rule of thumb: `--format` picks text vs JSON, `--diff-max-lines` trims
-  # the preview only, `--context` shrinks the lowering itself, `--output`
-  # always saves the full diff.
+  rsmpl-git --file change.rsmpl --check --context 0
+  # Rule of thumb: `--format` picks text vs JSON, `--diff-max-lines`
+  # trims the preview only, `--context` shrinks the lowering itself,
+  # `--output` always saves the full diff.
+  # Defaults stay: text report, `--context 3` (bare-`git apply`
+  # compatible), unbounded inspect (scope or `--max-items N` when
+  # `total` warrants); `--repo` defaults to `.`.
 
 # Discover valid @@ ranges without reading whole files:
-rsmpl-git --repo ./my-repo --inspect src/lib.rs
-rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
+rsmpl-git --inspect src/lib.rs
+rsmpl-git --inspect src/lib.rs --format json
 
 # Also list call/method/macro sites for tight call-rewrite ranges:
-rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
+rsmpl-git --inspect src/lib.rs --calls
 
 # Scan a whole subtree in one call (grep-style `file: kind name s-e`):
-rsmpl-git --repo ./my-repo --inspect src/ --calls
-rsmpl-git --repo ./my-repo --inspect src --format json
+rsmpl-git --inspect src/ --calls
+rsmpl-git --inspect src --format json
 # Bound large scans so they stay token-efficient (`truncated` in JSON):
-rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
+rsmpl-git --inspect src --calls --max-items 20
 
 # Apply and save the concrete diff for review:
-rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch
+rsmpl-git --file change.rsmpl --output lowered.patch
 ```
 
 Exit codes: `0` applied/clean, `2` patch error (structured
