@@ -517,4 +517,34 @@ mod tests {
             "got: {names:?}"
         );
     }
+
+    /// T101 pin: the D.3.2 skip-set promises symlinked directories are
+    /// not followed. `collect_rs_into` gates on `entry.file_type()`
+    /// (never follows links), so a symlink-to-dir is neither descended
+    /// nor collected. Unix-only (`std::os::unix::fs::symlink`).
+    #[cfg(unix)]
+    #[test]
+    fn collect_rs_files_does_not_follow_symlinked_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/realdir")).unwrap();
+        std::fs::write(root.join("src/real.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("src/realdir/inside.rs"), "fn b() {}\n").unwrap();
+        std::os::unix::fs::symlink(root.join("src/realdir"), root.join("src/linkdir")).unwrap();
+        let files = collect_rs_files(root);
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec!["src/real.rs", "src/realdir/inside.rs"],
+            "got: {names:?}"
+        );
+    }
 }
