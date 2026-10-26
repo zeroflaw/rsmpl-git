@@ -71,8 +71,10 @@ struct Cli {
 }
 
 /// CLI failure: structured patch/IO errors (JSON-enveloped with
-/// `--format json`, SPEC D.2) vs. input-shape usage errors (plain text, same
-/// class as clap's own errors; enveloping those is T26).
+/// `--format json`, SPEC D.2) vs. input-shape usage errors (the defensive
+/// both-inputs arm; clap's own parse errors are enveloped at the
+/// `try_parse` site below). Both print the stdout-only JSON envelope in
+/// json mode (SPEC D.2).
 enum CliError {
     Structured(StructuredError),
     Usage(String),
@@ -92,7 +94,17 @@ fn main() {
     if let Err(e) = run() {
         match e {
             CliError::Usage(msg) => {
-                eprintln!("{msg}");
+                if wants_json() {
+                    // Defensive both-inputs arm (clap `conflicts_with`
+                    // fires first, so this is unreachable in practice):
+                    // same stdout-only envelope as any usage error.
+                    let s = StructuredError::new(ErrorCode::IoConflict, msg)
+                        .with_suggestion("run `rsmpl-git --help` for usage");
+                    let payload = serde_json::json!({ "error": s.to_json() });
+                    println!("{payload}");
+                } else {
+                    eprintln!("{msg}");
+                }
             }
             CliError::Structured(s) => {
                 if wants_json() {
@@ -131,7 +143,30 @@ fn wants_json() -> bool {
 
 #[allow(clippy::too_many_lines)]
 fn run() -> Result<(), CliError> {
-    let cli = Cli::parse();
+    // Usage errors (unknown flag, bad value, `--patch` + `--file`
+    // together) are enveloped as `RSMPL_IO_CONFLICT` JSON on stdout when
+    // `--format json` was requested (SPEC D.2); otherwise clap's own
+    // text error goes to stderr. `wants_json` hand-scans argv because a
+    // failed parse leaves no `Cli` to inspect (T99 pin: both spellings,
+    // any position; a missing `--format` value can't be known → text).
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            if wants_json() {
+                let reason = e
+                    .to_string()
+                    .lines()
+                    .next()
+                    .unwrap_or("invalid command-line arguments")
+                    .trim()
+                    .to_string();
+                let s = StructuredError::new(ErrorCode::IoConflict, reason)
+                    .with_suggestion("run `rsmpl-git --help` for usage");
+                return Err(CliError::Structured(s));
+            }
+            e.exit();
+        }
+    };
 
     let patch_text = match (&cli.patch, &cli.file) {
         (Some(p), None) if p == "-" => read_stdin()?,

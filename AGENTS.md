@@ -147,7 +147,7 @@ itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
-| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
+| `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file or bad flags (`--format json` → stdout envelope, else clap text) — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
 
 With `--format json`, failures print `{error: {code, rule, file, range,
 reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).

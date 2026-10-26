@@ -79,7 +79,9 @@ mode is stdout-only for both success and failure (no stderr `check:` or
 envelope is the signal), while `warning:` lines stay stderr-only in both
 modes, so JSON consumers must also read stderr; failures print
 `{error: {code, rule, file, range, reason, suggestion}}` to stdout only
-(`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files).
+(`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files and
+flag-usage errors — bad flags envelop in JSON mode, stay clap text
+otherwise).
 Stream/empty/output contract: SPEC D.2.3.
 
 ## Minimal semantic hunk

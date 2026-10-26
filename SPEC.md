@@ -3128,7 +3128,10 @@ hunk: @@ -1,4 +1,5 @@
 A filesystem operation failed: the patch file or stdin could not be read,
 a repo file could not be read, or the `--output` file could not be written.
 Filesystem failures use this code so JSON-mode agents always receive a
-machine-readable envelope.
+machine-readable envelope. Flag-usage errors (unknown flag, bad value,
+`--patch` plus `--file` together) use this code too, for the same reason:
+with `--format json` they print the stdout-only envelope (D.2) instead of
+clap's stderr text.
 
 ```text
 RSMPL_IO_CONFLICT
@@ -4102,11 +4105,14 @@ prints one JSON object to stdout:
 - The envelope always carries all six keys (`code rule file range reason
   suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
-  or output files and stdin failures.
-- Remaining flag-usage errors (`--patch` plus `--file`
-  together, clap parse errors) stay plain text on stderr in both modes;
-  enveloping those is future work. (No-input is not an error: bare stdin
-  is the default, D.1.)
+  or output files, stdin failures, and flag-usage errors.
+- Flag-usage errors (unknown flag, bad value, `--patch` plus `--file`
+  together) are enveloped too: with `--format json` they print the same
+  stdout-only `RSMPL_IO_CONFLICT` envelope (reason = clap's one-line
+  error, suggestion = run `` `rsmpl-git --help` ``) and exit 2. Text mode
+  keeps clap's stderr error. (No-input is not an error: bare stdin
+  is the default, D.1.) One caveat: a missing `--format` value cannot be
+  detected as a json request, so it always takes the text path.
 
 #### D.2.1 Output budget (`--diff-max-lines N`)
 
@@ -4184,8 +4190,9 @@ Rules:
   so `--format json --diff-max-lines 0 --check --output
   full.patch` verifies with zero preview tokens while keeping the
   appliable patch on disk.
-- The removed `--context` spelling is now a plain-text clap usage error
-  (unknown argument); enveloping usage errors stays future work (T26).
+- The removed `--context` spelling is a clap usage error (unknown
+  argument): plain text by default, `RSMPL_IO_CONFLICT` envelope with
+  `--format json` (usage errors are enveloped, D.2).
 
 #### D.2.3 Output streams and empty lowerings
 

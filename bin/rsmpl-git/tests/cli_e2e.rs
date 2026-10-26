@@ -1122,7 +1122,8 @@ fn context_flag_is_gone() {
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(!help.contains("--context"), "got: {help}");
-    // Passing it is now a clap usage error (exit 2 path, T26 owns the envelope).
+    // Passing it is now a clap usage error (exit 2; enveloped in json
+    // mode since T26, pinned in `usage_envelope_e2e.rs`).
     let dir = init_repo();
     write(
         &dir.path().join(""),
