@@ -87,10 +87,11 @@ ellipsis positions are SPEC 16.
 ## Ranges without reading files
 
 ```sh
-rsmpl-git --repo ./my-repo --inspect src/lib.rs
-rsmpl-git --repo ./my-repo --inspect src/lib.rs --calls
-rsmpl-git --repo ./my-repo --inspect src/ --calls
-rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+rsmpl-git --inspect src/lib.rs
+rsmpl-git --inspect src/lib.rs --calls
+rsmpl-git --inspect src/ --calls
+rsmpl-git --inspect src --calls --max-items 20
 ```
 
 Item spans locate definitions, `--calls` lists call/method/macro sites for
@@ -104,12 +105,13 @@ the whole file (SPEC 17.3).
 ## Verify cheaply
 
 ```sh
-rsmpl-git --patch - --repo ./my-repo < change.rsmpl
-rsmpl-git --file change.rsmpl --repo ./my-repo --check
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --check
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 0 --check
-rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
-rsmpl-git --file change.rsmpl --repo ./my-repo --output full.patch
+# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+rsmpl-git --patch - < change.rsmpl
+rsmpl-git --file change.rsmpl --check
+rsmpl-git --file change.rsmpl --format json --check
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
+rsmpl-git --file change.rsmpl --check --context 0
+rsmpl-git --file change.rsmpl --output full.patch
 ```
 
 Piped patches avoid temp files (SPEC D.1). JSON prints
