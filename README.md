@@ -66,13 +66,18 @@ diff to stdout (plain apply stays quiet); `--format json` prints
 `--diff-max-lines N` is computable); inspect JSON adds `total`/`omitted`
 entry counts next to `truncated` for the same reason;
 `--diff-max-lines N` (`0` omits) bounds the reported diff only
-(`--check`/apply/`--output` always use the full diff);
+(`--check`/apply/`--output` always use the full diff — but `--output`
+writes nothing when the lowering is empty, and it is written before
+`--check` runs so a failing check still leaves the full diff);
 `--context N` (default 3, `0` allowed) instead shrinks the lowering itself
 (`--check`/apply handle any N via `git apply --unidiff-zero`; piping a saved
-`--context 0` patch elsewhere needs that flag) (stats unaffected); failures print
+`--context 0` patch elsewhere needs that flag) (stats unaffected); JSON
+`--check` is stdout-only (no stderr `check:` line — the `"check":"ok"`
+payload is the signal), while `warning:` lines stay stderr-only in both
+modes, so JSON consumers must also read stderr; failures print
 `{error: {code, rule, file, range, reason, suggestion}}` to stdout
 (`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files).
-`--inspect` needs no patch.
+`--inspect` needs no patch. Stream/empty/output contract: SPEC D.2.3.
 
 ## Minimal semantic hunk
 

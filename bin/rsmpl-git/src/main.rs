@@ -289,23 +289,29 @@ fn run() -> Result<(), CliError> {
     let (reported, diff_truncated) = reported_diff(&lowered, cli.diff_max_lines);
     let total_lines = lowered.lines().count();
 
-    if let Some(out) = &cli.output {
-        if let Some(parent) = out.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    CliError::io_file(
-                        format!("cannot write {}: {e}", out.display()),
-                        &out.to_string_lossy(),
-                    )
-                })?;
+    // `--output` saves the full lowering for review/debugging. It is written
+    // before `--check` runs, so a failing `--check` still leaves the full
+    // appliable diff on disk (SPEC D.2.3). An empty lowering writes nothing:
+    // no changes means no file (SPEC D.2.3).
+    if !lowered.trim().is_empty() {
+        if let Some(out) = &cli.output {
+            if let Some(parent) = out.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        CliError::io_file(
+                            format!("cannot write {}: {e}", out.display()),
+                            &out.to_string_lossy(),
+                        )
+                    })?;
+                }
             }
+            std::fs::write(out, &lowered).map_err(|e| {
+                CliError::io_file(
+                    format!("cannot write {}: {e}", out.display()),
+                    &out.to_string_lossy(),
+                )
+            })?;
         }
-        std::fs::write(out, &lowered).map_err(|e| {
-            CliError::io_file(
-                format!("cannot write {}: {e}", out.display()),
-                &out.to_string_lossy(),
-            )
-        })?;
     }
 
     if cli.format == Format::Json {
@@ -330,9 +336,9 @@ fn run() -> Result<(), CliError> {
             serde_json::to_string(&payload)
                 .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
         );
-        if cli.check && !lowered.trim().is_empty() {
-            eprintln!("check: lowered patch applies cleanly");
-        }
+        // No stderr `check:` line in JSON mode: the stdout `"check":"ok"`
+        // payload is the machine signal (SPEC D.2.3). Text mode keeps the
+        // human line below. `warning:` lines stay stderr-only in both modes.
         return Ok(());
     }
 

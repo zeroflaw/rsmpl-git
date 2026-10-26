@@ -3912,10 +3912,12 @@ prints one JSON object to stdout:
   reports in document position.
 - `files` follows patch file-section order, with any extra changed
   files not named by a section appended in sorted path order.
-- `--output <path>` always writes the full diff file in both modes, even
-  when the reported `diff` is truncated or omitted. Missing parent
-  directories are created automatically; unwritable targets stay
-  `RSMPL_IO_CONFLICT` (25.8).
+- `--output <path>` writes the full diff file in both modes, even when
+  the reported `diff` is truncated or omitted — but writes nothing when
+  the lowering is empty (no changes, no file). It is written before
+  `--check` runs, so a failing `--check` still leaves the full appliable
+  diff for debugging (see D.2.3). Missing parent directories are created
+  automatically; unwritable targets stay `RSMPL_IO_CONFLICT` (25.8).
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
 - Failure envelope: with `--format json`, every patch/IO failure prints
@@ -3965,9 +3967,10 @@ Rules:
   (--diff-max-lines 0): {n} file(s) changed` plus per-file
   `  {path}: +{added} -{removed}` lines, or `diff truncated: showing
   {shown} of {total} lines (full diff in --output file if given, else
-  re-run without --diff-max-lines)`. Plain text apply prints nothing to
-  stdout (only `applied ...` on stderr); an empty lowering prints
-  `(no changes)` to stdout in both modes.
+   re-run without --diff-max-lines)`. Plain text apply prints nothing to
+   stdout (only `applied ...` on stderr); an empty lowering prints
+   `(no changes)` to stdout in text mode (JSON returns the report
+   silently — see D.2.3).
 - `--check`, apply, and `--output` always use the FULL lowered diff, so
   `--format json --diff-max-lines 0 --check` verifies clean application
   with zero diff tokens, and `--diff-max-lines 1 --output full.patch`
@@ -4020,6 +4023,35 @@ Rules:
   absent from explicitly passed (even an explicit `--context 3` is rejected
   with `--inspect`); hence the default is documented manually in the help
   text instead of clap's automatic `[default: 3]` marker.
+
+#### D.2.3 Output streams and empty lowerings
+
+Agent loops pipe stdout (to `git apply`, to a JSON parser) and must know
+exactly which bytes land on which stream. The contract, per mode:
+
+| Mode | stdout | stderr |
+|---|---|---|
+| text apply | empty (quiet by default) | `applied N file(s): …` (kept: one line of human reassurance) |
+| text `--check` | reported diff (empty when omitted/no changes) | budget markers + `check: lowered patch applies cleanly` |
+| JSON apply | report object | warnings + errors only |
+| JSON `--check` | report object with `"check":"ok"` | warnings + errors only (no `check:` line: stdout is the signal) |
+
+Rules:
+
+- An empty lowering (no changes) never touches git: `git apply
+  --check` is skipped and the run reports clean. Text prints
+  `(no changes)` to stdout; JSON returns the report silently
+  (`"diff": ""`, `"diff_truncated": false`, `"files": []`,
+  `"check": "ok"` when `--check` was passed, else `null`).
+  `--output` writes nothing when the lowering is empty.
+- `--output` is written before `--check` runs, so a failing `--check`
+  still leaves the full appliable diff on disk for debugging.
+- A truncated report (`--diff-max-lines N` cut lines off) is
+  review-only: never pipe truncated stdout to `git apply`. Re-run
+  without the flag or take the full diff from `--output`.
+- `warning:` lines (`… treating as new (empty) file`, `skipping …:
+  …`) go to stderr in both modes. A `--format json` consumer parsing
+  stdout must also read stderr, or it will miss them.
 
 ### D.3 Range discovery (`--inspect <path>`)
 
