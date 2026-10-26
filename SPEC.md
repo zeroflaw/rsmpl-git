@@ -360,7 +360,12 @@ hunk            ::= ordinary_hunk | rsmpl_hunk
 A single path (`diff --git src/lib.rs`) is equivalent to the duplicated
 two-path form (`diff --git a/src/lib.rs b/src/lib.rs`); an optional
 `a/`/`b/` prefix is stripped either way. The two-path form stays for
-renames and for compatibility with Git tooling.
+compatibility with Git tooling. The two stripped paths must be identical:
+differing real paths are a file rename, which v0.1 rejects with
+`RSMPL_PARSE_CONFLICT` (Section 25.2) — run `git mv` first, then write one
+file section per path with matching a/b sides (single-path form
+preferred). `/dev/null` halves stay the create/delete spelling
+(`diff --git /dev/null b/new`, `diff --git a/old /dev/null`).
 
 Example:
 
@@ -2966,6 +2971,17 @@ file: src/lib.rs
 reason: target file does not parse as Rust
 ```
 
+A `diff --git a/old b/new` section whose stripped paths differ is also a
+parse conflict (a file rename, rejected fail-fast per Section 2.6 — v0.1
+never silently writes to the b-side):
+
+```text
+RSMPL_PARSE_CONFLICT
+file: src/new.rs
+reason: file rename a/src/old.rs -> b/src/new.rs is not supported in v0.1
+suggestion: use `git mv` first, then one file section per path with matching a/b sides (see SPEC 6)
+```
+
 ### 25.3 Pattern conflict
 
 The RSmPL pattern failed to parse. Unknown directives (`# foo`,
@@ -3076,7 +3092,10 @@ reason: cannot read patch file change.rsmpl: No such file or directory (os error
 ```
 
 Patch `target_path` values that are absolute or escape the worktree
-root fail here too (see 27.6) — before any file is read.
+root fail here too (see 27.6) — before any file is read. Differing
+`diff --git a/old b/new` paths (a file rename, Section 6) fail as a
+parse conflict (25.2), not an I/O conflict: the paths are well-formed,
+the operation is unsupported.
 
 ---
 
@@ -3176,7 +3195,9 @@ all `warning:` lines live (see D.2.3). Created files lower with
 `new file mode 100644` + `--- /dev/null` headers so the concrete
 diff applies with a bare `git apply`. `--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
-local artifact, not repo content.
+local artifact, not repo content. File renames are not a containment
+issue: differing `diff --git` paths are rejected earlier as a parse
+conflict (Sections 6, 25.2).
 
 ---
 

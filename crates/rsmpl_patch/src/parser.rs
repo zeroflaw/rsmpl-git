@@ -53,6 +53,25 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
             if let Some(sec) = current.take() {
                 patch.files.push(sec);
             }
+            // T29: differing real paths are a file rename, rejected fail-fast
+            // (SPEC 6/25.2). `/dev/null` halves stay the create/delete spelling.
+            if old != "/dev/null"
+                && old != "dev/null"
+                && new != "/dev/null"
+                && new != "dev/null"
+                && strip_ab_prefix(&old) != strip_ab_prefix(&new)
+            {
+                return Err(StructuredError::new(
+                    ErrorCode::ParseConflict,
+                    format!("file rename {old} -> {new} is not supported in v0.1"),
+                )
+                .with_file(strip_ab_prefix(&new))
+                .with_suggestion(
+                    "use `git mv` first, then one file section per path \
+                     with matching a/b sides (see SPEC 6)",
+                )
+                .into());
+            }
             current = Some(FileSection {
                 old_path: old.clone(),
                 new_path: new.clone(),
@@ -998,6 +1017,34 @@ mod tests {
         assert_eq!(p.files[0].target_path, "src/lib.rs");
         assert_eq!(p.files[0].hunks.len(), 1);
         assert!(!p.files[0].hunks[0].is_rsmpl());
+    }
+
+    #[test]
+    fn rejects_differing_diff_git_paths_as_rename() {
+        // T29: differing real paths are a file rename, rejected fail-fast
+        // (SPEC 6/25.2) instead of silently writing to the b-side.
+        let text = "diff --git a/src/old.rs b/src/new.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
+        let err = parse_patch(text).unwrap_err();
+        let ParseError::Structured(s) = &err else {
+            panic!("expected structured PARSE_CONFLICT, got: {err}");
+        };
+        assert_eq!(s.code, ErrorCode::ParseConflict);
+        assert!(s.message.contains("rename"), "got: {err}");
+        assert!(
+            s.message.contains("old.rs") && s.message.contains("new.rs"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn allows_dev_null_create_and_delete_halves() {
+        // T29: `/dev/null` halves stay the create/delete spelling.
+        let created =
+            parse_patch("diff --git /dev/null b/src/new.rs\n@@ -0,0 +1,1 @@\n+foo\n").unwrap();
+        assert!(created.files[0].is_new_file);
+        let deleted =
+            parse_patch("diff --git a/src/old.rs /dev/null\n@@ -1,1 +0,0 @@\n-foo\n").unwrap();
+        assert!(deleted.files[0].is_deleted_file);
     }
 
     #[test]
