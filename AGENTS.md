@@ -67,7 +67,7 @@ structurally (SPEC 15.7, SPEC 17.7); literal `E` needs backticks when `E`
 is declared (SPEC 15.4):
 
 ```diff
-@@ -5,5 +5,5 @@ rule=rename_calls
+@@ -5,5 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)

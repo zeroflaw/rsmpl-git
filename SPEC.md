@@ -66,14 +66,14 @@ normal Git patch syntax
 
 An RSmPL-Git patch should look as close as possible to a normal Git patch. The file path and line range come from standard Git diff structure. Semantic behavior is enabled using compact directive lines immediately after a hunk header.
 
-A minimal RSmPL hunk looks like this:
+A minimal RSmPL hunk looks like this (diet form: single-path header,
+elided new side — the `+new,len` side is ignored for RSmPL hunks, Section
+10.4; `# lang=rust` is the marker because a bare rename carries no other
+directive, Section 7.1):
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -10,7 +10,7 @@ rule=rename_foo
+diff --git src/lib.rs
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -104,7 +104,7 @@ The format is intended for LLM-generated patches. LLMs should not need to restat
 For example, renaming a function while preserving its body should be expressible as:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -133,11 +133,8 @@ Every RSmPL semantic transformation must be scoped to a file and line range.
 This is achieved by reusing the surrounding Git file section and hunk header range:
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+diff --git src/lib.rs
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)
@@ -226,8 +223,7 @@ Example:
 Semantic hunks use Git-like hunk headers and diff line prefixes, but include unprefixed directive lines immediately after the hunk header:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)
@@ -440,7 +436,7 @@ requires no other directive (such as a bare rename) still writes one
 marker line:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -451,7 +447,7 @@ marker line:
 while a hunk that already carries other directives omits it:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)
@@ -488,8 +484,7 @@ Directive lines must appear immediately after the hunk header and before any hun
 Valid:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # expr E
 - foo(E)
 + bar(E)
@@ -498,7 +493,7 @@ Valid:
 Invalid:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
+@@ -40,8 @@ rule=rename_calls
 - foo(E)
 # lang=rust
 + bar(E)
@@ -511,15 +506,14 @@ Directive lines are not part of the source file and are not counted against old 
 In this hunk:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)
 + bar(E)
 ```
 
-the three `#` lines are metadata. They do not represent Rust comments, removed lines, added lines, or context lines.
+the two `#` lines are metadata. They do not represent Rust comments, removed lines, added lines, or context lines.
 
 ### 7.5 No ambiguity with Rust comments or attributes
 
@@ -572,7 +566,7 @@ hunk is rejected with `RSMPL_PARSE_CONFLICT`.
 Example:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 ```
 
 ### 8.1 Header fields
@@ -598,7 +592,7 @@ rule=<identifier>
 Example:
 
 ```diff
-@@ -80,20 +80,20 @@ rule=rename_calls
+@@ -80,20 @@ rule=rename_calls
 ```
 
 The rule name is used for diagnostics, captures, dependency tracking, and review display. It is RECOMMENDED for multi-hunk patches but OPTIONAL for single-hunk patches; a hunk without `rule=` is valid and diagnostics show `<unnamed>` for it.
@@ -629,8 +623,7 @@ Most RSmPL-specific configuration should be placed in directive lines, not the h
 Preferred:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 ```
@@ -3052,7 +3045,7 @@ The concrete diff should contain no RSmPL directives.
 Input:
 
 ```diff
-@@ -10,7 +10,7 @@ rule=rename_foo
+@@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -3129,11 +3122,11 @@ Do not use RSmPL for trivial additions unless semantic placement is important.
 
 ### 28.2 Use RSmPL for semantic renames
 
-Good:
+Good (diet form: elided new side, no `# lang=rust` next to other
+directives — Sections 7.1, 10.4):
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - old_api(E)
@@ -3142,18 +3135,34 @@ Good:
 
 ### 28.3 Use ranges aggressively
 
-Keep RSmPL ranges small.
-
-Better:
+Keep RSmPL ranges tight: cite the smallest range that contains the match
+(discover spans with `--inspect`, SPEC D.3). When the agent already holds
+a small file, skip range discovery entirely with whole-file scope:
 
 ```diff
-@@ -80,15 +80,15 @@ rule=rename_one_block
+diff --git src/lib.rs
+@@ -1,1 @@ rule=rename_one_block
+# scope=file
+# allow=many
+# expr E
+- old_api(E)
++ new_api(E)
 ```
 
-Worse:
+The `@@ -1,1 @@` range is a dummy (SPEC 17.3) — no line counting, no
+inspect roundtrip.
+
+Better (tight range):
 
 ```diff
-@@ -1,500 +1,500 @@ rule=rename_whole_file
+@@ -80,15 @@ rule=rename_one_block
+```
+
+Worse (whole-file range: forces the author to count the file length, and
+the range goes stale on every edit):
+
+```diff
+@@ -1,500 @@ rule=rename_whole_file
 ```
 
 ### 28.4 Declare multiple matches explicitly
@@ -3216,19 +3225,17 @@ and later:
 
 ## 29. Examples
 
-Examples below use the verbose compatible spelling (two-path headers,
-copied new sides, explicit `# lang=rust`); the diet-minimal recipe from
-Section 6 (single-path header, elided new side, optional `rule=` /
-`# lang=rust`) applies throughout and is what agents should emit.
+Section 29.1 shows the diet-minimal recipe from Section 6 (single-path
+header, elided new side — the form agents should emit). The remaining
+examples keep the verbose compatible spelling (two-path headers, copied
+new sides, explicit `# lang=rust`); the diet recipe applies to them
+throughout.
 
 ### 29.1 Rename a plain function
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -10,7 +10,7 @@ rule=rename_plain_foo
+diff --git src/lib.rs
+@@ -10,7 @@ rule=rename_plain_foo
 # lang=rust
 - fn foo(...) {
 + fn bar(...) {
@@ -3462,7 +3469,7 @@ The `rename_second_function` hunk is still targeted at original line 20, exactly
 This grammar is illustrative, not a complete parser specification.
 
 ```ebnf
-patch               ::= file_section*
+patch               ::= file_section+
 
 file_section        ::= git_file_header file_metadata* hunk*
 
