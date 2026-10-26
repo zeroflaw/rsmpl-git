@@ -56,13 +56,20 @@ pub enum PatternKind {
     Macro { minus_raw: String, plus_raw: String },
     /// Non-function item rename (`struct Old` -> `struct New`): only the
     /// name ident is replaced, everything else is preserved. `impl`
-    /// renames the self-ty ident only (trait-side paths are T19).
+    /// renames the self-ty ident only (trait-side paths are T19b).
     ItemRename {
         kind: crate::item_rename::ItemKind,
         minus_name: String,
         plus_name: String,
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
+    },
+    /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
+    /// the matched leading-segment span of each `use` item is replaced,
+    /// tails (groups, globs, `as`, final names) are preserved.
+    UseRename {
+        minus_segs: Vec<String>,
+        plus_path: String,
     },
     /// Generalized statement/expression/type rewrite (`let x = E`, `a + E`,
     /// `Vec<T>`). `minus_sub` holds the placeholder-substituted pattern
@@ -411,6 +418,15 @@ fn classify(
     // `looks_like_fn`, and every fn shape falls through here as `None`.
     if let Some(rename) = classify_item_rename(m, p)? {
         return Ok(rename);
+    }
+
+    // `use`-path prefix renames (`use crate::old` -> `use crate::new`).
+    // Disjoint from item/fn/call shapes; falls through as `None`.
+    if let Some((minus_segs, plus_segs)) = crate::use_rename::classify_use_rename(m, p, table)? {
+        return Ok(PatternKind::UseRename {
+            minus_segs,
+            plus_path: plus_segs.join("::"),
+        });
     }
 
     // Function patterns (minus starts with fn-ish, possibly with vis/attrs).
@@ -936,6 +952,39 @@ mod tests {
         let c = compile(&h).unwrap();
         assert!(matches!(c.kind, PatternKind::Expr { .. }));
         assert!(c.unbound_plus.is_empty());
+    }
+
+    #[test]
+    fn compiles_use_rename() {
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=u\n# lang=rust\n# allow=many\n- use crate::old\n+ use crate::new\n",
+        );
+        let c = compile(&h).unwrap();
+        match &c.kind {
+            PatternKind::UseRename {
+                minus_segs,
+                plus_path,
+            } => {
+                assert_eq!(minus_segs, &vec!["crate".to_string(), "old".to_string()]);
+                assert_eq!(plus_path, "crate::new");
+            }
+            _ => panic!("expected use rename, got: {:?}", c.kind),
+        }
+        assert!(c.unbound_plus.is_empty());
+    }
+
+    #[test]
+    fn use_call_callee_not_stolen() {
+        // `use_foo(E)` is a call, not a `use` prefix: word-boundary guard.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- use_foo(E)\n+ use_bar(E)\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(c.kind, PatternKind::Expr { .. }),
+            "got: {:?}",
+            c.kind
+        );
     }
 
     #[test]

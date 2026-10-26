@@ -10,6 +10,7 @@ mod item_rename;
 mod metavar;
 mod pattern;
 mod quote_utils;
+mod use_rename;
 
 pub use expr_pattern::{try_parse_expr, ArgPat, ExprPattern, ExprPatternKind, PlaceholderMaps};
 pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, VisPat, WherePat};
@@ -19,3 +20,4 @@ pub use pattern::{compile, CompiledPattern, GeneralShape, PatternKind};
 pub use quote_utils::{
     mask_literal_spans, strip_literal_quotes, unmask_literal_spans, validate_quoting, LiteralToken,
 };
+pub use use_rename::{classify_use_rename, parse_use_prefix, UsePrefix};

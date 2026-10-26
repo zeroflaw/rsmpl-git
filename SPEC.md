@@ -1101,7 +1101,7 @@ Examples:
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 If the parse context is ambiguous, the engine may require an explicit directive:
 
@@ -1700,10 +1700,61 @@ Rules:
 - Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error.
 - An optional leading `pub…` / `unsafe` / `mut` prefix is accepted but ignored for matching: `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident. Unlike function slots, there is no slot to evolve, so requiring the author to restate visibility or generics would only cost tokens. Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
-- `impl Old` renames the self-type ident only. It matches `impl Old`, `impl<T> Old<T>`, and `impl Trait for Old`, preserving generics and trait references. It does not match `impl Old for Foo` (where `Old` is the trait, not the self-ty); updating trait-side paths in impl headers is a path rename (a T19-class extension), not an item rename.
+- `impl Old` renames the self-type ident only. It matches `impl Old`, `impl<T> Old<T>`, and `impl Trait for Old`, preserving generics and trait references. It does not match `impl Old for Foo` (where `Old` is the trait, not the self-ty); updating trait-side paths in impl headers is not supported in v0.1 (see Section 14.9).
 - Matching reuses the function scope modes (`scope=contained/anchor/overlap/exact`, anchor on the ident line), attribute policies (`# attrs=...`), and `allow`/`optional` count validation. Only file- and inline-`mod`-level items are collected; items nested inside function bodies are not matched in v0.1. Each match emits one ident-span edit, so overlapping-match rules are trivially satisfied.
 
 > **v0.1 implementation note:** `const fn` shapes keep routing to the function classifier (the keyword in name position falls through); `impl!(...)` macro shapes keep routing to the macro classifier (a `!` after the kind falls through). Item-rename hunks reject `# returns=none` (function-only). `auto trait` headers and raw-identifier edge cases beyond `` `r#name` `` are not supported; use an ordinary hunk.
+
+### 14.9 Use-path prefix renames
+
+Renaming a module (Section 14.8) orphans its imports. One semantic hunk
+moves them back: the author writes a bare `use <prefix>` pair and the
+engine rewrites the matched leading-segment span of every `use` item in
+range, preserving the target's tail verbatim:
+
+```diff
+diff --git src/lib.rs
+@@ -1,7 @@ rule=move_imports
+# allow=many
+- use crate::old
++ use crate::new
+```
+
+This rewrites `use crate::old::Thing;`, `use crate::old::{A, B};`,
+`use crate::old::*;`, `use crate::old::Widget as W;`, and
+`pub use crate::old::Reexport;` by replacing only the `crate::old` span —
+tails, visibility, attributes, and formatting are preserved byte-for-byte
+(the same fast path as a name-only item rename).
+
+Rules:
+
+- Both sides must be bare `use <path>` prefixes with plain `::`-separated
+  identifier segments (optional trailing `;`, optional leading `pub…`,
+  optional leading `::`, all normalized away). Anything else in the
+  pattern — braces, globs, `as`, `!`, `...`, `$Meta`, backticks, or a
+  declared-metavariable segment — is a pattern error; targets may freely
+  contain groups/globs/`as` tails, which are preserved.
+- Matching is segment-wise on the target's leading path segments: minus
+  `crate::old` matches `crate::old::Thing` but never `crate::old2::Thing`
+  (never a string prefix). Identical minus/plus prefixes are a pattern error.
+- Matching reuses the item scope modes (`scope=contained/anchor/overlap/
+  exact`, anchor on the prefix-start line), attribute policies
+  (`# attrs=...`), and `allow`/`optional` count validation. A file with
+  several matching imports needs `# allow=many` (default `one` fails on
+  the second match, like any multi-match hunk). Only file- and
+  inline-`mod`-level `use` items are collected; `use` declarations nested
+  inside function bodies are not matched in v0.1. Each match emits one
+  prefix-span edit, so overlapping-match rules are trivially satisfied.
+- No `# root=` is needed: a `use`-led minus/plus pair routes
+  automatically (a `use_foo(E)` call keeps routing to the call matcher by
+  the word-boundary rule). `# repeat` and `# returns=none` are rejected
+  on `use` hunks (call-only and function-only, respectively).
+
+Composition (no new shapes needed): call-site path prefixes already
+rewrite with the call matcher (`- old::foo(E)` / `+ new::foo(E)`), and
+type paths with the general type matcher (`- old::Thing` /
+`+ new::Thing`). Updating trait-side paths in impl headers
+(`impl Old for Foo`) is not supported in v0.1; use an ordinary hunk.
 
 ---
 

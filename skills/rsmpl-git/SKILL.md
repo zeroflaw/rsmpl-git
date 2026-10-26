@@ -80,6 +80,9 @@ marker; hunks with other directives omit it (SPEC 7.1).
   `const`/`static`/`mod`/`union`/`impl` self-ty), one ident edit (SPEC 14.8).
 - Move: cut `- I` (`# item I` + `# bind=N`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20).
+- Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)
+  moves imports after a `mod` rename; grouped/glob/`as` tails preserved,
+  segment-wise (SPEC 14.9).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`# type T`). Bare `P` never matches `x: T` — write `P: T`.
   Full supported-vs-rejected table: SPEC 18.6.

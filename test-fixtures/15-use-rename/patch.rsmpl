@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,7 @@ rule=move_imports
+# allow=many
+- use crate::old
++ use crate::new

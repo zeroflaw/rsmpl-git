@@ -20,7 +20,7 @@ use crate::capture::CaptureStore;
 use crate::edits::{apply_edits, TextEdit};
 use crate::lines::LineIndex;
 use crate::validate::{ensure_match_count, ZeroMatchHint};
-use crate::{matcher_expr, matcher_fn, matcher_general, matcher_item, matcher_macro};
+use crate::{matcher_expr, matcher_fn, matcher_general, matcher_item, matcher_macro, matcher_use};
 use crate::{ordinary_hunk_edits, RuleReport};
 
 /// Parsed original state for one file.
@@ -351,6 +351,14 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
+        PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
+            &state.parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
         PatternKind::General { .. } => matcher_general::apply_general_hunk(
             &state.parsed,
             &state.original,
@@ -402,7 +410,7 @@ fn apply_rsmpl_hunk(
         ),
         PatternKind::Raw { .. } => Err(StructuredError::new(
             ErrorCode::PatternConflict,
-            "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
+            "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
         )
         .with_rule(rule)),
     }
@@ -463,6 +471,7 @@ fn candidate_preview(
             | PatternKind::ImplContext { .. }
             | PatternKind::ItemCapture { .. }
             | PatternKind::ItemRename { .. }
+            | PatternKind::UseRename { .. }
     );
     if kind_specific {
         let mut headers = Vec::new();
@@ -535,6 +544,14 @@ fn collect_item_headers(items: &[syn::Item], out: &mut Vec<(u32, String)>) {
                 if let Some((_, inner)) = &m.content {
                     collect_item_headers(inner, out);
                 }
+            }
+            syn::Item::Use(u) => {
+                let tree = &u.tree;
+                let rendered = quote::quote!(#tree).to_string();
+                out.push((
+                    u.use_token.span.start().line as u32,
+                    format!("use {rendered}"),
+                ));
             }
             syn::Item::Impl(imp) => {
                 let line = imp.self_ty.span().start().line as u32;

@@ -6,7 +6,7 @@
 //! span per match. Visibility, generics, bodies, attributes and formatting
 //! are preserved byte-for-byte, exactly like the fn rename fast-path.
 //! `impl` renames the self-type ident only; trait-side paths in
-//! `impl Trait for Type` headers are T19 path renames, not matched here.
+//! `impl Trait for Type` headers are T19b, not matched here.
 
 use syn::spanned::Spanned;
 
@@ -157,7 +157,7 @@ fn in_scope(c: &ItemCandidate, scope: Scope, old_start: u32, old_len: u32) -> bo
     }
 }
 
-fn check_attrs(
+pub(crate) fn check_attrs(
     attrs: &[syn::Attribute],
     policy: AttrsPolicy,
     pattern_attrs: &[String],
@@ -203,7 +203,7 @@ fn check_attrs(
 }
 
 /// Byte range of `span` in the original text, or `None` outside the file.
-fn span_bytes(
+pub(crate) fn span_bytes(
     original: &str,
     index: &LineIndex,
     span: proc_macro2::Span,
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn impl_trait_side_does_not_match() {
         // `impl Old for Foo` names Old as the trait, not the self-ty:
-        // a bare `impl Old` rename must not touch it (T19 territory).
+        // a bare `impl Old` rename must not touch it (T19b).
         let patch = rename_patch("impl Old", "impl New", "@@ -1,3 +1,3 @@");
         let src = "trait Old {}\nstruct Foo;\nimpl Old for Foo {}\n";
         assert!(apply(&patch, src).is_err());

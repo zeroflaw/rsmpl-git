@@ -94,6 +94,10 @@ Move — cut with `# item I` + `# bind=Helper` + `- I`, paste with
 `# use=Helper` + `+ Helper`; paste hunks may precede cut hunks; cross-file
 moves are two file sections (SPEC 9.3, SPEC 10.5).
 
+Use-path prefix — after a `mod` rename, move imports with one hunk
+(`- use crate::old` / `+ use crate::new`, `# allow=many`); plain, grouped,
+glob, `as`, and `pub use` tails preserved, segment-wise (SPEC 14.9).
+
 Beyond calls — `let` (`- let x = E;` / `+ let y = E;`), general
 expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>` with `# type T`).
 A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
