@@ -20,3 +20,21 @@ impl New {
         self.x
     }
 }
+
+trait Labeled {
+    fn label(&self) -> String;
+}
+
+struct Foo;
+
+impl Labeled for Foo {
+    fn label(&self) -> String {
+        "foo".to_string()
+    }
+}
+
+impl Labeled for New {
+    fn label(&self) -> String {
+        "old".to_string()
+    }
+}

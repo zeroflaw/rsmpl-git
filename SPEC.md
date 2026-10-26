@@ -1693,14 +1693,14 @@ Supported kinds:
 | `const` | `const Old` | `const Old: ... = ...;` |
 | `static` | `static Old` | `static mut Old`, `static Old: ... = ...;` |
 | `mod` | `mod old` | `mod old;`, `mod old { ... }` |
-| `impl` | `impl Old` | `impl Old { ... }` (self-ty only, see below) |
+| `impl` | `impl Old` | `impl Old { ... }` (self-ty and trait-side, see below) |
 
 Rules:
 
 - Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error.
 - An optional leading `pub…` / `unsafe` / `mut` prefix is accepted but ignored for matching: `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident. Unlike function slots, there is no slot to evolve, so requiring the author to restate visibility or generics would only cost tokens. Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
-- `impl Old` renames the self-type ident only. It matches `impl Old`, `impl<T> Old<T>`, and `impl Trait for Old`, preserving generics and trait references. It does not match `impl Old for Foo` (where `Old` is the trait, not the self-ty); updating trait-side paths in impl headers is not supported in v0.1 (see Section 14.9).
+- `impl Old` renames the self-type ident and the trait-side path's last segment. It matches `impl Old`, `impl<T> Old<T>`, `impl Trait for Old`, and `impl Old for Foo`, rewriting only the `Old` spans while preserving generics, qualifiers, and the other side. Rationale: in valid Rust one name cannot be both a type and a trait in the same scope (type-namespace collision), so the bare pair is unambiguous; matching stays syntactic (Section 19). Generic (`impl Old<T> for Foo`), qualified (`impl crate::Old for Foo`), and negative (`impl !Old for Foo`) trait paths match on the last segment only.
 - Matching reuses the function scope modes (`scope=contained/anchor/overlap/exact`, anchor on the ident line), attribute policies (`# attrs=...`), and `allow`/`optional` count validation. Only file- and inline-`mod`-level items are collected; items nested inside function bodies are not matched in v0.1. Each match emits one ident-span edit, so overlapping-match rules are trivially satisfied.
 
 > **v0.1 implementation note:** `const fn` shapes keep routing to the function classifier (the keyword in name position falls through); `impl!(...)` macro shapes keep routing to the macro classifier (a `!` after the kind falls through). Item-rename hunks reject `# returns=none` (function-only). `auto trait` headers and raw-identifier edge cases beyond `` `r#name` `` are not supported; use an ordinary hunk.
@@ -1753,8 +1753,8 @@ Rules:
 Composition (no new shapes needed): call-site path prefixes already
 rewrite with the call matcher (`- old::foo(E)` / `+ new::foo(E)`), and
 type paths with the general type matcher (`- old::Thing` /
-`+ new::Thing`). Updating trait-side paths in impl headers
-(`impl Old for Foo`) is not supported in v0.1; use an ordinary hunk.
+`+ new::Thing`). Trait-side paths in impl headers need no extra shape: the
+bare `impl Old` / `impl New` pair (Section 14.8) rewrites them.
 
 ---
 
@@ -2359,7 +2359,7 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 
 > **v0.1 implementation note:** function-item hunks support signature evolution, not just renames. Each explicitly written slot evolves independently: an explicit `-`/`+` slot difference inserts, replaces, or deletes that slot's source bytes while all other slots (including the body and, unless `...` is replaced by concrete text, the parameter list) are preserved. Slot comparison is whitespace-insensitive against target text sliced from the original source; a concrete `-` slot must equal the target or the candidate is rejected (fail over guessing). `...` (parameters) and the same metavariable on both sides (visibility, qualifiers, generics, where) mean "preserve". A concrete body on either side is a compile error (bodies are always preserved). Minus-concrete/plus-omitted deletes the slot for parameters-as-`...`-removed, generics, and `where` clauses; for the return type, minus-concrete/plus-omitted deletes `-> T`, while plus-omitted with minus-`...` preserves the return type (rename fast-path). There is no syntax to delete a return type while matching any return with `...`; `# returns=none` constrains only the `-` side. Impl-block methods (`impl` context hunks) share the same slot semantics, including `self`/receiver parameters.
 >
-> Bare `<kind> <Name>` pairs for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, and `impl` (Section 14.8) are item renames, not general shapes: one ident-span edit per match, everything else preserved. `impl` renames the self-ty ident only.
+> Bare `<kind> <Name>` pairs for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, and `impl` (Section 14.8) are item renames, not general shapes: one ident-span edit per match, everything else preserved. `impl` renames the self-ty ident and the trait-side path's last segment.
 >
 > Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >

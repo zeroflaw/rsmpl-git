@@ -77,7 +77,10 @@ marker; hunks with other directives omit it (SPEC 7.1).
 - Method-call rewrite: bind the receiver explicitly
   (`Receiver.old_method(Arg)` → `new_function(Receiver, Arg)`, SPEC 18.5).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
-  `const`/`static`/`mod`/`union`/`impl` self-ty), one ident edit (SPEC 14.8).
+  `const`/`static`/`mod`/`union`/`impl`), one ident edit (SPEC 14.8).
+  A bare `impl Old` / `impl New` pair renames both the self-ty and the
+  trait-side path (`impl Old for Foo` → `impl New for Foo`); add
+  `# allow=many` when several headers match.
 - Move: cut `- I` (`# item I` + `# bind=N`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)

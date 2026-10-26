@@ -20,3 +20,21 @@ impl Old {
         self.x
     }
 }
+
+trait Printable {
+    fn label(&self) -> String;
+}
+
+struct Foo;
+
+impl Printable for Foo {
+    fn label(&self) -> String {
+        "foo".to_string()
+    }
+}
+
+impl Printable for Old {
+    fn label(&self) -> String {
+        "old".to_string()
+    }
+}

@@ -26,7 +26,19 @@ diff --git a/src/lib.rs b/src/lib.rs
 - struct Helper
 + struct Aid
 
-@@ -18,5 +18,5 @@ rule=rename_impl
+@@ -18,23 +18,23 @@ rule=rename_impl
 # lang=rust
+# allow=many
 - impl Old
 + impl New
+
+@@ -24,3 +24,3 @@ rule=rename_trait
+# lang=rust
+- trait Printable
++ trait Labeled
+
+@@ -30,11 +30,11 @@ rule=rename_impl_trait_side
+# lang=rust
+# allow=many
+- impl Printable
++ impl Labeled

@@ -5,8 +5,9 @@
 //! `<kind> <Old>` / `<kind> <New>` line pair replaces a single name-ident
 //! span per match. Visibility, generics, bodies, attributes and formatting
 //! are preserved byte-for-byte, exactly like the fn rename fast-path.
-//! `impl` renames the self-type ident only; trait-side paths in
-//! `impl Trait for Type` headers are T19b, not matched here.
+//! `impl` renames the self-ty ident and the trait-side path's last-segment
+//! ident (T19b): in valid Rust one name cannot be both a type and a trait in
+//! the same scope, so a bare `impl Old` pair targets whichever side(s) name it.
 
 use syn::spanned::Spanned;
 
@@ -137,6 +138,23 @@ fn collect(items: &[syn::Item], want: ItemKind, out: &mut Vec<ItemCandidate>) {
                         imp.attrs.clone(),
                         imp.span(),
                     );
+                }
+                // T19b: trait-side path (`impl Old for Foo`). Match the last
+                // segment ident so renaming a trait updates its impl headers;
+                // generics/qualifiers on the path are preserved. The trait
+                // position is a plain `syn::Path` (no qualified-self form
+                // exists there), so no qself guard is needed.
+                if let Some((_, path, _)) = &imp.trait_ {
+                    if let Some(seg) = path.segments.last() {
+                        let ident = &seg.ident;
+                        push_candidate(
+                            out,
+                            ident.to_string(),
+                            ident.span(),
+                            imp.attrs.clone(),
+                            imp.span(),
+                        );
+                    }
                 }
             }
             _ => {}
@@ -434,12 +452,56 @@ mod tests {
     }
 
     #[test]
-    fn impl_trait_side_does_not_match() {
-        // `impl Old for Foo` names Old as the trait, not the self-ty:
-        // a bare `impl Old` rename must not touch it (T19b).
+    fn impl_trait_side_matches() {
+        // T19b: `impl Old for Foo` names Old as the trait — a bare
+        // `impl Old` rename rewrites the trait-side ident too.
         let patch = rename_patch("impl Old", "impl New", "@@ -1,3 +1,3 @@");
         let src = "trait Old {}\nstruct Foo;\nimpl Old for Foo {}\n";
-        assert!(apply(&patch, src).is_err());
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("impl New for Foo"), "got: {out}");
+        assert!(!out.contains("impl Old for Foo"), "got: {out}");
+    }
+
+    #[test]
+    fn impl_trait_side_path_shapes() {
+        // Generic, qualified, and negative trait paths: only the last
+        // segment ident is replaced; arguments/qualifiers preserved.
+        let cases = [
+            (
+                "impl<T> Old<T> for Foo {}\nstruct Foo;\n",
+                "impl<T> New<T> for Foo {}",
+            ),
+            (
+                "impl crate::Old for Foo {}\nstruct Foo;\n",
+                "impl crate::New for Foo {}",
+            ),
+            (
+                "impl !Old for Foo {}\nstruct Foo;\n",
+                "impl !New for Foo {}",
+            ),
+        ];
+        for (src, want) in cases {
+            let patch = rename_patch("impl Old", "impl New", "@@ -1,1 +1,1 @@");
+            let out = apply(&patch, src).unwrap();
+            assert!(out.contains(want), "src {src:?}: got: {out}");
+        }
+    }
+
+    #[test]
+    fn impl_both_sides_match_with_allow_many() {
+        // `impl Old for Old` names Old twice: two ident-span edits.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# allow=many\n- impl Old\n+ impl New\n";
+        let out = apply(patch, "impl Old for Old {}\n").unwrap();
+        assert!(out.contains("impl New for New"), "got: {out}");
+    }
+
+    #[test]
+    fn impl_unrelated_trait_side_untouched() {
+        // Only the named trait is rewritten; other headers do not match.
+        let patch = rename_patch("impl Old", "impl New", "@@ -1,3 +1,3 @@");
+        let src = "trait Other {}\nstruct Foo;\nimpl Other for Foo {}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 
     #[test]

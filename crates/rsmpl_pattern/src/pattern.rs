@@ -56,7 +56,7 @@ pub enum PatternKind {
     Macro { minus_raw: String, plus_raw: String },
     /// Non-function item rename (`struct Old` -> `struct New`): only the
     /// name ident is replaced, everything else is preserved. `impl`
-    /// renames the self-ty ident only (trait-side paths are T19b).
+    /// renames the self-ty ident and the trait-side path's last segment.
     ItemRename {
         kind: crate::item_rename::ItemKind,
         minus_name: String,

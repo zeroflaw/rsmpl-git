@@ -554,8 +554,18 @@ fn collect_item_headers(items: &[syn::Item], out: &mut Vec<(u32, String)>) {
                 ));
             }
             syn::Item::Impl(imp) => {
+                // T19b: name both sides so the preview distinguishes impl
+                // headers (`impl Printable for Old` vs `impl Old`).
                 let line = imp.self_ty.span().start().line as u32;
-                out.push((line, "impl".to_string()));
+                let self_ty = &imp.self_ty;
+                let rendered_self = quote::quote!(#self_ty).to_string();
+                let label = match &imp.trait_ {
+                    Some((_, path, _)) => {
+                        format!("impl {} for {rendered_self}", quote::quote!(#path))
+                    }
+                    None => format!("impl {rendered_self}"),
+                };
+                out.push((line, label));
                 for it in &imp.items {
                     if let syn::ImplItem::Fn(m) = it {
                         let line = m.sig.fn_token.span().start().line as u32;
@@ -930,6 +940,17 @@ mod tests {
         let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
         assert!(err.contains("nearest source at line"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_impl_preview_names_trait_and_self_ty() {
+        // T19b: an impl rename with the wrong name previews the real
+        // header with both sides, so the retry needs no file read.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,1 @@ rule=r\n# lang=rust\n- impl Nosuch\n+ impl New\n";
+        let src = "trait Old {}\nstruct Foo;\nimpl Old for Foo {}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("nearest impl Old for Foo"), "got: {err}");
     }
 
     #[test]

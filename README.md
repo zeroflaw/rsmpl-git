@@ -118,7 +118,8 @@ Key rules for authors:
   rest); `...`/same-metavariable slots are preserved, bodies never
   rewritten. Other items rename with a bare pair (`- struct Old` /
   `+ struct New`, also `enum`/`trait`/`type`/`const`/`static`/`mod`/
-  `union`/`impl` self-ty): one ident edit, vis/generics/bodies preserved.
+  `union`/`impl`, where `impl Old` covers the self-ty and the trait-side
+  path): one ident edit, vis/generics/bodies preserved.
  - Call rewrites (`- foo(E)` / `+ bar(E)`) need `# allow=many` for multiple
    sites and `# optional` to tolerate zero matches; `# repeat` folds
    nested same-rule matches into one hunk, bottom-up (SPEC 17.8).
