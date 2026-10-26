@@ -290,6 +290,16 @@ fn run() -> Result<(), CliError> {
     let total_lines = lowered.lines().count();
 
     if let Some(out) = &cli.output {
+        if let Some(parent) = out.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    CliError::io_file(
+                        format!("cannot write {}: {e}", out.display()),
+                        &out.to_string_lossy(),
+                    )
+                })?;
+            }
+        }
         std::fs::write(out, &lowered).map_err(|e| {
             CliError::io_file(
                 format!("cannot write {}: {e}", out.display()),

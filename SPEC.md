@@ -3864,7 +3864,9 @@ prints one JSON object to stdout:
 - `files` follows patch file-section order, with any extra changed
   files not named by a section appended in sorted path order.
 - `--output <path>` always writes the full diff file in both modes, even
-  when the reported `diff` is truncated or omitted.
+  when the reported `diff` is truncated or omitted. Missing parent
+  directories are created automatically; unwritable targets stay
+  `RSMPL_IO_CONFLICT` (25.8).
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
 - Failure envelope: with `--format json`, every patch/IO failure prints

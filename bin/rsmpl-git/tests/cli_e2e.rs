@@ -1254,6 +1254,35 @@ fn output_file_stays_full_when_report_truncated() {
 }
 
 #[test]
+fn output_creates_missing_parent_dirs() {
+    // T70: `--output a/b/full.patch` needs no prior `mkdir -p`; missing
+    // parents are created, the saved diff is full, and the repo is applied.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let nested = dir.path().join("a").join("b").join("full.patch");
+    assert!(!dir.path().join("a").exists());
+    let out = run(
+        dir.path(),
+        &["--patch", patch, "--output", nested.to_str().unwrap()],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved = fs::read_to_string(&nested).unwrap();
+    assert!(saved.contains("diff --git"), "got: {saved}");
+    assert!(saved.contains("+fn bar(x: i32)"), "got: {saved}");
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("fn bar(x: i32)"), "got: {text}");
+}
+
+#[test]
 fn budget_flags_rejected_with_inspect() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
