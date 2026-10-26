@@ -68,6 +68,23 @@ impl LineIndex {
         self.text_len
     }
 
+    /// 1-based line containing byte `offset` (original coordinates).
+    /// Offsets past EOF clamp to the last line; offset 0 is line 1.
+    pub fn line_of(&self, offset: usize) -> u32 {
+        let offset = offset.min(self.text_len);
+        let mut lo = 0usize;
+        let mut hi = self.starts.len();
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2;
+            if self.starts[mid] <= offset {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo as u32) + 1
+    }
+
     /// EOF byte length of the underlying text is not stored; callers needing
     /// exact EOF should use `text.len()`. This returns the last line start.
     pub fn last_line_start(&self) -> usize {
@@ -85,11 +102,25 @@ mod tests {
         assert_eq!(idx.line_count(), 3);
         assert_eq!(idx.line_start(1), Some(0));
         assert_eq!(idx.line_start(2), Some(3));
+        assert_eq!(idx.line_start(3), Some(6));
         assert_eq!(idx.line_start(4), Some(8)); // EOF anchor
         assert_eq!(idx.offset(2, 1), Some(4));
         let idx2 = LineIndex::new("ab\n");
         assert_eq!(idx2.line_count(), 1);
         assert_eq!(idx2.line_start(2), Some(3)); // EOF anchor
         assert_eq!(idx2.line_start(5), None);
+    }
+
+    #[test]
+    fn line_of_maps_offsets() {
+        // T27: byte offsets map back to 1-based lines; EOF clamps.
+        let idx = LineIndex::new("ab\ncd\nef");
+        assert_eq!(idx.line_of(0), 1);
+        assert_eq!(idx.line_of(2), 1);
+        assert_eq!(idx.line_of(3), 2); // line start: next line
+        assert_eq!(idx.line_of(4), 2);
+        assert_eq!(idx.line_of(6), 3);
+        assert_eq!(idx.line_of(8), 3); // EOF clamps to last line
+        assert_eq!(idx.line_of(999), 3);
     }
 }

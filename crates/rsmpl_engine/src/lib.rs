@@ -38,6 +38,10 @@ pub struct RuleReport {
     pub rule: String,
     pub file: String,
     pub matches: usize,
+    /// Original-source 1-based inclusive `[start, end]` line spans, one per
+    /// match in application order. Insertions report `[anchor, anchor]`.
+    /// `spans.len() == matches` always holds (empty when no match).
+    pub spans: Vec<(u32, u32)>,
 }
 
 /// Result of applying a patch to an in-memory file tree.

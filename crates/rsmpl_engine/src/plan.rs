@@ -181,6 +181,7 @@ pub fn apply_with_captures(
                     rule: rh.rule_name(),
                     file: path.clone(),
                     matches: 1,
+                    spans: vec![(sl, el)],
                 },
             ));
         }
@@ -216,8 +217,10 @@ pub fn apply_with_captures(
                         rh.header.old_start,
                         rh.header.old_start + rh.header.old_len
                     );
+                    let edits_before = edits.len();
                     let found = apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
                         .map_err(|e| e.with_file(path))?;
+                    let spans = edit_spans(&state.index, &edits[edits_before..]);
                     // A non-insertion hunk carrying `# use=` has no v0.1 meaning.
                     if !rh.uses().is_empty()
                         && !matches!(
@@ -267,6 +270,7 @@ pub fn apply_with_captures(
                             rule,
                             file: path.clone(),
                             matches: found,
+                            spans,
                         },
                     ));
                 }
@@ -722,6 +726,28 @@ fn paste_capture(
     Ok(())
 }
 
+/// Per-match original-source line spans for one hunk's new edits (T27).
+///
+/// Each `TextEdit` covers `original[start..end]`; the span is the 1-based
+/// inclusive `[line_of(start), line_of(end)]` pair. Two normalizations keep
+/// spans tight: insertions (`start == end`) report `[anchor, anchor]`, and an
+/// `end` landing exactly on a line start (whole-line deletes) is attributed
+/// to the previous line so deleting line 5 reports `[5, 5]`, not `[5, 6]`.
+fn edit_spans(index: &LineIndex, new_edits: &[TextEdit]) -> Vec<(u32, u32)> {
+    new_edits
+        .iter()
+        .map(|e| {
+            let s = index.line_of(e.start);
+            let en = if e.end > e.start && index.line_start(index.line_of(e.end)) == Some(e.end) {
+                index.line_of(e.end).saturating_sub(1).max(s)
+            } else {
+                index.line_of(e.end)
+            };
+            (s, en)
+        })
+        .collect()
+}
+
 /// Reject incompatible overlapping edits (SPEC 10.6, 23.5).
 ///
 /// Same-point insertions are allowed (deterministic stable order, document
@@ -764,13 +790,20 @@ mod tests {
         patch_text: &str,
         initial: Vec<(&str, &str)>,
     ) -> Result<HashMap<String, String>, String> {
+        apply_multi_report(patch_text, initial).map(|(files, _)| files)
+    }
+
+    fn apply_multi_report(
+        patch_text: &str,
+        initial: Vec<(&str, &str)>,
+    ) -> Result<(HashMap<String, String>, crate::ApplyReport), String> {
         let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
         let mut files: HashMap<String, String> = initial
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        apply_with_captures(&mut files, &patch).map_err(|e| e.render())?;
-        Ok(files)
+        let report = apply_with_captures(&mut files, &patch).map_err(|e| e.render())?;
+        Ok((files, report))
     }
 
     const UPWARD_MOVE: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +2,0 @@ rule=paste_helper_near_top\n# lang=rust\n# use=Helper\n+ Helper\n\n@@ -6,4 +6,0 @@ rule=cut_helper_from_bottom\n# lang=rust\n# item I\n# bind=Helper\n- I\n";
@@ -951,6 +984,40 @@ mod tests {
         let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
         assert!(err.contains("nearest impl Old for Foo"), "got: {err}");
+    }
+
+    #[test]
+    fn report_carries_per_match_spans() {
+        // T27: `spans` mirrors `matches` with original-source 1-based
+        // inclusive line ranges — agents verify without re-reading.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1);\n}\nfn b() {\n    foo(2);\n}\n";
+        let (files, report) = apply_multi_report(patch, vec![("src/lib.rs", src)]).unwrap();
+        assert_eq!(report.rules.len(), 1);
+        let r = &report.rules[0];
+        assert_eq!(r.matches, 2);
+        assert_eq!(r.spans, vec![(2, 2), (5, 5)], "spans: {:?}", r.spans);
+        assert!(files["src/lib.rs"].contains("bar(1)"));
+        assert!(files["src/lib.rs"].contains("bar(2)"));
+    }
+
+    #[test]
+    fn report_spans_cover_cut_and_paste() {
+        // T27: cut hunks span the removed item lines; paste hunks span the
+        // anchor line ([L, L] for zero-width insertions).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -4,1 +4,1 @@ rule=paste_h\n# lang=rust\n# use=H\n+ H\n\n@@ -6,3 +6,0 @@ rule=cut_h\n# lang=rust\n# item I\n# bind=H\n- I\n";
+        let src = "fn top() {}\nfn mid() {}\nfn keep() {}\nfn other() {}\nfn tail() {}\nfn helper(x: i32) -> i32 {\n    x + 1\n}\n";
+        let (_, report) = apply_multi_report(patch, vec![("src/lib.rs", src)]).unwrap();
+        assert_eq!(report.rules.len(), 2);
+        // Document order: paste first, cut second (T45). The paste anchor
+        // `-4,1` inserts after line 4 (SPEC 10.5), i.e. at line 5.
+        assert_eq!(report.rules[0].rule, "paste_h");
+        assert_eq!(report.rules[0].spans, vec![(5, 5)]);
+        assert_eq!(report.rules[1].rule, "cut_h");
+        assert_eq!(report.rules[1].spans, vec![(6, 8)]);
+        for r in &report.rules {
+            assert_eq!(r.spans.len(), r.matches, "rule {}", r.rule);
+        }
     }
 
     #[test]

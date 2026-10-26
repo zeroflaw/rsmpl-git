@@ -3951,7 +3951,7 @@ prints one JSON object to stdout:
 ```json
 {
   "version": 1,
-  "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1}],
+  "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]]}],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
@@ -3963,6 +3963,11 @@ prints one JSON object to stdout:
 
 - `rules` is the per-rule match report (text mode prints only one-line
   `applied`/`check` summaries; agents needing match counts use JSON).
+  Each entry carries `spans`: one original-source 1-based inclusive
+  `[start, end]` line range per match in application order, so
+  `spans.len() == matches` always holds and agents can verify what matched
+  without re-reading the file. Insertions report the anchor as `[L, L]`;
+  an empty match set (optional no-match) reports `[]`.
 - `files` lists per-file `{path, added, removed}` line stats computed from
   the full old/new contents, so counts stay exact even when `diff` is
   truncated or omitted (see D.2.1). Empty when no changes. `files[].path`

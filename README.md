@@ -60,7 +60,7 @@ Exit codes: `0` applied/clean, `2` patch error (structured
 `RSMPL_*`/`GIT_*` diagnostic on stderr). Text `--check` previews the lowered
 diff to stdout (plain apply stays quiet); `--format json` prints
 `{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` to stdout
-(`version` = report schema, currently `1`; `rules` = per-rule match counts; `files` = per-file `added`/`removed`;
+(`version` = report schema, currently `1`; `rules` = per-rule match counts + per-match `spans`; `files` = per-file `added`/`removed`;
 `diff_truncated` = reported diff hides a non-empty lowering;
 `diff_lines`/`diff_shown` = full vs reported line counts so the next
 `--diff-max-lines N` is computable);

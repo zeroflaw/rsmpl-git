@@ -269,7 +269,7 @@ fn run() -> Result<(), CliError> {
         let payload = serde_json::json!({
             "version": 1,
             "rules": report.rules.iter().map(|r| serde_json::json!({
-                "rule": r.rule, "file": r.file, "matches": r.matches
+                "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
             "files": changed.iter().map(|(path, added, removed)| serde_json::json!({
                 "path": path, "added": added, "removed": removed

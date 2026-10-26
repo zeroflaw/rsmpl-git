@@ -111,6 +111,8 @@ rsmpl-git --file change.rsmpl                       # apply for real
   is the pass signal (SPEC D.2.4); re-check against the real repo after.
 - Verify the JSON `matches` count equals the sites you read before
   applying — fewer means a site (e.g. inside a macro) needs an ordinary hunk.
+  Each rule entry also carries `spans` (`[[start,end], …]`,
+  original-source 1-based lines) so verification needs no re-read.
 - Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
   (no input flags means stdin; `--file -` is the explicit alias, SPEC D.1).
 

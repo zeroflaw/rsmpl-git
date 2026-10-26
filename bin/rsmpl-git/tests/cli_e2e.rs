@@ -504,6 +504,30 @@ fn json_report_carries_rules_and_diff() {
 }
 
 #[test]
+fn json_report_carries_per_match_spans() {
+    // T27: each rule entry carries original-source 1-based inclusive
+    // `spans` ([start, end] per match), so agents verify what matched
+    // without re-reading the file. `spans.len() == matches` always.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\nfn b() {\n    foo(2);\n}\n",
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(2));
+    assert_eq!(v["rules"][0]["spans"], serde_json::json!([[2, 2], [5, 5]]));
+}
+
+#[test]
 fn json_envelope_on_match_failure() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
