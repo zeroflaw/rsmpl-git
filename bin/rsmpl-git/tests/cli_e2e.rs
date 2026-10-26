@@ -644,6 +644,73 @@ fn inspect_dir_lists_every_rs_file_in_text_and_json() {
 }
 
 #[test]
+fn inspect_ordering_contract_is_sorted() {
+    // T52: files in lexicographic repo-relative order; within a file,
+    // items sorted by (start, end, kind, name), then calls in the same
+    // key order. Pinned positionally in both text and JSON modes.
+    // Files are created in reverse-alpha order so readdir order cannot
+    // accidentally satisfy the assertions.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/z.rs", "fn z() {}\n");
+    write(
+        &dir.path().join(""),
+        "src/m.rs",
+        "fn m1() {}\nfn m2() {\n    foo(1);\n}\n",
+    );
+    write(&dir.path().join(""), "src/a.rs", "struct S;\n");
+
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--calls"])
+        .output()
+        .unwrap();
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    let expected = "src/a.rs: struct S 1-1\n\
+        src/m.rs: fn m1 1-1\n\
+        src/m.rs: fn m2 2-4\n\
+        src/m.rs: call foo 3-3\n\
+        src/z.rs: fn z 1-1\n";
+    assert_eq!(stdout, expected, "exact sorted sequence");
+
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src", "--calls", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let files = v["files"].as_array().expect("files array present");
+    let paths: Vec<&str> = files
+        .iter()
+        .map(|f| f["path"].as_str().expect("path string"))
+        .collect();
+    assert_eq!(paths, vec!["src/a.rs", "src/m.rs", "src/z.rs"]);
+    let m = &files[1];
+    let item_names: Vec<&str> = m["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["name"].as_str().expect("name string"))
+        .collect();
+    assert_eq!(item_names, vec!["m1", "m2"]);
+    let call_names: Vec<&str> = m["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().expect("name string"))
+        .collect();
+    assert_eq!(call_names, vec!["foo"]);
+}
+
+#[test]
 fn inspect_dir_skips_broken_file_with_warning() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/good.rs", "fn good() {}\n");

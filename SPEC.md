@@ -4065,7 +4065,11 @@ Rules:
   are not followed.
 - Files are processed in lexicographic repo-relative order; entries
   within a file keep the single-file order (items sorted, then calls
-  sorted when `--calls` is set).
+  sorted when `--calls` is set). Sort contract (single-file mode
+  included): files in lexicographic repo-relative path order; within a
+  file, items sorted by (start line, end line, kind, name), then calls in
+  the same key order when `--calls` is set; text lines and JSON arrays
+  both follow this order.
 - Text mode prints grep-style `rel: kind name start-end` lines. Files
   with no entries emit no lines (token-efficient); use JSON mode to
   confirm coverage.
