@@ -25,17 +25,17 @@ rsmpl-git --patch "$(cat change.rsmpl)" --repo ./my-repo
 cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 
 # From a file, preview the lowered Git diff without applying:
-rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
+rsmpl-git --file change.rsmpl --repo ./my-repo --check
 
   # Machine-readable result (rules, files_changed, files stats, diff, check):
-  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff --check
+  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --check
 
   # Token-bounded verification: stats + check, no diff tokens ...
-  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --no-diff --check
+  rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 0 --check
   # ... or skim the first 40 diff lines (stats stay exact, --output stays full):
   rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check --output full.patch
   # Shrink the lowering itself (still appliable): 0 context lines, stats exact:
-  rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --context 0
+  rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
 
 # Discover valid @@ ranges without reading whole files:
 rsmpl-git --repo ./my-repo --inspect src/lib.rs
@@ -51,15 +51,17 @@ rsmpl-git --repo ./my-repo --inspect src --format json
 rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
 
 # Apply and save the concrete diff for review:
-rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch --verbose
+rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch
 ```
 
 Exit codes: `0` applied/clean, `2` patch error (structured
-`RSMPL_*`/`GIT_*` diagnostic on stderr). `--format json` prints
+`RSMPL_*`/`GIT_*` diagnostic on stderr). Text `--check` prints the lowered
+diff to stdout (plain apply stays quiet); `--format json` prints
 `{rules, files_changed, files, diff, diff_truncated, check}` to stdout
-(`files` = per-file `added`/`removed`; `diff_truncated` = reported diff
-hides a non-empty lowering); `--no-diff` / `--diff-max-lines N` bound the
-reported diff only (`--check`/apply/`--output` always use the full diff);
+(`rules` = per-rule match counts; `files` = per-file `added`/`removed`;
+`diff_truncated` = reported diff hides a non-empty lowering);
+`--diff-max-lines N` (`0` omits) bounds the reported diff only
+(`--check`/apply/`--output` always use the full diff);
 `--context N` (default 3, `0` allowed) instead shrinks the lowering itself
 (`--check`/apply handle any N via `git apply --unidiff-zero`; piping a saved
 `--context 0` patch elsewhere needs that flag) (stats unaffected); failures print

@@ -57,7 +57,7 @@ fn inline_fn_rename_applies() {
 }
 
 #[test]
-fn check_and_emit_diff_do_not_modify() {
+fn check_prints_diff_and_does_not_modify() {
     let dir = init_repo();
     let before = "fn a() {\n    foo(1);\n    foo(2);\n}\n";
     write(&dir.path().join(""), "src/lib.rs", before);
@@ -67,12 +67,7 @@ fn check_and_emit_diff_do_not_modify() {
 
     let out = run(
         dir.path(),
-        &[
-            "--file",
-            patch_file.to_str().unwrap(),
-            "--emit-diff",
-            "--check",
-        ],
+        &["--file", patch_file.to_str().unwrap(), "--check"],
     );
     assert!(
         out.status.success(),
@@ -157,7 +152,7 @@ fn json_report_carries_rules_and_diff() {
         .arg(&patch_file)
         .arg("--repo")
         .arg(dir.path())
-        .args(["--format", "json", "--emit-diff", "--check"])
+        .args(["--format", "json", "--check"])
         .output()
         .unwrap();
     assert!(
@@ -726,14 +721,14 @@ fn inspect_max_items_zero_yields_truncated() {
     assert_eq!(v["truncated"], serde_json::json!(false), "got: {v}");
 }
 
-// --- T33 output budget (D.2.1): --no-diff / --diff-max-lines + files[] ---
+// --- T33 output budget (D.2.1): --diff-max-lines + files[] ---
 
 fn two_call_patch() -> &'static str {
     "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n"
 }
 
 #[test]
-fn json_no_diff_omits_diff_but_keeps_stats_and_check() {
+fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -749,7 +744,8 @@ fn json_no_diff_omits_diff_but_keeps_stats_and_check() {
             patch_file.to_str().unwrap(),
             "--format",
             "json",
-            "--no-diff",
+            "--diff-max-lines",
+            "0",
             "--check",
         ],
     );
@@ -778,52 +774,20 @@ fn json_no_diff_omits_diff_but_keeps_stats_and_check() {
 }
 
 #[test]
-fn json_no_diff_wins_over_diff_max_lines() {
-    let dir = init_repo();
-    write(
-        &dir.path().join(""),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
-    );
-    let patch_file = dir.path().join("change.rsmpl");
-    fs::write(&patch_file, two_call_patch()).unwrap();
-    let out = run(
-        dir.path(),
-        &[
-            "--file",
-            patch_file.to_str().unwrap(),
-            "--format",
-            "json",
-            "--no-diff",
-            "--diff-max-lines",
-            "40",
-        ],
-    );
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let v: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    // Omit outranks truncate (SPEC D.2.1), stats still exact.
-    assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
-    assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
-    assert_eq!(
-        v["files"],
-        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
-        "got: {v}"
-    );
-}
-
-#[test]
-fn json_no_diff_no_changes_is_not_truncated() {
+fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# optional\n# expr E\n- foo(E)\n+ bar(E)\n";
     let out = run(
         dir.path(),
-        &["--patch", patch, "--format", "json", "--no-diff"],
+        &[
+            "--patch",
+            patch,
+            "--format",
+            "json",
+            "--diff-max-lines",
+            "0",
+        ],
     );
     assert!(
         out.status.success(),
@@ -940,7 +904,7 @@ fn json_default_report_carries_files_and_untruncated() {
 }
 
 #[test]
-fn text_emit_diff_max_lines_truncates_with_marker() {
+fn text_check_diff_max_lines_truncates_with_marker() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -954,7 +918,6 @@ fn text_emit_diff_max_lines_truncates_with_marker() {
         &[
             "--file",
             patch_file.to_str().unwrap(),
-            "--emit-diff",
             "--check",
             "--diff-max-lines",
             "2",
@@ -973,7 +936,7 @@ fn text_emit_diff_max_lines_truncates_with_marker() {
 }
 
 #[test]
-fn text_emit_diff_no_diff_omits_with_stats_marker() {
+fn text_check_diff_max_lines_zero_omits_with_stats_marker() {
     let dir = init_repo();
     write(
         &dir.path().join(""),
@@ -987,9 +950,9 @@ fn text_emit_diff_no_diff_omits_with_stats_marker() {
         &[
             "--file",
             patch_file.to_str().unwrap(),
-            "--emit-diff",
             "--check",
-            "--no-diff",
+            "--diff-max-lines",
+            "0",
         ],
     );
     assert!(
@@ -1065,14 +1028,14 @@ fn budget_flags_rejected_with_inspect() {
     let dir = init_repo();
     write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
     for args in [
-        vec!["--inspect", "src/lib.rs", "--no-diff"],
         vec!["--inspect", "src/lib.rs", "--diff-max-lines", "5"],
+        vec!["--inspect", "src/lib.rs", "--context", "0"],
     ] {
         let out = run(dir.path(), &args);
         assert_eq!(out.status.code(), Some(2), "args: {args:?}");
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(
-            stderr.contains("--inspect does not take --no-diff/--diff-max-lines"),
+            stderr.contains("--inspect does not take --diff-max-lines/--context"),
             "got: {stderr}"
         );
     }
@@ -1095,7 +1058,6 @@ fn text_context_zero_omits_context_but_stays_check_clean() {
         &[
             "--file",
             patch_file.to_str().unwrap(),
-            "--emit-diff",
             "--check",
             "--context",
             "0",
@@ -1267,19 +1229,13 @@ fn explicit_context_three_matches_default() {
     fs::write(&patch_file, two_call_patch()).unwrap();
     let base = run(
         dir.path(),
-        &[
-            "--file",
-            patch_file.to_str().unwrap(),
-            "--emit-diff",
-            "--check",
-        ],
+        &["--file", patch_file.to_str().unwrap(), "--check"],
     );
     let explicit = run(
         dir.path(),
         &[
             "--file",
             patch_file.to_str().unwrap(),
-            "--emit-diff",
             "--check",
             "--context",
             "3",
@@ -1300,7 +1256,7 @@ fn context_rejected_with_inspect() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        stderr.contains("--inspect does not take --no-diff/--diff-max-lines/--context"),
+        stderr.contains("--inspect does not take --diff-max-lines/--context"),
         "got: {stderr}"
     );
 }

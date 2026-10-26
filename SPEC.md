@@ -3700,15 +3700,16 @@ prints one JSON object to stdout:
 }
 ```
 
-- `rules` mirrors the per-rule match report (`--verbose` on stderr).
+- `rules` is the per-rule match report (text mode prints only one-line
+  `applied`/`check` summaries; agents needing match counts use JSON).
 - `files_changed` lists repo-relative paths actually rewritten.
 - `files` lists per-file `{path, added, removed}` line stats computed from
   the full old/new contents, so counts stay exact even when `diff` is
   truncated or omitted (see D.2.1). Empty when no changes.
 - `diff` is the lowered ordinary Git diff (empty string when no changes).
 - `diff_truncated` is `true` iff the lowered diff is non-empty and the
-  reported `diff` string hides any of it (`--no-diff`, or
-  `--diff-max-lines N` cut lines off); else `false` (including no-changes).
+  reported `diff` string hides any of it (`--diff-max-lines N` cut lines
+  off, including `N=0` which omits); else `false` (including no-changes).
 - `check` is `"ok"` when `--check` was passed, else `null`.
 - `--output <path>` always writes the full diff file in both modes, even
   when the reported `diff` is truncated or omitted.
@@ -3729,52 +3730,47 @@ prints one JSON object to stdout:
 - Flag-usage errors (bad flag combinations, clap errors) stay plain text
   on stderr in both modes; enveloping those is future work.
 
-#### D.2.1 Output budget (`--no-diff`, `--diff-max-lines N`)
+#### D.2.1 Output budget (`--diff-max-lines N`)
 
 One large move can produce a lowered diff that exceeds an agent's context
-all by itself. Two apply-path flags bound only the *reported* diff; they
-never change what is checked, applied, or saved:
+all by itself. One apply-path flag bounds only the *reported* diff; it
+never changes what is checked, applied, or saved:
 
 ```sh
 # Stats + check only, no diff tokens at all:
-rsmpl-git --file change.rsmpl --repo ./my-repo --format json --no-diff --check
+rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 0 --check
 
 # First 40 lines of diff for a quick skim, stats stay exact:
 rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check
 
-# Text equivalents (stdout is the reported diff, markers on stderr):
-rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --no-diff
-rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --diff-max-lines 40
+# Text equivalent (stdout is the reported diff, markers on stderr):
+rsmpl-git --file change.rsmpl --repo ./my-repo --check --diff-max-lines 40
 ```
 
 Rules:
 
-- `--no-diff` suppresses the reported diff (empty stdout with
-  `--emit-diff`; `"diff": ""` in JSON). `--diff-max-lines N` keeps the
-  first N lines (`0` omits). A truncated diff is review-only: it is not
-  guaranteed to apply with `git apply`.
+- `--diff-max-lines N` keeps the first N lines (`0` omits). A truncated
+  diff is review-only: it is not guaranteed to `git apply`.
 - `diff_truncated` (JSON) is `true` iff the lowered diff is non-empty and
   the reported `diff` hides any of it; the marker is exact, not heuristic.
-- Text mode prints stdout as pure diff-or-empty (untruncated output still
-  pipes to `git apply`); budget markers go to stderr: `diff omitted
-  (--no-diff/--diff-max-lines 0): {n} file(s) changed` plus per-file
+- Text `--check` prints stdout as pure diff-or-empty (untruncated output
+  still pipes to `git apply`); budget markers go to stderr: `diff omitted
+  (--diff-max-lines 0): {n} file(s) changed` plus per-file
   `  {path}: +{added} -{removed}` lines, or `diff truncated: showing
   {shown} of {total} lines (full diff in --output file if given, else
-  re-run without --diff-max-lines)`.
+  re-run without --diff-max-lines)`. Plain text apply prints nothing to
+  stdout (only `applied ...` on stderr); an empty lowering prints
+  `(no changes)` to stdout in both modes.
 - `--check`, apply, and `--output` always use the FULL lowered diff, so
-  `--format json --no-diff --check` verifies clean application with zero
-  diff tokens, and `--diff-max-lines 1 --output full.patch` saves the
-  appliable patch while showing one line.
-- `--no-diff` wins over `--emit-diff` in text mode (no error, nothing
-  printed to stdout); in JSON mode `--emit-diff` is accepted but ignored
-  (the `diff` field carries the report). Combined `--no-diff
-  --diff-max-lines N` omits (omit outranks truncate). With no changes both
-  flags are no-ops (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
-- Budget flags are rejected with `--inspect` (`--inspect does not take
-  --no-diff/--diff-max-lines/--context`, exit 2, same usage-error class as
-  `--inspect` + `--check`).
+  `--format json --diff-max-lines 0 --check` verifies clean application
+  with zero diff tokens, and `--diff-max-lines 1 --output full.patch`
+  saves the appliable patch while showing one line. With no changes the
+  flag is a no-op (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
+- The budget flag is rejected with `--inspect`
+  (`--inspect does not take --diff-max-lines/--context`, exit 2, same
+  usage-error class as `--inspect` + `--check`).
 - To shrink the lowering itself rather than the report, use `--context N`
-  (D.2.2): the budget flags above apply *after* lowering and compose with it.
+  (D.2.2): the budget flag above applies *after* lowering and composes with it.
 
 #### D.2.2 Lowering context (`--context N`)
 
@@ -3784,7 +3780,7 @@ is absent, `0` allowed):
 
 ```sh
 # Minimal tokens, still a real appliable patch:
-rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --context 0
+rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
 
 # One context line for a quick skim; check still verifies the N-context diff:
 rsmpl-git --file change.rsmpl --repo ./my-repo --format json --context 1 --check
@@ -3798,19 +3794,19 @@ Rules:
   any N (it passes `git apply --unidiff-zero`, which plain `git apply`
   requires for zero-context hunks); piping a saved `--context 0` patch to a
   bare `git apply` needs that same flag.
-- Unlike `--no-diff` / `--diff-max-lines`, `--context` changes what is
-  checked, applied, and saved: `--check`, apply, and `--output` all see the
-  N-context lowering. A truncated report (`diff_truncated: true`) is
-  review-only, but an N-context diff is appliable — to recover full context,
-  re-run without the flag.
+- Unlike `--diff-max-lines`, `--context` changes what is checked, applied,
+  and saved: `--check`, apply, and `--output` all see the N-context
+  lowering. A truncated report (`diff_truncated: true`) is review-only,
+  but an N-context diff is appliable — to recover full context, re-run
+  without the flag.
 - Per-file `{path, added, removed}` stats and `files_changed` are computed
   from the full old/new contents, so they are identical for every N.
 - Layering: the D.2.1 report budget applies after lowering. `--context 0
   --diff-max-lines 2` shows the first 2 lines of the 0-context diff;
-  `--context 0 --no-diff` omits with `diff_truncated: true` iff changes
-  exist. With no changes `--context` is a no-op like the budget flags.
+  `--context 0 --diff-max-lines 0` omits with `diff_truncated: true` iff
+  changes exist. With no changes `--context` is a no-op like the budget flag.
 - `--context` is rejected with `--inspect` (same message and exit 2 as the
-  D.2.1 flags); non-numeric values stay plain-text clap parse errors.
+  D.2.1 flag); non-numeric values stay plain-text clap parse errors.
 
 ### D.3 Range discovery (`--inspect <path>`)
 
@@ -3941,7 +3937,7 @@ Recommended agent loop:
 
 ```text
 inspect dir -> author hunks in original-source coordinates
--> apply with --format json --context 0 --no-diff --check -> review files[] stats
+-> apply with --format json --context 0 --diff-max-lines 0 --check -> review files[] stats
 -> widen with --context 1 (or --diff-max-lines N / --output full.patch) only if needed
 -> apply for real
 ```

@@ -8,11 +8,11 @@
 //! # Piped patch (no temp file):
 //! cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 //! # From a file, printing the lowered diff without applying:
-//! rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
+//! rsmpl-git --file change.rsmpl --repo ./my-repo --check
 //! # Minimal-token review (no context lines, still appliable):
-//! rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --context 0
+//! rsmpl-git --file change.rsmpl --repo ./my-repo --check --context 0
 //! # Machine-readable report:
-//! rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff
+//! rsmpl-git --file change.rsmpl --repo ./my-repo --format json --check
 //! # Discover valid @@ ranges without reading whole files:
 //! rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
 //! # Also list call/method/macro sites for tight call-rewrite ranges:
@@ -68,43 +68,25 @@ struct Cli {
     #[arg(long)]
     check: bool,
 
-    /// Print the lowered concrete Git patch to stdout (text mode).
-    /// In `--format json` mode the diff is carried in the JSON `diff` field.
-    /// Bounded by `--no-diff` / `--diff-max-lines` (SPEC D.2.1); shaped by
-    /// `--context N` (SPEC D.2.2).
-    #[arg(long)]
-    emit_diff: bool,
-
     /// Write the lowered concrete Git patch to this file (always the full
-    /// diff, even with `--no-diff` / `--diff-max-lines`, which only bound
-    /// the stdout / JSON `diff` report field).
+    /// diff, even with `--diff-max-lines`, which only bounds the stdout /
+    /// JSON `diff` report field).
     #[arg(long, value_name = "PATH")]
     output: Option<PathBuf>,
 
-    /// Suppress the lowered diff in the report stream (stdout in text mode
-    /// with `--emit-diff`, `diff` field in `--format json`). Stats
-    /// (`files[]`), `files_changed`, `rules` and `--check` are unaffected,
-    /// and `--output` still writes the full diff.
-    #[arg(long)]
-    no_diff: bool,
-
     /// Cap the reported lowered diff at N lines (stdout in text mode with
-    /// `--emit-diff`, `diff` field in `--format json`). `0` omits the diff.
+    /// `--check`, `diff` field in `--format json`). `0` omits the diff.
     /// Stats stay full-fidelity; `--output`/`--check`/apply use the full diff.
     #[arg(long, value_name = "N")]
     diff_max_lines: Option<usize>,
 
     /// Unified-diff context radius for the lowered concrete patch (default 3,
     /// `0` omits all context lines). Shapes the lowering itself, so `--check`,
-    /// apply, and `--output` all see the N-context diff (unlike `--no-diff` /
-    /// `--diff-max-lines`, which only bound the report). Stats stay exact.
+    /// apply, and `--output` all see the N-context diff (unlike
+    /// `--diff-max-lines`, which only bounds the report). Stats stay exact.
     /// Rejected with `--inspect` (SPEC D.2.2).
     #[arg(long, value_name = "N")]
     context: Option<usize>,
-
-    /// Print per-rule match counts to stderr.
-    #[arg(long)]
-    verbose: bool,
 
     /// Output format for the result report (`text` default, `json` machine-readable).
     #[arg(long, value_enum, default_value = "text")]
@@ -263,12 +245,6 @@ fn run() -> Result<(), CliError> {
     let report =
         rsmpl_engine::apply_patch_to_tree(&mut updated, &patch).map_err(CliError::Structured)?;
 
-    if cli.verbose {
-        for r in &report.rules {
-            eprintln!("rule {} ({}): {} match(es)", r.rule, r.file, r.matches);
-        }
-    }
-
     // Lower to a concrete Git patch (SPEC 26.2): only changed files, no RSmPL.
     // Per-file stats are computed from the full old/new contents so they stay
     // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1)
@@ -305,10 +281,10 @@ fn run() -> Result<(), CliError> {
         }
     }
     let lowered = rsmpl_git::assemble_patch(sections);
-    // Budget flags only bound the *reported* diff. `--check`, `--output` and
-    // apply always use the full `lowered` diff. (`--context` is not a report
-    // budget: it shaped `lowered` itself above.)
-    let (reported, diff_truncated) = reported_diff(&lowered, cli.no_diff, cli.diff_max_lines);
+    // `--diff-max-lines` only bounds the *reported* diff. `--check`,
+    // `--output` and apply always use the full `lowered` diff. (`--context`
+    // is not a report budget: it shaped `lowered` itself above.)
+    let (reported, diff_truncated) = reported_diff(&lowered, cli.diff_max_lines);
     let total_lines = lowered.lines().count();
 
     if let Some(out) = &cli.output {
@@ -348,26 +324,24 @@ fn run() -> Result<(), CliError> {
     }
 
     if lowered.trim().is_empty() {
-        if cli.emit_diff {
-            println!("(no changes)");
-        } else if cli.verbose {
-            eprintln!("(no changes)");
-        }
+        println!("(no changes)");
         return Ok(());
     }
 
-    if cli.emit_diff {
+    // Text `--check` always previews the (possibly budget-bounded) diff on
+    // stdout; truncation/omit markers go to stderr. A truncated report is
+    // review-only: `--check`, `--output` and apply use the full diff.
+    // Plain apply stays quiet on stdout (token-efficient default).
+    if cli.check {
         if !reported.is_empty() {
             print!("{reported}");
         }
         if diff_truncated {
             if reported.is_empty() {
-                let what = if cli.no_diff {
-                    "--no-diff"
-                } else {
-                    "--diff-max-lines 0"
-                };
-                eprintln!("diff omitted ({what}): {} file(s) changed", changed.len());
+                eprintln!(
+                    "diff omitted (--diff-max-lines 0): {} file(s) changed",
+                    changed.len()
+                );
                 for (path, added, removed) in &changed {
                     eprintln!("  {path}: +{added} -{removed}");
                 }
@@ -378,9 +352,6 @@ fn run() -> Result<(), CliError> {
                 );
             }
         }
-    }
-
-    if cli.check {
         rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
         eprintln!("check: lowered patch applies cleanly");
         return Ok(());
@@ -403,14 +374,14 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
             "--inspect does not take --patch/--file".to_string(),
         ));
     }
-    if cli.check || cli.emit_diff || cli.output.is_some() {
+    if cli.check || cli.output.is_some() {
         return Err(CliError::Usage(
-            "--inspect does not take --check/--emit-diff/--output".to_string(),
+            "--inspect does not take --check/--output".to_string(),
         ));
     }
-    if cli.no_diff || cli.diff_max_lines.is_some() || cli.context.is_some() {
+    if cli.diff_max_lines.is_some() || cli.context.is_some() {
         return Err(CliError::Usage(
-            "--inspect does not take --no-diff/--diff-max-lines/--context".to_string(),
+            "--inspect does not take --diff-max-lines/--context".to_string(),
         ));
     }
     let rel_str = rel.to_string_lossy().to_string();
@@ -650,17 +621,13 @@ fn truncate_dir_entries(
 /// Bound the *reported* diff for token budget (SPEC D.2.1).
 ///
 /// Returns `(reported, truncated)` where `truncated` is true iff the lowered
-/// diff is non-empty and the reported string hides any of it. `--no-diff`
-/// always omits (truncated iff changes exist); `--diff-max-lines N` keeps
-/// the first N lines (truncated iff lines were cut, incl. N == 0 with
-/// changes). A truncated diff is review-only, never appliable: `--check`,
-/// `--output` and apply always use the full diff.
-fn reported_diff(full: &str, no_diff: bool, max_lines: Option<usize>) -> (String, bool) {
+/// diff is non-empty and the reported string hides any of it.
+/// `--diff-max-lines N` keeps the first N lines (truncated iff lines were
+/// cut; N == 0 omits with changes). A truncated diff is review-only, never
+/// appliable: `--check`, `--output` and apply always use the full diff.
+fn reported_diff(full: &str, max_lines: Option<usize>) -> (String, bool) {
     if full.trim().is_empty() {
         return (String::new(), false);
-    }
-    if no_diff {
-        return (String::new(), true);
     }
     if let Some(n) = max_lines {
         let total = full.lines().count();
