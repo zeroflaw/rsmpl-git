@@ -2905,6 +2905,17 @@ Output after lowering might be:
  }
 ```
 
+The lowered hunks carry a unified-diff context radius: the number of
+unchanged lines shown around each change. The default radius is 3, matching
+conventional unified diffs. A smaller radius (down to `0`, which shows only
+changed lines) spends fewer review tokens; per-file added/removed line counts
+are computed from the full old/new contents and never change with the radius.
+A zero-context lowering is still a valid unified diff, but plain
+`git apply` rejects zero-context hunks by default as a safety measure — it
+needs `git apply --unidiff-zero` (which the reference CLI passes
+automatically for every check/apply). Lowering stays deterministic given the
+same inputs plus the same radius (see D.2.2 for the `--context N` CLI lever).
+
 ### 26.3 Determinism
 
 Given the same input tree, patch, formatter settings, and semantic environment, lowering should be deterministic.
@@ -3760,8 +3771,46 @@ Rules:
   --diff-max-lines N` omits (omit outranks truncate). With no changes both
   flags are no-ops (`"diff": ""`, `"diff_truncated": false`, `"files": []`).
 - Budget flags are rejected with `--inspect` (`--inspect does not take
-  --no-diff/--diff-max-lines`, exit 2, same usage-error class as
+  --no-diff/--diff-max-lines/--context`, exit 2, same usage-error class as
   `--inspect` + `--check`).
+- To shrink the lowering itself rather than the report, use `--context N`
+  (D.2.2): the budget flags above apply *after* lowering and compose with it.
+
+#### D.2.2 Lowering context (`--context N`)
+
+D.2.1 bounds the *reported* diff; `--context N` shapes the *lowered* diff
+itself by setting the unified-diff context radius (default `3` when the flag
+is absent, `0` allowed):
+
+```sh
+# Minimal tokens, still a real appliable patch:
+rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --context 0
+
+# One context line for a quick skim; check still verifies the N-context diff:
+rsmpl-git --file change.rsmpl --repo ./my-repo --format json --context 1 --check
+```
+
+Rules:
+
+- `--context N` sets the number of unchanged lines shown around each lowered
+  hunk. `--context 0` shows only changed (`-`/`+`) lines; hunk headers stay
+  `@@ -a,b +c,d @@`. rsmpl-git's own `--check`/apply/`--output` path handles
+  any N (it passes `git apply --unidiff-zero`, which plain `git apply`
+  requires for zero-context hunks); piping a saved `--context 0` patch to a
+  bare `git apply` needs that same flag.
+- Unlike `--no-diff` / `--diff-max-lines`, `--context` changes what is
+  checked, applied, and saved: `--check`, apply, and `--output` all see the
+  N-context lowering. A truncated report (`diff_truncated: true`) is
+  review-only, but an N-context diff is appliable — to recover full context,
+  re-run without the flag.
+- Per-file `{path, added, removed}` stats and `files_changed` are computed
+  from the full old/new contents, so they are identical for every N.
+- Layering: the D.2.1 report budget applies after lowering. `--context 0
+  --diff-max-lines 2` shows the first 2 lines of the 0-context diff;
+  `--context 0 --no-diff` omits with `diff_truncated: true` iff changes
+  exist. With no changes `--context` is a no-op like the budget flags.
+- `--context` is rejected with `--inspect` (same message and exit 2 as the
+  D.2.1 flags); non-numeric values stay plain-text clap parse errors.
 
 ### D.3 Range discovery (`--inspect <path>`)
 
@@ -3892,8 +3941,8 @@ Recommended agent loop:
 
 ```text
 inspect dir -> author hunks in original-source coordinates
--> apply with --format json --no-diff --check -> review files[] stats
--> widen with --diff-max-lines N (or --output full.patch) only if needed
+-> apply with --format json --context 0 --no-diff --check -> review files[] stats
+-> widen with --context 1 (or --diff-max-lines N / --output full.patch) only if needed
 -> apply for real
 ```
 

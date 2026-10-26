@@ -1077,3 +1077,230 @@ fn budget_flags_rejected_with_inspect() {
         );
     }
 }
+
+// --- T37 lowering context (D.2.2): --context N ---
+
+#[test]
+fn text_context_zero_omits_context_but_stays_check_clean() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--emit-diff",
+            "--check",
+            "--context",
+            "0",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("@@"), "got: {stdout}");
+    assert!(stdout.contains("-    foo(1);"), "got: {stdout}");
+    assert!(stdout.contains("+    bar(1);"), "got: {stdout}");
+    // Unchanged surroundings are not shown at context 0 ...
+    assert!(!stdout.contains("fn a() {"), "got: {stdout}");
+    // ... but the lowering still verifies cleanly and check mode is read-only.
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("check:"),
+        "got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn context_zero_applies_for_real() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let out = run(
+        dir.path(),
+        &["--file", patch_file.to_str().unwrap(), "--context", "0"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("bar(1);"), "got: {text}");
+    assert!(text.contains("bar(2);"), "got: {text}");
+}
+
+#[test]
+fn context_zero_output_file_is_git_apply_clean() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let saved_patch = dir.path().join("ctx0.patch");
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--context",
+            "0",
+            "--output",
+            saved_patch.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // JSON mode is report-only: the repo is untouched, so the saved
+    // zero-context patch must verify against the pristine tree.
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+    let saved = fs::read_to_string(&saved_patch).unwrap();
+    assert!(saved.contains("-    foo(1);"), "got: {saved}");
+    assert!(!saved.contains(" fn a() {"), "got: {saved}");
+    // Bare `git apply` rejects zero-context hunks by default, so outside
+    // callers need `--unidiff-zero` (the CLI passes it internally).
+    let check = Command::new("git")
+        .args([
+            "apply",
+            "--check",
+            "--unidiff-zero",
+            saved_patch.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "zero-context patch must apply: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
+fn json_context_zero_shrinks_diff_stats_stay_exact() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let full = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--check",
+        ],
+    );
+    assert!(full.status.success());
+    let full_v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&full.stdout)).expect("stdout is JSON");
+
+    let out = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--check",
+            "--context",
+            "0",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let full_lines = full_v["diff"].as_str().unwrap().lines().count();
+    let shown_lines = v["diff"].as_str().unwrap().lines().count();
+    assert!(shown_lines > 0, "got: {v}");
+    assert!(
+        shown_lines < full_lines,
+        "context 0 should shrink the diff: {shown_lines} vs {full_lines}"
+    );
+    // Stats come from the full contents, not the hunk rendering.
+    assert_eq!(v["files"], full_v["files"], "got: {v} vs {full_v}");
+    assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
+    assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
+}
+
+#[test]
+fn explicit_context_three_matches_default() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, two_call_patch()).unwrap();
+    let base = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--emit-diff",
+            "--check",
+        ],
+    );
+    let explicit = run(
+        dir.path(),
+        &[
+            "--file",
+            patch_file.to_str().unwrap(),
+            "--emit-diff",
+            "--check",
+            "--context",
+            "3",
+        ],
+    );
+    assert!(base.status.success() && explicit.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&base.stdout),
+        String::from_utf8_lossy(&explicit.stdout)
+    );
+}
+
+#[test]
+fn context_rejected_with_inspect() {
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let out = run(dir.path(), &["--inspect", "src/lib.rs", "--context", "0"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("--inspect does not take --no-diff/--diff-max-lines/--context"),
+        "got: {stderr}"
+    );
+}

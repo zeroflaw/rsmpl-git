@@ -4,7 +4,28 @@
 //! generated from materialized file text, never from the input patch).
 
 /// Build a `diff --git` section for one file, or `None` when unchanged.
+///
+/// Uses the default context radius of 3 surrounding lines per hunk.
+/// See [`unified_diff_for_file_with_context`] for the token-budget lever
+/// (`--context N`, SPEC 26.2 / D.2.2).
 pub fn unified_diff_for_file(path: &str, old: &str, new: &str) -> Option<String> {
+    unified_diff_for_file_with_context(path, old, new, 3)
+}
+
+/// Build a `diff --git` section for one file with an explicit unified-diff
+/// context radius, or `None` when unchanged.
+///
+/// `context` is the number of unchanged lines shown around each hunk
+/// (`0` omits all context; headers stay `@@ -a,b +c,d @@`). The result
+/// remains acceptable to `git apply` for any radius, including `0`.
+/// Per-file `added`/`removed` stats (see [`file_line_stats`]) are computed
+/// from the line diff itself and are independent of this radius.
+pub fn unified_diff_for_file_with_context(
+    path: &str,
+    old: &str,
+    new: &str,
+    context: usize,
+) -> Option<String> {
     if old == new {
         return None;
     }
@@ -13,9 +34,9 @@ pub fn unified_diff_for_file(path: &str, old: &str, new: &str) -> Option<String>
     out.push_str(&format!("--- a/{path}\n"));
     out.push_str(&format!("+++ b/{path}\n"));
     let diff = similar::TextDiff::from_lines(old, new);
-    // Portable `@@ -a,b +c,d @@` hunks with 3 context lines (unified format).
+    // Portable `@@ -a,b +c,d @@` hunks with N context lines (unified format).
     // `---`/`+++` headers are emitted above (a/ b/ style, git-compatible).
-    let hunks = diff.unified_diff().context_radius(3).to_string();
+    let hunks = diff.unified_diff().context_radius(context).to_string();
     out.push_str(&hunks);
     Some(out)
 }
@@ -104,5 +125,49 @@ mod tests {
         let old = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
         let new = "L1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nL10\n";
         assert_eq!(file_line_stats(old, new), (2, 2));
+    }
+
+    #[test]
+    fn default_wrapper_pins_context_three() {
+        let old = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n";
+        let new = "l1\nl2\nl3\nCHANGED\nl5\nl6\nl7\nl8\n";
+        assert_eq!(
+            unified_diff_for_file("x", old, new),
+            unified_diff_for_file_with_context("x", old, new, 3)
+        );
+    }
+
+    #[test]
+    fn zero_context_drops_unchanged_but_keeps_edits() {
+        let old = "l1\nl2\nl3\nl4\nold\nl6\nl7\nl8\nl9\n";
+        let new = "l1\nl2\nl3\nl4\nnew\nl6\nl7\nl8\nl9\n";
+        let d0 = unified_diff_for_file_with_context("x", old, new, 0).unwrap();
+        assert!(d0.contains("-old\n"), "got: {d0}");
+        assert!(d0.contains("+new\n"), "got: {d0}");
+        assert!(!d0.contains(" l1\n"), "got: {d0}");
+        assert!(!d0.contains(" l9\n"), "got: {d0}");
+        assert!(d0.contains("@@"), "got: {d0}");
+        // Stats are independent of the context radius.
+        assert_eq!(file_line_stats(old, new), (1, 1));
+    }
+
+    #[test]
+    fn smaller_context_shrinks_hunks() {
+        let old = "l1\nl2\nl3\nl4\nold\nl6\nl7\nl8\nl9\n";
+        let new = "l1\nl2\nl3\nl4\nnew\nl6\nl7\nl8\nl9\n";
+        let d3 = unified_diff_for_file_with_context("x", old, new, 3).unwrap();
+        let d1 = unified_diff_for_file_with_context("x", old, new, 1).unwrap();
+        assert!(
+            d1.lines().count() < d3.lines().count(),
+            "1-context should be shorter: {} vs {}",
+            d1.lines().count(),
+            d3.lines().count()
+        );
+        assert!(d1.contains("-old\n") && d1.contains("+new\n"));
+    }
+
+    #[test]
+    fn with_context_unchanged_returns_none() {
+        assert!(unified_diff_for_file_with_context("x", "a\n", "a\n", 0).is_none());
     }
 }

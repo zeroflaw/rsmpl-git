@@ -11,4 +11,6 @@ mod apply;
 mod diff;
 
 pub use apply::{apply_with_git, check_with_git};
-pub use diff::{assemble_patch, file_line_stats, unified_diff_for_file};
+pub use diff::{
+    assemble_patch, file_line_stats, unified_diff_for_file, unified_diff_for_file_with_context,
+};

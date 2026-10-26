@@ -34,6 +34,8 @@ rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
   rsmpl-git --file change.rsmpl --repo ./my-repo --format json --no-diff --check
   # ... or skim the first 40 diff lines (stats stay exact, --output stays full):
   rsmpl-git --file change.rsmpl --repo ./my-repo --format json --diff-max-lines 40 --check --output full.patch
+  # Shrink the lowering itself (still appliable): 0 context lines, stats exact:
+  rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --context 0
 
 # Discover valid @@ ranges without reading whole files:
 rsmpl-git --repo ./my-repo --inspect src/lib.rs
@@ -58,7 +60,9 @@ Exit codes: `0` applied/clean, `2` patch error (structured
 (`files` = per-file `added`/`removed`; `diff_truncated` = reported diff
 hides a non-empty lowering); `--no-diff` / `--diff-max-lines N` bound the
 reported diff only (`--check`/apply/`--output` always use the full diff);
-failures print
+`--context N` (default 3, `0` allowed) instead shrinks the lowering itself
+(`--check`/apply handle any N via `git apply --unidiff-zero`; piping a saved
+`--context 0` patch elsewhere needs that flag) (stats unaffected); failures print
 `{error: {code, rule, file, range, reason, suggestion}}` to stdout
 (`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files).
 `--inspect` needs no patch.

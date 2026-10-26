@@ -15,7 +15,10 @@ fn git_error(code: ErrorCode, message: String) -> StructuredError {
 
 fn run_git_apply(repo: &Path, patch: &str, check_only: bool) -> Result<String, StructuredError> {
     let mut cmd = Command::new("git");
-    cmd.arg("apply");
+    // `--unidiff-zero` permits zero-context hunks (SPEC D.2.2 `--context 0`
+    // lowerings); it is a no-op for hunks that do carry context, so it is
+    // passed unconditionally rather than threaded through every caller.
+    cmd.args(["apply", "--unidiff-zero"]);
     if check_only {
         cmd.arg("--check");
     }
@@ -100,5 +103,26 @@ mod tests {
             "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\nzzz\n b\n";
         let err = check_with_git(dir.path(), bad).unwrap_err();
         assert!(err.code == ErrorCode::GitHunkConflict);
+    }
+
+    #[test]
+    fn zero_context_patch_round_trips_with_unidiff_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(st.success());
+        std::fs::write(dir.path().join("f.txt"), "a\nb\nc\n").unwrap();
+        // No context lines at all: plain `git apply` rejects this, but our
+        // runner passes `--unidiff-zero` so it verifies and applies.
+        let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -2 +2 @@\n-b\n+B\n";
+        check_with_git(dir.path(), patch).unwrap();
+        apply_with_git(dir.path(), patch).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.txt")).unwrap(),
+            "a\nB\nc\n"
+        );
     }
 }

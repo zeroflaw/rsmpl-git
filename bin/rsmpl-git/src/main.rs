@@ -9,6 +9,8 @@
 //! cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 //! # From a file, printing the lowered diff without applying:
 //! rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
+//! # Minimal-token review (no context lines, still appliable):
+//! rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check --context 0
 //! # Machine-readable report:
 //! rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff
 //! # Discover valid @@ ranges without reading whole files:
@@ -68,7 +70,8 @@ struct Cli {
 
     /// Print the lowered concrete Git patch to stdout (text mode).
     /// In `--format json` mode the diff is carried in the JSON `diff` field.
-    /// Bounded by `--no-diff` / `--diff-max-lines` (SPEC D.2.1).
+    /// Bounded by `--no-diff` / `--diff-max-lines` (SPEC D.2.1); shaped by
+    /// `--context N` (SPEC D.2.2).
     #[arg(long)]
     emit_diff: bool,
 
@@ -90,6 +93,14 @@ struct Cli {
     /// Stats stay full-fidelity; `--output`/`--check`/apply use the full diff.
     #[arg(long, value_name = "N")]
     diff_max_lines: Option<usize>,
+
+    /// Unified-diff context radius for the lowered concrete patch (default 3,
+    /// `0` omits all context lines). Shapes the lowering itself, so `--check`,
+    /// apply, and `--output` all see the N-context diff (unlike `--no-diff` /
+    /// `--diff-max-lines`, which only bound the report). Stats stay exact.
+    /// Rejected with `--inspect` (SPEC D.2.2).
+    #[arg(long, value_name = "N")]
+    context: Option<usize>,
 
     /// Print per-rule match counts to stderr.
     #[arg(long)]
@@ -260,14 +271,18 @@ fn run() -> Result<(), CliError> {
 
     // Lower to a concrete Git patch (SPEC 26.2): only changed files, no RSmPL.
     // Per-file stats are computed from the full old/new contents so they stay
-    // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1).
+    // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1)
+    // or the lowering uses a smaller context radius (SPEC D.2.2).
     // `changed` follows section order (`order` + sorted `extra`).
+    let context_radius = cli.context.unwrap_or(3);
     let mut changed: Vec<(String, usize, usize)> = Vec::new();
     let mut sections = Vec::new();
     for rel in &order {
         let old = &originals[rel];
         let new = &updated[rel];
-        if let Some(s) = rsmpl_git::unified_diff_for_file(rel, old, new) {
+        if let Some(s) =
+            rsmpl_git::unified_diff_for_file_with_context(rel, old, new, context_radius)
+        {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
             changed.push((rel.clone(), added, removed));
             sections.push(s);
@@ -281,7 +296,9 @@ fn run() -> Result<(), CliError> {
         .collect();
     extra.sort();
     for rel in &extra {
-        if let Some(s) = rsmpl_git::unified_diff_for_file(rel, "", &updated[rel]) {
+        if let Some(s) =
+            rsmpl_git::unified_diff_for_file_with_context(rel, "", &updated[rel], context_radius)
+        {
             let (added, removed) = rsmpl_git::file_line_stats("", &updated[rel]);
             changed.push((rel.clone(), added, removed));
             sections.push(s);
@@ -289,7 +306,8 @@ fn run() -> Result<(), CliError> {
     }
     let lowered = rsmpl_git::assemble_patch(sections);
     // Budget flags only bound the *reported* diff. `--check`, `--output` and
-    // apply always use the full `lowered` diff.
+    // apply always use the full `lowered` diff. (`--context` is not a report
+    // budget: it shaped `lowered` itself above.)
     let (reported, diff_truncated) = reported_diff(&lowered, cli.no_diff, cli.diff_max_lines);
     let total_lines = lowered.lines().count();
 
@@ -390,9 +408,9 @@ fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), CliError> {
             "--inspect does not take --check/--emit-diff/--output".to_string(),
         ));
     }
-    if cli.no_diff || cli.diff_max_lines.is_some() {
+    if cli.no_diff || cli.diff_max_lines.is_some() || cli.context.is_some() {
         return Err(CliError::Usage(
-            "--inspect does not take --no-diff/--diff-max-lines".to_string(),
+            "--inspect does not take --no-diff/--diff-max-lines/--context".to_string(),
         ));
     }
     let rel_str = rel.to_string_lossy().to_string();
