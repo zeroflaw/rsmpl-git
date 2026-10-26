@@ -101,7 +101,8 @@ Key rules for authors:
 - Beyond calls: `let` statements (`- let x = E;` / `+ let y = E;`), general
   expressions (`- E + 1` / `+ E.wrapping_add(1)`), and types
   (`- Vec<T>` / `+ Box<[T]>` with `# type T`) rewrite structurally. A bare
-  `P` never matches an annotated `x: T` — write `P: T`.
+  `P` never matches an annotated `x: T` — write `P: T`. Full supported-vs-rejected
+  table with exact errors: SPEC 18.6.
 - Moves use `# item I` + `# bind=Name` (cut) and `# use=Name` (paste);
   paste hunks may precede cut hunks.
 - Ordinary Git hunks and semantic hunks can mix but must not overlap.

@@ -2196,7 +2196,7 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 >
 > Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >
-> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, and `?`. General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, and `_` (which matches any type). Anything else (blocks, `if`/`match`/loops/closures, `let-else` targets, turbofish placeholders like `P::<...>`, `...` wildcards in these shapes) rejects the candidate rather than guessing. Lifetimes are wildcards in v1 and are not compared. An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous).
+> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, and `?`. General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, and `_` (which matches any type). Anything else (blocks, `if`/`match`/loops/closures, `let-else` targets, turbofish placeholders like `P::<...>`, `...` wildcards in these shapes) rejects the candidate rather than guessing. Lifetimes are wildcards in v1 and are not compared. An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
 
 Example:
 
@@ -2267,6 +2267,64 @@ Example:
 ```
 
 If a metavariable is used in a `+` pattern without being bound or imported via `# use`, the hunk fails.
+
+### 18.6 v0.1 general-matcher coverage table (fail-fast reference)
+
+General `let`-statement, expression, and type patterns (Section 18.1, v0.1
+note) cover a bounded shape set. Anything outside it fails fast: either at
+compile time with the exact diagnostic below, or at match time as a silent
+candidate rejection that surfaces as `RSMPL_MATCH_CONFLICT` with reason `no
+match found` and suggestion ``check the range and pattern, or add `# optional` ``.
+There is no partial matching and no guessing; check this table before
+authoring instead of iterating against `--check`.
+
+#### Compile-time rejections (exact diagnostics)
+
+| # | Trigger | Exact diagnostic |
+|---|---|---|
+| C1 | `...` anywhere in a general minus/plus side | `v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)` |
+| C2 | `let-else` in the minus pattern | `v1 general patterns do not support `let-else` statements` |
+| C3 | `# root=stmt` with a non-`let` shape | `` `# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`) `` |
+| C4 | `# root=expr` with a non-expression shape | `` `# root=expr` requires a Rust expression pattern `` |
+| C5 | `# root=type` with a non-type shape | `` `# root=type` requires a Rust type pattern `` |
+| C6 | empty `+` side on an expression | `v1 expression deletion (empty `+` side) is only supported for `...;` statement shapes; match a `let` statement or write an explicit replacement` |
+| C7 | empty `+` side on a type | `v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type` |
+| C8 | embedded metavariable inside the `let` bound pattern (anything other than a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts) | `v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported` |
+| C9 | `# returns=none` on a non-function hunk | `` `# returns=none` requires a function-item pattern `` |
+| C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
+| C11 | `+` side writes attributes the `-` side did not match | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
+| C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
+| C13 | `# symbol` declared without `# fallback=syntax` (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Spelling note: the call-matcher symbol gate (Section 19 path) emits the same text with `v0.1` in place of `v1`; the table quotes the general-matcher spelling byte-for-byte. Unifying the two spellings is T24 follow-up. |
+
+C6 note: `...;` expression-statement deletions never reach the general
+matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
+— so in practice C6 fires for every empty-`+` expression hunk. Delete a
+`let` statement instead (whole lines), or write an explicit replacement.
+
+Routing trap: `let (E, x) = ...` never reaches gate C8 — the tuple parens
+make the call router claim it as a `let(...)` call pattern. Non-call shapes
+such as `let [E, x] = ...` reach the `let` gate.
+
+#### Match-time silent rejections (surface as `no match found`)
+
+| # | Trigger | Mechanism | Write instead |
+|---|---|---|---|
+| R1 | block, `if`, `match`, loops, or closures as the general expression | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`; anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
+| R2 | `let-else` in the *target* file | v1 never matches `let-else` targets (`diverge.is_some()` rejects the candidate) | an ordinary Git hunk |
+| R3 | turbofish placeholder (`P::<...>` — a placeholder path segment carrying generic arguments) | placeholder segments with arguments never match (concrete turbofish such as `::<u8>` compares by rendered text and works) | a concrete turbofish, or a whole-expression `# expr E` placeholder |
+| R4 | `P @ ...` subpattern bindings in `let` | `subpat.is_some()` rejects the candidate | a whole-pattern `# pat P` placeholder or a concrete pattern |
+| R5 | unsupported type variants (`impl Trait`, `dyn Trait`, fn-pointer types, macro types, …) | supported: paths with generic arguments, references, slices, arrays, tuples, parentheses, `_` (matches any type), `!`; anything else rejects the candidate | a concrete type or a whole-type `# type T` placeholder |
+
+#### Deliberate wildcards (not failures)
+
+- Lifetimes are wildcards in v1: generic-argument and reference lifetimes
+  are never compared.
+- `_` as a type matches any type.
+- Trailing commas are insignificant wherever Rust permits them (Section 17.7).
+- A bare `P` never matches an annotated `x: T` — spell the ascription
+  explicitly as `P: T` (strict, like function slots). A repeated
+  metavariable must bind structurally equal values at every occurrence
+  (Section 15.7); disagreement rejects the candidate.
 
 ---
 

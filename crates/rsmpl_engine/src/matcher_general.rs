@@ -957,4 +957,166 @@ mod tests {
             "got: {out}"
         );
     }
+
+    #[test]
+    fn coverage_table_runtime_rows_are_pinned() {
+        // SPEC 18.6 runtime rows: silent candidate rejections surface as
+        // `RSMPL_MATCH_CONFLICT` / `no match found`, and the attribute /
+        // symbol gates fire with their exact table diagnostics. Pinning
+        // these proves the table cannot drift from the code.
+        struct Row {
+            patch: &'static str,
+            file: &'static str,
+            code: &'static str,
+            reason: &'static str,
+            suggestion: Option<&'static str>,
+        }
+        const NO_MATCH: Option<&str> = Some("check the range and pattern, or add `# optional`");
+        const ATTR_SUGGESTION: Option<&str> =
+            Some("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`");
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let rows = [
+            // R1: block as the general expression.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- { E }\n+ { E }\n",
+                file: "fn a() {\n    let v = { 1 };\n    let _ = v;\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R1: `if` as the general expression.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- if E { 1 } else { 2 }\n+ if E { 1 } else { 3 }\n",
+                file: "fn a(x: bool) {\n    let v = if x { 1 } else { 2 };\n    let _ = v;\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R1: closure as the general expression.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- |x| E\n+ |x| E\n",
+                file: "fn a() {\n    let f = |x| x + 1;\n    let _ = f;\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R1: `match` as the general expression.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- match E { _ => 1 }\n+ match E { _ => 2 }\n",
+                file: "fn a(x: bool) {\n    let v = match x { _ => 1 };\n    let _ = v;\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R1: `loop` as the general expression.
+            Row {
+                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- loop { E }\n+ loop { E }\n",
+                file: "fn a() {\n    loop { break; }\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R2: `let-else` in the target file.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- let x = E;\n+ let y = E;\n",
+                file: "fn a(o: Option<i32>) -> i32 {\n    let x = o else { return 0 };\n    x\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R3: turbofish placeholder (placeholder path segment with args).
+            Row {
+                patch: "@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type P\n- P<u8>\n+ Vec<u8>\n",
+                file: "fn a(x: Vec<u8>) {}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R4: `P @ ...` subpattern binding in `let`.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# pat P\n# expr E\n- let P @ E = E;\n+ let P @ E = E;\n",
+                file: "fn a() {\n    let q = 1;\n    let _ = q;\n}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // R5: `dyn Trait` as the general type.
+            Row {
+                patch: "@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type T\n- Box<dyn T>\n+ Box<dyn T>\n",
+                file: "fn a(x: Box<dyn std::fmt::Display>) {}\n",
+                code: "RSMPL_MATCH_CONFLICT",
+                reason: "no match found",
+                suggestion: NO_MATCH,
+            },
+            // C10: leading attributes on a non-`let` shape (attribute lines
+            // are split per line, so `#[attr]` stands on its own line).
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# expr E\n- #[attr]\n- E + 1\n+ E + 2\n",
+                file: "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
+                code: "RSMPL_PATTERN_CONFLICT",
+                reason: "leading attributes are only supported on `let` statement patterns in v1",
+                suggestion: None,
+            },
+            // C11: `+` attributes the `-` side did not match.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- let x = E;\n+ #[attr]\n+ let y = E;\n",
+                file: "fn a() {\n    let x = compute();\n    let _ = x;\n}\n",
+                code: "RSMPL_PATTERN_CONFLICT",
+                reason: "replacement writes attributes the pattern did not match",
+                suggestion: ATTR_SUGGESTION,
+            },
+            // C12: mismatched attribute sets.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- #[a]\n- let x = E;\n+ #[b]\n+ let y = E;\n",
+                file: "fn a() {\n    let x = compute();\n    let _ = x;\n}\n",
+                code: "RSMPL_PATTERN_CONFLICT",
+                reason: "replacement attributes differ from matched attributes",
+                suggestion: ATTR_SUGGESTION,
+            },
+            // C13: `# symbol` without `# fallback=syntax` (general-matcher gate).
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# expr E\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n",
+                file: "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
+                code: "RSMPL_SYMBOL_CONFLICT",
+                reason: "symbol `Old` could not be resolved (no semantic environment in v1)",
+                suggestion: Some("add `# fallback=syntax` to allow syntactic matching"),
+            },
+        ];
+        assert_eq!(
+            rows.len(),
+            13,
+            "SPEC 18.6 lists R1-R5 + C10-C13 runtime rows"
+        );
+        for row in rows {
+            let patch = format!("{head}{}", row.patch);
+            let err = apply(&patch, row.file).unwrap_err();
+            assert!(
+                err.contains(row.code),
+                "SPEC 18.6 drift: want code {} in:\n{err}",
+                row.code
+            );
+            assert!(
+                err.contains(row.reason),
+                "SPEC 18.6 drift: want reason {:?} in:\n{err}",
+                row.reason
+            );
+            if let Some(s) = row.suggestion {
+                assert!(
+                    err.contains(s),
+                    "SPEC 18.6 drift: want suggestion {s:?} in:\n{err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn concrete_generic_args_match_structurally() {
+        // R3 counterpart (SPEC 18.6): concrete generic arguments compare
+        // structurally — only placeholder segments carrying arguments are
+        // rejected. A fully concrete `Vec<u8>` rewrite must succeed.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n- Vec<u8>\n+ Box<u8>\n";
+        let out = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap();
+        assert!(out.contains("Box<u8>"), "got: {out}");
+        assert!(!out.contains("Vec<u8>"), "got: {out}");
+    }
 }

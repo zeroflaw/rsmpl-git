@@ -1118,4 +1118,88 @@ mod tests {
             "got const-fn routing"
         );
     }
+
+    #[test]
+    fn general_coverage_diagnostics_are_pinned() {
+        // SPEC 18.6 compile-time rows (C1-C9): each unsupported shape must
+        // fail with the exact table diagnostic, so the table cannot drift
+        // from the code without a test failing.
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let cases = [
+            // C1: `...` in a general shape.
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- E + ...\n+ E\n"
+                ),
+                "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
+            ),
+            // C2: `let-else` in the minus pattern.
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let x = E else {{ return; }};\n+ let y = E;\n"
+                ),
+                "v1 general patterns do not support `let-else` statements",
+            ),
+            // C3: `# root=stmt` with a non-`let` shape.
+            (
+                format!("{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root=stmt\n- foo\n+ bar\n"),
+                "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+            ),
+            // C4: `# root=expr` with a non-expression shape.
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root=expr\n- let x = 1;\n+ let y = 1;\n"
+                ),
+                "`# root=expr` requires a Rust expression pattern",
+            ),
+            // C5: `# root=type` with a non-type shape.
+            (
+                format!(
+                    "{head}@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# root=type\n- foo bar\n+ Box<u8>\n"
+                ),
+                "`# root=type` requires a Rust type pattern",
+            ),
+            // C6: empty `+` side on an expression.
+            (
+                format!("{head}@@ -2,1 +2,0 @@ rule=x\n# lang=rust\n# expr E\n- E + 1\n"),
+                "v1 expression deletion (empty `+` side) is only supported for `...;` statement shapes; match a `let` statement or write an explicit replacement",
+            ),
+            // C7: empty `+` side on a type.
+            (
+                format!("{head}@@ -1,1 +1,0 @@ rule=x\n# lang=rust\n# type T\n- Vec<T>\n"),
+                "v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type",
+            ),
+            // C8: embedded metavariable inside the `let` bound pattern.
+            // (Slice shape: a paren tuple after `let` would route to the
+            // call matcher as `let(...)`; `[E, x]` reaches the general
+            // matcher and trips the embedded-metavariable gate.)
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let [E, x] = E;\n+ let [E, x] = E;\n"
+                ),
+                "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
+            ),
+            // C9: `# returns=none` on a non-function hunk.
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n# returns=none\n- foo(E)\n+ bar(E)\n"
+                ),
+                "`# returns=none` requires a function-item pattern",
+            ),
+        ];
+        assert_eq!(cases.len(), 9, "SPEC 18.6 lists C1-C9 compile-time rows");
+        for (patch, want) in cases {
+            let err = compile(&hunk_of(&patch)).unwrap_err();
+            let rendered = err.render();
+            assert_eq!(
+                err.code,
+                rsmpl_patch::ErrorCode::PatternConflict,
+                "wrong code for {want:?}:\n{rendered}"
+            );
+            assert!(
+                rendered.contains(want),
+                "SPEC 18.6 drift: want {want:?} in:\n{rendered}"
+            );
+        }
+    }
 }
