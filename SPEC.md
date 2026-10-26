@@ -3991,8 +3991,9 @@ use macro method union item extern_crate foreign_mod trait_alias` (any other
 `syn::Item` variant falls back to `item`); `impl` methods are listed as
 `method SelfTy::method` and inline `mod` contents recurse with `mod::item`
 names. Spans cover the same attached attribute/doc envelope the matcher
-sees, so an inspect span is directly usable as an `@@ -start,len` old-side
-range.
+sees. Spans are 1-based inclusive; the hunk length is
+`L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`), so an inspect
+span converts to an `@@ -start,len` old-side range with one subtraction.
 
 #### D.3.1 Call-site preview (`--inspect <path> --calls`)
 

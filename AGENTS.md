@@ -95,7 +95,8 @@ rsmpl-git --repo ./my-repo --inspect src --calls --max-items 20
 Item spans locate definitions, `--calls` lists call/method/macro sites for
 tight rewrite ranges, directory scan covers a subtree in one call, and
 `--max-items N` bounds large scans (SPEC D.3, SPEC D.3.1, SPEC D.3.2,
-SPEC D.3.3). Spans are 1-based inclusive, directly usable as `@@ -start,len`.
+SPEC D.3.3). Spans are 1-based inclusive; the hunk length is
+`L = end-start+1` (e.g. `fn foo 1-3` → `@@ -1,3 @@`).
 
 ## Verify cheaply
 
