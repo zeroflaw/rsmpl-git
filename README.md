@@ -21,15 +21,26 @@ cargo install --path bin/rsmpl-git
 # Inline patch (no restatement of unchanged bodies needed):
 rsmpl-git --patch "$(cat change.rsmpl)" --repo ./my-repo
 
+# Piped patch, no temp file:
+cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
+
 # From a file, preview the lowered Git diff without applying:
 rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
+
+# Machine-readable result (rules, files_changed, diff, check):
+rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff --check
+
+# Discover valid @@ ranges without reading whole files:
+rsmpl-git --repo ./my-repo --inspect src/lib.rs
+rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
 
 # Apply and save the concrete diff for review:
 rsmpl-git --file change.rsmpl --repo ./my-repo --output lowered.patch --verbose
 ```
 
 Exit codes: `0` applied/clean, `2` patch error (structured
-`RSMPL_*`/`GIT_*` diagnostic on stderr).
+`RSMPL_*`/`GIT_*` diagnostic on stderr). `--format json` prints
+`{rules, files_changed, diff, check}` to stdout; `--inspect` needs no patch.
 
 ## Minimal semantic hunk
 

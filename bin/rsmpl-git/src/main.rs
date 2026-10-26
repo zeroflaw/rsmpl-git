@@ -5,19 +5,35 @@
 //! ```sh
 //! # Inline patch:
 //! rsmpl-git --patch '<diff text>' --repo ./my-repo
+//! # Piped patch (no temp file):
+//! cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
 //! # From a file, printing the lowered diff without applying:
 //! rsmpl-git --file change.rsmpl --repo ./my-repo --emit-diff --check
+//! # Machine-readable report:
+//! rsmpl-git --file change.rsmpl --repo ./my-repo --format json --emit-diff
+//! # Discover valid @@ ranges without reading whole files:
+//! rsmpl-git --repo ./my-repo --inspect src/lib.rs --format json
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
 //! to an in-memory tree (original coordinates) -> emit a concrete Git diff ->
 //! `git apply` (or `--check`).
 
+mod inspect;
+
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rsmpl_patch::StructuredError;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum Format {
+    #[default]
+    Text,
+    Json,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -26,11 +42,11 @@ use rsmpl_patch::StructuredError;
     about = "Apply RSmPL-Git semantic patches via lowering to Git patches"
 )]
 struct Cli {
-    /// Inline RSmPL-Git patch text.
+    /// Inline RSmPL-Git patch text, or `-` to read from stdin.
     #[arg(long, conflicts_with = "file")]
     patch: Option<String>,
 
-    /// Path to a file containing the RSmPL-Git patch.
+    /// Path to a file containing the RSmPL-Git patch, or `-` for stdin.
     #[arg(long, conflicts_with = "patch")]
     file: Option<PathBuf>,
 
@@ -42,7 +58,8 @@ struct Cli {
     #[arg(long)]
     check: bool,
 
-    /// Print the lowered concrete Git patch to stdout.
+    /// Print the lowered concrete Git patch to stdout (text mode).
+    /// In `--format json` mode the diff is carried in the JSON `diff` field.
     #[arg(long)]
     emit_diff: bool,
 
@@ -53,6 +70,15 @@ struct Cli {
     /// Print per-rule match counts to stderr.
     #[arg(long)]
     verbose: bool,
+
+    /// Output format for the result report (`text` default, `json` machine-readable).
+    #[arg(long, value_enum, default_value = "text")]
+    format: Format,
+
+    /// Inspect a repo-relative Rust file and list its items with line spans
+    /// (no patch needed). Useful for authoring `@@ -old,len` ranges.
+    #[arg(long, value_name = "PATH")]
+    inspect: Option<PathBuf>,
 }
 
 fn main() {
@@ -62,14 +88,25 @@ fn main() {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
+
+    if let Some(rel) = cli.inspect.clone() {
+        return run_inspect(&cli, &rel);
+    }
+
     let patch_text = match (&cli.patch, &cli.file) {
+        (Some(p), None) if p == "-" => read_stdin()?,
         (Some(p), None) => p.clone(),
+        (None, Some(f)) if f.as_os_str() == "-" => read_stdin()?,
         (None, Some(f)) => std::fs::read_to_string(f)
             .map_err(|e| format!("cannot read patch file {}: {e}", f.display()))?,
         (None, None) => {
-            return Err("provide exactly one of --patch <text> or --file <path>".to_string());
+            return Err(
+                "provide exactly one of --patch <text> or --file <path> (or use --inspect <path>)"
+                    .to_string(),
+            );
         }
         (Some(_), Some(_)) => {
             return Err("provide exactly one of --patch <text> or --file <path>".to_string());
@@ -133,6 +170,38 @@ fn run() -> Result<(), String> {
     }
     let lowered = rsmpl_git::assemble_patch(sections);
 
+    if let Some(out) = &cli.output {
+        std::fs::write(out, &lowered)
+            .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    }
+
+    if cli.format == Format::Json {
+        let diff_field = if lowered.trim().is_empty() {
+            String::new()
+        } else {
+            lowered.clone()
+        };
+        if cli.check && !diff_field.is_empty() {
+            rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(|e| render_engine_error(&e))?;
+        }
+        let payload = serde_json::json!({
+            "rules": report.rules.iter().map(|r| serde_json::json!({
+                "rule": r.rule, "file": r.file, "matches": r.matches
+            })).collect::<Vec<_>>(),
+            "files_changed": report.files_changed,
+            "diff": diff_field,
+            "check": if cli.check { serde_json::Value::String("ok".to_string()) } else { serde_json::Value::Null },
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&payload).map_err(|e| e.to_string())?
+        );
+        if cli.check && !lowered.trim().is_empty() {
+            eprintln!("check: lowered patch applies cleanly");
+        }
+        return Ok(());
+    }
+
     if lowered.trim().is_empty() {
         if cli.emit_diff {
             println!("(no changes)");
@@ -142,10 +211,6 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    if let Some(out) = &cli.output {
-        std::fs::write(out, &lowered)
-            .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
-    }
     if cli.emit_diff {
         print!("{lowered}");
     }
@@ -165,6 +230,43 @@ fn run() -> Result<(), String> {
         report.files_changed.join(", ")
     );
     Ok(())
+}
+
+fn run_inspect(cli: &Cli, rel: &PathBuf) -> Result<(), String> {
+    if cli.patch.is_some() || cli.file.is_some() {
+        return Err("--inspect does not take --patch/--file".to_string());
+    }
+    if cli.check || cli.emit_diff || cli.output.is_some() {
+        return Err("--inspect does not take --check/--emit-diff/--output".to_string());
+    }
+    let rel_str = rel.to_string_lossy().to_string();
+    let abs = cli.repo.join(rel);
+    let text =
+        std::fs::read_to_string(&abs).map_err(|e| format!("cannot read {}: {e}", abs.display()))?;
+    let items = inspect::inspect_source(&text).map_err(|e| format!("{e} file: {rel_str}"))?;
+    match cli.format {
+        Format::Json => {
+            let payload = serde_json::json!({ "path": rel_str, "items": items });
+            println!(
+                "{}",
+                serde_json::to_string(&payload).map_err(|e| e.to_string())?
+            );
+        }
+        Format::Text => {
+            for i in &items {
+                println!("{} {} {}-{}", i.kind, i.name, i.start, i.end);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_stdin() -> Result<String, String> {
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|e| format!("cannot read stdin: {e}"))?;
+    Ok(buf)
 }
 
 fn render_parse_error(e: rsmpl_patch::ParseError) -> String {

@@ -106,3 +106,111 @@ fn no_match_exits_two_with_structured_error() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
 }
+
+#[test]
+fn stdin_patch_applies() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let mut child = Command::new(binary())
+        .args(["--patch", "-", "--repo"])
+        .arg(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path(), "src/lib.rs").contains("fn bar(x: i32)"));
+}
+
+#[test]
+fn json_report_carries_rules_and_diff() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\n",
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let patch_file = dir.path().join("change.rsmpl");
+    fs::write(&patch_file, patch).unwrap();
+    let out = Command::new(binary())
+        .arg("--file")
+        .arg(&patch_file)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json", "--emit-diff", "--check"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(v["rules"][0]["rule"], serde_json::json!("r"));
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
+    assert!(v["diff"].as_str().unwrap().contains("diff --git"));
+    assert!(!v["diff"].as_str().unwrap().contains("# lang=rust"));
+    assert_eq!(v["check"], serde_json::json!("ok"));
+    // --check must not modify the file.
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn inspect_lists_item_spans() {
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn foo() {}\nstruct S;\nimpl S {\n    fn m(&self) {}\n}\n",
+    );
+    let out = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let items = v["items"].as_array().unwrap();
+    let foo = items.iter().find(|i| i["name"] == "foo").unwrap();
+    assert_eq!(foo["kind"], serde_json::json!("fn"));
+    assert_eq!(foo["start"], serde_json::json!(1));
+    let method = items.iter().find(|i| i["name"] == "S::m").unwrap();
+    assert_eq!(method["kind"], serde_json::json!("method"));
+
+    let text = Command::new(binary())
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--inspect", "src/lib.rs"])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    let stdout = String::from_utf8_lossy(&text.stdout).to_string();
+    assert!(stdout.contains("fn foo 1-1"), "got: {stdout}");
+}

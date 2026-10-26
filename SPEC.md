@@ -3547,3 +3547,71 @@ where clause: absent in pattern, present in code
 Modifiers and structural signature features must be explicitly written or explicitly abstracted.
 
 ---
+
+## Appendix D: Agent CLI Surface (stdin, JSON report, inspect)
+
+The patch format above is engine-agnostic, but the reference `rsmpl-git`
+binary exposes three agent-oriented conveniences. They do not change patch
+semantics; they reduce the tokens and round-trips an LLM needs to author
+valid `@@ -old,len` ranges and verify results.
+
+### D.1 Piped patches (stdin)
+
+`--patch -` and `--file -` read the RSmPL-Git patch from stdin instead of
+from an argument or a temp file:
+
+```sh
+cat change.rsmpl | rsmpl-git --patch - --repo ./my-repo
+```
+
+### D.2 Machine-readable reports (`--format json`)
+
+`--format text` (default) preserves the existing human output. `--format json`
+prints one JSON object to stdout:
+
+```json
+{
+  "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1}],
+  "files_changed": ["src/lib.rs"],
+  "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
+  "check": "ok"
+}
+```
+
+- `rules` mirrors the per-rule match report (`--verbose` on stderr).
+- `files_changed` lists repo-relative paths actually rewritten.
+- `diff` is the lowered ordinary Git diff (empty string when no changes).
+- `check` is `"ok"` when `--check` was passed, else `null`.
+- `--output <path>` still writes the diff file in both modes.
+- Exit codes are unchanged: `0` applied/clean, `2` patch error with a
+  structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
+
+### D.3 Range discovery (`--inspect <path>`)
+
+`rsmpl-git --repo <dir> --inspect <rel-path> [--format json]` parses the
+target file with the same Rust frontend the engine uses and lists its items
+with 1-based inclusive line spans:
+
+```sh
+rsmpl-git --repo ./my-repo --inspect src/lib.rs
+# fn foo 1-3
+# struct Config 5-9
+# method Config::load 11-15
+```
+
+JSON mode emits `{"path": ..., "items": [{"kind","name","start","end"}]}`.
+Kinds include `fn struct enum trait impl type const static mod use macro
+method union item`; `impl` methods are listed as `method SelfTy::method` and
+inline `mod` contents recurse with `mod::item` names. Spans cover the same
+attached attribute/doc envelope the matcher sees, so an inspect span is
+directly usable as an `@@ -start,len` old-side range.
+
+Recommended agent loop:
+
+```text
+inspect file -> author hunks in original-source coordinates
+-> apply with --format json --check --emit-diff -> review lowered diff
+-> apply for real
+```
+
+---
