@@ -2176,8 +2176,7 @@ The engine must bind the metavariable on its first occurrence and then require e
 This pattern:
 
 ```diff
-@@ -40,1 +40,1 @@ rule=same_assert_args
-# lang=rust
+@@ -40,1 @@ rule=same_assert_args
 # expr E
 - assert_eq!(E, E)
 + assert_equal_once(E)
@@ -2218,8 +2217,7 @@ This means **outermost matches win**. The engine must not repeatedly re-run the 
 Example:
 
 ```diff
-@@ -10,1 +10,1 @@ rule=unbox_many
-# lang=rust
+@@ -10,1 @@ rule=unbox_many
 # allow=many
 # expr E
 - Box::new(E)
@@ -2263,8 +2261,7 @@ The engine must treat trailing commas as separator trivia during matching for at
 Therefore, this pattern:
 
 ```diff
-@@ -10,1 +10,1 @@ rule=call_two_args
-# lang=rust
+@@ -10,1 @@ rule=call_two_args
 # expr A
 # expr B
 - foo(A, B)
@@ -2344,8 +2341,7 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 Example:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=rename_call
-# lang=rust
+@@ -40,8 @@ rule=rename_call
 # expr E
 - old_api(E)
 + new_api(E)
@@ -2358,8 +2354,7 @@ A hunk with only `-` semantic pattern lines removes the matched AST fragment.
 Example:
 
 ```diff
-@@ -20,12 +20,0 @@ rule=delete_helper
-# lang=rust
+@@ -20,12 @@ rule=delete_helper
 # item I
 - I
 ```
@@ -2371,7 +2366,7 @@ A hunk with only `+` semantic pattern lines inserts the new AST fragment at the 
 Example:
 
 ```diff
-@@ -5,0 +5,0 @@ rule=insert_use
+@@ -5,0 @@ rule=insert_use
 # lang=rust
 + use crate::new_module;
 ```
@@ -2383,8 +2378,7 @@ Context lines constrain the surrounding AST and are preserved.
 Example:
 
 ```diff
-@@ -20,12 +20,12 @@ rule=rename_method_inside_impl
-# lang=rust
+@@ -20,12 @@ rule=rename_method_inside_impl
   impl Service {
       ...
 -     fn old_name(...) {
@@ -2401,8 +2395,7 @@ Metavariables bound in the `-` or context pattern may be reused in the `+` patte
 Example:
 
 ```diff
-@@ -40,8 +40,8 @@ rule=method_to_function
-# lang=rust
+@@ -40,8 @@ rule=method_to_function
 # expr Receiver
 # expr Arg
 - Receiver.old_method(Arg)
@@ -2491,8 +2484,7 @@ This declares `Old` as a semantic symbol metavariable.
 ### 19.2 Symbol rewrite example
 
 ```diff
-@@ -80,20 +80,20 @@ rule=rename_symbol_calls
-# lang=rust
+@@ -80,20 @@ rule=rename_symbol_calls
 # allow=many
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
@@ -2541,10 +2533,7 @@ A normal Git patch must repeat the removed and inserted code. RSmPL can capture 
 ### 20.1 Cut item
 
 ```diff
-diff --git a/src/old.rs b/src/old.rs
-index 1111111..2222222 100644
---- a/src/old.rs
-+++ b/src/old.rs
+diff --git src/old.rs
 @@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
@@ -2560,10 +2549,7 @@ This means:
 ### 20.2 Paste item
 
 ```diff
-diff --git a/src/new.rs b/src/new.rs
-index 3333333..4444444 100644
---- a/src/new.rs
-+++ b/src/new.rs
+diff --git src/new.rs
 @@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
@@ -2594,17 +2580,12 @@ Unlike v0.4, captures are not limited to later hunks in document order. Implemen
 This requirement is necessary because standard Git-style patches usually order hunks by ascending line number. Moving an item upward in the same file naturally places the insertion hunk before the deletion hunk:
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -10,0 +10,0 @@ rule=paste_helper_near_top
-# lang=rust
+diff --git src/lib.rs
+@@ -10,0 @@ rule=paste_helper_near_top
 # use=Helper
 + Helper
 
-@@ -100,12 +100,0 @@ rule=cut_helper_from_bottom
-# lang=rust
+@@ -100,12 @@ rule=cut_helper_from_bottom
 # item I
 # bind=Helper
 - I
@@ -2633,19 +2614,13 @@ RSmPL can move the code and normal Git hunks can adjust imports.
 Example:
 
 ```diff
-diff --git a/src/old.rs b/src/old.rs
-index 1111111..2222222 100644
---- a/src/old.rs
-+++ b/src/old.rs
+diff --git src/old.rs
 @@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
 
-diff --git a/src/new.rs b/src/new.rs
-index 3333333..4444444 100644
---- a/src/new.rs
-+++ b/src/new.rs
+diff --git src/new.rs
 @@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
@@ -2674,8 +2649,7 @@ Supported macro modes:
 ### 21.2 Macro invocation rewrite
 
 ```diff
-@@ -30,6 +30,6 @@ rule=rename_macro
-# lang=rust
+@@ -30,6 @@ rule=rename_macro
 # macro M
 # token_tree TT
 - M!(TT)
@@ -2685,8 +2659,7 @@ Supported macro modes:
 ### 21.3 Token-tree rewrite
 
 ```diff
-@@ -30,6 +30,6 @@ rule=rewrite_inside_macro
-# lang=rust
+@@ -30,6 @@ rule=rewrite_inside_macro
 # macro=token_tree
 - old_token
 + new_token
@@ -2701,8 +2674,7 @@ In `# macro=token_tree` mode, `...` is a token-tree wildcard. It matches any seq
 Example:
 
 ```diff
-@@ -30,1 +30,1 @@ rule=wrap_macro_body
-# lang=rust
+@@ -30,1 @@ rule=wrap_macro_body
 # macro=token_tree
 - mac!(...)
 + mac_wrapped!(...)
@@ -2725,8 +2697,7 @@ mac!({ let x = 1; x }, nested!(y))
 The wildcard captures the token sequence between the macro delimiters. If reused in a `+` pattern, the captured tokens are pasted as the same sequence:
 
 ```diff
-@@ -30,1 +30,1 @@ rule=rename_macro_preserve_body
-# lang=rust
+@@ -30,1 @@ rule=rename_macro_preserve_body
 # macro=token_tree
 - mac!(...)
 + new_mac!(...)
@@ -2835,17 +2806,15 @@ A capture in any hunk may be used by any other hunk in the same patch file, rega
 This is valid:
 
 ```diff
-diff --git a/src/b.rs b/src/b.rs
+diff --git src/b.rs
 ...
-@@ -20,0 +20,0 @@ rule=paste
-# lang=rust
+@@ -20,0 @@ rule=paste
 # use=Thing
 + Thing
 
-diff --git a/src/a.rs b/src/a.rs
+diff --git src/a.rs
 ...
-@@ -10,5 +10,0 @@ rule=cut
-# lang=rust
+@@ -10,5 @@ rule=cut
 # item I
 # bind=Thing
 - I
@@ -2860,17 +2829,12 @@ Forward capture references are especially important for moving code upward in a 
 A Git-like patch ordered by line number places the insertion near the top before the deletion near the bottom:
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -10,0 +10,0 @@ rule=paste_helper
-# lang=rust
+diff --git src/lib.rs
+@@ -10,0 @@ rule=paste_helper
 # use=Helper
 + Helper
 
-@@ -100,12 +100,0 @@ rule=cut_helper
-# lang=rust
+@@ -100,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
@@ -3335,11 +3299,10 @@ and later:
 
 ## 29. Examples
 
-Section 29.1 shows the diet-minimal recipe from Section 6 (single-path
-header, elided new side — the form agents should emit). The remaining
-examples keep the verbose compatible spelling (two-path headers, copied
-new sides, explicit `# lang=rust`); the diet recipe applies to them
-throughout.
+All examples use the diet-minimal recipe from Section 6 (single-path
+header, elided new side, no `# lang=rust` next to other directives —
+the form agents should emit). Bare renames keep `# lang=rust` as the
+sole-directive marker (Section 7.1).
 
 ### 29.1 Rename a plain function
 
@@ -3381,11 +3344,8 @@ where
 ### 29.2 Rename a public async unsafe generic function
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -30,12 +30,12 @@ rule=rename_complex_foo
+diff --git src/lib.rs
+@@ -30,12 @@ rule=rename_complex_foo
 # lang=rust
 - pub async unsafe fn foo<T>(...)
 + pub async unsafe fn bar<T>(...)
@@ -3401,12 +3361,8 @@ This only matches functions with the explicitly written shape.
 ### 29.3 Rename calls in a known range
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+diff --git src/lib.rs
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)
@@ -3416,12 +3372,8 @@ index 1111111..2222222 100644
 ### 29.4 Method call to free function
 
 ```diff
-diff --git a/src/service.rs b/src/service.rs
-index 1111111..2222222 100644
---- a/src/service.rs
-+++ b/src/service.rs
-@@ -75,20 +75,20 @@ rule=method_to_free_function
-# lang=rust
+diff --git src/service.rs
+@@ -75,20 @@ rule=method_to_free_function
 # allow=many
 # expr Receiver
 # expr Arg
@@ -3432,12 +3384,8 @@ index 1111111..2222222 100644
 ### 29.5 Semantic rename with symbol resolution
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -80,20 +80,20 @@ rule=rename_symbol_calls
-# lang=rust
+diff --git src/lib.rs
+@@ -80,20 @@ rule=rename_symbol_calls
 # allow=many
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
@@ -3448,19 +3396,13 @@ index 1111111..2222222 100644
 ### 29.6 Move a function between files
 
 ```diff
-diff --git a/src/old.rs b/src/old.rs
-index 1111111..2222222 100644
---- a/src/old.rs
-+++ b/src/old.rs
+diff --git src/old.rs
 @@ -20,12 @@ rule=cut_helper
 # item I
 # bind=Helper
 - I
 
-diff --git a/src/new.rs b/src/new.rs
-index 3333333..4444444 100644
---- a/src/new.rs
-+++ b/src/new.rs
+diff --git src/new.rs
 @@ -5,0 @@ rule=paste_helper
 # use=Helper
 + Helper
@@ -3469,10 +3411,7 @@ index 3333333..4444444 100644
 ### 29.7 Mixed RSmPL and ordinary Git patch
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
+diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_foo
 # lang=rust
 - fn foo(...) {
@@ -3480,8 +3419,7 @@ index 1111111..2222222 100644
       ...
   }
 
-@@ -40,8 +40,8 @@ rule=rename_calls
-# lang=rust
+@@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
 - foo(E)
@@ -3497,11 +3435,8 @@ index 1111111..2222222 100644
 ### 29.8 Insert a use item semantically
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -3,0 +3,0 @@ rule=insert_use
+diff --git src/lib.rs
+@@ -3,0 @@ rule=insert_use
 # lang=rust
 + use crate::new_module::Thing;
 ```
@@ -3509,11 +3444,8 @@ index 1111111..2222222 100644
 ### 29.9 Rewrite inside an impl block
 
 ```diff
-diff --git a/src/service.rs b/src/service.rs
-index 1111111..2222222 100644
---- a/src/service.rs
-+++ b/src/service.rs
-@@ -20,40 +20,40 @@ rule=rename_impl_method
+diff --git src/service.rs
+@@ -20,40 @@ rule=rename_impl_method
 # lang=rust
   impl Service {
       ...
@@ -3527,12 +3459,8 @@ index 1111111..2222222 100644
 ### 29.10 Optional migration
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -100,30 +100,30 @@ rule=optional_old_api_cleanup
-# lang=rust
+diff --git src/lib.rs
+@@ -100,30 @@ rule=optional_old_api_cleanup
 # optional
 # allow=many
 # expr E
@@ -3547,11 +3475,8 @@ If no calls exist in the range, the hunk succeeds without changes.
 This example demonstrates the original-source coordinate system from Section 10.2. The second semantic hunk keeps using the line number it had in the original file, even though the first hunk inserts a larger replacement before it.
 
 ```diff
-diff --git a/src/lib.rs b/src/lib.rs
-index 1111111..2222222 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -10,1 +10,10 @@ rule=insert_large_block
+diff --git src/lib.rs
+@@ -10,1 @@ rule=insert_large_block
 # lang=rust
 - old_function()
 + new_function_that_spans(
@@ -3560,7 +3485,7 @@ index 1111111..2222222 100644
 +     lines,
 + )
 
-@@ -20,5 +20,5 @@ rule=rename_second_function
+@@ -20,5 @@ rule=rename_second_function
 # lang=rust
 - fn second_function(...) {
 + fn renamed_function(...) {
