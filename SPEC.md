@@ -4094,6 +4094,39 @@ Rules:
   …`) go to stderr in both modes. A `--format json` consumer parsing
   stdout must also read stderr, or it will miss them.
 
+#### D.2.4 Repo-free patch lint (no new flags)
+
+Authoring check without a checkout: parse, directive validation,
+pattern compilation, and the capture graph (`# bind=`/`# use=`,
+plus-side binding) all run before matching, so an empty directory
+stands in for the repo:
+
+```sh
+mkdir -p /tmp/empty && rsmpl-git --file change.rsmpl --repo /tmp/empty --check
+```
+
+Triage the result: `RSMPL_PARSE_CONFLICT` /
+`RSMPL_PATTERN_CONFLICT` / `RSMPL_CAPTURE_CONFLICT` (and symbol
+errors) are real authoring bugs — fix them. `RSMPL_RANGE_CONFLICT`,
+`RSMPL_MATCH_CONFLICT` (`no match found`), and `GIT_*` failures are
+empty-dir artifacts: the empty file counts as 1 line (authored
+ranges exceed it), there is no code to match, and insertion
+lowerings cannot `git apply` there — ignore them and re-check
+against the real repo. In particular `no match found` on the empty
+dir is the lint-pass signal: the patterns compiled and the captures
+bound.
+
+One caveat: range validation (Pass 0) runs before the
+pattern-compile/capture stages, so authored `@@ -old,len` ranges
+mask those stages on the empty dir (the first range error wins). To
+lint the deeper stages, temporarily lint with the `# scope=file` +
+`@@ -1,1 @@` dummy (17.3) on each hunk — the dummy skips range
+validation and the compile/capture errors surface. Expect the stderr
+`treating as new (empty) file` warning (D.2.3); insertion-only
+patches always need the real repo for the final check. No `--lint`
+/ `--no-repo` flag is needed, so the T34 lint gap closes with zero
+flags added.
+
 ### D.3 Range discovery (`--inspect <path>`)
 
 `rsmpl-git --repo <dir> --inspect <rel-path> [--format json]` parses the

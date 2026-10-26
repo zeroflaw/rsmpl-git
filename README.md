@@ -50,6 +50,9 @@ rsmpl-git --file change.rsmpl --check
   # Defaults stay: text report, `--context 3` (bare-`git apply`
   # compatible), unbounded inspect (scope or `--max-items N` when
   # `total` warrants); `--repo` defaults to `.`.
+  # Lint authoring without a checkout (parse/directives/captures):
+  # mkdir -p /tmp/empty && rsmpl-git --file change.rsmpl --repo /tmp/empty --check
+  # (`no match found` = well-formed; triage table: SPEC D.2.4).
 
 # Discover valid @@ ranges without reading whole files:
 rsmpl-git --inspect src/lib.rs
