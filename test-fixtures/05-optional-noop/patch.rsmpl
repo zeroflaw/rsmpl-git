@@ -1,0 +1,10 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,1 +1,1 @@ rule=optional_cleanup
+# lang=rust
+# optional
+# allow=many
+# expr E
+- old_api(E)
++ new_api(E)

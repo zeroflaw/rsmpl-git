@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,1 +1,1 @@ rule=rename_foo
+# lang=rust
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }
+
+@@ -3,3 +3,3 @@
+ fn calls() {
+-    old_call();
++    new_call();
+ }

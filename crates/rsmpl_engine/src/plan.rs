@@ -130,20 +130,26 @@ pub fn apply_with_captures(
                 &range_desc,
             )?;
             let (sl, el) = targets[0];
-            let start = state
+            // Capture the exact item span (no blank-line absorption); the
+            // delete edit may absorb an adjacent blank separator line.
+            let cap_start = state
                 .index
                 .line_start(sl)
                 .ok_or_else(|| range_err(&rh.rule_name(), path, sl))?;
-            let end = state
+            let cap_end = state
                 .index
                 .line_start(el + 1)
                 .unwrap_or_else(|| state.index.eof());
-            let captured = state.original.get(start..end).unwrap_or("").to_string();
+            let cut =
+                matcher_fn::delete_lines(&state.original, &state.index, sl, el, &rh.rule_name())
+                    .map_err(|e| e.with_file(path))?;
+            let captured = state
+                .original
+                .get(cap_start..cap_end)
+                .unwrap_or("")
+                .to_string();
             captures.define(binds[0], captured, &rh.rule_name(), path)?;
-            file_edits
-                .get_mut(path)
-                .expect("file state")
-                .push(TextEdit::new(start, end, String::new()));
+            file_edits.get_mut(path).expect("file state").push(cut);
             report.rules.push(RuleReport {
                 rule: rh.rule_name(),
                 file: path.clone(),

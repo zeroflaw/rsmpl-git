@@ -371,7 +371,7 @@ pub(crate) fn find_item_targets(
 /// Delete the single matched item for a bare `- I` hunk (SPEC 18.2).
 pub fn apply_item_delete(
     parsed: &syn::File,
-    _original: &str,
+    original: &str,
     index: &LineIndex,
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
@@ -401,27 +401,51 @@ pub fn apply_item_delete(
     };
     let n = targets.len();
     for (sl, el) in targets {
-        edits.push(delete_lines(index, sl, el, &rule)?);
+        edits.push(delete_lines(original, index, sl, el, &rule)?);
     }
     Ok(n)
 }
 
 /// Whole-line deletion edit from `start_line` through `end_line` (inclusive),
 /// swallowing the trailing newline.
+///
+/// To avoid leaving stray blank separator lines, the range additionally
+/// absorbs one adjacent blank line: the following blank line when one exists,
+/// otherwise one preceding blank line at EOF. Comments and code are never
+/// absorbed — only a fully blank line.
 pub(crate) fn delete_lines(
+    original: &str,
     index: &LineIndex,
     start_line: u32,
     end_line: u32,
     rule: &str,
 ) -> Result<TextEdit, StructuredError> {
-    let start = index
+    let mut start = index
         .line_start(start_line)
         .ok_or_else(|| range_err(rule, start_line))?;
     // End at the start of the following line (this swallows the trailing
     // newline); at EOF use EOF.
-    let end = index
+    let mut end = index
         .line_start(end_line + 1)
         .unwrap_or_else(|| index.eof());
+    if end < original.len() {
+        // Absorb one following blank line (a lone `\n` right at `end`).
+        if original.as_bytes().get(end) == Some(&b'\n') {
+            end += 1;
+        }
+    } else if start > 0 {
+        // At EOF: absorb one preceding blank line.
+        let before = &original[..start];
+        if before.ends_with("\n\n") {
+            // Move `start` back over the blank line.
+            let trimmed = &before[..before.len() - 1];
+            if let Some(pos) = trimmed.rfind('\n') {
+                start = pos + 1;
+            } else {
+                start = 0;
+            }
+        }
+    }
     Ok(TextEdit::new(start, end, String::new()))
 }
 

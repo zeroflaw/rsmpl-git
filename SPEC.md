@@ -644,7 +644,7 @@ Every RSmPL hunk must include:
 | `# attrs=explicit` | Only attributes written in the pattern participate; unwritten attached attributes cause the match to fail. |
 | `# attrs=strip` | Match like `preserve`, but do not copy attributes to the replacement when stripping is valid. |
 | `# mode=ast` | Parse and match using AST. Default. |
-| `# mode=tokens` | Match using token trees or token stream. |
+| `# mode=tokens` | Match using token trees or token stream. (> v0.1 note: only supported for macro token-tree patterns; otherwise rejected.) |
 | `# macro=invocation` | Treat macro invocations as AST nodes. Default. |
 | `# macro=token_tree` | Allow token-tree matching inside macro invocation bodies. |
 | `# macro=expanded` | Match macro-expanded output when build integration is available. |
@@ -837,6 +837,8 @@ Example:
 The insertion anchor is line 5 in the original source file. The inserted code length is determined by the captured AST object, the target syntactic position, and the formatter.
 
 For insertions, `-old_start,0` is the normative anchor. `+new_start,new_len` remains review metadata and must not be used to rebase later semantic hunk ranges.
+
+> **v0.1 implementation note:** the anchor `-N,0` inserts *after* line `N` (at the start of line `N+1`, or EOF). `-0,0` inserts at the start of the file. Deleted-item cut ranges additionally absorb one adjacent blank separator line (following blank preferred, else preceding at EOF) so moves do not leave stray blank lines; the captured text itself excludes the separator.
 
 ### 10.6 Interaction with ordinary Git hunk coordinates
 
@@ -1034,6 +1036,8 @@ Examples:
 | `let x = E;` | statement |
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
+
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is an item rename; a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. `# root=item` forces item capture and `# root=expr` forces expression rewrite for ambiguous shapes.
 
 If the parse context is ambiguous, the engine may require an explicit directive:
 
@@ -1952,6 +1956,8 @@ The first concrete non-ellipsis token in the pattern must be inside the old-side
 
 Useful for matching a call inside a larger expression or statement.
 
+> **v0.1 implementation note:** the anchor is approximated as the `fn` keyword line for function items and the candidate start line for call/macro matches.
+
 #### `scope=overlap`
 
 The matched AST node may overlap the old-side range.
@@ -2093,6 +2099,8 @@ In `# macro=token_tree` mode, raw token-tree matching does not automatically tre
 
 A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 
+> **v0.1 implementation note:** function-item hunks may differ only in the function name (rename-only). Visibility, qualifiers, generic parameters, return type, and where-clause slots must be identical between the `-` and `+` sides unless abstracted with the same metavariable on both sides; `# returns=none` constrains only the `-` side. Other slot changes are rejected rather than guessed.
+
 Example:
 
 ```diff
@@ -2217,6 +2225,8 @@ Fallback directive:
 
 If `fallback=syntax` is set, the engine may use syntactic matching when semantic resolution is unavailable. This is less safe and should be discouraged for important refactors.
 
+> **v0.1 implementation note:** syntactic fallback compares only the last path segment of the symbol (e.g. `crate::old_api` matches any callee whose final segment is `old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment.
+
 ---
 
 ## 20. Moving Code
@@ -2272,6 +2282,8 @@ The value of `# use=Helper` imports that capture.
 Names are patch-local.
 
 In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST object. Collection-valued captures are not part of v0.1 and there is no syntax such as `# bind_list=Name`, `# bind_many=Name`, or `# use_list=Name`.
+
+> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (`+ Name`). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file.
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
@@ -2425,6 +2437,8 @@ In token-tree mode, `...` is token-based, not AST-based. It does not enforce Rus
 
 If a token-tree pattern contains multiple `...` wildcards at the same delimiter depth, the engine must either use a documented deterministic left-to-right matching strategy or reject the pattern as ambiguous. Rejection is recommended for v0.1 unless the implementation documents exact behavior.
 
+> **v0.1 implementation note:** multiple `...` wildcards (argument lists, path segments, macro bodies) match with a documented left-to-right greedy strategy; `foo(...)` absorbs any argument count including zero.
+
 ### 21.5 Expanded macro rewrite
 
 ```text
@@ -2440,6 +2454,8 @@ If the engine cannot provide that mapping, it must fail.
 ## 22. Formatting and Trivia Preservation
 
 ### 22.1 Recommended default
+
+> **v0.1 implementation note:** only `# format=preserve` is implemented. Non-`preserve` values are rejected with a diagnostic instead of being silently ignored.
 
 The recommended default is:
 
@@ -2598,6 +2614,8 @@ If an ordinary hunk and an RSmPL hunk target disjoint original source ranges, th
 If they overlap, the engine must reject the patch unless it can prove that the ordinary hunk is a textual refinement of the same semantic transformation.
 
 Document order may be used as a deterministic tie-breaker only for non-overlapping insertions at exactly the same original insertion point. Implementations should document their tie-breaking policy.
+
+> **v0.1 implementation note:** multiple insertions at exactly the same point are applied in a deterministic (stable, document-order-derived) sequence; an insertion strictly inside a deleted or replaced range is rejected as an overlap conflict.
 
 ---
 

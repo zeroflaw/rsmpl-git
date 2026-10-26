@@ -1,0 +1,8 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,1 +1,1 @@ rule=missing_foo
+# lang=rust
+# expr E
+- foo(E)
++ bar(E)
