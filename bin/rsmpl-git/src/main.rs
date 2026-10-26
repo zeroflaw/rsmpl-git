@@ -91,7 +91,7 @@ fn main() {
                     // T85 success silence): the stdout envelope carries the
                     // machine signal; stderr keeps `warning:` lines only.
                     // Text mode keeps the human stderr diagnostic.
-                    let payload = serde_json::json!({ "error": s.to_json() });
+                    let payload = serde_json::json!({"version": 1, "error": s.to_json()});
                     println!("{payload}");
                 } else {
                     eprintln!("{}", s.render());
@@ -267,6 +267,7 @@ fn run() -> Result<(), CliError> {
             rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
         }
         let payload = serde_json::json!({
+            "version": 1,
             "rules": report.rules.iter().map(|r| serde_json::json!({
                 "rule": r.rule, "file": r.file, "matches": r.matches
             })).collect::<Vec<_>>(),
@@ -277,14 +278,14 @@ fn run() -> Result<(), CliError> {
             "diff_truncated": diff_truncated,
             "diff_lines": total_lines,
             "diff_shown": reported.lines().count(),
-            "check": if cli.check { serde_json::Value::String("ok".to_string()) } else { serde_json::Value::Null },
+            "check": cli.check,
         });
         println!(
             "{}",
             serde_json::to_string(&payload)
                 .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
         );
-        // No stderr `check:` line in JSON mode: the stdout `"check":"ok"`
+        // No stderr `check:` line in JSON mode: the stdout `"check":true`
         // payload is the machine signal (SPEC D.2.3). Text mode keeps the
         // human line below. `warning:` lines stay stderr-only in both modes.
         return Ok(());

@@ -59,8 +59,8 @@ rsmpl-git --file change.rsmpl --output lowered.patch
 Exit codes: `0` applied/clean, `2` patch error (structured
 `RSMPL_*`/`GIT_*` diagnostic on stderr). Text `--check` previews the lowered
 diff to stdout (plain apply stays quiet); `--format json` prints
-`{rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` to stdout
-(`rules` = per-rule match counts; `files` = per-file `added`/`removed`;
+`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` to stdout
+(`version` = report schema, currently `1`; `rules` = per-rule match counts; `files` = per-file `added`/`removed`;
 `diff_truncated` = reported diff hides a non-empty lowering;
 `diff_lines`/`diff_shown` = full vs reported line counts so the next
 `--diff-max-lines N` is computable);
@@ -72,10 +72,10 @@ The lowering itself is always 0-context (minimal tokens, still appliable:
 `--check`/apply use `git apply --unidiff-zero`; piping a saved patch
 elsewhere needs that flag) (stats unaffected); JSON
 mode is stdout-only for both success and failure (no stderr `check:` or
-`error:` lines — the `"check":"ok"` payload or the `{error: {...}}`
+`error:` lines — the `"check":true` payload or the `{version, error: {...}}`
 envelope is the signal), while `warning:` lines stay stderr-only in both
 modes, so JSON consumers must also read stderr; failures print
-`{error: {code, rule, file, range, reason, suggestion}}` to stdout only
+`{version, error: {code, rule, file, range, reason, suggestion}}` to stdout only
 (`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files and
 flag-usage errors — bad flags envelop in JSON mode, stay clap text
 otherwise).

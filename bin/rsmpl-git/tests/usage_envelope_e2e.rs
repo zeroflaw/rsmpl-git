@@ -32,6 +32,8 @@ fn assert_envelope(out: &std::process::Output, needle: &str) {
         serde_json::json!("RSMPL_IO_CONFLICT"),
         "got: {v}"
     );
+    // T25: schema version rides alongside the envelope on every failure.
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
     assert!(
         v["error"]["reason"]
             .as_str()

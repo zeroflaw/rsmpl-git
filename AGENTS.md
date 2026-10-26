@@ -127,7 +127,9 @@ rsmpl-git --file change.rsmpl --output full.patch
 
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 `--file` names a patch file (avoids quoting for large patches). JSON prints
-`{rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
+`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
+`version` is the report schema (currently `1`); `check` is boolean (`true` =
+`--check` ran clean, `false` = skipped);
 JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes
 the full diff before `--check` runs but nothing when the lowering is empty;
@@ -149,7 +151,7 @@ itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
 | `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file or bad flags (`--format json` → stdout envelope, else clap text) — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
 
-With `--format json`, failures print `{error: {code, rule, file, range,
+With `--format json`, failures print `{version, error: {code, rule, file, range,
 reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
 
 ## Full reference

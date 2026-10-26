@@ -3929,13 +3929,14 @@ prints one JSON object to stdout:
 
 ```json
 {
+  "version": 1,
   "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1}],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
   "diff_lines": 12,
   "diff_shown": 12,
-  "check": "ok"
+  "check": true
 }
 ```
 
@@ -3957,7 +3958,15 @@ prints one JSON object to stdout:
   changes); `diff_shown` is the line count of the reported `diff` string
   (`0` when omitted or no changes). JSON consumers size the next budget
   as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
-- `check` is `"ok"` when `--check` was passed, else `null`.
+- `version` is the JSON report schema version (`1` = this contract:
+  boolean `check`, no `files_changed`). Agents pin parsing on it; any
+  future breaking JSON change bumps it.
+- `check` is a boolean: `true` when `--check` was passed (the lowering,
+  empty or not, passed `git apply --check`), else `false`. Failures
+  never reach this payload (exit 2 with the `{error}` envelope below),
+  so `false` means "skipped", never "failed". The single-type shape
+  replaces the former `"ok"`/`null` pair, which forced agents to branch
+  on type.
 - `rules` follows patch document order (file-section order, then
   hunk order within a section), so a multi-hunk patch reads
   top-to-bottom like the patch itself — including move cut/paste
@@ -3992,12 +4001,12 @@ prints one JSON object to stdout:
   the stderr diagnostic.
 
 ```json
-{"error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
+{"version": 1, "error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
 
 ```
 
-- The envelope always carries all six keys (`code rule file range reason
-  suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
+- The envelope always carries `version` plus all six error keys (`code
+  rule file range reason suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
   or output files, stdin failures, and flag-usage errors.
 - Flag-usage errors (unknown flag, bad value) are enveloped too: with
@@ -4098,15 +4107,15 @@ exactly which bytes land on which stream. The contract, per mode:
 | text apply | empty (quiet by default) | `applied N file(s): …` (kept: one line of human reassurance) |
 | text `--check` | reported diff (empty when omitted/no changes) | budget markers + `check: lowered patch applies cleanly` |
 | JSON apply | report object | `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
-| JSON `--check` | report object with `"check":"ok"` | `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
+| JSON `--check` | report object with `"check":true` | `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
 
 Rules:
 
 - An empty lowering (no changes) never touches git: `git apply
   --check` is skipped and the run reports clean. Text prints
-  `(no changes)` to stdout; JSON returns the report silently
-  (`"diff": ""`, `"diff_truncated": false`, `"files": []`,
-  `"check": "ok"` when `--check` was passed, else `null`).
+   `(no changes)` to stdout; JSON returns the report silently
+   (`"diff": ""`, `"diff_truncated": false`, `"files": []`,
+   `"check": true` when `--check` was passed, else `false`).
   `--output` writes nothing when the lowering is empty.
 - `--output` is written before `--check` runs, so a failing `--check`
   still leaves the full appliable diff on disk for debugging.

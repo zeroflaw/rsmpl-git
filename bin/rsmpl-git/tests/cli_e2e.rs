@@ -473,7 +473,8 @@ fn json_report_carries_rules_and_diff() {
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
     assert!(v["diff"].as_str().unwrap().contains("diff --git"));
     assert!(!v["diff"].as_str().unwrap().contains("# lang=rust"));
-    assert_eq!(v["check"], serde_json::json!("ok"));
+    assert_eq!(v["check"], serde_json::json!(true));
+    assert_eq!(v["version"], serde_json::json!(1));
     // --check must not modify the file.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
@@ -646,7 +647,8 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
     assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
-    assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
+    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
     assert_eq!(
         v["files"],
         serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
@@ -679,6 +681,9 @@ fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
     assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
     assert_eq!(v["files"], serde_json::json!([]), "got: {v}");
+    // T57: no `--check` means `check` is false (boolean, never null).
+    assert_eq!(v["check"], serde_json::json!(false), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
 }
 
 #[test]
@@ -732,7 +737,8 @@ fn json_diff_max_lines_truncates_but_stats_stay_exact() {
     assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
     // Stats are computed from the full contents, not the truncated string.
     assert_eq!(v["files"], full_v["files"], "got: {v} vs {full_v}");
-    assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
+    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
 
@@ -1075,7 +1081,8 @@ fn json_lowering_is_zero_context_stats_stay_exact() {
         "got: {v}"
     );
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
-    assert_eq!(v["check"], serde_json::json!("ok"), "got: {v}");
+    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
 }
 
 #[test]

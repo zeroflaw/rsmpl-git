@@ -127,8 +127,8 @@ rsmpl-git --file change.rsmpl                       # apply for real
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
 | `RSMPL_IO_CONFLICT` | unreadable path or bad flags (`--format json` → stdout envelope) — fix per suggestion; absolute/`..`-escaping targets rejected |
 
-JSON failures (`--format json`) print `{error: {code, rule, file, range,
-reason, suggestion}}` to stdout only, exit 2.
+JSON failures (`--format json`) print `{version, error: {code, rule, file,
+range, reason, suggestion}}` to stdout only, exit 2.
 
 ## Dogfood rule
 
