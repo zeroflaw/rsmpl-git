@@ -75,14 +75,19 @@ pub fn apply_with_captures(
     for path in states.keys() {
         file_edits.insert(path.clone(), Vec::new());
     }
+    // Rule reports staged with their document position (T45): pass 1
+    // evaluates cuts first, but the report must read in patch document
+    // order (section order, then hunk order), so entries are sorted
+    // after pass 2 before being committed to `report.rules`.
+    let mut rule_order: Vec<((usize, usize), RuleReport)> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
-    for section in &patch.files {
+    for (sec_idx, section) in patch.files.iter().enumerate() {
         let path = &section.target_path;
         let Some(state) = states.get(path) else {
             continue;
         };
-        for hunk in &section.hunks {
+        for (hunk_idx, hunk) in section.hunks.iter().enumerate() {
             let Hunk::Rsmpl(rh) = hunk else { continue };
             let binds = rh.binds();
             if binds.is_empty() {
@@ -150,22 +155,25 @@ pub fn apply_with_captures(
                 .to_string();
             captures.define(binds[0], captured, &rh.rule_name(), path)?;
             file_edits.get_mut(path).expect("file state").push(cut);
-            report.rules.push(RuleReport {
-                rule: rh.rule_name(),
-                file: path.clone(),
-                matches: 1,
-            });
+            rule_order.push((
+                (sec_idx, hunk_idx),
+                RuleReport {
+                    rule: rh.rule_name(),
+                    file: path.clone(),
+                    matches: 1,
+                },
+            ));
         }
     }
 
     // ---- Pass 2: every other hunk in document order. ----
-    for section in &patch.files {
+    for (sec_idx, section) in patch.files.iter().enumerate() {
         let path = &section.target_path;
         let Some(state) = states.get(path) else {
             continue;
         };
         let edits = file_edits.get_mut(path).expect("file state");
-        for hunk in &section.hunks {
+        for (hunk_idx, hunk) in section.hunks.iter().enumerate() {
             match hunk {
                 Hunk::Ordinary(oh) => {
                     let mut e = ordinary_hunk_edits(&state.index, &state.original, oh)
@@ -320,15 +328,23 @@ pub fn apply_with_captures(
                         path,
                         &range_desc,
                     )?;
-                    report.rules.push(RuleReport {
-                        rule,
-                        file: path.clone(),
-                        matches: found,
-                    });
+                    rule_order.push((
+                        (sec_idx, hunk_idx),
+                        RuleReport {
+                            rule,
+                            file: path.clone(),
+                            matches: found,
+                        },
+                    ));
                 }
             }
         }
     }
+
+    // Commit rule reports in patch document order (T36/T45 contract:
+    // section order, then hunk order within a section).
+    rule_order.sort_by_key(|(pos, _)| *pos);
+    report.rules.extend(rule_order.into_iter().map(|(_, r)| r));
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
     for (path, state) in &states {

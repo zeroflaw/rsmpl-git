@@ -3819,6 +3819,13 @@ prints one JSON object to stdout:
   reported `diff` string hides any of it (`--diff-max-lines N` cut lines
   off, including `N=0` which omits); else `false` (including no-changes).
 - `check` is `"ok"` when `--check` was passed, else `null`.
+- `rules` follows patch document order (file-section order, then
+  hunk order within a section), so a multi-hunk patch reads
+  top-to-bottom like the patch itself — including move cut/paste
+  hunks, which the engine evaluates in a different pass but
+  reports in document position.
+- `files` follows patch file-section order, with any extra changed
+  files not named by a section appended in sorted path order.
 - `--output <path>` always writes the full diff file in both modes, even
   when the reported `diff` is truncated or omitted.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a

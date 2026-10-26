@@ -124,6 +124,52 @@ fn no_match_exits_two_with_structured_error() {
 }
 
 #[test]
+fn json_report_arrays_follow_document_order() {
+    // T36/T45: `rules` and `files` follow patch document order
+    // (section order, hunk order within a section) — never sorted.
+    // Sections are non-alphabetical (z before a) and the cut hunk
+    // sorts second in the document although the engine evaluates
+    // cuts first: old code reported [r_cut, r_rename, r_paste].
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/z.rs",
+        "fn keep() {}\nfn helper() {}\n",
+    );
+    write(&dir.path().join(""), "src/a.rs", "fn a() {}\n");
+    let patch = "diff --git a/src/z.rs b/src/z.rs\n@@ -1,1 +1,1 @@ rule=r_rename\n# lang=rust\n- fn keep(...) {\n+ fn keep2(...) {\n      ...\n  }\n@@ -2,1 +2,1 @@ rule=r_cut\n# lang=rust\n# item I\n# bind=H\n- I\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1,0 +1,0 @@ rule=r_paste\n# lang=rust\n# use=H\n+ H\n";
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .args(["--format", "json", "--check"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let rules: Vec<&str> = v["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["rule"].as_str().unwrap())
+        .collect();
+    assert_eq!(rules, vec!["r_rename", "r_cut", "r_paste"]);
+    let files: Vec<&str> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["src/z.rs", "src/a.rs"]);
+}
+
+#[test]
 fn empty_patch_fails_text() {
     // T59: zero file sections is an authoring typo, not a no-op.
     let dir = init_repo();
