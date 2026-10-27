@@ -60,23 +60,31 @@ pub fn unified_diff_for_new_file_with_context(
 
 /// Build a `diff --git` section for a deleted file.
 ///
-/// Emits `deleted file mode 100644` + `+++ /dev/null` headers so the
-/// lowered patch removes the file with a bare `git apply` instead of
-/// truncating it to empty (T350). Callers must only use this when the
-/// input section targets `/dev/null` and the engine emptied the
+/// Emits `deleted file mode 100644` (regular files) or `deleted file
+/// mode 120000` (symlinks) + `+++ /dev/null` headers so the lowered
+/// patch removes the path with a bare `git apply` instead of
+/// truncating it to empty (T350). `git apply` type-checks the mode
+/// line, so a symlink deleted as 100644 fails with `wrong type`
+/// (T353 history dogfood: 53372c4). Callers must only use this when
+/// the input section targets `/dev/null` and the engine emptied the
 /// content; an ordinary all-minus hunk truncates the file and keeps
 /// it.
 pub fn unified_diff_for_deleted_file_with_context(
     path: &str,
     old: &str,
     context: usize,
+    symlink: bool,
 ) -> Option<String> {
     if old.is_empty() {
         return None;
     }
     let mut out = String::new();
     out.push_str(&format!("diff --git a/{path} b/{path}\n"));
-    out.push_str("deleted file mode 100644\n");
+    out.push_str(if symlink {
+        "deleted file mode 120000\n"
+    } else {
+        "deleted file mode 100644\n"
+    });
     out.push_str(&format!("--- a/{path}\n"));
     out.push_str("+++ /dev/null\n");
     let diff = similar::TextDiff::from_lines(old, "");
@@ -228,7 +236,8 @@ mod tests {
     fn deleted_file_section_uses_dev_null_headers() {
         // T350: deleted files lower with `deleted file mode` so a bare
         // `git apply` removes them (plain `+++ b/…` truncates instead).
-        let d = unified_diff_for_deleted_file_with_context("src/old.rs", "use x;\n", 3).unwrap();
+        let d =
+            unified_diff_for_deleted_file_with_context("src/old.rs", "use x;\n", 3, false).unwrap();
         assert!(d.contains("deleted file mode"), "got: {d}");
         assert!(d.contains("+++ /dev/null"), "got: {d}");
         assert!(d.contains("--- a/src/old.rs"), "got: {d}");
@@ -238,6 +247,15 @@ mod tests {
 
     #[test]
     fn deleted_file_empty_returns_none() {
-        assert!(unified_diff_for_deleted_file_with_context("x", "", 3).is_none());
+        assert!(unified_diff_for_deleted_file_with_context("x", "", 3, false).is_none());
+    }
+
+    #[test]
+    fn deleted_symlink_section_uses_120000_mode() {
+        // T353: `git apply` type-checks the mode line, so symlink
+        // deletes lower as 120000 (100644 fails `wrong type`).
+        let d = unified_diff_for_deleted_file_with_context("link", "target\n", 0, true).unwrap();
+        assert!(d.contains("deleted file mode 120000"), "got: {d}");
+        assert!(!d.contains("100644"), "got: {d}");
     }
 }

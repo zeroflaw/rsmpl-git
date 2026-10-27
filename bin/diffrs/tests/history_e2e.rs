@@ -82,6 +82,20 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 0,
     },
+    // Symlink create (T121) and symlink delete (T298: the T353
+    // `wrong type` dogfood gap) — ordinary passthrough, zero semantic.
+    Case {
+        commit: "e80988aa125e685f87e9c433320769f96295d2d7",
+        rev: None,
+        root: false,
+        expect_sem: 0,
+    },
+    Case {
+        commit: "53372c43752e2ad1523fe2688525429f47fca7fe",
+        rev: None,
+        root: false,
+        expect_sem: 0,
+    },
     // Root commit via the empty tree (3 new-file sections).
     Case {
         commit: "acd1c1eef9758629edc74dfce2920d760114beb9",

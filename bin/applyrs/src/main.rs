@@ -196,6 +196,7 @@ fn run() -> Result<(), CliError> {
     // rejected before any read (lexical check, symlinks unresolved).
     let mut originals: HashMap<String, String> = HashMap::new();
     let mut is_new: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut is_symlink: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut order: Vec<String> = Vec::new();
     for section in &patch.files {
         let rel = section.target_path.clone();
@@ -206,19 +207,39 @@ fn run() -> Result<(), CliError> {
             return Err(CliError::io_file(reason, &rel));
         }
         let abs = cli.repo.join(&rel);
-        let text = match std::fs::read_to_string(&abs) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("warning: {rel} not found, treating as new (empty) file");
-                is_new.insert(rel.clone());
-                String::new()
-            }
-            Err(e) => {
-                return Err(CliError::io_file(
-                    format!("cannot read {}: {e}", abs.display()),
-                    &rel,
-                ));
-            }
+        // Git stores a symlink's content as its target string (mode
+        // 120000 blobs); `git diff` shows the target as the line
+        // content. Read the link itself, never follow it: following a
+        // link-to-dir fails with EISDIR and a link-to-file would
+        // verify against the wrong bytes (T353 history dogfood:
+        // 53372c4 deletes a discovery symlink into a directory).
+        let text = match std::fs::symlink_metadata(&abs) {
+            Ok(md) if md.file_type().is_symlink() => match std::fs::read_link(&abs) {
+                Ok(target) => {
+                    is_symlink.insert(rel.clone());
+                    target.to_string_lossy().into_owned()
+                }
+                Err(e) => {
+                    return Err(CliError::io_file(
+                        format!("cannot read {}: {e}", abs.display()),
+                        &rel,
+                    ));
+                }
+            },
+            _ => match std::fs::read_to_string(&abs) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("warning: {rel} not found, treating as new (empty) file");
+                    is_new.insert(rel.clone());
+                    String::new()
+                }
+                Err(e) => {
+                    return Err(CliError::io_file(
+                        format!("cannot read {}: {e}", abs.display()),
+                        &rel,
+                    ));
+                }
+            },
         };
         order.push(rel.clone());
         originals.insert(rel, text);
@@ -255,7 +276,12 @@ fn run() -> Result<(), CliError> {
             .any(|s| s.target_path == *rel && s.is_deleted_file)
             && new.is_empty()
         {
-            rsmpl_git::unified_diff_for_deleted_file_with_context(rel, old, 0)
+            rsmpl_git::unified_diff_for_deleted_file_with_context(
+                rel,
+                old,
+                0,
+                is_symlink.contains(rel),
+            )
         } else {
             rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0)
         };

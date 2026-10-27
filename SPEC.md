@@ -4577,7 +4577,9 @@ committing; `--format json` consumers must also read stderr, where
 all `warning:` lines live (see D.2.3). Created files lower with
 `new file mode 100644` + `--- /dev/null` headers so the concrete
 diff applies with a bare `git apply`; deleted files mirror it with
-`deleted file mode 100644` + `+++ /dev/null` headers (T350).
+`deleted file mode 100644` + `+++ /dev/null` headers (T350) —
+`120000` when the target is a symlink, whose content reads as its
+target string, never followed (T353).
 `--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
 local artifact, not repo content. File renames are not a containment
