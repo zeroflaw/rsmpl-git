@@ -4094,6 +4094,7 @@ stdin like any Unix filter — pipe or pass `--file`/`--patch`.
 Three sources cover every case (T253 reverses the T135 `--patch` removal:
 inline wins for agentic check loops — no `Write` round-trip — at the cost
 of shell quoting and arg-length limits, so large patches keep `--file`):
+ T259 audit KEEP: each source traces to a distinct token cost (bare stdin = cheapest pipe, `--file` = large patches, `--patch` = inline loops), so the trio is final; if a future cleanup must drop a flag, drop `--patch` (inline loops fall back to temp files) — never `--file`, never the bare-stdin default.
 
 ```sh
 rsmpl-git --file change.rsmpl --check          # large patches, no quoting
