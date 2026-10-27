@@ -1,0 +1,9 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=sweep_pats
+# scope=file
+# allow=many
+# pat P
+# type T
+# expr E
+- let P: T = E;
++ let P: T = E.wrapping_add(1);
