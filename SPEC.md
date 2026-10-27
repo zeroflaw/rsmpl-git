@@ -2132,6 +2132,13 @@ crate::a::b::foo
 
 The exact zero-or-more behavior for path ellipsis must be documented by the implementation. The recommended behavior is zero or more path segments.
 
+> **v0.1 implementation note:** on call callees (e.g. `- crate::...::old(E)`)
+> the minus-side `...` matches zero or more path segments, and the
+> surrounding segments still match exactly. The plus side must be concrete
+> (`+ crate::new(E)`): a `+` path `...` has no absorbed path segments to
+> replay (only argument remainders replay, Section 16.3) and is rejected
+> with `RSMPL_PATTERN_CONFLICT`.
+
 ---
 
 ## 17. Matching Semantics

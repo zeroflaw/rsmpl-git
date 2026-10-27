@@ -356,7 +356,7 @@ pub fn classify_call_pattern(
                         .collect();
                     return Ok((
                         ExprPatternKind::Call {
-                            callee: callee_unmasked,
+                            callee: restore_path_ellipsis(callee_unmasked, &maps),
                             args,
                         },
                         maps,
@@ -373,6 +373,20 @@ pub fn classify_call_pattern(
         maps,
         lit_strs,
     ))
+}
+
+/// Restore `...` path-ellipsis markers (SPEC 16.5) in an extracted callee:
+/// `placeholder_expr` rewrites every `...` to `__RSMPL_ELLIPSIS_N`, but the
+/// engine's `match_path_segments` matches on literal `"..."` — without this
+/// restore a `crate::...::old` callee would fall through to exact compare
+/// and never match. Callee-only: receiver/method/macro-name `...` is
+/// undocumented. Arg-list markers are handled separately by
+/// `classify_args`/`restore_arg` and never pass through here.
+fn restore_path_ellipsis(mut text: String, maps: &PlaceholderMaps) -> String {
+    for id in &maps.ellipsis_ids {
+        text = text.replace(id, "...");
+    }
+    text
 }
 
 /// Restore backtick-literal sentinels after classification: a bare
@@ -526,5 +540,29 @@ mod tests {
             panic!("method literal got a non-method shape");
         };
         assert_eq!(args, vec![ArgPat::Concrete("Arg".to_string())]);
+    }
+
+    #[test]
+    fn path_ellipsis_survives_callee_extraction() {
+        // T164 (SPEC 16.5): `placeholder_expr` must not destroy the
+        // callee's `...` — the engine matches on literal `"..."`.
+        let (kind, _, _) = classify_call_pattern("crate::...::old(E)", &table()).unwrap();
+        let ExprPatternKind::Call { callee, args } = kind else {
+            panic!("path-ellipsis call got a non-call shape");
+        };
+        assert_eq!(callee, "crate::...::old");
+        assert_eq!(args, vec![ArgPat::Meta("__RSMPL_E".to_string())]);
+        // Plain concrete callees and arg ellipses are untouched.
+        let (kind, _, _) = classify_call_pattern("crate::a::old(E)", &table()).unwrap();
+        let ExprPatternKind::Call { callee, .. } = kind else {
+            panic!("concrete-path call got a non-call shape");
+        };
+        assert_eq!(callee, "crate::a::old");
+        let (kind, _, _) = classify_call_pattern("foo(...)", &table()).unwrap();
+        let ExprPatternKind::Call { callee, args } = kind else {
+            panic!("arg-ellipsis call got a non-call shape");
+        };
+        assert_eq!(callee, "foo");
+        assert_eq!(args, vec![ArgPat::Ellipsis]);
     }
 }

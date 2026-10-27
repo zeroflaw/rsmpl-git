@@ -1436,4 +1436,28 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert!(out.contains("r.bar(3);"), "got: {out}");
     }
+
+    #[test]
+    fn path_ellipsis_matches_zero_or_more_segments() {
+        // T164 (SPEC 16.5): a minus-side callee `...` matches zero or
+        // more path segments; the plus side stays concrete.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- crate::...::old(E)\n+ crate::new(E)\n";
+        let src = "fn a() {\n    crate::old(1);\n    crate::a::old(2);\n    crate::a::b::old(3);\n    crate::a::other(4);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("crate::new(1);"), "got: {out}");
+        assert!(out.contains("crate::new(2);"), "got: {out}");
+        assert!(out.contains("crate::new(3);"), "got: {out}");
+        assert!(
+            out.contains("crate::a::other(4);"),
+            "must not rewrite: {out}"
+        );
+    }
+
+    #[test]
+    fn path_ellipsis_last_segment_mismatch_fails() {
+        // T164: the segments around `...` still match exactly.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- crate::...::old(E)\n+ crate::new(E)\n";
+        let src = "fn a() {\n    crate::a::newer(1);\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
 }
