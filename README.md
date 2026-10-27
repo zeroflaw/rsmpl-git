@@ -68,6 +68,27 @@ gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
 gitrs apply --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
 ```
 
+### Diff (native changes → semantic patch)
+
+```sh
+gitrs diff --repo ./my-repo              # pending unstaged changes as RSmPL (stdout)
+gitrs diff --staged                      # index vs HEAD instead of worktree
+gitrs diff HEAD~1                        # history: changes since a revision
+gitrs diff --format json                 # {"version":1,"files":[…],"patch":"…"}
+```
+
+v0 emits ordinary hunks (passthrough — always parses, always
+round-trips through `gitrs apply --check` against the pre-change
+tree); semantic compression (rename/call-sweep fan-out) is T341.
+Untracked files are included as new-file sections; binary files are
+stripped with a `warning:` line. Empty changes print `(no changes)`
+on stderr with empty stdout (never pipe empties into `gitrs apply` —
+it rejects empty input). Round-trip recipe:
+
+```sh
+gitrs diff > change.rsmpl && git stash -q && gitrs apply --file change.rsmpl --check
+```
+
 `--format` picks text vs JSON; `--diff-max-lines N` (`0` omits) trims the
 preview only — `--check`/apply/`--output` always use the full 0-context
 lowering (still appliable via `git apply --unidiff-zero`). Exit `0` clean,

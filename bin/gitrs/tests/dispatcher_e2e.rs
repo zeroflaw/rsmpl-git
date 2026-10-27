@@ -14,17 +14,22 @@ fn dispatcher() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_gitrs"))
 }
 
-fn sibling_applyrs() -> PathBuf {
+fn sibling(name: &str) -> PathBuf {
     let d = dispatcher();
-    d.parent()
-        .map(|p| {
-            p.join(if cfg!(windows) {
-                "applyrs.exe"
-            } else {
-                "applyrs"
-            })
-        })
-        .unwrap()
+    let file = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    d.parent().map(|p| p.join(&file)).unwrap()
+}
+
+fn sibling_applyrs() -> PathBuf {
+    sibling("applyrs")
+}
+
+fn sibling_diffrs() -> PathBuf {
+    sibling("diffrs")
 }
 
 fn init_repo() -> tempfile::TempDir {
@@ -104,12 +109,33 @@ fn bare_dispatcher_needs_subcommand() {
 }
 
 #[test]
-fn diff_reports_t340_stub() {
-    let out = Command::new(dispatcher()).arg("diff").output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(stderr.contains("not yet implemented"), "got: {stderr}");
-    assert!(stderr.contains("T340"), "got: {stderr}");
+fn diff_passthrough_matches_diffrs() {
+    // Sibling must exist: run via `cargo test --workspace`.
+    assert!(
+        sibling_diffrs().exists(),
+        "sibling diffrs missing next to the dispatcher"
+    );
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    let via: Vec<String> = vec![
+        "diff".to_string(),
+        "--repo".to_string(),
+        dir.path().to_string_lossy().to_string(),
+    ];
+    // Untracked file: `gitrs diff` must surface it (git-diff-only
+    // would report nothing).
+    let out_via = Command::new(dispatcher()).args(&via).output().unwrap();
+    let out_direct = Command::new(sibling_diffrs())
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out_via.status.code(), Some(0));
+    assert_eq!(out_direct.status.code(), Some(0));
+    let via_stdout = String::from_utf8_lossy(&out_via.stdout).to_string();
+    let direct_stdout = String::from_utf8_lossy(&out_direct.stdout).to_string();
+    assert_eq!(via_stdout, direct_stdout);
+    assert!(direct_stdout.contains("new file mode"));
 }
 
 #[test]

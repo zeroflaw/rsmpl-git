@@ -25,10 +25,8 @@ patch has several hunks). For RSmPL hunks the `+new,len` side is
 ignored (SPEC 10.4), so elide it (`@@ -old,len @@`); copying the old
 side verbatim (`@@ -old,len +old,len @@`) stays compatible.
 
-Rules: every semantic hunk = `@@ -old,len @@ rule=name`
-header (+new,len elided, RSmPL-only) + at least one `#` directive line + `-`/`+`/context lines
-(`# lang=rust` alone is the marker for bare renames; hunks that
-already carry other directives omit it, SPEC 7.1). All `-old,len`
+Rules: every semantic hunk = `@@ -old,len @@ rule=name` header (+new,len elided, RSmPL-only) + at least one `#` directive line + `-`/`+`/context lines
+(`# lang=rust` alone is the marker for bare renames; hunks that already carry other directives omit it, SPEC 7.1). All `-old,len`
 ranges cite the ORIGINAL pre-patch file, never rebased by earlier hunks
 (SPEC 10). Ordinary Git hunks (no `#` directives) may mix in but must not
 overlap semantic ranges (SPEC 10.6, SPEC 11).
@@ -137,6 +135,8 @@ gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
 gitrs apply --file change.rsmpl --output full.patch
 ```
 
+Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v0 ordinary
+hunks; see README diff section; binary files stripped with a warning).
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 `--file` names a patch file (avoids quoting for large patches); `--patch`
 passes it inline (archived to `<repo>/.history/{id}.rsmpl`, last 128 kept,

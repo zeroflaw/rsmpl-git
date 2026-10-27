@@ -2,7 +2,7 @@
 //!
 //! ```sh
 //! gitrs apply --file change.rsmpl --check   # invoke applyrs
-//! gitrs diff --repo .                       # invoke diffrs (T340)
+//! gitrs diff --repo .                       # invoke diffrs
 //! ```
 //!
 //! The dispatcher never parses subcommand flags itself: `apply` re-execs
@@ -107,17 +107,7 @@ fn main() {
 }
 
 /// Re-exec the sibling `binary` with `rest`, propagating its exit code.
-///
-/// `diff` is a stub until T340 lands `bin/diffrs`: the sibling is
-/// absent, so this reports the pointer error instead of a bare
-/// cannot-locate message.
 fn invoke(binary: &str, rest: &[String], args: &[String]) -> ! {
-    if binary == "diffrs" {
-        fail(
-            "gitrs diff is not yet implemented (see T340: bin/diffrs + rsmpl_diff crates)",
-            args,
-        );
-    }
     let bin = sibling(binary);
     match std::process::Command::new(&bin).args(rest).status() {
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),

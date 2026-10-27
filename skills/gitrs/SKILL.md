@@ -69,10 +69,8 @@ marker; hunks with other directives omit it (SPEC 7.1).
 + new_function(Receiver, Arg)
 ```
 
-- Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/
-  generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
-  preserved, bodies never rewritten (SPEC 14.7). A `trait T {` header + fn
-  pair rewrites trait methods incl. `;` decls (never `pub`, SPEC 13.4).
+- Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
+  preserved, bodies never rewritten (SPEC 14.7). A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`, SPEC 13.4).
 - Call rewrite: add `# repeat` to fold nested same-rule matches in one
   hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8). General-expression
   rewrites (`E + 1` → `E + 2`) fold the same way; `let`/type/macro
@@ -124,6 +122,8 @@ gitrs apply --file change.rsmpl                       # apply for real
 - Piped patches avoid temp files: `cat change.rsmpl | gitrs apply --check`
   (no input flags means stdin; `--file -` is the explicit alias; `--patch`
   passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
+  Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v0
+  ordinary hunks; see README diff section).
 
 ## Errors: code → fix (SPEC 25)
 

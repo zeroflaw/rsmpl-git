@@ -2,10 +2,14 @@
 members = [
   "bin/applyrs",
   "bin/gitrs",
+  "bin/diffrs",
   "crates/rsmpl_patch",
   "crates/rsmpl_pattern",
   "crates/rsmpl_engine",
   "crates/rsmpl_git",
+  "crates/rsmpl_diff",
+  "crates/rsmpl_diff_source",
+  "crates/rsmpl_diff_infer",
 ]
 resolver = "2"
 
@@ -20,6 +24,9 @@ rsmpl_patch = { path = "crates/rsmpl_patch" }
 rsmpl_pattern = { path = "crates/rsmpl_pattern" }
 rsmpl_engine = { path = "crates/rsmpl_engine" }
 rsmpl_git = { path = "crates/rsmpl_git" }
+rsmpl_diff = { path = "crates/rsmpl_diff" }
+rsmpl_diff_source = { path = "crates/rsmpl_diff_source" }
+rsmpl_diff_infer = { path = "crates/rsmpl_diff_infer" }
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
