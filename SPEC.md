@@ -2429,7 +2429,12 @@ compile time with the exact diagnostic below, or at match time as a silent
 candidate rejection that surfaces as `RSMPL_MATCH_CONFLICT` with reason `no
 match found` and a suggestion naming the file to read for valid ranges.
 There is no partial matching and no guessing; check this table before
-authoring instead of iterating against `--check`.
+authoring instead of iterating against `--check`. The match-time (R-row)
+rejections are permanent v0.1 scope, not deferred work: control-flow
+expressions, `let-else` targets, `P @` subpatterns, and macro types go
+through ordinary hunks (the same composition as Section 21.3 macro
+bodies and Section 22 formatting). Reopen a row only with a dogfood
+case where an ordinary hunk cannot express the edit.
 
 #### Compile-time rejections (exact diagnostics)
 

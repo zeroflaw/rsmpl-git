@@ -102,7 +102,9 @@ glob, `as`, and `pub use` tails preserved, segment-wise (SPEC 14.9).
 Beyond calls — `let` (`- let x = E;` / `+ let y = E;`), general
 expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>` with `# type T`).
 A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
-set: full supported-vs-rejected table with exact errors is SPEC 18.6;
+set: full supported-vs-rejected table with exact errors is SPEC 18.6
+(control-flow exprs, `let-else` targets, `P @` subpatterns, macro types
+stay ordinary hunks — permanent v0.1 scope);
 ellipsis positions are SPEC 16.
 
 ## Ranges (file reads, not a CLI listing)

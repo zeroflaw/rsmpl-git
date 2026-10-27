@@ -97,7 +97,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
   segment-wise (SPEC 14.9).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`# type T`). Bare `P` never matches `x: T` — write `P: T`.
-  Full supported-vs-rejected table: SPEC 18.6.
+  Table: SPEC 18.6 (control-flow/`let-else`/`P @`/macro-type shapes stay ordinary hunks, permanent scope).
 - Ordinary hunks: text edits with no `#` lines; headers stay two-sided
   (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11).
 - Macros: plain call patterns never reach inside macro invocations;
