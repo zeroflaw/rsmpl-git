@@ -135,3 +135,52 @@ fn evolves_typed_self_receiver_inside_impl() {
         "got: {out}"
     );
 }
+
+#[test]
+fn trailing_comma_where_matches_single_line_pattern() {
+    // T224: rustfmt-canonical multi-line `where` (trailing comma) matches
+    // the documented single-line pattern spelling; a pure rename keeps
+    // the clause text, never collapses it to single-line.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@ rule=x\n# lang=rust\n- fn f<T>(...) -> T where T: Clone {\n+ fn g<T>(...) -> T where T: Clone {\n      ...\n  }\n";
+    let src = "fn f<T>(x: T) -> T\nwhere\n    T: Clone,\n{\n    x\n}\n";
+    let out = apply(patch, src).unwrap();
+    assert!(out.contains("fn g<T>(x: T) -> T"), "got: {out}");
+    assert!(
+        out.contains("    T: Clone,"),
+        "where clause kept, got: {out}"
+    );
+}
+
+#[test]
+fn trailing_comma_params_match_single_line_pattern() {
+    // T224 params half: multi-line params with trailing comma match the
+    // single-line pattern; a pure rename keeps the list, never collapses it.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@ rule=x\n# lang=rust\n- fn f(x: i32, y: i32) -> i32 {\n+ fn g(x: i32, y: i32) -> i32 {\n      ...\n  }\n";
+    let src = "fn f(\n    x: i32,\n    y: i32,\n) -> i32 {\n    x + y\n}\n";
+    let out = apply(patch, src).unwrap();
+    assert!(out.contains("fn g("), "got: {out}");
+    assert!(out.contains("    y: i32,"), "params kept, got: {out}");
+}
+
+#[test]
+fn trailing_comma_where_matches_inside_impl() {
+    // T224 via the impl-context slot planner: same tolerance for methods.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,8 +2,8 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     fn f<T>(...) -> T where T: Clone {\n+     fn g<T>(...) -> T where T: Clone {\n          ...\n      }\n  }\n";
+    let src = "struct S;\nimpl S {\n    fn f<T>(x: T) -> T\n    where\n        T: Clone,\n    {\n        x\n    }\n}\n";
+    let out = apply(patch, src).unwrap();
+    assert!(out.contains("fn g<T>(x: T) -> T"), "got: {out}");
+    assert!(
+        out.contains("        T: Clone,"),
+        "where clause kept, got: {out}"
+    );
+}
+
+#[test]
+fn where_predicate_difference_still_fails() {
+    // T224 negative control: trailing-comma tolerance must not equate
+    // genuinely different predicates.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=x\n# lang=rust\n- fn f<T>(...) where T: Clone {\n+ fn g<T>(...) where T: Clone {\n      ...\n  }\n";
+    let src = "fn f<T>(x: T) where T: Debug {\n    x\n}\n";
+    let err = apply(patch, src).unwrap_err();
+    assert!(err.contains("no match found"), "got: {err}");
+}

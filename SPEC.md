@@ -1635,6 +1635,8 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 | where clause | absent requires none; concrete requires normalized equality of the predicates; `W` matches any; predicates containing `...` are a pattern error | insert before `{` / replace / delete (minus-concrete/`+`-omitted) |
 | body | must be exactly `...` (or `;`) on both sides; mixing `...` with other tokens is a pattern error | always preserved; any concrete body is a pattern error |
 
+Trailing commas are ignored when comparing parameter lists and `where` predicates: a rustfmt-canonical multi-line target (`x: i32,`, `T: Clone,`) matches the single-line pattern spelling (`x: i32`, `T: Clone`), and a comma-only slot difference never emits an edit — the target text is preserved.
+
 Example (add visibility, generics, and a return type in one hunk, params and body preserved):
 
 ```diff

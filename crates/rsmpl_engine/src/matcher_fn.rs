@@ -21,6 +21,14 @@ use crate::lines::LineIndex;
 fn norm_slot(s: &str) -> String {
     s.split_whitespace().collect()
 }
+/// List-slot normalization: `norm_slot` plus trailing-comma tolerance.
+/// In comma-separated positions (parameter lists, `where` predicates) a
+/// trailing comma is a separator, never a semantic difference, so the
+/// rustfmt-canonical multi-line spelling (`x: i32,`) compares equal to
+/// the single-line pattern spelling (`x: i32`) (SPEC 14.7).
+fn norm_list_slot(s: &str) -> String {
+    norm_slot(s).trim_end_matches(',').to_string()
+}
 
 /// Compact pattern slot text into valid Rust (`< T >` -> `<T>`,
 /// `x : i32` -> `x: i32`). Input is token-joined pattern text.
@@ -460,7 +468,7 @@ fn minus_matches_strict(
         };
         let got = original.get(a..b).unwrap_or("");
         let want = minus.params_text.as_deref().unwrap_or("");
-        if norm_slot(got) != norm_slot(want) {
+        if norm_list_slot(got) != norm_list_slot(want) {
             return false;
         }
     }
@@ -483,11 +491,11 @@ fn minus_matches_strict(
             return false;
         };
         let got = original.get(a..b).unwrap_or("");
-        let got_preds = norm_slot(got)
+        let got_preds = norm_list_slot(got)
             .strip_prefix("where")
             .unwrap_or("")
             .to_string();
-        if got_preds != norm_slot(want) {
+        if got_preds != norm_list_slot(want) {
             return false;
         }
     }
@@ -677,7 +685,7 @@ fn plan_sig_edits(
         let want = plus.params_text.as_deref().unwrap_or("");
         let (a, b) = params_inner_bytes(index, sig)
             .ok_or_else(|| range_err(sig.paren_token.span.open().start().line as u32))?;
-        if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(want) {
+        if norm_list_slot(original.get(a..b).unwrap_or("")) != norm_list_slot(want) {
             edits.push(TextEdit::new(a, b, compact_slot(want)));
         }
     }
@@ -755,11 +763,11 @@ fn plan_sig_edits(
         // Plus Absent with minus Absent/Any: preserve (no delete signal).
         // Plus Absent with minus Concrete: delete the clause.
         let plus_absent = matches!(plus.where_clause, WherePat::Absent);
-        if minus_w.as_deref().map(norm_slot) != plus_w.as_deref().map(norm_slot) {
+        if minus_w.as_deref().map(norm_list_slot) != plus_w.as_deref().map(norm_list_slot) {
             match (where_bytes(original, index, sig), plus_w) {
                 (Some((a, b)), Some(want)) => {
                     let rep = format!("where {}", compact_slot(&want));
-                    if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&rep) {
+                    if norm_list_slot(original.get(a..b).unwrap_or("")) != norm_list_slot(&rep) {
                         edits.push(TextEdit::new(a, b, rep));
                     }
                 }

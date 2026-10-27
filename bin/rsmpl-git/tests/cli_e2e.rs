@@ -1680,3 +1680,58 @@ fn repeat_with_bind_rejected_json_envelope() {
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
 }
+
+#[test]
+fn trailing_comma_where_rename_applies() {
+    // T224: multi-line `where` target matches the single-line pattern
+    // spelling; the clause is preserved on a pure rename.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn f<T>(x: T) -> T\nwhere\n    T: Clone,\n{\n    x\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,6 @@ rule=t\n# lang=rust\n- fn f<T>(...) -> T where T: Clone {\n+ fn g<T>(...) -> T where T: Clone {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "fn g<T>(x: T) -> T\nwhere\n    T: Clone,\n{\n    x\n}\n"
+    );
+}
+
+#[test]
+fn trailing_comma_params_json_spans() {
+    // T224 params half via JSON: one match, original-source spans.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn f(\n    x: i32,\n    y: i32,\n) -> i32 {\n    x + y\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,6 @@ rule=t\n# lang=rust\n- fn f(x: i32, y: i32) -> i32 {\n+ fn g(x: i32, y: i32) -> i32 {\n      ...\n  }\n";
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be JSON");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
+    assert_eq!(v["rules"][0]["spans"], serde_json::json!([[1, 1]]));
+}
