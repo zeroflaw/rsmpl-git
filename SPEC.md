@@ -3067,7 +3067,10 @@ under `# allow=one`, so the many-case never claims an exact number.)
 The zero-match `reason` also carries a T67 candidate preview — the nearest
 same-kind item header (`fn foo at line 5: 'fn foo() {}'`), or the nearest
 non-empty source line when the hunk kind has no item headers — so the next
-attempt often needs no file read. The preview is a single line of at most
+attempt often needs no file read. The header walk reaches block-level items
+(fn bodies, closures, method bodies — the same scope matching reaches), and
+same-kind headers win over a nearer enclosing item (a typo'd `struct Lcoal`
+previews the real `struct Local`, not the enclosing `fn`). The preview is a single line of at most
 200 chars of source (plus a short `kind name at line N` label, whole string
 bounded); `suggestion` is unchanged. An empty file has nothing to preview
 and keeps the bare `no match found` reason.

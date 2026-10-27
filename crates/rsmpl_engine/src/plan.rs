@@ -508,7 +508,29 @@ fn candidate_preview(
         if let Some(parsed) = state.parsed.as_ref() {
             let mut headers = Vec::new();
             collect_item_headers(&parsed.items, &mut headers);
-            if let Some((line, label)) = nearest_header(&headers, old_start) {
+            // T141: prefer the same-kind header (a typo'd `struct Lcoal`
+            // should preview the real `struct Local`, not the enclosing
+            // `fn outer`). Fall back to nearest-any when no same-kind
+            // header exists, preserving the old behavior.
+            let want_prefix: Option<String> = match &compiled.kind {
+                PatternKind::Fn { .. } | PatternKind::ImplContext { .. } => Some("fn ".to_string()),
+                PatternKind::ItemRename { kind, .. } => Some(format!("{} ", kind.as_str())),
+                PatternKind::UseRename { .. } => Some("use ".to_string()),
+                _ => None,
+            };
+            let nearest = match want_prefix {
+                Some(prefix) => {
+                    let same_kind: Vec<(u32, String)> = headers
+                        .iter()
+                        .filter(|(_, label)| label.starts_with(&prefix))
+                        .cloned()
+                        .collect();
+                    nearest_header(&same_kind, old_start)
+                        .or_else(|| nearest_header(&headers, old_start))
+                }
+                None => nearest_header(&headers, old_start),
+            };
+            if let Some((line, label)) = nearest {
                 if let Some(excerpt) = source_line(state, line) {
                     return Some(cap_preview(format!("{label} at line {line}: '{excerpt}'")));
                 }
@@ -519,96 +541,109 @@ fn candidate_preview(
 }
 
 /// `(line, label)` item headers for the T67 kind-aware tier.
+/// T141: walks the full `Visit` tree so block-level items (fn bodies,
+/// closures, method bodies — the same scope the T23 matcher reaches) are
+/// previewed, not just file/inline-mod items. Macro bodies stay excluded
+/// only insofar as `syn` nests them as tokens, matching matcher behavior.
 fn collect_item_headers(items: &[syn::Item], out: &mut Vec<(u32, String)>) {
     use syn::spanned::Spanned;
-    for it in items {
-        match it {
-            syn::Item::Fn(f) => {
-                let line = f.sig.fn_token.span().start().line as u32;
-                out.push((line, format!("fn {}", f.sig.ident)));
-            }
-            syn::Item::Struct(s) => {
-                out.push((
-                    s.ident.span().start().line as u32,
-                    format!("struct {}", s.ident),
-                ));
-            }
-            syn::Item::Enum(e) => {
-                out.push((
-                    e.ident.span().start().line as u32,
-                    format!("enum {}", e.ident),
-                ));
-            }
-            syn::Item::Trait(t) => {
-                out.push((
-                    t.ident.span().start().line as u32,
-                    format!("trait {}", t.ident),
-                ));
-            }
-            syn::Item::Union(u) => {
-                out.push((
-                    u.ident.span().start().line as u32,
-                    format!("union {}", u.ident),
-                ));
-            }
-            syn::Item::Type(t) => {
-                out.push((
-                    t.ident.span().start().line as u32,
-                    format!("type {}", t.ident),
-                ));
-            }
-            syn::Item::Const(c) => {
-                out.push((
-                    c.ident.span().start().line as u32,
-                    format!("const {}", c.ident),
-                ));
-            }
-            syn::Item::Static(s) => {
-                out.push((
-                    s.ident.span().start().line as u32,
-                    format!("static {}", s.ident),
-                ));
-            }
-            syn::Item::Mod(m) => {
-                out.push((
-                    m.ident.span().start().line as u32,
-                    format!("mod {}", m.ident),
-                ));
-                if let Some((_, inner)) = &m.content {
-                    collect_item_headers(inner, out);
+    use syn::visit::{self, Visit};
+    struct Headers {
+        out: Vec<(u32, String)>,
+    }
+    impl<'ast> Visit<'ast> for Headers {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            match it {
+                syn::Item::Fn(f) => {
+                    let line = f.sig.fn_token.span().start().line as u32;
+                    self.out.push((line, format!("fn {}", f.sig.ident)));
                 }
-            }
-            syn::Item::Use(u) => {
-                let tree = &u.tree;
-                let rendered = quote::quote!(#tree).to_string();
-                out.push((
-                    u.use_token.span.start().line as u32,
-                    format!("use {rendered}"),
-                ));
-            }
-            syn::Item::Impl(imp) => {
-                // T19b: name both sides so the preview distinguishes impl
-                // headers (`impl Printable for Old` vs `impl Old`).
-                let line = imp.self_ty.span().start().line as u32;
-                let self_ty = &imp.self_ty;
-                let rendered_self = quote::quote!(#self_ty).to_string();
-                let label = match &imp.trait_ {
-                    Some((_, path, _)) => {
-                        format!("impl {} for {rendered_self}", quote::quote!(#path))
-                    }
-                    None => format!("impl {rendered_self}"),
-                };
-                out.push((line, label));
-                for it in &imp.items {
-                    if let syn::ImplItem::Fn(m) = it {
-                        let line = m.sig.fn_token.span().start().line as u32;
-                        out.push((line, format!("fn {}", m.sig.ident)));
+                syn::Item::Struct(s) => {
+                    self.out.push((
+                        s.ident.span().start().line as u32,
+                        format!("struct {}", s.ident),
+                    ));
+                }
+                syn::Item::Enum(e) => {
+                    self.out.push((
+                        e.ident.span().start().line as u32,
+                        format!("enum {}", e.ident),
+                    ));
+                }
+                syn::Item::Trait(t) => {
+                    self.out.push((
+                        t.ident.span().start().line as u32,
+                        format!("trait {}", t.ident),
+                    ));
+                }
+                syn::Item::Union(u) => {
+                    self.out.push((
+                        u.ident.span().start().line as u32,
+                        format!("union {}", u.ident),
+                    ));
+                }
+                syn::Item::Type(t) => {
+                    self.out.push((
+                        t.ident.span().start().line as u32,
+                        format!("type {}", t.ident),
+                    ));
+                }
+                syn::Item::Const(c) => {
+                    self.out.push((
+                        c.ident.span().start().line as u32,
+                        format!("const {}", c.ident),
+                    ));
+                }
+                syn::Item::Static(s) => {
+                    self.out.push((
+                        s.ident.span().start().line as u32,
+                        format!("static {}", s.ident),
+                    ));
+                }
+                syn::Item::Mod(m) => {
+                    self.out.push((
+                        m.ident.span().start().line as u32,
+                        format!("mod {}", m.ident),
+                    ));
+                }
+                syn::Item::Use(u) => {
+                    let tree = &u.tree;
+                    let rendered = quote::quote!(#tree).to_string();
+                    self.out.push((
+                        u.use_token.span.start().line as u32,
+                        format!("use {rendered}"),
+                    ));
+                }
+                syn::Item::Impl(imp) => {
+                    // T19b: name both sides so the preview distinguishes impl
+                    // headers (`impl Printable for Old` vs `impl Old`).
+                    let line = imp.self_ty.span().start().line as u32;
+                    let self_ty = &imp.self_ty;
+                    let rendered_self = quote::quote!(#self_ty).to_string();
+                    let label = match &imp.trait_ {
+                        Some((_, path, _)) => {
+                            format!("impl {} for {rendered_self}", quote::quote!(#path))
+                        }
+                        None => format!("impl {rendered_self}"),
+                    };
+                    self.out.push((line, label));
+                    for it in &imp.items {
+                        if let syn::ImplItem::Fn(m) = it {
+                            let line = m.sig.fn_token.span().start().line as u32;
+                            self.out.push((line, format!("fn {}", m.sig.ident)));
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
+            visit::visit_item(self, it);
         }
     }
+    let mut h = Headers { out: Vec::new() };
+    for it in items {
+        h.visit_item(it);
+    }
+    out.extend(h.out);
 }
 
 fn nearest_header(headers: &[(u32, String)], old_start: u32) -> Option<(u32, String)> {
@@ -991,6 +1026,17 @@ mod tests {
         assert!(err.contains("no match found"), "got: {err}");
         assert!(err.contains("nearest"), "got: {err}");
         assert!(err.contains("line 1"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_block_level_preview_names_local_item() {
+        // T141: a typo'd block-level rename previews the same-kind local,
+        // not the enclosing fn — the retry needs no file read.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 @@ rule=r\n# lang=rust\n- struct Lcoal\n+ struct Fixed\n";
+        let src = "fn outer() {\n    struct Local;\n    let _ = Local;\n}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("nearest struct Local at line 2"), "got: {err}");
     }
 
     #[test]
