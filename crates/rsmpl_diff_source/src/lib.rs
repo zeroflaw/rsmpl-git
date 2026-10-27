@@ -34,6 +34,9 @@ pub struct CollectedDiff {
     /// A top-level `.history/` audit log was present but skipped
     /// (warned on stderr, never embedded).
     pub skipped_history: bool,
+    /// Untracked directory entries skipped during collection (nested
+    /// repos, empty dirs — T387; warned on stderr, never embedded).
+    pub skipped_untracked_dirs: Vec<String>,
 }
 
 impl GitSource {
@@ -86,6 +89,14 @@ impl GitSource {
         let (untracked, skipped): (Vec<String>, Vec<String>) =
             untracked.into_iter().partition(|p| !is_history_path(p));
         let skipped_history = !skipped.is_empty();
+        // Untracked directories (T387): `git status -uall` reports a
+        // nested repo as `?? inner/` and an empty dir as `?? dir/` —
+        // real `git diff` shows neither, and there is no content to
+        // embed (a nested repo's files belong to another repo, an
+        // empty dir holds nothing). Reading them as files fails with
+        // EISDIR, so skip them here (warned by the binary) instead of
+        // failing the whole conversion on unrelated state.
+        let mut skipped_untracked_dirs = Vec::new();
         for path in &untracked {
             let abs = self.repo.join(path);
             // Read the link itself, never follow it (T354, mirrors the
@@ -93,6 +104,10 @@ impl GitSource {
             // `std::fs::read` with `SourceError` (exit 2) and a
             // link-to-dir with EISDIR; `read_link` serves both.
             let (content, mode) = match std::fs::symlink_metadata(&abs) {
+                Ok(md) if md.file_type().is_dir() => {
+                    skipped_untracked_dirs.push(path.clone());
+                    continue;
+                }
                 Ok(md) if md.file_type().is_symlink() => match std::fs::read_link(&abs) {
                     Ok(target) => (target.to_string_lossy().into_owned().into_bytes(), "120000"),
                     Err(e) => {
@@ -136,6 +151,9 @@ impl GitSource {
 
         let mut files = files_in_diff(&raw);
         for path in untracked {
+            if skipped_untracked_dirs.contains(&path) {
+                continue;
+            }
             if !files.contains(&path) {
                 files.push(path);
             }
@@ -144,6 +162,7 @@ impl GitSource {
             raw,
             files,
             skipped_history,
+            skipped_untracked_dirs,
         })
     }
 }
@@ -207,9 +226,14 @@ fn new_file_section(path: &str, content: &str, mode: &str) -> String {
         return section;
     }
     section.push_str(&format!("--- /dev/null\n+++ b/{path}\n"));
-    let line_count = content.lines().count();
-    section.push_str(&format!("@@ -0,0 +1,{line_count} @@\n"));
-    for line in content.lines() {
+    // T385: split on `\n` (not `str::lines`, which strips `\r`) so
+    // CRLF content round-trips byte-exact instead of converting to LF.
+    let mut clines: Vec<&str> = content.split('\n').collect();
+    if content.ends_with('\n') {
+        clines.pop();
+    }
+    section.push_str(&format!("@@ -0,0 +1,{} @@\n", clines.len()));
+    for line in clines {
         section.push('+');
         section.push_str(line);
         section.push('\n');
@@ -303,6 +327,17 @@ mod tests {
         let section = new_file_section("run.sh", "#!/bin/sh\n", "100755");
         assert!(section.contains("new file mode 100755\n"));
         assert!(section.contains("--- /dev/null\n"));
+    }
+
+    #[test]
+    fn new_file_section_preserves_crlf() {
+        // T385: CRLF content must ride the `+` lines byte-exact —
+        // `str::lines` stripped the `\r` and silently converted
+        // worktree files to LF on apply.
+        let section = new_file_section("win.txt", "a\r\nb\r\n", "100644");
+        assert!(section.contains("@@ -0,0 +1,2 @@\n"), "got: {section}");
+        assert!(section.contains("+a\r\n+b\r\n"), "got: {section}");
+        assert!(!section.contains("\\ No newline"), "got: {section}");
     }
 
     #[test]

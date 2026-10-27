@@ -44,7 +44,10 @@ pub fn infer_semantic(sections: &[String]) -> Option<String> {
 
 fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<String> {
     let header = section.lines().next()?;
-    if !header.starts_with("diff --git ") {
+    // T385: CRLF content stays ordinary passthrough — detectors strip
+    // `\r` via `str::lines` and would emit hunks that cannot match
+    // the worktree file.
+    if !header.starts_with("diff --git ") || section.contains('\r') {
         return None;
     }
     // T377: rename sections stay ordinary passthrough. Detectors key

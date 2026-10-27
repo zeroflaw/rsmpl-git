@@ -31,6 +31,9 @@ pub enum InferError {
 pub struct InferredPatch {
     pub rsmpl: String,
     pub stripped_binary: Vec<String>,
+    /// Submodule (gitlink, mode 160000) paths stripped during
+    /// inference (T386; warned like binaries).
+    pub stripped_gitlink: Vec<String>,
 }
 
 pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
@@ -41,18 +44,21 @@ pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
         return Ok(InferredPatch {
             rsmpl: String::new(),
             stripped_binary: Vec::new(),
+            stripped_gitlink: Vec::new(),
         });
     }
-    let (kept, stripped) = strip_binary_sections(raw);
-    if kept.is_empty() && !stripped.is_empty() {
-        // All-binary change (T378): nothing expressible in RSmPL-Git (a
-        // patch is UTF-8), so report empty + the stripped names (the
-        // binary warns) instead of failing the empty passthrough below
-        // as an authoring typo. Section-less non-binary input still
-        // falls through to the parse error.
+    let (kept, stripped, stripped_gitlink) = strip_unpatchable_sections(raw);
+    if kept.is_empty() && (!stripped.is_empty() || !stripped_gitlink.is_empty()) {
+        // All-binary / all-gitlink change (T378, T386): nothing
+        // expressible in RSmPL-Git (a patch is UTF-8; `applyrs` cannot
+        // read submodule directories), so report empty + the stripped
+        // names (the binary warns) instead of failing the empty
+        // passthrough below as an authoring typo. Section-less
+        // non-binary input still falls through to the parse error.
         return Ok(InferredPatch {
             rsmpl: String::new(),
             stripped_binary: stripped,
+            stripped_gitlink,
         });
     }
     // Native hunks often carry git's `@@ -a,b +c,d @@ <funcname>`
@@ -84,16 +90,19 @@ pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
         return Ok(InferredPatch {
             rsmpl: passthrough,
             stripped_binary: stripped,
+            stripped_gitlink,
         });
     }
     match rsmpl_patch::parse_patch(&candidate) {
         Ok(_) => Ok(InferredPatch {
             rsmpl: candidate,
             stripped_binary: stripped,
+            stripped_gitlink,
         }),
         Err(_) => Ok(InferredPatch {
             rsmpl: passthrough,
             stripped_binary: stripped,
+            stripped_gitlink,
         }),
     }
 }
@@ -105,34 +114,57 @@ fn describe_parse_error(e: &rsmpl_patch::ParseError) -> String {
     }
 }
 
+/// Lines of `s` without stripping trailing `\r` (`str::lines`
+/// drops it, corrupting CRLF file content — T385). The trailing empty
+/// segment of a `\n`-terminated input is dropped so callers re-append
+/// `\n` per line and round-trip byte-exact.
+fn raw_lines(s: &str) -> Vec<&str> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let mut v: Vec<&str> = s.split('\n').collect();
+    if s.ends_with('\n') {
+        v.pop();
+    }
+    v
+}
+
 /// Split `raw` into `diff --git` sections; drop sections holding a
-/// `Binary files … differ` line. Returns (kept sections, stripped
-/// `b/`-side paths).
-fn strip_binary_sections(raw: &str) -> (Vec<String>, Vec<String>) {
+/// `Binary files … differ` line or a mode-160000 (gitlink/submodule)
+/// declaration. Returns (kept sections, stripped `b/`-side binary
+/// paths, stripped `b/`-side gitlink paths).
+fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut stripped = Vec::new();
+    let mut stripped_gitlink = Vec::new();
     // `raw` always ends sections with `\n` (git output); a missing
     // trailing section is still flushed below.
     let mut current = String::new();
     let mut current_path: Option<String> = None;
     let mut current_binary = false;
+    let mut current_gitlink = false;
     let mut seen_any = false;
-    for line in raw.lines() {
+    for line in raw_lines(raw) {
         if let Some(rest) = line.strip_prefix("diff --git ") {
             if seen_any {
                 flush(
                     &mut kept,
                     &mut stripped,
+                    &mut stripped_gitlink,
                     &mut current,
                     &current_path,
                     current_binary,
+                    current_gitlink,
                 );
             }
             seen_any = true;
             current_binary = false;
+            current_gitlink = false;
             current_path = b_side_path(rest);
         } else if line.starts_with("Binary files ") {
             current_binary = true;
+        } else if is_gitlink_mode_line(line) {
+            current_gitlink = true;
         }
         if seen_any {
             current.push_str(line);
@@ -143,24 +175,46 @@ fn strip_binary_sections(raw: &str) -> (Vec<String>, Vec<String>) {
         flush(
             &mut kept,
             &mut stripped,
+            &mut stripped_gitlink,
             &mut current,
             &current_path,
             current_binary,
+            current_gitlink,
         );
     }
-    (kept, stripped)
+    (kept, stripped, stripped_gitlink)
+}
+
+/// A mode line declaring a gitlink (mode 160000): submodule add
+/// (`new file mode`), delete (`deleted file mode`), or bump (`old /
+/// `new mode`, `index … 160000`). Restricted to metadata prefixes —
+/// a content line mentioning 160000 (e.g. `+const X = 160000;`) must
+/// never strip its section.
+fn is_gitlink_mode_line(line: &str) -> bool {
+    (line.starts_with("new file mode ")
+        || line.starts_with("deleted file mode ")
+        || line.starts_with("old mode ")
+        || line.starts_with("new mode ")
+        || line.starts_with("index "))
+        && line.split_whitespace().any(|w| w == "160000")
 }
 
 fn flush(
     kept: &mut Vec<String>,
     stripped: &mut Vec<String>,
+    stripped_gitlink: &mut Vec<String>,
     current: &mut String,
     path: &Option<String>,
     binary: bool,
+    gitlink: bool,
 ) {
     if binary {
         if let Some(p) = path {
             stripped.push(p.clone());
+        }
+    } else if gitlink {
+        if let Some(p) = path {
+            stripped_gitlink.push(p.clone());
         }
     } else {
         kept.push(std::mem::take(current));
@@ -185,7 +239,7 @@ fn b_side_path(rest: &str) -> Option<String> {
 /// two-sided (native ordinary) hunk headers.
 fn strip_hunk_titles(section: &str) -> String {
     let mut out = String::new();
-    for line in section.lines() {
+    for line in raw_lines(section) {
         if let Some(rest) = line.strip_prefix("@@") {
             if let Some(end) = rest.find("@@") {
                 let ranges = &rest[..end];
@@ -210,7 +264,7 @@ fn strip_hunk_titles(section: &str) -> String {
 /// are load-bearing and never touched.
 fn strip_index_lines(section: &str) -> String {
     let mut out = String::new();
-    for line in section.lines() {
+    for line in raw_lines(section) {
         if line.starts_with("index ") {
             continue;
         }
@@ -226,7 +280,7 @@ fn strip_index_lines(section: &str) -> String {
 /// `rsmpl_patch::collapse_git_header`.
 fn collapse_git_headers(section: &str) -> String {
     let mut out = String::new();
-    for line in section.lines() {
+    for line in raw_lines(section) {
         if line.starts_with("diff --git ") {
             out.push_str(&rsmpl_patch::collapse_git_header(line));
         } else {
@@ -350,5 +404,67 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
+    }
+
+    #[test]
+    fn crlf_content_survives_title_and_index_strips() {
+        // T385: the passthrough rewrites (title/index/header) must not
+        // drop the `\r` that CRLF file content carries — the old
+        // `str::lines` loops converted worktree files to LF.
+        let raw = "diff --git a/win.txt b/win.txt\nindex 1..2 100644\n--- a/win.txt\n+++ b/win.txt\n@@ -1,1 +1,1 @@ title\r\n-line2\r\n+CHANGED\r\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("index "), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("@@ -1,1 +1,1 @@\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(out.rsmpl.contains("-line2\r\n"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("+CHANGED\r\n"), "got: {}", out.rsmpl);
+    }
+
+    #[test]
+    fn crlf_rs_section_stays_ordinary() {
+        // T385: semantic detectors decline `\r`-carrying sections —
+        // a `\r`-less hunk could never match the CRLF worktree file.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-fn a() {}\r\n-fn b() {}\r\n+fn c() {}\r\n+fn d() {}\r\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("-fn a() {}\r\n"), "got: {}", out.rsmpl);
+    }
+
+    #[test]
+    fn gitlink_sections_are_stripped_and_named() {
+        // T386: submodule sections (mode 160000) cannot round-trip —
+        // `applyrs` cannot read the directory on the pre-image side —
+        // so they strip with a warning, like binaries (T378). The
+        // content-line guard keeps `+const X = 160000;` sections.
+        let add = "diff --git a/sub b/sub\nnew file mode 160000\nindex 0000000..e7d842f\n--- /dev/null\n+++ b/sub\n@@ -0,0 +1 @@\n+Subproject commit e7d842fc138fa5a8e7899a15cfd554d44dc82d3a\n";
+        let bump = "diff --git a/sub b/sub\nindex e7d842f..2dac80d 160000\n--- a/sub\n+++ b/sub\n@@ -1 +1 @@\n-Subproject commit e7d842fc138fa5a8e7899a15cfd554d44dc82d3a\n+Subproject commit 2dac80d76a2a7aa7ba3494066ff8fb1cf8896cff\n";
+        let delete = "diff --git a/sub b/sub\ndeleted file mode 160000\nindex e7d842f..0000000\n--- a/sub\n+++ /dev/null\n@@ -1 +0,0 @@\n-Subproject commit e7d842fc138fa5a8e7899a15cfd554d44dc82d3a\n";
+        let text = format!("{TEXT_SECTION}{add}{bump}{delete}");
+        let out = infer_rsmpl(&text).unwrap();
+        assert_eq!(out.rsmpl, TEXT_STRIPPED);
+        assert_eq!(out.stripped_gitlink, vec!["sub", "sub", "sub"]);
+        assert!(out.stripped_binary.is_empty());
+        let plain_160000 =
+            "diff --git a/n.rs b/n.rs\n--- a/n.rs\n+++ b/n.rs\n@@ -1 +1 @@\n-a\n+const X = 160000;\n";
+        let out = infer_rsmpl(plain_160000).unwrap();
+        assert!(
+            out.rsmpl.contains("+const X = 160000;"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(out.stripped_gitlink.is_empty());
+    }
+
+    #[test]
+    fn all_gitlink_change_is_empty_not_an_error() {
+        // T386: mirrors the T378 all-binary rule — nothing expressible,
+        // so empty + names instead of a parse error.
+        let add = "diff --git a/sub b/sub\nnew file mode 160000\n--- /dev/null\n+++ b/sub\n@@ -0,0 +1 @@\n+Subproject commit e7d842f\n";
+        let out = infer_rsmpl(add).unwrap();
+        assert!(out.rsmpl.is_empty(), "got: {}", out.rsmpl);
+        assert_eq!(out.stripped_gitlink, vec!["sub"]);
     }
 }

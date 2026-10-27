@@ -23,9 +23,14 @@ pub type Result<T> = std::result::Result<T, ParseError>;
 /// Parse a complete patch document.
 pub fn parse_patch(text: &str) -> Result<Patch> {
     let mut patch = Patch::default();
-    // Normalize CRLF to LF; keep trailing-newline info per line separately.
-    let normalized = text.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
+    // T385: no CRLF normalization — a trailing `\r` on a hunk body
+    // line is CRLF file content and must survive byte-exact (the
+    // engine compares against `split('\n')` file bytes and inserts
+    // `text + '\n'`). Structural lines tolerate one trailing `\r` at
+    // their own consumption points (whitespace-split parses, `trim`
+    // checks, and explicit strips below), so CRLF-authored patch
+    // files keep parsing as before.
+    let lines: Vec<&str> = text.split('\n').collect();
 
     // Handle optional top-level version marker `# gitrs=0.1` (SPEC 33.1).
     let mut idx = 0;
@@ -96,6 +101,13 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
             // halves and mark the side in `---`/`+++` instead (T350):
             // mirror the markers into the create/delete flags so they
             // hold regardless of header spelling.
+            //
+            // T385: tolerate one trailing `\r` (CRLF-authored patch
+            // file) — the exact `/dev/null` comparisons and the stored
+            // metadata (re-emitted into the lowered diff) must not
+            // carry it. Hunk body content lines keep their `\r` in
+            // `parse_body_lines` below; this strip is metadata-only.
+            let line = line.strip_suffix('\r').unwrap_or(line);
             if let Some(sec) = current.as_mut() {
                 if line == "+++ /dev/null" || line == "+++ dev/null" {
                     sec.is_deleted_file = true;
@@ -190,6 +202,10 @@ fn is_version_marker(line: &str) -> bool {
 }
 
 fn parse_diff_git_header(line: &str) -> Option<(String, String)> {
+    // T385: tolerate a CRLF-authored header line — the trailing `\r`
+    // would otherwise embed into a single-path fallback (whitespace
+    // splitting already tolerates it for shaped headers).
+    let line = line.strip_suffix('\r').unwrap_or(line);
     let rest = line.strip_prefix("diff --git ")?;
     // A single path (`diff --git <path>`, SPEC 6) is equivalent to the
     // duplicated two-path form; the two-path form stays for renames/compat.
@@ -1316,6 +1332,41 @@ mod tests {
                 assert_eq!(rh.header.insertion_anchor(), Some(5));
             }
             _ => panic!("expected rsmpl"),
+        }
+    }
+
+    #[test]
+    fn crlf_body_content_survives_byte_exact() {
+        // T385: a trailing `\r` on hunk body lines is CRLF file
+        // content — the old global `\r\n` normalization silently
+        // converted worktree files to LF on apply. The engine compares
+        // against `split('\n')` bytes, so the `\r` must reach it.
+        let text = "diff --git a/win.txt b/win.txt\n--- a/win.txt\n+++ b/win.txt\n@@ -1,2 +1,2 @@\n-line1\r\n-line2\r\n+line1\r\n+CHANGED\r\n";
+        let p = parse_patch(text).unwrap();
+        match &p.files[0].hunks[0] {
+            Hunk::Ordinary(oh) => {
+                let texts: Vec<&str> = oh.lines.iter().map(|l| l.text.as_str()).collect();
+                assert_eq!(texts, vec!["line1\r", "line2\r", "line1\r", "CHANGED\r"]);
+            }
+            _ => panic!("expected ordinary"),
+        }
+    }
+
+    #[test]
+    fn crlf_authored_metadata_still_parses() {
+        // T385: a CRLF-authored patch file (every line ends `\r\n`)
+        // keeps parsing — structural lines tolerate one trailing
+        // `\r`, only body content keeps it.
+        let text = "diff --git a/new.txt b/new.txt\r\nnew file mode 100644\r\n--- /dev/null\r\n+++ b/new.txt\r\n@@ -0,0 +1,1 @@\r\n+hi\r\n";
+        let p = parse_patch(text).unwrap();
+        assert!(p.files[0].is_new_file);
+        match &p.files[0].hunks[0] {
+            Hunk::Ordinary(oh) => {
+                // Body content keeps its `\r` even in a CRLF-authored
+                // file; only structural lines strip it.
+                assert_eq!(oh.lines[0].text, "hi\r");
+            }
+            _ => panic!("expected ordinary"),
         }
     }
 

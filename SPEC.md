@@ -375,6 +375,11 @@ A two-part remainder that wears neither git's `a/`/`b/` uniform nor a
 `/dev/null` half is one single path with a space (SPEC 6 single-path form,
 T381) — never a rename of the first word into the second.
 Repeated sections for one path are allowed and share original coordinates (Section 10): every `-old,len` cites the pre-patch file, never rebased by earlier sections or hunks.
+Line endings: a trailing `\r` on a hunk body line (` `/`-`/`+`) is file
+content and survives byte-exact (CRLF files round-trip unchanged,
+T385); structural lines (`diff --git` headers, hunk headers,
+directives, metadata) tolerate one trailing `\r`, so CRLF-authored
+patch files parse as before.
 
 Example:
 
@@ -5753,12 +5758,21 @@ same mechanism. `git diff` runs with `--no-color --no-ext-diff
 from/to` sections that round-trip through `applyrs`, T377).
 Context radius is 0, so
 ordinary passthrough carries no untouched context lines yet still
-round-trips. Binary files are
+round-trips. CRLF file content passes through byte-exact (the `\r`
+rides the body lines; semantic detectors decline `\r`-carrying
+sections, T385). Binary files are
 stripped with a stderr `warning:` per path (a patch is UTF-8;
 `applyrs` cannot read binary worktree files); untracked binaries emit
 the same marker sections `git diff` shows once staged, so they warn
 uniformly instead of vanishing silently, and an all-binary change
-reports empty + warnings (exit 0), not an error (T378). Top-level `.history/`
+reports empty + warnings (exit 0), not an error (T378). Submodule
+(gitlink, mode 160000) sections strip the same way (one `warning:`
+per path): a gitlink bump/delete cannot round-trip (`applyrs`
+cannot read the directory on the pre-image side) and an add only
+materializes an empty dir, while real git needs submodule machinery
+no patch carries (T386). Untracked directory entries (nested repos,
+empty dirs — real `git diff` hides them) skip the same way instead
+of failing the conversion (T387). Top-level `.history/`
 audit files are skipped the same way (one `warning:`; they are tool
 output, never lowering inputs). Git's trailing
 `@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL

@@ -1748,3 +1748,150 @@ fn intent_to_add_round_trips_through_applyrs() {
         "fn added() {}\n"
     );
 }
+
+// T246 session 17 (T385): CRLF line endings round-trip byte-exact.
+// A tracked CRLF modify used to fail `applyrs --check` with
+// `GIT_HUNK_CONFLICT` (the parser normalized `\r` away) and an
+// untracked CRLF create silently converted to LF (the source built
+// `+` lines via `str::lines`). Both now preserve `\r`.
+#[test]
+fn crlf_modify_and_create_round_trip_byte_exact() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "win.txt", "line1\r\nline2\r\nline3\r\n");
+    write(dir.path(), "unix.txt", "a\n");
+    commit_all(dir.path());
+    write(dir.path(), "win.txt", "line1\r\nCHANGED\r\nline3\r\n");
+    write(dir.path(), "newcrlf.txt", "newline-untracked\r\nsecond\r\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("-line2\r"), "got: {patch:?}");
+    assert!(patch.contains("+CHANGED\r"), "got: {patch:?}");
+    assert!(patch.contains("+newline-untracked\r"), "got: {patch:?}");
+    assert!(!patch.contains("rule="), "got: {patch}");
+
+    // Back to the pre-change tree: `git stash` reverts the tracked
+    // CRLF modify but leaves untracked files, so remove the create
+    // (the `untracked_new_file` pin's recipe) before checking.
+    std::fs::remove_file(dir.path().join("newcrlf.txt")).unwrap();
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let git_out = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        git_out.status.success(),
+        "git apply --check failed: {}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("win.txt")).unwrap(),
+        b"line1\r\nCHANGED\r\nline3\r\n"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("newcrlf.txt")).unwrap(),
+        b"newline-untracked\r\nsecond\r\n"
+    );
+}
+
+// T246 session 17 (T386): a staged submodule add strips to a warning
+// (mode-160000 sections can never round-trip — `applyrs` cannot read
+// the directory on the pre-image side, and real git needs submodule
+// machinery no patch carries), while a staged ordinary edit in the
+// same index state still converts.
+#[test]
+fn staged_submodule_add_strips_with_warning() {
+    let origin = init_repo();
+    write(origin.path(), "f.txt", "data\n");
+    commit_all(origin.path());
+    let dir = init_repo();
+    write(dir.path(), "main.rs", "fn main() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "main.rs", "fn main() {}\nfn other() {}\n");
+    git(dir.path(), &["add", "main.rs"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &origin.path().to_string_lossy(),
+            "sub",
+        ],
+    );
+
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git main.rs"), "got: {patch}");
+    assert!(!patch.contains("diff --git sub"), "got: {patch}");
+    assert!(!patch.contains("Subproject commit"), "got: {patch}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("submodule (gitlink) stripped"),
+        "got: {stderr}"
+    );
+}
+
+// T246 session 17 (T387): an untracked nested repo (`?? inner/`) or
+// empty dir must not fail the whole conversion (exit 2) — real `git
+// diff` hides such entries, so they skip with a warning while real
+// untracked files still embed.
+#[test]
+fn untracked_nested_repo_skips_with_warning() {
+    let dir = init_repo();
+    write(dir.path(), "base.rs", "fn base() {}\n");
+    commit_all(dir.path());
+    let inner = dir.path().join("inner");
+    std::fs::create_dir_all(&inner).unwrap();
+    git(&inner, &["init", "-q"]);
+    write(&inner, "g.txt", "nested\n");
+    write(dir.path(), "new.rs", "fn added() {}\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git new.rs"), "got: {patch}");
+    assert!(!patch.contains("inner"), "got: {patch}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("untracked directory skipped"),
+        "got: {stderr}"
+    );
+}

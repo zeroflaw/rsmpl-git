@@ -137,8 +137,14 @@ fn run() -> Result<(), CliError> {
     for stripped in &patch.stripped_binary {
         eprintln!("warning: {stripped}: binary file stripped from semantic patch");
     }
+    for stripped in &patch.stripped_gitlink {
+        eprintln!("warning: {stripped}: submodule (gitlink) stripped from semantic patch");
+    }
     if patch.skipped_history {
         eprintln!("warning: .history/: tool audit log skipped in semantic patch");
+    }
+    for skipped in &patch.skipped_untracked_dirs {
+        eprintln!("warning: {skipped}: untracked directory skipped in semantic patch");
     }
 
     if cli.format == Format::Json {
