@@ -5737,9 +5737,16 @@ on collision).
   identical args, uniform arity, and one shared callee delta →
   one `# allow=many` hunk (`# expr E0…` per arity position;
   arity 0 needs no metavars).
+- Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
+  (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
+  single-segment call whose first arg token-equals the receiver and
+  whose rest token-equals the method args, with one shared method
+  ident, one shared function callee, and uniform minus-arity →
+  one `# allow=many` hunk (`# expr Receiver` + `# expr E0…`).
 - Everything else (multi-line edits, pure deletions/additions,
-  non-`.rs` files, unbalanced hunks, method calls, paths,
-  turbofish, macro interiors) stays ordinary-hunk passthrough.
+  non-`.rs` files, unbalanced hunks, method→method renames,
+  turbofish/`&`-receiver sites, paths, macro interiors) stays
+  ordinary-hunk passthrough.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —

@@ -532,3 +532,55 @@ fn method_slot_sweep_compresses_to_one_hunk() {
         serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(4), "got: {v}");
 }
+
+// T345: an N-site method-to-function fan-out compresses to one
+// `Receiver.old_method(E…)` hunk with `matches == N`.
+#[test]
+fn method_to_fn_sweep_compresses_to_one_hunk() {
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn m() {\n    a.old_method(1);\n    b.old_method(2);\n    c.old_method(3);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn m() {\n    new_function(a, 1);\n    new_function(b, 2);\n    new_function(c, 3);\n}\n",
+    );
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("# expr Receiver"), "got: {patch}");
+    assert!(patch.contains("- Receiver.old_method(E0)"), "got: {patch}");
+    assert!(
+        patch.contains("+ new_function(Receiver, E0)"),
+        "got: {patch}"
+    );
+    assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--check")
+        .arg("--format")
+        .arg("json")
+        .arg("--diff-max-lines")
+        .arg("0")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(3), "got: {v}");
+}

@@ -1,4 +1,4 @@
-//! v1 semantic inference: fn/item rename + slot-sweep + call-sweep fan-out.
+//! v1 semantic inference: fn/item rename + slot-sweep + call-sweep + method-to-fn fan-out.
 //!
 //! Pure detectors over a binary-stripped native diff. Per-file
 //! all-or-nothing: a file section is either fully replaced by
@@ -93,6 +93,11 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     // sweep (T344); fall through to the call sweep otherwise.
     if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(slot);
+    }
+    // N >= 2 method-to-function fan-outs (T345); fall through to the
+    // bare-call sweep otherwise.
+    if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, used_rules) {
+        return Some(m2f);
     }
     try_call_sweep(&minuses, &pluses, &path, used_rules)
 }
@@ -350,6 +355,119 @@ fn split_fn_ident(text: &str) -> Option<(String, String, String)> {
 
 fn is_ident_char(c: char) -> bool {
     c == '_' || c.is_ascii_alphanumeric()
+}
+
+/// N-site (N ≥ 2) method-to-function fan-out (T345, SPEC 18.5): every
+/// pair parses as `recv.old_method(args)` → `new_fn(recv, args)` with
+/// one shared method ident, one shared function callee, uniform
+/// minus-arity, and a per-site receiver-prepend delta (receiver texts
+/// differ per site — `Receiver` binds per site like the engine).
+/// Turbofish sites, `&`-led receivers (general-expr routing), and
+/// method→method pairs stay passthrough. Emits one `# allow=many` +
+/// `# scope=file` hunk (`# expr Receiver` + `# expr E{i}` per arg;
+/// arity 0 needs only `Receiver`).
+fn try_method_to_fn_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() < 2 {
+        return None;
+    }
+    let mut old_method: Option<String> = None;
+    let mut new_func: Option<String> = None;
+    let mut arity: Option<usize> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (o, n, a) = parse_method_to_fn_pair(m, p)?;
+        if old_method.as_ref().is_some_and(|c| *c != o) {
+            return None;
+        }
+        if new_func.as_ref().is_some_and(|c| *c != n) {
+            return None;
+        }
+        if arity.is_some_and(|x| x != a) {
+            return None;
+        }
+        old_method = Some(o);
+        new_func = Some(n);
+        arity = Some(a);
+    }
+    let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
+    let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
+    let mut hunk = format!(
+        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n"
+    );
+    let mut vars = Vec::new();
+    for i in 0..arity {
+        let v = format!("E{i}");
+        hunk.push_str(&format!("# expr {v}\n"));
+        vars.push(v);
+    }
+    let args = vars.join(", ");
+    let tail = if args.is_empty() {
+        "Receiver".to_string()
+    } else {
+        format!("Receiver, {args}")
+    };
+    hunk.push_str(&format!(
+        "- Receiver.{old_method}({args})\n+ {new_func}({tail})\n"
+    ));
+    Some(hunk)
+}
+
+/// Parse a `-`/`+` line pair as a method-to-function refactor; return
+/// (method ident, function callee, minus-arity) when the delta is a
+/// receiver prepend (plus `[0]` token-equals the minus receiver, rest
+/// token-equal pairwise).
+fn parse_method_to_fn_pair(old_line: &str, new_line: &str) -> Option<(String, String, usize)> {
+    let mut old_text = old_line.trim();
+    if old_text.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = old_text.strip_suffix(';') {
+        old_text = stripped.trim_end();
+    }
+    let mut new_text = new_line.trim();
+    if new_text.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = new_text.strip_suffix(';') {
+        new_text = stripped.trim_end();
+    }
+    if old_text.starts_with('&') {
+        return None;
+    }
+    let old_expr: syn::Expr = syn::parse_str(old_text).ok()?;
+    let new_expr: syn::Expr = syn::parse_str(new_text).ok()?;
+    let syn::Expr::MethodCall(old_call) = &old_expr else {
+        return None;
+    };
+    if old_call.turbofish.is_some() {
+        return None;
+    }
+    let (new_cal, new_args) = call_parts(&new_expr)?;
+    if new_args.len() != old_call.args.len() + 1 {
+        return None;
+    }
+    use quote::ToTokens;
+    let recv_text = old_call.receiver.to_token_stream().to_string();
+    if new_args.is_empty() {
+        return None;
+    }
+    if new_args[0].to_token_stream().to_string() != recv_text {
+        return None;
+    }
+    for (a, b) in old_call.args.iter().zip(new_args.iter().skip(1)) {
+        if a.to_token_stream().to_string() != b.to_token_stream().to_string() {
+            return None;
+        }
+    }
+    let method = old_call.method.to_string();
+    if ident_len(&method)? != method.len() {
+        return None;
+    }
+    Some((method, new_cal, old_call.args.len()))
 }
 
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:
@@ -635,6 +753,83 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    a.foo(1);\n-    a.foo(2);\n+    a.bar(1);\n+    a.bar(2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_to_fn_sweep_compresses() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.old_method(1);\n-    b.old_method(2);\n-    c.old_method(3);\n+    new_function(a, 1);\n+    new_function(b, 2);\n+    new_function(c, 3);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("# expr Receiver\n"), "got: {out}");
+        assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
+        assert!(out.contains("+ new_function(Receiver, E0)\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn method_to_fn_sweep_multi_arg() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old(1, x);\n-    b.old(2, y);\n+    new_fn(a, 1, x);\n+    new_fn(b, 2, y);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
+        assert!(out.contains("- Receiver.old(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ new_fn(Receiver, E0, E1)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn method_to_fn_sweep_zero_arg() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old();\n-    b.old();\n+    new_fn(a);\n+    new_fn(b);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(!out.contains("# expr E"), "got: {out}");
+        assert!(out.contains("- Receiver.old()\n"), "got: {out}");
+        assert!(out.contains("+ new_fn(Receiver)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn method_to_fn_divergent_method_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old(1);\n-    b.other(2);\n+    new_fn(a, 1);\n+    new_fn(b, 2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_to_fn_divergent_callee_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old(1);\n-    b.old(2);\n+    new_fn(a, 1);\n+    other_fn(b, 2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_to_fn_receiver_mismatch_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old(1);\n-    b.old(2);\n+    new_fn(x, 1);\n+    new_fn(y, 2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_to_fn_turbofish_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old::<u8>(1);\n-    b.old::<u8>(2);\n+    new_fn(a, 1);\n+    new_fn(b, 2);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
