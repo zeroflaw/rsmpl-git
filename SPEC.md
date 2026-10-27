@@ -885,6 +885,27 @@ or `# foo=bar` gets `unknown directive` plus the Section 9.3 pointer
 instead of a silently ignored no-op. `# edition=*` and `# format_scope=*`
 are rejected as unsupported in v0.1 (edition is the toolchain default;
 only `# format=preserve` is supported).
+Both fail parse-time (exit 2; bare + suggestion envelope — text carries
+the `reason:` + `suggestion:` lines only, null rule/file/range omitted;
+JSON carries explicit `rule: null` / `file: null` / `range: null` plus the
+string suggestion). Engine-verbatim (`{v}` echoes the offending value,
+`{line}` the full `#` line):
+```text
+RSMPL_PATTERN_CONFLICT
+reason: unsupported directive `# edition=2021` (edition is the toolchain default in v0.1): # edition=2021
+suggestion: remove the directive — edition is the toolchain default in v0.1
+```
+```text
+RSMPL_PATTERN_CONFLICT
+reason: unsupported directive `# format_scope=file` (only `# format=preserve` is supported in v0.1): # format_scope=file
+suggestion: remove the directive — only `# format=preserve` is supported
+```
+The edition arm fires on any `# edition=<value>` spelling (the toolchain
+default applies); the format_scope arm on any `# format_scope=<value>`
+spelling (only `# format=preserve` exists in v0.1). Unlike the
+suggestion-less canonical unknown-directive fence, both carry a set
+suggestion (remove the directive); the typo near-miss is the only other
+`reason:` in this section with one.
 The three unknown-directive shapes below all fail parse-time (exit 2, bare envelope — text carries the bare `reason:` line only, JSON carries explicit `rule: null` / `file: null` / `range: null`).
 ```text
 unknown directive `#foo=bar`: # foo=bar
@@ -3938,7 +3959,8 @@ misplaced-directive fence; the prose contract lives in Section 6.
 
 The RSmPL pattern failed to parse. Unknown directives (`# foo`,
 `# foo=bar`), `# edition=*`, and `# format_scope=*` are rejected here
-(no silent ignore, Section 9.6), as is any hunk-header `k=v` tag other
+(no silent ignore — verbatim fences in Section 9.6: three unknown-directive
+shapes plus the two `unsupported directive` shapes, each with its suggestion note), as is any hunk-header `k=v` tag other
 than `rule=` (no silent dead tags — verbatim reason + envelope, Section 8.3),
 any `# root=` value other than `item/expr/stmt/type` (no silent heuristic
 fallthrough — verbatim reason + envelope, Section 13.4),
