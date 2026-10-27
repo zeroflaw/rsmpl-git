@@ -92,3 +92,44 @@ fn mixed_body_ellipsis_fails_fast_json() {
     assert!(stdout.contains("RSMPL_PATTERN_CONFLICT"), "got: {stdout}");
     assert!(stdout.contains("exactly `...`"), "got: {stdout}");
 }
+
+#[test]
+fn ellipsis_in_generics_where_return_fails_fast() {
+    // T161: `...` inside `<...>`, `where ...`, or `-> ...` used to fail
+    // safe with a bare `no match found` (never equal to a real slice).
+    // Now the parser fails fast with a repair needle; worktree untouched.
+    let cases = [
+        (
+            "fn foo<T>(x: T) -> i32 {\n    1\n}\n",
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=t\n# scope=file\n- fn foo<..., T>(...) {\n+ fn bar<..., T>(...) {\n      ...\n  }\n",
+            "generic parameter",
+        ),
+        (
+            "fn foo<T>(x: T) where T: Clone {\n    x\n}\n",
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=t\n# scope=file\n- fn foo<T>(...) where ..., T: Clone {\n+ fn bar<T>(...) where ..., T: Clone {\n      ...\n  }\n",
+            "where clause",
+        ),
+        (
+            "fn bar(x: i32) -> i32 {\n    x\n}\n",
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=t\n# scope=file\n- fn bar(...) -> ... {\n+ fn baz(...) -> ... {\n      ...\n  }\n",
+            "return type",
+        ),
+    ];
+    for (src, patch, needle) in cases {
+        let dir = init_repo();
+        write(dir.path(), "src/lib.rs", src);
+        let before = read(dir.path(), "src/lib.rs");
+        let out = run_stdin(dir.path(), patch, &["--check"]);
+        assert!(!out.status.success(), "must fail for {needle}");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+        assert!(stderr.contains(needle), "got: {stderr}");
+        assert_eq!(read(dir.path(), "src/lib.rs"), before, "untouched");
+        // JSON envelope carries the same needle stdout-only.
+        let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+        assert!(!out.status.success(), "json must fail for {needle}");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(stdout.contains("RSMPL_PATTERN_CONFLICT"), "got: {stdout}");
+        assert!(stdout.contains(needle), "got: {stdout}");
+    }
+}

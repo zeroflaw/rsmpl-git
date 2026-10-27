@@ -1623,10 +1623,10 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 | name | equal, or `$Meta` binds any | replaced with the `+` name (`$Meta` preserves) |
 | visibility | absent requires inherited; concrete requires normalized equality; `V` matches any | insert/replace/delete `pub…` (`V` on `+` preserves) |
 | qualifiers | same set (with `extern "ABI"`); `Q` matches any | insert/replace/delete qualifier run |
-| generics | absent requires none; concrete requires normalized equality; `G` matches any | insert after name / replace `<…>` / delete |
+| generics | absent requires none; concrete requires normalized equality; `G` matches any; angle text containing `...` is a pattern error | insert after name / replace `<…>` / delete |
 | parameters | `...` matches any; concrete (incl. `()`) requires normalized equality; mixing `...` with other tokens on either side is a pattern error | `...` preserves; concrete replaces the parenthesized list |
-| return type | `...`-shorthand (no `->`) matches any; absent (via `# returns=none`) requires none; concrete requires normalized equality | `+` with no `->` preserves, except minus-concrete/`+`-omitted deletes `-> T`; concrete inserts after `)` or replaces `-> T` |
-| where clause | absent requires none; concrete requires normalized equality of the predicates; `W` matches any | insert before `{` / replace / delete (minus-concrete/`+`-omitted) |
+| return type | `...`-shorthand (no `->`) matches any; absent (via `# returns=none`) requires none; concrete requires normalized equality; `-> ...` is a pattern error (omit `->` for any) | `+` with no `->` preserves, except minus-concrete/`+`-omitted deletes `-> T`; concrete inserts after `)` or replaces `-> T` |
+| where clause | absent requires none; concrete requires normalized equality of the predicates; `W` matches any; predicates containing `...` are a pattern error | insert before `{` / replace / delete (minus-concrete/`+`-omitted) |
 | body | must be exactly `...` (or `;`) on both sides; mixing `...` with other tokens is a pattern error | always preserved; any concrete body is a pattern error |
 
 Example (add visibility, generics, and a return type in one hunk, params and body preserved):

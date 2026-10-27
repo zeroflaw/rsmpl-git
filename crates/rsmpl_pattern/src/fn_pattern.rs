@@ -402,6 +402,15 @@ pub fn parse_fn_pattern(
         if depth != 0 {
             return Err(fail("unbalanced generics in fn pattern".to_string()));
         }
+        // T161: `...` inside `<...>` can never equal a real target slice
+        // (engine compares generics via normalized equality), so every
+        // such hunk fails safe with a bare no-match. Fail fast with a
+        // repair needle instead (mirrors the T160 params/body gates).
+        if acc.iter().any(|t| t == "...") {
+            return Err(fail(
+                "`...` is not supported in generic parameter lists in v0.1: write concrete `<T>` or abstract with `# generic_params G` + `fn foo G (...)` (SPEC 14.7)".to_string(),
+            ));
+        }
         generics = GenericPat::Concrete(acc.join(" "));
     } else if i < toks.len() && generic_metas.contains(&toks[i]) {
         generics = GenericPat::Meta(toks[i].clone());
@@ -478,6 +487,14 @@ pub fn parse_fn_pattern(
             if acc.is_empty() {
                 return Err(fail("`->` without return type in fn pattern".to_string()));
             }
+            // T161: `-> ...` can never equal a real return type (engine
+            // compares via normalized equality) — fail fast instead of a
+            // bare no-match. Omit `->` to match any return type.
+            if acc.iter().any(|t| t == "...") {
+                return Err(fail(
+                    "`...` is not supported as a return type in v0.1: omit `->` to match any return type or write a concrete type (SPEC 14.7)".to_string(),
+                ));
+            }
             ret = RetPat::Concrete(acc.join(" "));
         }
     } else if returns_none {
@@ -496,6 +513,14 @@ pub fn parse_fn_pattern(
         if acc.len() == 1 && where_metas.contains(&acc[0]) {
             where_clause = WherePat::Meta(acc[0].clone());
         } else {
+            // T161: `...` inside `where` predicates can never equal real
+            // predicates (engine compares via normalized equality) — fail
+            // fast instead of a bare no-match.
+            if acc.iter().any(|t| t == "...") {
+                return Err(fail(
+                    "`...` is not supported in where clauses in v0.1: write concrete predicates or abstract with `# where_clause W` + `... W ...` (SPEC 14.7)".to_string(),
+                ));
+            }
             where_clause = WherePat::Concrete(acc.join(" "));
         }
     } else if i < toks.len() && where_metas.contains(&toks[i]) {
@@ -811,5 +836,70 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pat.attrs_written, vec!["#[doc = \" Block doc. \"]"]);
+    }
+
+    #[test]
+    fn ellipsis_in_generics_where_return_fails_fast() {
+        // T161: `...` inside `<...>`, `where ...`, or `-> ...` can never
+        // equal a real target slice (normalized equality) — fail fast
+        // with a repair needle instead of a bare no-match.
+        for shape in [
+            "fn foo<...>(...) { ... }",
+            "fn foo<T, ...>(...) { ... }",
+            "fn foo<..., T>(...) { ... }",
+        ] {
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("generic parameter"), "unexpected: {err}");
+        }
+        for shape in [
+            "fn bar(...) -> ... { ... }",
+            "fn bar(...) -> ... where T: Clone { ... }",
+        ] {
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("return type"), "unexpected: {err}");
+        }
+        for shape in [
+            "fn foo<T>(...) where ... { ... }",
+            "fn foo<T>(...) where T: Clone, ... { ... }",
+            "fn foo<T>(...) where ..., T: Clone { ... }",
+        ] {
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("where clause"), "unexpected: {err}");
+        }
+        // Pure shapes still parse: concrete generics/where/return and
+        // omitted slots (plus `G`/`W` metas, which wildcard those slots).
+        assert!(parse("fn foo<T>(...) { ... }").generics != GenericPat::Absent);
+        assert!(parse("fn foo<T>(...) where T: Clone { ... }").where_clause != WherePat::Absent);
+        assert!(!matches!(
+            parse("fn foo(...) { ... }").ret,
+            RetPat::Concrete(_)
+        ));
+        assert!(parse("fn foo(...) -> i32 { ... }").ret != RetPat::Any);
+        let g = parse_fn_pattern(
+            "fn foo G (...) { ... }",
+            &[],
+            &[],
+            &["G".into()],
+            &[],
+            false,
+        )
+        .unwrap();
+        assert_eq!(g.generics, GenericPat::Meta("G".into()));
+        let w = parse_fn_pattern(
+            "fn foo<T>(...) W { ... }",
+            &[],
+            &[],
+            &[],
+            &["W".into()],
+            false,
+        )
+        .unwrap();
+        assert_eq!(w.where_clause, WherePat::Meta("W".into()));
     }
 }
