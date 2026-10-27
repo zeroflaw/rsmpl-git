@@ -1386,3 +1386,179 @@ fn live_symlink_retarget_round_trips() {
         PathBuf::from("b.txt")
     );
 }
+
+fn check_with_bare_git_unidiff_zero(dir: &Path, patch: &str) -> std::process::Output {
+    // The project's bare-git compat bar (T351/T374): plain `git apply`
+    // rejects zero-context hunks that native `git diff -U0` itself
+    // emits (e.g. pure-insertion `@@ -1,0 +2 @@`), so compat is
+    // measured with `--unidiff-zero`, which the reference CLI passes
+    // internally.
+    use std::io::Write;
+    let mut child = Command::new("git")
+        .args(["apply", "--check", "--unidiff-zero"])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+// T246 session 15: space-path modify (git emits TAB-suffixed `---`/`+++`
+// markers) alongside a content delete and a plain edit — all ordinary
+// passthrough, single-path headers, `deleted file mode` kept (the only
+// delete signal besides `/dev/null`; T383 rejects stripping it), and
+// the output checks clean via applyrs, real-applies byte-exact, and
+// passes bare `git apply --check --unidiff-zero`.
+#[test]
+fn space_path_delete_and_edit_round_trip() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "sp ace.txt", "q\n");
+    write(dir.path(), "gone.txt", "bye\n");
+    write(dir.path(), "plain.txt", "v1\n");
+    commit_all(dir.path());
+    write(dir.path(), "sp ace.txt", "q2\n");
+    std::fs::remove_file(dir.path().join("gone.txt")).unwrap();
+    write(dir.path(), "plain.txt", "v2\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git sp ace.txt\n"), "got: {patch}");
+    assert!(!patch.contains("diff --git a/"), "got: {patch}");
+    assert!(patch.contains("deleted file mode 100644"), "got: {patch}");
+    assert!(
+        !patch.contains("rule="),
+        "mixed ordinary shapes must stay ordinary, got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let git_out = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        git_out.status.success(),
+        "git apply --check failed: {}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("sp ace.txt")).unwrap(),
+        "q2\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("plain.txt")).unwrap(),
+        "v2\n"
+    );
+    assert!(
+        !dir.path().join("gone.txt").exists(),
+        "delete must remove the file"
+    );
+}
+
+// T246 session 15: a mode flip bundled with a content change converts
+// as ordinary passthrough (mode lines load-bearing for both
+// consumers) and real-applies content + mode splice byte-exact.
+#[cfg(unix)]
+#[test]
+fn mode_flip_with_content_round_trips() {
+    use std::os::unix::fs::PermissionsExt;
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "run.sh", "exe\n");
+    std::fs::set_permissions(
+        dir.path().join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    commit_all(dir.path());
+    std::fs::set_permissions(
+        dir.path().join("run.sh"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    write(dir.path(), "run.sh", "exe\nmore\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("old mode 100755"), "got: {patch}");
+    assert!(patch.contains("new mode 100644"), "got: {patch}");
+    assert!(patch.contains("+more"), "got: {patch}");
+    assert!(
+        !patch.contains("rule="),
+        "mode flip must stay ordinary, got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let git_out = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        git_out.status.success(),
+        "git apply --check failed: {}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
+        "exe\nmore\n"
+    );
+    let mode = std::fs::metadata(dir.path().join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o111, 0, "mode splice must clear exec, got {mode:o}");
+}
