@@ -3214,6 +3214,11 @@ suggestion: add a hunk with `# bind=Helper`
 
 Captures are patch-local, not document-ordered: a `# use=Helper` paste
 may precede its `# bind=Helper` cut (forward references, Section 20.3).
+A second capture failure needs no missing name: a hunk declaring both
+`# bind=<Name>` and `# allow=many` fails with `RSMPL_CAPTURE_CONFLICT`
+(reason: `` `# bind=<Name>` cannot be combined with `# allow=many` in v0.1
+(scalar captures only) ``). Move several items with separate scalar captures
+under distinct names instead (Section 20.3).
 
 ### 25.7 Git hunk conflict
 

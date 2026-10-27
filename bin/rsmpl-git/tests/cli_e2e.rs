@@ -1535,6 +1535,29 @@ fn repeat_with_bind_rejected_json_envelope() {
 }
 
 #[test]
+fn bind_with_allow_many_rejected_json_envelope() {
+    // T262: `# bind=` + `# allow=many` is a capture conflict (scalar
+    // captures only, SPEC 20.4/25.6) — move several items with separate
+    // scalar captures under distinct names instead.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=cut\n# item I\n# bind=H\n# allow=many\n- I\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_CAPTURE_CONFLICT")
+    );
+    assert!(
+        v["error"]["reason"].as_str().unwrap().contains("# allow=many"),
+        "got: {v}"
+    );
+}
+
+#[test]
 fn trailing_comma_where_rename_applies() {
     // T224: multi-line `where` target matches the single-line pattern
     // spelling; the clause is preserved on a pure rename.
