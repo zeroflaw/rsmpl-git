@@ -1,0 +1,14 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,5 +2,5 @@
+-    old_mac!(1);
+-    old_mac!(x + 1);
+-    old_mac!(foo(y));
+-    old_mac!(4);
+-    old_mac!(z);
++    new_mac!(1);
++    new_mac!(x + 1);
++    new_mac!(foo(y));
++    new_mac!(4);
++    new_mac!(z);
