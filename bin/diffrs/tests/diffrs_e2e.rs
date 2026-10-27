@@ -1189,3 +1189,174 @@ fn mode_only_pending_change_converts_and_checks_clean() {
         String::from_utf8_lossy(&checked.stderr)
     );
 }
+
+// T246 session 13: a tracked binary modification alongside a text
+// edit — the binary section strips with a warning (T378 third cell)
+// while the text section converts and checks clean.
+#[test]
+fn tracked_binary_modify_alongside_text_strips_with_warning() {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn a() {}\n");
+    std::fs::write(dir.path().join("img.bin"), [0u8, 1, 2, 3]).unwrap();
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("img.bin"), [0u8, 1, 2, 4]).unwrap();
+    write(dir.path(), "a.rs", "fn a() {}\nfn b() {}\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git a/a.rs b/a.rs"), "got: {patch}");
+    assert!(!patch.contains("img.bin"), "binary embedded: {patch}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("img.bin"), "got: {stderr}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+// T246 session 13: a live file→symlink typechange converts as a
+// delete+create pair (T357) and a real apply materializes the link.
+#[cfg(unix)]
+#[test]
+fn live_file_to_symlink_typechange_round_trips() {
+    let dir = init_repo();
+    write(dir.path(), "real.txt", "real\n");
+    write(dir.path(), "target.txt", "content\n");
+    commit_all(dir.path());
+    std::fs::remove_file(dir.path().join("real.txt")).unwrap();
+    std::os::unix::fs::symlink("target.txt", dir.path().join("real.txt")).unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("deleted file mode"), "got: {patch}");
+    assert!(patch.contains("new file mode 120000"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read_link(dir.path().join("real.txt")).unwrap(),
+        PathBuf::from("target.txt")
+    );
+}
+
+// T246 session 13: a live symlink→file typechange converts as a
+// delete+create pair and a real apply materializes the regular file.
+#[cfg(unix)]
+#[test]
+fn live_symlink_to_file_typechange_round_trips() {
+    let dir = init_repo();
+    write(dir.path(), "target.txt", "content\n");
+    std::os::unix::fs::symlink("target.txt", dir.path().join("link.txt")).unwrap();
+    commit_all(dir.path());
+    std::fs::remove_file(dir.path().join("link.txt")).unwrap();
+    write(dir.path(), "link.txt", "now a file\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("deleted file mode 120000"), "got: {patch}");
+    assert!(patch.contains("new file mode"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert!(!std::fs::symlink_metadata(dir.path().join("link.txt"))
+        .unwrap()
+        .is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("link.txt")).unwrap(),
+        "now a file\n"
+    );
+}
+
+// T246 session 13: a live symlink retarget converts as a plain
+// modify and a real apply repoints the link.
+#[cfg(unix)]
+#[test]
+fn live_symlink_retarget_round_trips() {
+    let dir = init_repo();
+    write(dir.path(), "a.txt", "a\n");
+    write(dir.path(), "b.txt", "b\n");
+    std::os::unix::fs::symlink("a.txt", dir.path().join("link.txt")).unwrap();
+    commit_all(dir.path());
+    std::fs::remove_file(dir.path().join("link.txt")).unwrap();
+    std::os::unix::fs::symlink("b.txt", dir.path().join("link.txt")).unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        patch.contains("diff --git a/link.txt b/link.txt"),
+        "got: {patch}"
+    );
+    assert!(!patch.contains("file mode"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read_link(dir.path().join("link.txt")).unwrap(),
+        PathBuf::from("b.txt")
+    );
+}
