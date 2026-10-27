@@ -814,8 +814,9 @@ are rejected as unsupported in v0.1 (edition is the toolchain default;
 only `# format=preserve` is supported).
 
 Bad *values* for known directives fail the same way (`RSMPL_PATTERN_CONFLICT`,
-exit 2, bare `reason:` line — null rule/file/range/suggestion omitted from
-text, explicit nulls in JSON). Engine-verbatim reasons (backticked value is
+exit 2, bare `reason:` line — null rule/file/range omitted from text
+(explicit nulls in JSON); the text `suggestion:` line appears only when the
+reason sets one, which only the `repeat` entry below does). Engine-verbatim
 the offending spelling, echoed after the colon):
 
 ```text
@@ -830,15 +831,20 @@ invalid format `bogus`: # format=bogus
 invalid fallback `bogus`: # fallback=bogus
 invalid returns `bogus` (only `none` supported): # returns=bogus
 invalid metavars `bogus`: # metavars=bogus
+invalid repeat value `bogus` (write bare `# repeat`): # repeat=bogus
 invalid symbol directive (want `# symbol Name=path`): # symbol JustName
 empty metavariable/capture name
 ```
 
 The last two are malformed declarations, not values: a `=`-less `# symbol`
 line, and an empty `# bind=`/`# use=` name. Note the engine's own wording —
-`allow`/`attrs`/`optional` say "value", the rest don't; only `allow` carries
-`(want one|many)`, only `returns` carries `(only `none` supported)` — recorded
-verbatim, not normalized.
+`allow`/`attrs`/`optional`/`repeat` say "value", the rest don't; only `allow`
+carries `(want one|many)`, only `returns` carries `(only `none` supported)`,
+only `repeat` carries `(write bare `# repeat`)` plus the echoed offending
+# repeat=<value>` spelling — recorded verbatim, not normalized. All fence
+lines carry a null suggestion (omitted from text, explicit null in JSON)
+except `invalid repeat value`, whose suggestion is `write bare `# repeat`
+with no value` (text carries the `suggestion:` line, JSON carries the string).
 
 ---
 
@@ -2557,8 +2563,11 @@ Rules:
  `# bind=`/`# use=` reports `` `# repeat` cannot be combined with
  `# bind=`/`# use=` (captures move verbatim) `` with suggestion
  `remove `# repeat` from the cut/paste hunk`. Here `v1` names the
- general-matcher generation (the SPEC 18.6 C-table namespace), not
- the SPEC v0.1 version.
+  `remove `# repeat` from the cut/paste hunk`. A valued spelling
+  (`# repeat=<value>`) never reaches this gate: directive parsing rejects
+  it first (verbatim reason + suggestion, Section 9.6). Here `v1` names the
+  general-matcher generation (the SPEC 18.6 C-table namespace), not
+  the SPEC v0.1 version.
 
 ---
 
@@ -3307,8 +3316,9 @@ fallthrough — verbatim reason + envelope, Section 13.4),
 any `# identifier/# path/# lifetime/# field/# attributes`
 metavariable declaration (no kind-specific binding in v0.1 — verbatim
 reasons in Section 15.1), any `# repeat=<value>`
-(write bare `# repeat`, Section 17.8), any bad value for a known
-directive key (verbatim reasons in Section 9.6), any `# repeat` on a
+(parse-time verbatim reason + suggestion, Section 9.6), any bad value
+for a known directive key (other verbatim reasons in Section 9.6),
+any `# repeat` on a
 non-call/non-general-expression shape, on a capture hunk, or with an empty
 minus/plus side (no silent no-op repeat, Sections 17.8, 24.4), any
 item-rename hunk whose minus/plus `pub…` / `unsafe` / `mut` prefixes
@@ -3355,7 +3365,6 @@ several); the text `suggestion:` line is present only there (null
 suggestion omitted in the first fence, explicit `suggestion: null` in
 JSON for the first, `range: null` in both).
 
-Directive-parse failures carry no `rule:`/`file:`/`range:` lines (null
 Directive-parse failures are not uniform (all exit 2). A bare unknown
 directive (`# foo=bar`) carries no `rule:`/`file:`/`range:` lines (null
 fields are omitted from text output; the JSON envelope carries explicit
