@@ -528,6 +528,29 @@ fn unknown_directive_fails_fast_text_and_json() {
 }
 
 #[test]
+fn directive_validation_runs_before_range_validation() {
+    // T267 (feeds T246): directive validation is parse-time, pre-Pass-0 —
+    // an unknown directive surfaces even when the range is also bad, so
+    // SPEC D.2.4's masking covers only the pattern-body / capture /
+    // symbol stages. Empty repo = the D.2.4 lint stand-in (missing file
+    // counts as the 1-line empty file).
+    let dir = init_repo();
+    let bad_directive =
+        "diff --git src/lib.rs\n@@ -10,7 @@ rule=x\n# foo=bar\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), bad_directive, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("unknown directive"), "got: {stderr}");
+    let bad_body =
+        "diff --git src/lib.rs\n@@ -10,7 @@ rule=y\n# lang=rust\n- fn (((broken...\n+ fn b(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), bad_body, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_RANGE_CONFLICT"), "got: {stderr}");
+}
+
+#[test]
 fn item_rename_prefix_difference_fails_fast_text_and_json() {
     // T23a: spelled vis/qualifier differences are rename-only violations,
     // never silent vis changes — text keeps the stderr diagnostic, JSON

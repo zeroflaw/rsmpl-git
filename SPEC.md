@@ -4417,12 +4417,14 @@ dir is the lint-pass signal: the patterns compiled and the captures
 bound.
 
 One caveat: range validation (Pass 0) runs before the
-pattern-compile/capture stages, so authored `@@ -old,len` ranges
-mask those stages on the empty dir (the first range error wins). To
-lint the deeper stages, temporarily lint with the `# scope=file` +
+pattern-body/capture/symbol stages, so authored `@@ -old,len` ranges
+mask those stages on the empty dir (the first range error wins) —
+but not directive validation, which is parse-time and runs before
+Pass 0, so an unknown `#` directive surfaces regardless of range.
+To lint the deeper stages, temporarily lint with the `# scope=file` +
 `@@ -1,1 @@` dummy (17.3) on each hunk — the dummy skips range
-validation and the compile/capture errors surface. Expect the stderr
-`treating as new (empty) file` warning (D.2.3); insertion-only
+validation and the body/capture/symbol errors surface. Expect the
+stderr `treating as new (empty) file` warning (D.2.3); insertion-only
 patches always need the real repo for the final check. No `--lint`
 / `--no-repo` flag is needed, so the T34 lint gap closes with zero
 flags added.
