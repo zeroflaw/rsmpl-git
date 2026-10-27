@@ -885,6 +885,13 @@ or `# foo=bar` gets `unknown directive` plus the Section 9.3 pointer
 instead of a silently ignored no-op. `# edition=*` and `# format_scope=*`
 are rejected as unsupported in v0.1 (edition is the toolchain default;
 only `# format=preserve` is supported).
+The three unknown-directive shapes below all fail parse-time (exit 2, bare envelope — text carries the bare `reason:` line only, JSON carries explicit `rule: null` / `file: null` / `range: null`).
+```text
+unknown directive `#foo=bar`: # foo=bar
+unknown directive `#alow=many` (did you mean `#allow=...`?): # alow=many
+unknown directive `#foo`: # foo
+```
+The first carries suggestion `check SPEC 9.3 for the supported directive list`; the typo near-miss carries `use `#allow=...`` (one-edit distance over `KNOWN_KV_KEYS`, `alow` → `allow` probed); the bare/multi-token form echoes only the first token (both `# foo` and `# foo bar` echo `` `#foo` ``) with the generic 9.3 pointer. The `invalid directive: {line}` arm is defensive-only: the parser only collects `#`-led lines, so no CLI input reaches it (T287/T290/T291 precedent, documented not pinned).
 
 Bad *values* for known directives fail the same way (`RSMPL_PATTERN_CONFLICT`,
 exit 2, bare `reason:` line — null rule/file/range omitted from text
@@ -3977,6 +3984,7 @@ RSMPL_PATTERN_CONFLICT
 reason: unknown directive `#foo=bar`: # foo=bar
 suggestion: check SPEC 9.3 for the supported directive list
 ```
+The fence above is the canonical `k=v` spelling; Section 9.6 carries the other two engine-verbatim variants (the typo near-miss with its `use ...` suggestion and the bare first-token-echo form) plus the defensive-only `invalid directive:` note.
 
 Any `# mode=tokens` hunk that is not a macro token-tree pattern is
 rejected (only that shape supports token matching in v0.1), as is any
