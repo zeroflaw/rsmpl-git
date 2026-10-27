@@ -238,3 +238,41 @@ fn impl_pub_method_evolution_json_check() {
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(stdout.contains("\"check\":true"), "got: {stdout}");
 }
+
+#[test]
+fn trait_declaration_rename_applies() {
+    // T182: `;` trait-method declarations rename through the trait half of
+    // method-context matching (previously `RSMPL_MATCH_CONFLICT`).
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "trait T {\n    fn foo();\n}\n");
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=t\n# lang=rust\n  trait T {\n      ...\n-     fn foo();\n+     fn bar();\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "trait T {\n    fn bar();\n}\n"
+    );
+}
+
+#[test]
+fn trait_plus_pub_fails_fast() {
+    // T182: trait methods never carry visibility — a `+` side writing
+    // `pub` fails with the repair needle, not a reparse error.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "trait T {\n    fn foo();\n}\n");
+    let before = read(dir.path(), "src/lib.rs");
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=t\n# lang=rust\n  trait T {\n      ...\n-     fn foo();\n+     pub fn bar();\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success(), "must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains("cannot declare visibility"),
+        "got: {stderr}"
+    );
+    assert_eq!(read(dir.path(), "src/lib.rs"), before, "worktree untouched");
+}

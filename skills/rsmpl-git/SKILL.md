@@ -71,7 +71,8 @@ marker; hunks with other directives omit it (SPEC 7.1).
 
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/
   generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
-  preserved, bodies never rewritten (SPEC 14.7).
+  preserved, bodies never rewritten (SPEC 14.7). A `trait T {` header + fn
+  pair rewrites trait methods incl. `;` decls (never `pub`, SPEC 13.4).
 - Call rewrite: add `# repeat` to fold nested same-rule matches in one
   hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8). General-expression
   rewrites (`E + 1` → `E + 2`) fold the same way; `let`/type/macro
@@ -118,10 +119,9 @@ rsmpl-git --file change.rsmpl                       # apply for real
   review-only, never pipe it to `git apply` (SPEC D.2.1/D.2.2).
 - Lint without a checkout: `--repo /tmp/empty --check` — `no match found`
   is the pass signal (SPEC D.2.4); re-check against the real repo after.
-- Verify the JSON `matches` count equals the sites you read before
-  applying — fewer means a site (e.g. inside a macro) needs an ordinary hunk.
-  Each rule entry also carries `spans` (`[[start,end], …]`,
-  original-source 1-based lines) so verification needs no re-read.
+- Verify the JSON `matches` count equals the sites you read — fewer means
+  a site (e.g. inside a macro) needs an ordinary hunk; per-rule `spans`
+  (`[[start,end], …]`, original-source lines) need no re-read.
 - Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
   (no input flags means stdin; `--file -` is the explicit alias, SPEC D.1).
 

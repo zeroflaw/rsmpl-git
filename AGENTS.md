@@ -56,7 +56,8 @@ Everything else lives in the full table (SPEC 9.3); you rarely need it.
 Fn rename — `fn foo(...)` matches only plain fns; write `pub`/`async`/
 generics explicitly to match them (SPEC 14.1). Slots written explicitly
 evolve, `...`/same-metavar slots are preserved, bodies are never rewritten
-(SPEC 14.7). Other items rename with a bare pair, one ident edit,
+(SPEC 14.7). A `trait T {` header + fn pair rewrites trait methods incl.
+`;` decls (never `pub`, SPEC 13.4). Other items rename with a bare pair, one ident edit,
 vis/generics/bodies preserved (SPEC 14.8; definition-only, follow-ups
 per the 14.8 table):
 

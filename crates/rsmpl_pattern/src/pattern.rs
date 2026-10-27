@@ -50,7 +50,9 @@ pub enum PatternKind {
         text: String,
         use_name: Option<String>,
     },
-    /// Impl-context rewrite (`impl Service { ... - fn ... }`).
+    /// Method-context rewrite (`impl Service { ... - fn ... }` or
+    /// `trait Service { ... - fn ... }`, T182): the stored header covers
+    /// both block kinds (field name is historical).
     ImplContext { impl_header: String },
     /// Macro token-tree / invocation patterns.
     Macro { minus_raw: String, plus_raw: String },
@@ -258,7 +260,13 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                 GeneralShape::Type => "general-type",
             },
             PatternKind::Fn { .. } => "function-item",
-            PatternKind::ImplContext { .. } => "impl-context",
+            PatternKind::ImplContext { impl_header } => {
+                if is_trait_header(impl_header) {
+                    "trait-context"
+                } else {
+                    "impl-context"
+                }
+            }
             PatternKind::Macro { .. } => "macro",
             PatternKind::ItemRename { .. } => "item-rename",
             PatternKind::UseRename { .. } => "use-path",
@@ -556,8 +564,12 @@ fn classify(
         });
     }
 
-    // Impl-context: context lines mention `impl`.
-    if c.contains("impl ") && looks_like_fn(m, table) {
+    // Method-context: context lines open an `impl` or `trait` block and
+    // the minus side is fn-like. The trait half (T182) routes
+    // `TraitItem::Fn` (`;` declarations and default bodies) through the
+    // shared slot planner; `impl` is checked first so a pathological
+    // both-match stays deterministic.
+    if (c.contains("impl ") || is_trait_context(c)) && looks_like_fn(m, table) {
         let impl_header = c.lines().next().unwrap_or("").to_string();
         return Ok(PatternKind::ImplContext { impl_header });
     }
@@ -1040,6 +1052,38 @@ fn first_fn_block(text: &str) -> String {
     // The fn pattern may span multiple lines (`fn foo(...) {` / `...` / `}`);
     // join lines with newlines preserved for the fn parser.
     text.to_string()
+}
+
+/// Single header-line check (T182): the trimmed line opens a `trait` block
+/// (`trait T ...` / `unsafe trait T ...`). Used for the C14 label and by the
+/// engine to pick the trait half of method-context matching.
+pub fn is_trait_header(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("trait ") || t.starts_with("unsafe trait ")
+}
+
+/// Multi-line context check for the router (T182): any context line opens a
+/// trait block. Line-anchored so `// trait` comments or `dyn Trait` bounds
+/// never route a hunk into method-context matching.
+fn is_trait_context(context_raw: &str) -> bool {
+    context_raw.lines().any(is_trait_header)
+}
+
+/// Ident a `trait` header line declares (`trait T<U>: B ...` → `T`; T182).
+/// `None` when the line is not a trait header (attribute lines, garbage) —
+/// callers fall back to range-overlap behavior instead of guessing.
+pub fn trait_header_ident(header: &str) -> Option<String> {
+    let t = header.trim_start();
+    let rest = t
+        .strip_prefix("trait ")
+        .or_else(|| t.strip_prefix("unsafe trait "))?;
+    let name = rest.split_whitespace().next()?;
+    let name = name.split(['<', ':']).next().unwrap_or(name);
+    if name.is_empty() || name == "{" {
+        None
+    } else {
+        Some(name.to_string())
+    }
 }
 
 /// Classify a non-function item rename (`struct Old` -> `struct New`).

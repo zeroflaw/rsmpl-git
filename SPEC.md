@@ -1106,7 +1106,7 @@ Examples:
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `trait`-header context plus a function pair is a trait-method rename (same slot planner: `;` declarations and default bodies match, bodies/`;` preserved, explicit `pub` never matches — trait methods carry no visibility — and a `+` side writing it fails fast; the header names the trait ident, otherwise the block is accepted only on range overlap like `impl`); `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 If the parse context is ambiguous, the engine may require an explicit directive:
 
@@ -3573,6 +3573,21 @@ diff --git src/service.rs
 +     fn new_name(...) {
           ...
       }
+  }
+```
+
+The same shape with a `trait` header rewrites trait methods, including
+`;` declarations (the `;` is preserved like a body):
+
+```diff
+diff --git src/service.rs
+@@ -1,3 @@ rule=rename_trait_method
+# lang=rust
+  trait Service {
+      ...
+-     fn old_name();
++     fn new_name();
+      ...
   }
 ```
 

@@ -820,3 +820,49 @@ fn repeat_non_call_shape_rejected() {
     );
     assert!(compile(&ok_expr).is_ok());
 }
+
+#[test]
+fn trait_context_routes_to_method_context() {
+    // T182: a `trait` context header plus a fn pair routes to the shared
+    // method-context kind (same variant as `impl`); `// trait` comments
+    // and `dyn Trait` bounds never route.
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=x\n# lang=rust\n  trait T {\n      ...\n-     fn foo();\n+     fn bar();\n      ...\n  }\n",
+    );
+    let c = compile(&h).unwrap();
+    assert!(
+        matches!(c.kind, PatternKind::ImplContext { .. }),
+        "got: {:?}",
+        c.kind
+    );
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- fn foo();\n+ fn bar();\n",
+    );
+    let c = compile(&h).unwrap();
+    assert!(
+        matches!(c.kind, PatternKind::Fn { .. }),
+        "got: {:?}",
+        c.kind
+    );
+}
+
+#[test]
+fn trait_header_ident_cases() {
+    // T182: ident extraction for the engine header check — generics,
+    // bounds, and `unsafe` strip; non-headers yield `None`.
+    use rsmpl_pattern::{is_trait_header, trait_header_ident};
+    assert_eq!(trait_header_ident("trait T {"), Some("T".to_string()));
+    assert_eq!(
+        trait_header_ident("unsafe trait T<U>: Clone {"),
+        Some("T".to_string())
+    );
+    assert_eq!(
+        trait_header_ident("trait T: Clone {"),
+        Some("T".to_string())
+    );
+    assert_eq!(trait_header_ident("impl S {"), None);
+    assert_eq!(trait_header_ident("#[cfg(x)]"), None);
+    assert!(is_trait_header("  unsafe trait T {"));
+    assert!(!is_trait_header("  // trait T {"));
+    assert!(!is_trait_header("  impl S {"));
+}
