@@ -107,3 +107,45 @@ fn attributes_abstraction_rejected_with_needle() {
     );
     assert_eq!(read(dir.path(), "a.rs"), "#[inline]\nfn foo() {}\n");
 }
+
+#[test]
+fn item_preserve_written_mismatch_fails_safe_text_and_json() {
+    // T235 dogfood probe: item renames reuse the fn attribute contract
+    // (SPEC 14.6/14.8) — a written `///` the target lacks skips the site
+    // instead of silently renaming it.
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "struct Local;\n");
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- /// Local thing.\n- struct Local\n+ /// Local thing.\n+ struct Remote\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    assert_eq!(read(dir.path(), "a.rs"), "struct Local;\n");
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(!out.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(payload["error"]["code"], "RSMPL_MATCH_CONFLICT");
+}
+
+#[test]
+fn item_plus_attrs_differ_rejected_with_needle() {
+    // T235: the item rewrite only replaces the ident span, so plus-side
+    // attrs differing from the minus side are rejected (fn/general
+    // parity) instead of silently dropped.
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "/// Other thing.\nstruct Other;\n");
+    let patch = "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- /// Other thing.\n- struct Other\n+ /// Changed thing.\n+ struct Renamed\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    assert!(err.contains("differ from matched attributes"), "got: {err}");
+    assert_eq!(
+        read(dir.path(), "a.rs"),
+        "/// Other thing.\nstruct Other;\n"
+    );
+}

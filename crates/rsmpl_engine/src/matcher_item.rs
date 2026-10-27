@@ -189,6 +189,28 @@ fn in_scope(c: &ItemCandidate, scope: Scope, old_start: u32, old_len: u32) -> bo
     }
 }
 
+/// Whitespace-insensitive attribute comparison shared by the Explicit
+/// arm, the Preserve site filter, and the plus/minus mirror gate
+/// (T235): pattern text (token-joined at parse, `///` normalized to
+/// `#[doc]`) vs `quote!`-rendered target attributes or minus-side text.
+fn norm_attr_text(s: &str) -> String {
+    s.split_whitespace().collect()
+}
+
+fn attrs_equal(pattern_attrs: &[String], attrs: &[syn::Attribute]) -> bool {
+    let want: Vec<String> = pattern_attrs.iter().map(|a| norm_attr_text(a)).collect();
+    let have: Vec<String> = attrs
+        .iter()
+        .map(|a| norm_attr_text(&quote::quote!(#a).to_string()))
+        .collect();
+    want == have
+}
+
+fn attrs_text_equal(a: &[String], b: &[String]) -> bool {
+    let norm = |ss: &[String]| ss.iter().map(|s| norm_attr_text(s)).collect::<Vec<_>>();
+    norm(a) == norm(b)
+}
+
 pub(crate) fn check_attrs(
     attrs: &[syn::Attribute],
     policy: AttrsPolicy,
@@ -211,15 +233,7 @@ pub(crate) fn check_attrs(
             Ok(())
         }
         AttrsPolicy::Explicit => {
-            let want: Vec<String> = pattern_attrs
-                .iter()
-                .map(|a| a.split_whitespace().collect::<String>())
-                .collect();
-            let have: Vec<String> = attrs
-                .iter()
-                .map(|a| quote::quote!(#a).to_string().split_whitespace().collect())
-                .collect();
-            if want != have {
+            if !attrs_equal(pattern_attrs, attrs) {
                 return Err(StructuredError::new(
                     ErrorCode::MatchConflict,
                     "attached attributes do not match explicitly written pattern attributes",
@@ -299,6 +313,24 @@ pub fn apply_item_rename_hunk(
             .with_rule(hunk.rule_name()));
         }
     }
+    // Plus-side attribute text must mirror the minus side (same contract
+    // as fn/general hunks, T235): the item rewrite only replaces the
+    // ident span, so differing plus-side attrs would be silently dropped.
+    // `# attrs=strip` skips this gate — the envelope is deleted anyway.
+    if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
+        if hunk.attrs_policy() != AttrsPolicy::Strip
+            && !minus_attrs.is_empty()
+            && !plus_attrs.is_empty()
+            && !attrs_text_equal(&minus_attrs, plus_attrs)
+        {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
+            )
+            .with_rule(hunk.rule_name())
+            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+        }
+    }
     let rule = hunk.rule_name();
     let file = "";
     let mut candidates = Vec::new();
@@ -314,6 +346,15 @@ pub fn apply_item_rename_hunk(
             continue;
         }
         if !in_scope(c, hunk.scope(), old_start, old_len) {
+            continue;
+        }
+        // Preserve plus written minus-side attributes constrains the match
+        // (T235, SPEC 14.6 — same as fn hunks): sites carrying different
+        // attributes are skipped, never silently rewritten.
+        if hunk.attrs_policy() == AttrsPolicy::Preserve
+            && !minus_attrs.is_empty()
+            && !attrs_equal(&minus_attrs, &c.attrs)
+        {
             continue;
         }
         check_attrs(&c.attrs, hunk.attrs_policy(), &minus_attrs, &rule, file)?;
@@ -632,5 +673,33 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert_eq!(out.matches("struct New").count(), 2, "got: {out}");
         assert!(!out.contains("Old"));
+    }
+
+    #[test]
+    fn preserve_written_attrs_constrain_and_mirror() {
+        // T235: written minus-side attrs constrain the match even under
+        // the default preserve policy (SPEC 14.6, fn parity via T165);
+        // sites carrying different attrs are skipped, never rewritten.
+        let mismatch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- /// Local thing.\n- struct Local\n+ /// Local thing.\n+ struct Remote\n";
+        let err = apply(mismatch, "struct Local;\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Mirrored attrs on a matching site apply byte-exact.
+        let mirror = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- /// Local thing.\n- struct Local\n+ /// Local thing.\n+ struct Remote\n";
+        let out = apply(mirror, "/// Local thing.\nstruct Local;\n").unwrap();
+        assert!(
+            out.contains("/// Local thing.\nstruct Remote;"),
+            "got: {out}"
+        );
+        // Plus-side attrs differing from the minus side are rejected
+        // instead of silently dropped (fn/general mirror-gate parity).
+        let differ = mirror.replace("+ /// Local thing.", "+ /// Changed thing.");
+        let err = apply(&differ, "/// Local thing.\nstruct Local;\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("differ from matched attributes"), "got: {err}");
+        // `# attrs=strip` skips the differ gate: the envelope is deleted.
+        let strip = differ.replace("# lang=rust", "# attrs=strip\n# lang=rust");
+        let out = apply(&strip, "/// Local thing.\nstruct Local;\n").unwrap();
+        assert!(out.contains("struct Remote;"), "got: {out}");
+        assert!(!out.contains("Local thing"), "got: {out}");
     }
 }
