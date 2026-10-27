@@ -1795,7 +1795,11 @@ Rules:
   sitting directly inside a group at the matched position (see below).
 - Matching is segment-wise on the target's leading path segments: minus
   `crate::old` matches `crate::old::Thing` but never `crate::old2::Thing`
-  (never a string prefix). Identical minus/plus prefixes are a pattern error.
+  (never a string prefix). Identical minus/plus prefixes are a pattern error, reported verbatim:
+  ```text
+  `use`-path rename minus and plus prefixes are identical (`crate::old`); write the new path on the `+` side
+  ```
+  (rule + file lines; text omits the null range/suggestion lines, JSON carries explicit nulls; suggestion is null).
 - Group members at the matched position rewrite too: the walk descends
   into `{...}` (at any depth, including a root group) and matches each
   member from the member start, so `use crate::{old, other as o}` becomes
@@ -2178,6 +2182,14 @@ empty and swallows one adjacent comma, so the same hunk rewrites
 arg-drop (`- foo(E, ...)` / `+ bar(E)` rewrites `foo(1, 2)` to
 `bar(1)`). A `...` in `+` with no matching `- ...` is a pattern error:
 there is nothing to replay.
+  The engine reports this verbatim (rule + file lines; text carries the suggestion line, JSON explicit nulls):
+  ```text
+  RSMPL_PATTERN_CONFLICT
+  rule: r
+  file: src/lib.rs
+  reason: `...` in `+` has no matching `- ...` to replay
+  suggestion: drop the `+ ...` or add a `- ...` absorbing the replayed args
+  ```
 
 ### 16.4 Body ellipsis
 
@@ -3205,8 +3217,8 @@ kind-illegal prefix (`unsafe` off `trait`/`impl`, visibility on `impl`),
 or any kind mismatch, identical-name, or `auto trait` header — all Section
 14.8, which lists the engine-verbatim reasons,
 and any call/method-call hunk whose `+` side holds more `...` tokens
-than the `-` side has argument ellipses to replay (nothing to replay —
-drop the `+ ...` or add a `- ...`, Section 16.3).
+than the `-` side has argument ellipses to replay (verbatim reason +
+suggestion, Section 16.3).
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -3356,7 +3368,7 @@ reason: cannot read patch file change.rsmpl: No such file or directory (os error
 An unwritable `--output` target reports `reason: cannot write <path>: <os error>` with `file:` echoing the `--output` path, and aborts before checking or applying (`--output` is written before `--check` runs, Section D.2.3).
 
 Patch `target_path` values that are absolute or escape the worktree
-root fail here too (see 27.6) — before any file is read. Differing
+root fail here too (Section 27.6 lists both engine-verbatim reasons) — before any file is read. Differing
 `diff --git a/old b/new` paths (a file rename, Section 6) fail as a
 parse conflict (25.2), not an I/O conflict: the paths are well-formed,
 the operation is unsupported.
@@ -3451,7 +3463,13 @@ Patch `target_path` values must be repo-relative: no leading `/`
 segments that escape the worktree root. The check is lexical
 (`.`/empty segments ignored, symlinks unresolved); violations fail
 with `RSMPL_IO_CONFLICT`. `--repo` itself is a trusted invoker
-argument, not patch content. A missing target file warns
+argument, not patch content.
+  The engine reports these path reasons verbatim (`file:` echoes the target path; both carry no suggestion — null in JSON, line omitted in text):
+  ```text
+  target path is absolute (/tmp/evil.rs); use a repo-relative path without leading /
+  target path escapes the repo (../evil.rs); use a repo-relative path without ../
+  ```
+A missing target file warns
 (`treating as new (empty) file`) and is treated as empty, so a
 typo'd path creates a stray file on apply — read the warning before
 committing; `--format json` consumers must also read stderr, where
