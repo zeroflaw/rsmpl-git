@@ -96,9 +96,16 @@ impl GitSource {
         // empty dir holds nothing). Reading them as files fails with
         // EISDIR, so skip them here (warned by the binary) instead of
         // failing the whole conversion on unrelated state.
+        //
+        // T390: `--repo` may be a subdirectory (agents run from one);
+        // `git diff`/`git status` paths are already repo-root-relative,
+        // so resolve the filesystem base to the worktree top level
+        // once — joining them onto the subdir reads `sub/sub/…`.
+        // Output paths stay root-relative (check/apply with the root).
+        let base = toplevel(&self.repo);
         let mut skipped_untracked_dirs = Vec::new();
         for path in &untracked {
-            let abs = self.repo.join(path);
+            let abs = base.join(path);
             // Read the link itself, never follow it (T354, mirrors the
             // T353 applyrs read side): a dangling symlink would fail
             // `std::fs::read` with `SourceError` (exit 2) and a
@@ -167,6 +174,31 @@ impl GitSource {
     }
 }
 
+/// Repo worktree top level for `--repo` (T390): `git -C <repo>
+///
+/// rev-parse --show-toplevel`, falling back to `<repo>` itself when
+/// unresolvable (bare dir, git missing — callers already fail fast on
+/// the real git invocations).
+fn toplevel(repo: &Path) -> std::path::PathBuf {
+    match Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if top.is_empty() {
+                repo.to_path_buf()
+            } else {
+                std::path::PathBuf::from(top)
+            }
+        }
+        _ => repo.to_path_buf(),
+    }
+}
+
 /// Repo-relative paths of untracked files (`git status --porcelain`).
 fn untracked_files(repo: &Path) -> Result<Vec<String>, String> {
     let out = Command::new("git")
@@ -182,9 +214,11 @@ fn untracked_files(repo: &Path) -> Result<Vec<String>, String> {
     }
     let mut paths = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
-        // `?? <path>`; renames never appear as untracked.
+        // `?? <path>`; renames never appear as untracked. Quoted
+        // tokens are C-quoted non-ASCII names (T389) and decode to
+        // the real filename; unquoted tokens pass through.
         if let Some(path) = line.strip_prefix("?? ") {
-            paths.push(path.trim_matches('"').to_string());
+            paths.push(rsmpl_patch::decode_git_path_token(path));
         }
     }
     Ok(paths)

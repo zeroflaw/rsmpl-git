@@ -314,7 +314,7 @@ fn is_dev_null(p: &str) -> bool {
 
 fn split_paths(s: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
-    let mut cur = String::new();
+    let mut cur: Vec<u8> = Vec::new();
     let mut in_q = false;
     let mut q = '"';
     let mut chars = s.chars().peekable();
@@ -323,32 +323,112 @@ fn split_paths(s: &str) -> Option<Vec<String>> {
             if c == q {
                 in_q = false;
             } else if c == '\\' {
-                if let Some(n) = chars.next() {
-                    cur.push(n);
+                // T389: git C-quotes non-ASCII bytes (`"caf\303\251.txt"`);
+                // decode escapes inside double quotes so the target is
+                // the real filename, not the backslash-stripped text.
+                // Single-quote spans keep the legacy lenient rule
+                // (backslash quotes the next char verbatim).
+                if q == '"' {
+                    if let Some(n) = chars.next() {
+                        push_c_escape(&mut cur, &mut chars, n);
+                    }
+                } else if let Some(n) = chars.next() {
+                    push_str_byte(&mut cur, n);
                 }
             } else {
-                cur.push(c);
+                push_str_byte(&mut cur, c);
             }
         } else if c == '"' || c == '\'' {
             in_q = true;
             q = c;
         } else if c.is_whitespace() {
             if !cur.is_empty() {
-                out.push(cur.clone());
+                out.push(bytes_to_path(&cur));
                 cur.clear();
             }
         } else {
-            cur.push(c);
+            push_str_byte(&mut cur, c);
         }
     }
     if !cur.is_empty() {
-        out.push(cur);
+        out.push(bytes_to_path(&cur));
     }
     if out.is_empty() {
         None
     } else {
         Some(out)
     }
+}
+
+/// Decode one C-style escape after a backslash inside a double-quoted
+/// git path (`\"`, `\\`, `\a\b\f\n\r\t\v`, octal `\NNN`); anything
+/// else quotes the char verbatim (the pre-T389 rule).
+fn push_c_escape(cur: &mut Vec<u8>, chars: &mut std::iter::Peekable<std::str::Chars>, n: char) {
+    let byte = match n {
+        'a' => Some(0x07),
+        'b' => Some(0x08),
+        'f' => Some(0x0C),
+        'n' => Some(b'\n'),
+        'r' => Some(b'\r'),
+        't' => Some(b'\t'),
+        'v' => Some(0x0B),
+        '\\' => Some(b'\\'),
+        '"' => Some(b'"'),
+        '0'..='7' => {
+            let mut val = n as u32 - '0' as u32;
+            for _ in 0..2 {
+                match chars.peek() {
+                    Some(&d) if ('0'..='7').contains(&d) => {
+                        val = val * 8 + (d as u32 - '0' as u32);
+                        chars.next();
+                    }
+                    _ => break,
+                }
+            }
+            Some((val & 0xFF) as u8)
+        }
+        _ => None,
+    };
+    match byte {
+        Some(b) => cur.push(b),
+        None => push_str_byte(cur, n),
+    }
+}
+
+fn push_str_byte(cur: &mut Vec<u8>, c: char) {
+    let mut buf = [0u8; 4];
+    cur.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+}
+
+fn bytes_to_path(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Decode a `git status --porcelain` path token: double-quoted tokens
+/// are C-quoted (`?? "caf\303\251.txt"`, T389) and decode to the real
+/// filename; unquoted tokens (spaces included — git never quotes
+/// those) pass through byte-exact.
+pub fn decode_git_path_token(token: &str) -> String {
+    let inner = match token.strip_prefix('"') {
+        Some(rest) => match rest.strip_suffix('"') {
+            Some(inner) => inner,
+            None => return token.to_string(),
+        },
+        None => return token.to_string(),
+    };
+    let mut cur = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(n) => push_c_escape(&mut cur, &mut chars, n),
+                None => cur.push(b'\\'),
+            }
+        } else {
+            push_str_byte(&mut cur, c);
+        }
+    }
+    bytes_to_path(&cur)
 }
 
 fn strip_ab_prefix(p: &str) -> String {
@@ -1480,6 +1560,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.files[0].target_path, "my file.rs");
+    }
+
+    #[test]
+    fn c_quoted_octal_paths_decode() {
+        // T389: default `core.quotepath=true` C-quotes non-ASCII names
+        // (`"caf\303\251.txt"`); the splitter decodes the octal escapes
+        // to the real filename instead of dropping the backslashes.
+        let p = parse_patch(
+            "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+        )
+        .unwrap();
+        assert_eq!(p.files[0].target_path, "caf\u{e9}.txt");
+        assert_eq!(
+            decode_git_path_token("\"caf\\303\\251.txt\""),
+            "caf\u{e9}.txt"
+        );
+        assert_eq!(decode_git_path_token("plain file.txt"), "plain file.txt");
     }
 
     #[test]

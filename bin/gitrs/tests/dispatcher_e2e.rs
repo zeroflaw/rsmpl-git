@@ -171,3 +171,60 @@ fn apply_passthrough_matches_applyrs() {
     assert!(direct.status.success());
     assert!(via.status.success());
 }
+
+// T246 session 20: `gitrs diff` forwards every surface cell to the
+// sibling `diffrs` byte-identical (pending, --staged, [REV], two-dot
+// range, --format json, error paths) — the agent entry point never
+// drifts from the binary it invokes.
+#[test]
+fn diff_forwards_all_cells_identical_to_diffrs() {
+    assert!(
+        sibling_diffrs().exists(),
+        "sibling diffrs missing next to the dispatcher"
+    );
+    let dir = init_repo();
+    let g = |args: &[&str]| {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "git {args:?} failed");
+    };
+    g(&["config", "user.email", "t@t"]);
+    g(&["config", "user.name", "t"]);
+    g(&["config", "commit.gpgsign", "false"]);
+    write(dir.path(), "f.rs", "fn v1() {}\n");
+    g(&["add", "-A"]);
+    g(&["commit", "-qm", "one"]);
+    write(dir.path(), "f.rs", "fn v2() {}\n");
+    g(&["add", "-A"]);
+
+    let cells: &[&[&str]] = &[
+        &[],
+        &["--staged"],
+        &["HEAD~1"],
+        &["HEAD~1..HEAD"],
+        &["--format", "json"],
+        &["nosuchrev12345"],
+    ];
+    for cell in cells {
+        let mut direct_args: Vec<String> = cell.iter().map(|s| s.to_string()).collect();
+        direct_args.push("--repo".to_string());
+        direct_args.push(dir.path().to_string_lossy().to_string());
+        let mut via_args = vec!["diff".to_string()];
+        via_args.extend(direct_args.clone());
+        let out_via = Command::new(dispatcher()).args(&via_args).output().unwrap();
+        let out_direct = Command::new(sibling_diffrs())
+            .args(&direct_args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            out_via.status.code(),
+            out_direct.status.code(),
+            "cell {cell:?}"
+        );
+        assert_eq!(out_via.stdout, out_direct.stdout, "cell {cell:?}");
+        assert_eq!(out_via.stderr, out_direct.stderr, "cell {cell:?}");
+    }
+}

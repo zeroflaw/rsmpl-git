@@ -370,7 +370,9 @@ sections and rewrite old-side content. `/dev/null` halves stay the create/delete
 (`diff --git /dev/null b/new`, `diff --git a/old /dev/null`).
 Paths may be quoted; unquoted paths may contain spaces (real git never
 quotes spaces) — the header splits at the first `b/`-led part, or at a
-`/dev/null` half, else it fails to parse (T379).
+`/dev/null` half, else it fails to parse (T379). Quoted paths decode
+git's C-style escapes (default `core.quotepath` quotes non-ASCII names,
+so `"caf\303\251.txt"` resolves to `café.txt`, T389).
 A two-part remainder that wears neither git's `a/`/`b/` uniform nor a
 `/dev/null` half is one single path with a space (SPEC 6 single-path form,
 T381) — never a rename of the first word into the second.
@@ -5749,7 +5751,9 @@ what changed. Minimal surface, same philosophy as `applyrs`:
 Collection: unstaged worktree-vs-index plus untracked files (emitted
 as new-file ordinary sections, since `git diff` never shows them;
 untracked symlinks read as their link-target string, never followed,
-with `new file mode 120000`);
+with `new file mode 120000`); `--repo` may be a subdirectory — reads
+resolve to the worktree top level while output paths stay
+repo-root-relative (check/apply run against the root, T390).
 empty files emit headers only (no hunk, exactly real git's shape);
 untracked executables emit `100755` (unix) so +x round-trips (T364);
 `--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
