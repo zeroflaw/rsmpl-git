@@ -209,6 +209,11 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     let patch_path = tmp.join(format!("{short}.rsmpl"));
     std::fs::write(&patch_path, &patch).unwrap();
+    // Anchored count (T358): semantic headers are exactly
+    // `@@ -1,1 @@ rule=` (scope=file dummies); ordinary hunks are
+    // two-sided `@@ -a,b +c,d @@`, and SPEC/test content lines may
+    // contain `rule=` substrings — substring counts inflate (~170/251
+    // false "compressing"), so never loosen this prefix.
     let sem = patch
         .lines()
         .filter(|l| l.starts_with("@@ -1,1 @@ rule="))
