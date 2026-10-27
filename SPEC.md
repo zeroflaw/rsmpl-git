@@ -887,17 +887,51 @@ invalid returns `bogus` (only `none` supported): # returns=bogus
 invalid metavars `bogus`: # metavars=bogus
 invalid repeat value `bogus` (write bare `# repeat`): # repeat=bogus
 invalid symbol directive (want `# symbol Name=path`): # symbol JustName
+metavariable directive missing name: # expr
+invalid name `1bad` (must start with letter or _)
+symbol path must not be empty: # symbol Old=
 empty metavariable/capture name
 ```
 
-The last two are malformed declarations, not values: a `=`-less `# symbol`
-line, and an empty `# bind=`/`# use=` name. Note the engine's own wording —
+The last four are malformed declarations, not values: a `=`-less `# symbol`
+line, a nameless `# expr`-family line, a bad name, and an empty path or
+capture name. Engine-verbatim (all exit 2; all parse-time, before any
+`rule:`/`file:` is attached — text carries the bare `reason:` line only;
+JSON carries explicit `rule: null` / `file: null` / `range: null` /
+`suggestion: null`):
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: metavariable directive missing name: # expr
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: invalid name `1bad` (must start with letter or _)
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: symbol path must not be empty: # symbol Old=
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: empty metavariable/capture name
+```
+
+`{line}` echoes the offending `#` directive line (`# expr` bare, `# symbol
+Old=` with its empty path); `` `1bad` `` is the offending name (backticked).
+The first fires when the directive carries no name at all; the second when
+the name fails validation (must start with a letter or `_`); the third when
+a `# symbol Name=` line carries no path; the fourth only for empty
+`# bind=`/`# use=` names. Note the engine's own wording —
 `allow`/`attrs`/`optional`/`repeat` say "value", the rest don't; only `allow`
 carries `(want one|many)`, only `returns` carries `(only `none` supported)`,
 only `repeat` carries `(write bare `# repeat`)` plus the echoed offending
-# repeat=<value>` spelling — recorded verbatim, not normalized. All fence
-lines carry a null suggestion (omitted from text, explicit null in JSON)
-except `invalid repeat value`, whose suggestion is `write bare `# repeat`
+`# repeat=<value>` spelling — recorded verbatim, not normalized. All value
+fences above carry a null suggestion (omitted from text, explicit null in
+JSON) except `invalid repeat value`, whose suggestion is `write bare `# repeat`
 with no value` (text carries the `suggestion:` line, JSON carries the string).
 
 ---
@@ -2608,6 +2642,22 @@ there is nothing to replay.
   suggestion: drop the `+ ...` or add a `- ...` absorbing the replayed args
   ```
 
+A `...` fused to identifier characters is a different pattern error from
+the replay fence above: `...` must stand alone (or sit inside delimiters),
+so `foo(E...E)` never parses as a callee plus wildcard. The engine reports
+this verbatim (rule + file lines; text omits the null `range:`/`suggestion:`
+lines, JSON carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: `...` must be a standalone wildcard, got ` foo(E...E)`
+```
+
+`{line}` echoes the full body-line text after the diff-prefix strip
+(leading space kept — `- foo(...)` reports `` ` foo(...)` ``).
+
 ### 16.4 Body ellipsis
 
 Pattern:
@@ -2908,12 +2958,15 @@ Rules:
  (both suggestion null). A `# repeat` hunk that also declares
  `# bind=`/`# use=` reports `` `# repeat` cannot be combined with
  `# bind=`/`# use=` (captures move verbatim) `` with suggestion
- `remove `# repeat` from the cut/paste hunk`. Here `v1` names the
-  `remove `# repeat` from the cut/paste hunk`. A valued spelling
-  (`# repeat=<value>`) never reaches this gate: directive parsing rejects
-  it first (verbatim reason + suggestion, Section 9.6). Here `v1` names the
-  general-matcher generation (the SPEC 18.6 C-table namespace), not
-  the SPEC v0.1 version.
+ `remove `# repeat` from the cut/paste hunk`. A hunk with only one side
+ (`-` without `+`, or `+` without `-`) reports `` `# repeat` requires
+ both `-` and `+` patterns (insertions/deletions already cover nested
+ matches) `` with suggestion `remove `# repeat`, or write a rewrite
+ hunk`. Gate order: a valued spelling (`# repeat=<value>`) never reaches
+ these gates — directive parsing rejects it first (verbatim reason +
+ suggestion, Section 9.6) — and a combined bind/use hunk reports the
+ bind/use fence above. Here `v1` names the general-matcher generation
+ (the SPEC 18.6 C-table namespace), not the SPEC v0.1 version.
 
 ---
 
@@ -3795,7 +3848,7 @@ directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (three engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons) or structural fn-pattern misuse (eleven engine-verbatim reasons, both Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
-The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
+The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. It gains three further members: the Section 9.6 declaration-name fences (`missing name`, `invalid name`, `empty path`, `empty capture`), the Section 16 standalone-`...` fence, and the Section 17.8 repeat-both fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
 
 Two further structural pattern rejections are fenced below: an RSmPL
 hunk with no pattern body lines (rule-only envelope), and a `#`
