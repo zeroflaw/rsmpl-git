@@ -3191,14 +3191,17 @@ fn-body `use` is ordinary-hunk territory too.
 
 ### 25.5 Symbol conflict
 
-Symbol resolution failed.
+Symbol resolution failed. In v0.1 there is no semantic environment, so every symbol hunk needs `# fallback=syntax` (Section 19.3); without it the hunk fails with `RSMPL_SYMBOL_CONFLICT`:
 
 ```text
 RSMPL_SYMBOL_CONFLICT
 rule: rename_symbol_calls
-symbol: crate::old_api
-reason: symbol could not be resolved under current Cargo configuration
+file: src/lib.rs
+reason: symbol `Old` could not be resolved (no semantic environment in v0.1)
+suggestion: add `# fallback=syntax` to allow syntactic matching
 ```
+ 
+`Old` is the declared `# symbol Old=...` metavariable name (backticked in the reason). The JSON envelope carries the same reason with explicit `range: null` (null fields are omitted from text output).
 
 ### 25.6 Capture conflict
 

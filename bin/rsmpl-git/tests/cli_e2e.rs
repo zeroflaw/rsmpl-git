@@ -268,6 +268,7 @@ fn turbofish_call_rewrite_applies_text() {
 #[test]
 fn symbol_without_fallback_json_envelope() {
     // T24: the gate failure is machine-readable (SPEC D.2).
+    // T263: reason/suggestion pinned engine-verbatim (SPEC 25.5).
     let dir = init_repo();
     write(
         dir.path(),
@@ -289,6 +290,20 @@ fn symbol_without_fallback_json_envelope() {
     assert_eq!(
         v["error"]["file"],
         serde_json::json!("src/lib.rs"),
+        "got: {v}"
+    );
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no semantic environment in v0.1"),
+        "got: {v}"
+    );
+    assert!(
+        v["error"]["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("# fallback=syntax"),
         "got: {v}"
     );
 }
