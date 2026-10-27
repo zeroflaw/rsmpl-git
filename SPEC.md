@@ -823,6 +823,25 @@ not `# expr E F` (a space-separated list is a pattern error), and
 note `# symbol` keeps the single-`Name=path` form (Section 9.5) with
 no comma form.
 
+A space-separated name list is a pattern error, not two declarations:
+`# expr E F` fails fast with `RSMPL_PATTERN_CONFLICT` (exit 2;
+parse-time bare envelope — text carries the bare `reason:` line only,
+JSON carries explicit `rule: null` / `file: null` / `range: null` /
+`suggestion: null`). Engine-verbatim (`{name}` is the trimmed
+comma-segment containing the space, `{line}` the full offending `#`
+line including any `= constraint` tail):
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: invalid metavariable name `E F` in: # expr E F
+```
+
+The gate fires per comma-segment before charset validation, so it is
+distinct from the Section 9.6 `invalid name` gates (which reject one
+bad identifier — `` `1bad` `` at the start-char gate, `` `foo-bar` ``
+at the alphanumeric gate — after the whitespace split). The fix is the
+comma form above (`# expr E, F`).
+
 ### 9.5 Symbol directives
 
 A semantic symbol binding is declared with:
@@ -3941,6 +3960,8 @@ The body list above gains four final members: the Section 14.6 attribute match-t
 It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C1-C12 compile-time fences (`...` in general shape, `let-else`, three `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6), each pinned text+JSON+untouched in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections).
 
 It gains one further member: the Section 14.8 item attr-merge fence (plus-side-omitted verbatim reason, rule+file envelope with null range/suggestion; the differ case reuses the 14.6 second fence byte-identical, suggestion set). Defensive-only, documented without pins (T287/T290/T291 precedent — no CLI trigger, so no fence to pin): the seven `expected X pattern` dispatch arms (`function`, `item capture`, `insertion`, `impl-context`, `expression`, `use-path`, `generalized stmt/expr/type` — plan.rs routes each `PatternKind` to its own matcher, cf. the 21.3 macro note), the `cannot analyze method signature` synth backstop (rendered from an already-parsed signature; no CLI trigger post-T190/T221), the `general statement patterns must be ...` arm alongside the `invalid let`/`expression`/`type` match-time re-parses the body list already names (the classifier pre-validates the same strings at compile time), and the span-guard family (`span line ... outside file`, `edit range ... outside file`, `... name span mismatch (file changed during matching?)`, `use prefix span is empty (file changed during matching?)` — the target file is immutable during matching).
+
+It gains one further member: the Section 9.4 whitespace-in-name fence (reason shape `invalid metavariable name ... in: ...`, parse-time bare envelope — text carries the bare `reason:` line only, JSON carries explicit nulls), pinned text+JSON+untouched in `metavar_space_verbatim_e2e.rs`.
 
 Two further structural pattern rejections are fenced below: an RSmPL
 hunk with no pattern body lines (rule-only envelope), and a `#`
