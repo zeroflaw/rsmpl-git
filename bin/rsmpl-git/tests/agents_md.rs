@@ -113,6 +113,46 @@ fn agents_md_citations_resolve() {
     ] {
         assert!(skill.contains(needle), "skill missing needle {needle:?}");
     }
+    // T146 anti-rot: SKILL.md's SPEC citations must resolve too (the
+    // `SPEC D.3.3` pointer rotted silently after T122 deleted the D.3
+    // subsections). Same (cite, anchor) shape as the AGENTS.md table.
+    for (cite, anchor) in [
+        ("17.3", "### 17.3"),
+        ("10.4", "### 10.4"),
+        ("SPEC 10", "## 10."),
+        ("7.1", "### 7.1"),
+        ("SPEC 9.3", "### 9.3"),
+        ("SPEC 14", "## 14."),
+        ("14.1", "### 14.1"),
+        ("14.7", "### 14.7"),
+        ("17.8", "### 17.8"),
+        ("18.5", "### 18.5"),
+        ("14.8", "### 14.8"),
+        ("14.9", "### 14.9"),
+        ("SPEC 20", "## 20."),
+        ("SPEC 21", "## 21."),
+        ("D.2.1", "D.2.1"),
+        ("D.2.2", "D.2.2"),
+        ("D.2.4", "D.2.4"),
+        ("D.1", "### D.1"),
+        ("SPEC 25", "## 25."),
+        ("SPEC D.3", "### D.3"),
+    ] {
+        assert!(skill.contains(cite), "SKILL.md should cite {cite}");
+        assert!(
+            spec.contains(anchor),
+            "SPEC.md has no anchor {anchor} cited by SKILL.md ({cite})"
+        );
+    }
+    // Deleted sections must stay uncited (T122 removed the D.3 subsections
+    // with the inspect surface; a bare `contains` pin is blind to `D.3.3`
+    // because it contains `D.3` as a substring).
+    for stale in ["D.3.1", "D.3.2", "D.3.3"] {
+        assert!(
+            !skill.contains(stale),
+            "SKILL.md cites removed section {stale}"
+        );
+    }
     assert!(
         agents.contains("skills/rsmpl-git/SKILL.md"),
         "AGENTS.md should point to the skill"

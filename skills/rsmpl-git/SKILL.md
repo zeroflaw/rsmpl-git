@@ -98,7 +98,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
   `# macro=token_tree` is verbatim-only (`- M!(...)` / `+ N!(...)` renames);
   edits inside macro bodies go through ordinary hunks (SPEC 21).
 
-## Loop (SPEC D.3.3)
+## Loop (SPEC D.3)
 
 ```sh
 # read the target file first — note the 1-based spans to rewrite
