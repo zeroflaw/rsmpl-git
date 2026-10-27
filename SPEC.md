@@ -813,6 +813,33 @@ instead of a silently ignored no-op. `# edition=*` and `# format_scope=*`
 are rejected as unsupported in v0.1 (edition is the toolchain default;
 only `# format=preserve` is supported).
 
+Bad *values* for known directives fail the same way (`RSMPL_PATTERN_CONFLICT`,
+exit 2, bare `reason:` line — null rule/file/range/suggestion omitted from
+text, explicit nulls in JSON). Engine-verbatim reasons (backticked value is
+the offending spelling, echoed after the colon):
+
+```text
+unsupported language `bogus` (only `rust` supported): # lang=bogus
+invalid scope `bogus`: # scope=bogus
+invalid allow value `bogus` (want one|many): # allow=bogus
+invalid optional value `bogus`: # optional=bogus
+invalid attrs value `bogus`: # attrs=bogus
+invalid mode `bogus`: # mode=bogus
+invalid macro mode `bogus`: # macro=bogus
+invalid format `bogus`: # format=bogus
+invalid fallback `bogus`: # fallback=bogus
+invalid returns `bogus` (only `none` supported): # returns=bogus
+invalid metavars `bogus`: # metavars=bogus
+invalid symbol directive (want `# symbol Name=path`): # symbol JustName
+empty metavariable/capture name
+```
+
+The last two are malformed declarations, not values: a `=`-less `# symbol`
+line, and an empty `# bind=`/`# use=` name. Note the engine's own wording —
+`allow`/`attrs`/`optional` say "value", the rest don't; only `allow` carries
+`(want one|many)`, only `returns` carries `(only `none` supported)` — recorded
+verbatim, not normalized.
+
 ---
 
 ## 10. Line Range Semantics
@@ -3235,7 +3262,8 @@ any `# root=` value other than `item/expr/stmt/type` (no silent heuristic
 fallthrough — verbatim reason + envelope, Section 13.4),
 any `# identifier/# path/# lifetime/# field` metavariable declaration
 (no kind-specific binding in v0.1, Section 15.1), any `# repeat=<value>`
-(write bare `# repeat`, Section 17.8), any `# repeat` on a
+(write bare `# repeat`, Section 17.8), any bad value for a known
+directive key (verbatim reasons in Section 9.6), any `# repeat` on a
 non-call/non-general-expression shape, on a capture hunk, or with an empty
 minus/plus side (no silent no-op repeat, Sections 17.8, 24.4), any
 item-rename hunk whose minus/plus `pub…` / `unsafe` / `mut` prefixes
