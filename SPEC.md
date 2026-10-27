@@ -1129,7 +1129,7 @@ The insertion anchor is line 5 in the original source file. The inserted code le
 
 For insertions, `-old_start,0` is the normative anchor. `+new_start,new_len` remains review metadata and must not be used to rebase later semantic hunk ranges.
 
-> **v0.1 implementation note:** the anchor `-N,0` inserts *after* line `N` (at the start of line `N+1`, or EOF). `-0,0` inserts at the start of the file. Deleted-item cut ranges additionally absorb one adjacent blank separator line (following blank preferred, else preceding at EOF) so moves do not leave stray blank lines; the captured text itself excludes the separator. Same-anchor multi-pastes restore one blank line between items on insertion (Section 20.2).
+> **v0.1 implementation note:** the anchor `-N,0` inserts *after* line `N` (at the start of line `N+1`, or EOF). `-0,0` inserts at the start of the file. `-len-1,0` (one past the last line) is the EOF spelling and is equivalent to `-len,0`; anything further fails `RSMPL_RANGE_CONFLICT`. Deleted-item cut ranges additionally absorb one adjacent blank separator line (following blank preferred, else preceding at EOF) so moves do not leave stray blank lines; the captured text itself excludes the separator. Same-anchor multi-pastes restore one blank line between items on insertion (Section 20.2).
 
 ### 10.6 Interaction with ordinary Git hunk coordinates
 
