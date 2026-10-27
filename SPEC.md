@@ -3325,7 +3325,7 @@ In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST o
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
-The five shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fence in Section 25.6, which sets `suggestion:`):
+The five shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fences in Section 25.6, which set `suggestion:`):
 
 ```text
 RSMPL_CAPTURE_CONFLICT
@@ -4193,10 +4193,30 @@ A capture is missing or invalid.
 ```text
 RSMPL_CAPTURE_CONFLICT
 rule: paste_helper
-capture: Helper
+file: src/a.rs
 reason: capture `Helper` is not bound by any hunk
-suggestion: add a hunk with `# bind=Helper`
+suggestion: add a hunk with `# bind=<Name>`
 ```
+
+When other captures are bound elsewhere in the patch, the suggestion
+names them instead (sorted, `", "`-joined):
+
+```text
+RSMPL_CAPTURE_CONFLICT
+rule: paste_missing
+file: src/a.rs
+reason: capture `Missing` is not bound by any hunk
+suggestion: available captures: Known
+```
+
+Both fences share one envelope (exit 2; `rule:` + `file:` lines; text
+omits the null `range:` line, JSON carries explicit `range: null`
+with the same `reason`/`suggestion` strings; suggestion is set in
+both — the empty-known branch points at the `# bind=<Name>` syntax,
+the non-empty branch lists the bound names, e.g.
+`available captures: Alpha, Zulu`). In the reason `{name}` echoes the
+offending `# use=` name; in the first suggestion `<Name>` is a literal
+placeholder, not the missing name.
 
 Captures are patch-local, not document-ordered: a `# use=Helper` paste
 may precede its `# bind=Helper` cut (forward references, Section 20.3).
@@ -4206,8 +4226,8 @@ A second capture failure needs no missing name: a hunk declaring both
 (scalar captures only) ``). Move several items with separate scalar captures
 under distinct names instead (Section 20.3). The failure carries `rule:`/`file:`
 like the shape fences in Section 20.3 (text omits the null `range:`/`suggestion:` lines,
-JSON carries explicit nulls); suggestion is null — the missing-capture fence
-above is the only 25.6 entry with a set suggestion.
+JSON carries explicit nulls); suggestion is null — the two missing-capture
+fences above are the only 25.6 entries with a set suggestion.
 A third needs no separate hunk either: one hunk carrying both `# bind=H` and `# use=H` fails with the Section 20.3 self-cycle fence (same `rule:`/`file:` envelope, null suggestion).
 
 ### 25.7 Git hunk conflict
