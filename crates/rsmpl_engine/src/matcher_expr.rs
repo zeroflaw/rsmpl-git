@@ -893,7 +893,13 @@ fn match_callee(
     // target segments drop generic args, so `id::<T>` always failed).
     // Callees without `<` keep the exact historical behavior.
     if callee.contains('<') {
-        return match_callee_turbofish(callee, cand, &reverse_map, bindings);
+        return match_callee_turbofish(
+            callee,
+            cand,
+            &reverse_map,
+            &compiled.table.symbols,
+            bindings,
+        );
     }
     let target_segments = &cand.callee_segments;
     // T177: a bare pattern (no `::<...>`) never matches a turbofish site
@@ -940,6 +946,7 @@ fn match_callee_turbofish(
     pat_callee: &str,
     cand: &Candidate<'_>,
     reverse_map: &HashMap<String, String>,
+    symbols: &HashMap<String, String>,
     bindings: &mut HashMap<String, String>,
 ) -> bool {
     let pat_path: syn::Path = match syn::parse_str(pat_callee) {
@@ -949,11 +956,41 @@ fn match_callee_turbofish(
     if pat_path.leading_colon.is_some() {
         return false;
     }
-    if pat_path.segments.len() != cand.callee_segments.len() {
+    let mut segs: Vec<syn::PathSegment> = pat_path.segments.into_iter().collect();
+    // T199: a sole symbol ident with turbofish (`Old::<u8>` with
+    // `# symbol Old=crate::old_api`) expands to its seeded path
+    // segments; seeded idents compare by full-path equality (SPEC 19.3,
+    // same rule as the bare-symbol arm) while the turbofish args compare
+    // structurally below. Symbols are pre-bound, so no binding is added.
+    // A placeholder-mapped ident keeps placeholder behavior (the bare
+    // arm checks the reverse map first, too).
+    if segs.len() == 1 {
+        let ident = segs[0].ident.to_string();
+        // A symbol name is also placeholder-substituted, so resolve
+        // through the reverse map first (mirrors the bare-symbol arm).
+        // A plain placeholder has no symbols entry and keeps its
+        // behavior.
+        if let Some(orig) = reverse_map.get(&ident) {
+            if let Some(seed) = symbols.get(orig) {
+                let seed_path: syn::Path = match syn::parse_str(seed) {
+                    Ok(p) => p,
+                    Err(_) => return false,
+                };
+                if seed_path.leading_colon.is_some() {
+                    return false;
+                }
+                let mut seed_segs: Vec<_> = seed_path.segments.into_iter().collect();
+                if let Some(last) = seed_segs.last_mut() {
+                    last.arguments = segs[0].arguments.clone();
+                }
+                segs = seed_segs;
+            }
+        }
+    }
+    if segs.len() != cand.callee_segments.len() {
         return false;
     }
-    for ((pat_seg, tgt_ident), tgt_args) in pat_path
-        .segments
+    for ((pat_seg, tgt_ident), tgt_args) in segs
         .iter()
         .zip(cand.callee_segments.iter())
         .zip(cand.callee_arg_texts.iter())
@@ -1442,6 +1479,36 @@ mod tests {
         // site either — spell `P::<T>(E)` (T144/T145).
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr P\n# expr E\n- P(E)\n+ bar(E)\n";
         let src = "fn a() {\n    let a = foo::<u8>(1u8);\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
+    fn symbol_callee_with_turbofish_binds() {
+        // T199: `Old::<u8>(E)` with `# symbol Old=crate::old_api`
+        // matches the turbofish site (sole-symbol expansion to the seeded
+        // path; concrete-path parity is the P5b probe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n- Old::<u8>(E)\n+ New::<u8>(E)\n";
+        let src = "fn a() {\n    let a = crate::old_api::<u8>(1u8);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("crate::new_api::<u8>(1u8);"), "got: {out}");
+    }
+
+    #[test]
+    fn symbol_callee_with_placeholder_turbofish_binds() {
+        // T199: `Old::<T>(E)` binds `T` structurally through the seeded
+        // path expansion (P5e placeholder probe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n# type T\n- Old::<T>(E)\n+ New::<T>(E)\n";
+        let src = "fn a() {\n    let a = crate::old_api::<u8>(1u8);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("crate::new_api::<u8>(1u8);"), "got: {out}");
+    }
+
+    #[test]
+    fn symbol_callee_with_turbofish_mismatch_fails() {
+        // T199 negative: the seeded path must equal the site path, and a
+        // wrong turbofish arg still fails safe.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n- Old::<u16>(E)\n+ New::<u16>(E)\n";
+        let src = "fn a() {\n    let a = crate::old_api::<u8>(1u8);\n}\n";
         assert!(apply(patch, src).is_err());
     }
 
