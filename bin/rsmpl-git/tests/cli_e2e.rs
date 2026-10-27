@@ -1784,3 +1784,28 @@ fn nested_semantic_overlap_suggests_separate_runs() {
     assert!(!err.contains("ordinary hunk"), "got: {err}");
     assert!(err.contains("separate runs"), "got: {err}");
 }
+
+#[test]
+fn mirrored_attrs_preserve_target_indent() {
+    // T153: mirrored `#[...]` lines compare whitespace-insensitively and the
+    // Stmt replacement reuses the original envelope slice, so the target's
+    // `let` indent survives (no one-space diff-prefix artifact leak).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ #[allow(x)]\n+ let y = E;\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert_eq!(
+        text, "fn f() {\n    #[allow(x)]\n    let y = 1;\n}\n",
+        "got: {text:?}"
+    );
+}

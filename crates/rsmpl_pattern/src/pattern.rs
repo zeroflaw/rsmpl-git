@@ -78,6 +78,12 @@ pub enum PatternKind {
         shape: GeneralShape,
         minus_sub: String,
         plus_raw: String,
+        /// Plus text with leading `#[...]` attribute lines removed and the
+        /// one-space diff-prefix artifact stripped per line (T153): the Stmt
+        /// mirrored-attrs path emits `original-envelope + substitute(plus_body)`
+        /// so the target's `let` indent survives instead of being replaced by
+        /// the pattern artifact space.
+        plus_body: String,
         /// Placeholder idents per metavariable, for substitution checks.
         placeholders: Vec<(String, String)>,
         /// Backtick literals in the minus pattern.
@@ -773,6 +779,20 @@ fn check_type_deletion(
     Ok(Some(build()))
 }
 
+/// Strip the one-space diff-prefix artifact from each pattern line (T153).
+/// Agents author `- let x` (prefix + space + content) and `classify` trims
+/// only the outer ends of the full text, so interior lines of multi-line
+/// patterns keep one leading space. Matching is whitespace-insensitive (syn),
+/// but replacements are byte splices: emitting the artifact would silently
+/// re-indent the target. Genuine continuation indent (2+) survives minus one
+/// space, preserving relative indentation.
+fn strip_artifact_space(text: &str) -> String {
+    text.lines()
+        .map(|l| l.strip_prefix(' ').unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn build_general(
     shape: GeneralShape,
     minus_sub: String,
@@ -782,10 +802,14 @@ fn build_general(
     plus_attrs: Vec<String>,
     had_semi: bool,
 ) -> PatternKind {
+    // Attribute-stripped plus for the Stmt mirrored-attrs path (the envelope
+    // is re-supplied from the original source, indent included).
+    let (_, plus_rest) = split_leading_attrs(plus_raw);
     PatternKind::General {
         shape,
         minus_sub,
         plus_raw: plus_raw.to_string(),
+        plus_body: strip_artifact_space(&plus_rest),
         placeholders: maps
             .expr_placeholders
             .iter()

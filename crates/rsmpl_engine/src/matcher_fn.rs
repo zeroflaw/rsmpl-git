@@ -1284,6 +1284,21 @@ mod tests {
     }
 
     #[test]
+    fn attrs_explicit_mirrored_applies() {
+        // T153: the fn attribute loop detects the `#` + `[` token pair, so
+        // mirrored explicit attributes compare whitespace-insensitively and
+        // the rename lands byte-exact (plain and indented targets).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n# attrs=explicit\n- #[inline]\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
+        let out = apply(patch, "#[inline]\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "#[inline]\nfn bar() {}\n", "got: {out:?}");
+        let out2 = apply(patch, "#[inline]\n    fn foo() {}\n").unwrap();
+        assert_eq!(out2, "#[inline]\n    fn bar() {}\n", "got: {out2:?}");
+        // Wrong attribute still fails instead of silently matching.
+        let wrong = patch.replace("- #[inline]", "- #[other]");
+        assert!(apply(&wrong, "#[inline]\nfn foo() {}\n").is_err());
+    }
+
+    #[test]
     fn optional_no_match_ok() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# optional\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
         let out = apply(patch, "fn a() {}\n").unwrap();

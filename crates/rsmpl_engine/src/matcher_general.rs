@@ -585,8 +585,11 @@ fn in_scope(start_line: u32, end_line: u32, scope: Scope, old_start: u32, old_le
     }
 }
 
+/// Whitespace-insensitive attribute comparison: strip ALL whitespace so raw
+/// pattern text (`#[allow(x)]`) compares equal to `quote!`-rendered targets
+/// (`# [ allow ( x ) ]`). Matches the fn/item `check_attrs` normalization.
 fn norm_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    s.split_whitespace().collect::<String>()
 }
 
 fn target_attrs_rendered(local: &syn::Local) -> Vec<String> {
@@ -760,30 +763,33 @@ pub fn apply_general_hunk(
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
 ) -> Result<usize, StructuredError> {
-    let (shape, minus_sub, plus_raw, minus_attrs, plus_attrs, had_semi) = match &compiled.kind {
-        PatternKind::General {
-            shape,
-            minus_sub,
-            plus_raw,
-            minus_attrs,
-            plus_attrs,
-            had_semi,
-            ..
-        } => (
-            *shape,
-            minus_sub.clone(),
-            plus_raw.clone(),
-            minus_attrs.clone(),
-            plus_attrs.clone(),
-            *had_semi,
-        ),
-        _ => {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "expected generalized stmt/expr/type pattern".to_string(),
-            ))
-        }
-    };
+    let (shape, minus_sub, plus_raw, plus_body, minus_attrs, plus_attrs, had_semi) =
+        match &compiled.kind {
+            PatternKind::General {
+                shape,
+                minus_sub,
+                plus_raw,
+                plus_body,
+                minus_attrs,
+                plus_attrs,
+                had_semi,
+                ..
+            } => (
+                *shape,
+                minus_sub.clone(),
+                plus_raw.clone(),
+                plus_body.clone(),
+                minus_attrs.clone(),
+                plus_attrs.clone(),
+                *had_semi,
+            ),
+            _ => {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "expected generalized stmt/expr/type pattern".to_string(),
+                ))
+            }
+        };
     let rule = hunk.rule_name();
 
     // Attribute shape validation up front (clear errors, no guessing).
@@ -935,8 +941,30 @@ pub fn apply_general_hunk(
                         &rule,
                     )?);
                 } else {
-                    let mut replacement =
-                        substitute_general_plus(&plus_raw, &cx.bindings, compiled.table.sigiled)?;
+                    // Mirrored attributes (T153): the plus attr lines equal the
+                    // target envelope modulo whitespace, so reuse the original
+                    // envelope slice (attrs + `let` indent, exactly like the
+                    // preserve path) and substitute only the attr-stripped
+                    // plus body. Splicing raw plus text would replace the
+                    // target's `let` indent with the pattern's one-space
+                    // diff-prefix artifact. Scoped to Preserve/Explicit (the
+                    // policies that keep attributes); Strip keeps its path.
+                    let mirrored = !minus_attrs.is_empty()
+                        && matches!(
+                            hunk.attrs_policy(),
+                            AttrsPolicy::Preserve | AttrsPolicy::Explicit
+                        );
+                    let mut replacement = if mirrored {
+                        let mut with_prefix = prefix.to_string();
+                        with_prefix.push_str(&substitute_general_plus(
+                            &plus_body,
+                            &cx.bindings,
+                            compiled.table.sigiled,
+                        )?);
+                        with_prefix
+                    } else {
+                        substitute_general_plus(&plus_raw, &cx.bindings, compiled.table.sigiled)?
+                    };
                     if hunk.attrs_policy() == AttrsPolicy::Preserve && minus_attrs.is_empty() {
                         let mut with_prefix = prefix.to_string();
                         with_prefix.push_str(&replacement);
@@ -1137,6 +1165,30 @@ mod tests {
         assert!(out.contains("let y = compute();"), "got: {out}");
         assert!(out.contains("let other = 1;"), "got: {out}");
         assert!(!out.contains("let x ="), "got: {out}");
+    }
+
+    #[test]
+    fn mirrored_attrs_preserve_indent() {
+        // T153: mirrored `#[...]` lines compare whitespace-insensitively
+        // (raw pattern text vs `quote!` rendering) and the replacement reuses
+        // the original envelope slice, so the target's `let` indent survives
+        // instead of being replaced by the one-space diff-prefix artifact.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ #[allow(x)]\n+ let y = E;\n";
+        let out = apply(patch, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out, "fn f() {\n    #[allow(x)]\n    let y = 1;\n}\n",
+            "got: {out:?}"
+        );
+        // `# attrs=explicit` with mirrored attrs applies the same way.
+        let explicit = patch.replace("# stmt S", "# stmt S\n# attrs=explicit");
+        let out2 = apply(&explicit, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out2, "fn f() {\n    #[allow(x)]\n    let y = 1;\n}\n",
+            "got: {out2:?}"
+        );
+        // Wrong attribute still fails instead of silently matching.
+        let wrong = patch.replace("- #[allow(x)]", "- #[allow(y)]");
+        assert!(apply(&wrong, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").is_err());
     }
 
     #[test]

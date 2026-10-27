@@ -209,9 +209,15 @@ pub fn parse_fn_pattern(
     let mut i = 0;
 
     // Optional attributes on their own lines: `#[...]` or doc `///`.
+    // Note: the tokenizer emits `#` and `[` as separate tokens, so an
+    // attribute opens with the two-token pair `#` + `[`, never `"#["`.
     let mut attrs_written = Vec::new();
-    while i < toks.len() && (toks[i] == "#[" || toks[i] == "///" || toks[i] == "//!") {
-        if toks[i] == "#[" {
+    while i < toks.len()
+        && ((toks[i] == "#" && toks.get(i + 1).is_some_and(|n| n == "["))
+            || toks[i] == "///"
+            || toks[i] == "//!")
+    {
+        if toks[i] == "#" {
             let mut depth = 0;
             let mut acc = Vec::new();
             while i < toks.len() {
@@ -580,5 +586,19 @@ mod tests {
         let p = parse("pub fn foo(...) { ... }");
         let item: syn::ItemFn = syn::parse_str("pub fn foo() {}").unwrap();
         assert!(p.matches_item_fn(&item));
+    }
+
+    #[test]
+    fn leading_attribute_lines_recorded() {
+        // T153: the tokenizer emits `#` + `[` as separate tokens, so the
+        // attribute loop must detect the pair (the old `"#["` literal never
+        // matched and explicit-attribute fn patterns failed to parse).
+        let p = parse("#[inline]\nfn foo(...) { ... }");
+        assert_eq!(p.attrs_written.len(), 1, "got: {:?}", p.attrs_written);
+        let p2 = parse("#[inline]\n#[must_use]\nfn foo(...) { ... }");
+        assert_eq!(p2.attrs_written.len(), 2, "got: {:?}", p2.attrs_written);
+        // Residual (not T153): `/// text` doc lines with trailing text are
+        // not consumed as attributes — mirroring doc comments in fn patterns
+        // stays unsupported (use `# attrs=preserve`, the default).
     }
 }
