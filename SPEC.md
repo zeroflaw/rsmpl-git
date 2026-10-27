@@ -366,6 +366,7 @@ differing real paths are a file rename, which v0.1 rejects with
 file section per path with matching a/b sides (single-path form
 preferred). `/dev/null` halves stay the create/delete spelling
 (`diff --git /dev/null b/new`, `diff --git a/old /dev/null`).
+Repeated sections for one path are allowed and share original coordinates (Section 10): every `-old,len` cites the pre-patch file, never rebased by earlier sections or hunks.
 
 Example:
 

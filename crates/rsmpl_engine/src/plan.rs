@@ -59,7 +59,6 @@ pub fn apply_with_captures(
             )
         })?;
         let index = LineIndex::new(&original);
-        crate::validate::ensure_file_range(&index, section, &path)?;
         let has_semantic = patch
             .files
             .iter()
@@ -84,6 +83,15 @@ pub fn apply_with_captures(
                 parsed,
             },
         );
+    }
+
+    // T348: every section shares original coordinates — validate all
+    // sections per path, not just the first (duplicate-path sections
+    // skipped bounds checks and surfaced OOB as GIT_HUNK_CONFLICT).
+    for section in &patch.files {
+        let path = &section.target_path;
+        let state = states.get(path).expect("file state");
+        crate::validate::ensure_file_range(&state.index, section, path)?;
     }
 
     let mut captures = CaptureStore::default();
