@@ -1,12 +1,17 @@
 //! Pure inference for the inverse mapping (`diffrs`).
 //!
-//! Turns a native unified diff into RSmPL-Git. v0 is ordinary-hunk
-//! passthrough (no semantic compression — T341 plugs rename and
-//! call-sweep detection behind the same signature): binary file
-//! sections are stripped (a patch is UTF-8; `applyrs` cannot read
-//! binary worktree files) and the remainder is validated by parsing
-//! it as RSmPL-Git, so every `diffrs` output is applyrs-consumable
-//! by construction.
+//! Turns a native unified diff into RSmPL-Git: v1 compresses whole-file
+//! fn/item renames (one ident delta, identical bodies) and N-site
+//! call rewrites (same callee/arity delta → one `# allow=many`
+//! hunk) into semantic hunks, and passes everything else through as
+//! ordinary hunks. Binary file sections are stripped (a patch is
+//! UTF-8; `applyrs` cannot read binary worktree files) and the
+//! remainder is validated by parsing it as RSmPL-Git, so every
+//! `diffrs` output is applyrs-consumable by construction. A failed
+//! semantic candidate falls back to the ordinary passthrough —
+//! never an unparseable patch.
+
+pub mod semantic;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InferError {
@@ -14,7 +19,7 @@ pub enum InferError {
     Unparseable(String),
 }
 
-/// The v0 inference result: the RSmPL patch plus which binary paths
+/// The v1 inference result: the RSmPL patch plus which binary paths
 /// were stripped (the binary reports them as `warning:` lines).
 pub struct InferredPatch {
     pub rsmpl: String,
@@ -32,13 +37,35 @@ pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
         });
     }
     let (kept, stripped) = strip_binary_sections(raw);
-    let candidate = kept.join("");
-    rsmpl_patch::parse_patch(&candidate)
+    // Native hunks often carry git's `@@ -a,b +c,d @@ <funcname>`
+    // section title; RSmPL hunk headers admit only `rule=` tags
+    // (SPEC 8.3), so ordinary titles must go — exactly like `git
+    // apply`, which ignores them. Two-sided (native) headers are
+    // truncated after the closing `@@`; one-sided (semantic, never
+    // present in native diffs) lines are left alone.
+    let kept: Vec<String> = kept.iter().map(|s| strip_hunk_titles(s)).collect();
+    let passthrough = kept.join("");
+    rsmpl_patch::parse_patch(&passthrough)
         .map_err(|e| InferError::Unparseable(describe_parse_error(&e)))?;
-    Ok(InferredPatch {
-        rsmpl: candidate,
-        stripped_binary: stripped,
-    })
+    // Semantic compression first; any validation failure falls back
+    // to the (already validated) ordinary passthrough.
+    let candidate = semantic::infer_semantic(&kept).unwrap_or_default();
+    if candidate.is_empty() {
+        return Ok(InferredPatch {
+            rsmpl: passthrough,
+            stripped_binary: stripped,
+        });
+    }
+    match rsmpl_patch::parse_patch(&candidate) {
+        Ok(_) => Ok(InferredPatch {
+            rsmpl: candidate,
+            stripped_binary: stripped,
+        }),
+        Err(_) => Ok(InferredPatch {
+            rsmpl: passthrough,
+            stripped_binary: stripped,
+        }),
+    }
 }
 
 fn describe_parse_error(e: &rsmpl_patch::ParseError) -> String {
@@ -122,6 +149,28 @@ fn b_side_path(rest: &str) -> Option<String> {
     })
 }
 
+/// Drop git's trailing `@@ … @@ <title>` section titles on
+/// two-sided (native ordinary) hunk headers.
+fn strip_hunk_titles(section: &str) -> String {
+    let mut out = String::new();
+    for line in section.lines() {
+        if let Some(rest) = line.strip_prefix("@@") {
+            if let Some(end) = rest.find("@@") {
+                let ranges = &rest[..end];
+                if ranges.contains('-') && ranges.contains('+') {
+                    out.push_str("@@");
+                    out.push_str(ranges);
+                    out.push_str("@@\n");
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +201,22 @@ mod tests {
         let out = infer_rsmpl("").unwrap();
         assert!(out.rsmpl.is_empty());
         assert!(out.stripped_binary.is_empty());
+    }
+
+    #[test]
+    fn hunk_section_titles_are_stripped() {
+        // git appends the enclosing `fn` signature after the closing
+        // `@@`; RSmPL headers admit only `rule=` tags (SPEC 8.3), so
+        // infer drops titles like `git apply` does (T343). A body
+        // edit (not a rename shape) passes through ordinarily.
+        let raw = "diff --git a/f.rs b/f.rs\nindex 1..2 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1,3 @@ fn foo() {\n fn foo() {\n-    1\n+    2\n }\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,3 +1,3 @@\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(!out.rsmpl.contains("fn foo() {\n fn"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("-    1\n+    2\n"), "got: {}", out.rsmpl);
     }
 }

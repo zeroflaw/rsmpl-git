@@ -7,3 +7,5 @@ license.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 rsmpl_patch = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }

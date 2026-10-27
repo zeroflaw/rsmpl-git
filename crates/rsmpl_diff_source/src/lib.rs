@@ -40,7 +40,8 @@ impl GitSource {
             .arg(&self.repo)
             .arg("diff")
             .arg("--no-color")
-            .arg("--no-ext-diff");
+            .arg("--no-ext-diff")
+            .arg("--no-renames");
         if self.staged {
             cmd.arg("--cached");
         }
@@ -58,6 +59,11 @@ impl GitSource {
             });
         }
         let mut raw = String::from_utf8_lossy(&out.stdout).to_string();
+        // `git diff` detects renames by default (`similarity index`
+        // + `rename from/to` headers), which RSmPL-Git v0.1 cannot
+        // express (file renames are unsupported, SPEC 6); callers
+        // configure `--no-renames` above so moves surface as
+        // delete+create ordinary hunks that round-trip cleanly.
 
         // Untracked files never appear in `git diff`; emit them as
         // new-file ordinary sections so the patch covers all pending

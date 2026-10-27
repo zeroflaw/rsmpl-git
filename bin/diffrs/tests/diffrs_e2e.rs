@@ -1,6 +1,10 @@
 //! T340 e2e: `diffrs` compresses native git state into a valid
 //! RSmPL-Git patch (v0: ordinary-hunk passthrough).
 //!
+//! T341: semantic inference (fn/item rename, N-site call sweep) with
+//! round-trip pins; T343: hunk-title strip + `--no-renames`
+//! regressions.
+//!
 //! Validity = the output parses and `applyrs --check` accepts it
 //! against the pre-change tree. Requires a workspace build so the
 //! sibling `applyrs` binary sits next to `diffrs`
@@ -217,4 +221,209 @@ fn bad_repo_fails_with_envelope() {
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
     assert!(v["error"]["rule"].is_null());
+}
+
+// T341: a whole-file fn rename (identical body, one ident delta)
+// compresses to a single semantic hunk that round-trips.
+#[test]
+fn fn_rename_compresses_to_semantic_hunk() {
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {\n    1\n}\n");
+    commit_all(dir.path());
+    write(dir.path(), "src/lib.rs", "fn bar() {\n    1\n}\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("rule=rename_foo_to_bar"), "got: {patch}");
+    assert!(patch.contains("- fn foo(...) {"), "got: {patch}");
+    assert!(!patch.contains("-fn foo"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+// T341: an N-site call rewrite (same callee/arity delta) compresses
+// to one `# allow=many` hunk with `matches == N`.
+#[test]
+fn call_sweep_compresses_to_one_hunk() {
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn m() {\n    foo(1);\n    foo(2);\n    foo(3);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn m() {\n    bar(1);\n    bar(2);\n    bar(3);\n}\n",
+    );
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("# allow=many"), "got: {patch}");
+    assert!(patch.contains("- foo(E0)"), "got: {patch}");
+    assert_eq!(
+        patch.matches("@@ -1,1 @@").count(),
+        1,
+        "one hunk for three sites, got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--check")
+        .arg("--format")
+        .arg("json")
+        .arg("--diff-max-lines")
+        .arg("0")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(3), "got: {v}");
+}
+
+// T341: sweeps in two files share one patch (rule names stay unique,
+// `# expr` reuse across hunks parses) and round-trip together.
+#[test]
+fn call_sweep_two_files_round_trip() {
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "a.rs",
+        "fn m() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    write(
+        dir.path(),
+        "b.rs",
+        "fn n() {\n    foo(1);\n    foo(2);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "a.rs",
+        "fn m() {\n    bar(1);\n    bar(2);\n}\n",
+    );
+    write(
+        dir.path(),
+        "b.rs",
+        "fn n() {\n    bar(1);\n    bar(2);\n}\n",
+    );
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("rule=calls_foo_to_bar\n"), "got: {patch}");
+    assert!(patch.contains("rule=calls_foo_to_bar_2\n"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+// T343: git's `@@ … @@ <funcname>` section titles are stripped, not
+// rejected — the conversion must exit 0 and round-trip.
+#[test]
+fn hunk_section_titles_do_not_break_conversion() {
+    let dir = init_repo();
+    let body: String = (0..20).map(|i| format!("    let v{i} = {i};\n")).collect();
+    write(dir.path(), "f.rs", &format!("fn alpha() {{\n{body}}}\n"));
+    commit_all(dir.path());
+    // Sanity: this shape really carries a title pre-fix.
+    write(
+        dir.path(),
+        "f.rs",
+        &format!("fn alpha() {{\n{body}    let tail = 1;\n}}\n"),
+    );
+    let native = Command::new("git")
+        .args(["diff", "--no-color", "--no-ext-diff"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let native = String::from_utf8_lossy(&native.stdout).to_string();
+    assert!(
+        native
+            .lines()
+            .any(|l| l.starts_with("@@") && l.contains("fn alpha")),
+        "expected a titled hunk, got: {native}"
+    );
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !patch
+            .lines()
+            .any(|l| l.starts_with("@@") && l.contains("fn alpha")),
+        "titles stripped, got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+// T343: file moves surface as delete+create (`--no-renames`), never
+// as unsupported rename headers — conversion exits 0 and round-trips.
+#[test]
+fn file_move_converts_as_delete_plus_create() {
+    let dir = init_repo();
+    write(dir.path(), "old.rs", "fn moved() {}\n");
+    commit_all(dir.path());
+    git(dir.path(), &["mv", "old.rs", "new.rs"]);
+
+    // The move is staged by `git mv`; collect the index diff.
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("old.rs"), "got: {patch}");
+    assert!(patch.contains("new.rs"), "got: {patch}");
+
+    // Back to the pre-move tree: delete+create must check clean.
+    git(dir.path(), &["mv", "new.rs", "old.rs"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
 }

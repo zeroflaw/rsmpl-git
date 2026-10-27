@@ -3,9 +3,8 @@
 //!
 //! The pub API boundary the `diffrs` binary and T341 tests pin:
 //! `compress` collects the native diff and returns a validated
-//! RSmPL-Git patch (v0: ordinary-hunk passthrough; T341 adds
-//! semantic compression inside `rsmpl_diff_infer` without changing
-//! this signature).
+//! RSmPL-Git patch (v1: fn/item renames + call-sweep fan-out
+//! compressed inside `rsmpl_diff_infer`, rest ordinary passthrough).
 
 use std::path::Path;
 

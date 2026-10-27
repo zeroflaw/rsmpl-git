@@ -122,8 +122,8 @@ gitrs apply --file change.rsmpl                       # apply for real
 - Piped patches avoid temp files: `cat change.rsmpl | gitrs apply --check`
   (no input flags means stdin; `--file -` is the explicit alias; `--patch`
   passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
-  Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v0
-  ordinary hunks; see README diff section).
+  Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v1
+  renames/call-sweeps compressed; see README diff section, SPEC D.4).
 
 ## Errors: code → fix (SPEC 25)
 

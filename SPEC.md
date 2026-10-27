@@ -5682,4 +5682,66 @@ read file -> author hunks in original-source coordinates
 New authors: start with `AGENTS.md` (one-page authoring reference); this
 appendix and Sections 9/18.6 are the normative detail behind it.
 
+### D.4 Inverse mapping (`diffrs`: native diffs → RSmPL)
+
+`gitrs diff` (sibling `diffrs` binary) inverts the authoring
+direction: it reads pending native changes (or history) and prints a
+compressed RSmPL-Git patch to stdout — the token-efficient view of
+what changed. Minimal surface, same philosophy as `applyrs`:
+`--repo` (default `.`), `--format text|json` (default `text`),
+`--staged` (index vs HEAD/rev instead of worktree), one optional
+`[rev]` forwarded to `git diff [rev]` (e.g. `HEAD~1` for history).
+
+Collection: unstaged worktree-vs-index plus untracked files (emitted
+as new-file ordinary sections, since `git diff` never shows them);
+`--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
+same mechanism. `git diff` runs with `--no-color --no-ext-diff
+--no-renames`: rename detection stays off because RSmPL-Git v0.1
+cannot express file renames (Section 6) — moves surface as
+delete+create ordinary hunks that round-trip. Binary files are
+stripped with a stderr `warning:` per path (a patch is UTF-8;
+`applyrs` cannot read binary worktree files). Git's trailing
+`@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL
+headers admit only `rule=` tags, Section 8.3; `git apply` likewise
+ignores them).
+
+Inference v1 is pure and per-file all-or-nothing: a file section is
+either fully replaced by semantic hunks or passed through as
+ordinary hunks, never mixed — so Section 10.6 overlap is impossible
+by construction. Every emission uses the `# scope=file` +
+`@@ -1,1 @@` dummy (Section 17.3); rule names derive from the
+rewritten idents (`rename_old_to_new`, `calls_old_to_new`, suffixed
+on collision).
+
+- Fn/item rename: exactly one `-`/`+` line pair in the section,
+  column-0, same kind/vis/suffix with one ident delta. Plain
+  top-level `fn` (no `pub`/`async`/generics/return-type/where —
+  those need explicit slots v1 does not emit) compresses to
+  `- fn Old(...)` / `+ New(...)` with `# lang=rust`; other kinds
+  (`struct`/`enum`/`trait`/`type`/`mod`/`union`/`const`/`static`,
+  vis echoed) compress to bare `- kind Old` / `+ kind New` pairs.
+  `impl` and indented (method/block-level) lines are excluded.
+- Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
+  (`syn`-parsed, trailing `;` tolerated) with per-site textually
+  identical args, uniform arity, and one shared callee delta →
+  one `# allow=many` hunk (`# expr E0…` per arity position;
+  arity 0 needs no metavars).
+- Everything else (multi-line edits, pure deletions/additions,
+  non-`.rs` files, unbalanced hunks, method calls, paths,
+  turbofish, macro interiors) stays ordinary-hunk passthrough.
+
+Fallback rule: the candidate patch must parse via `parse_patch`;
+any validation failure falls back to the ordinary passthrough —
+`diffrs` never emits an unparseable patch. Every output therefore
+parses by construction; the pinned shapes additionally round-trip
+through `applyrs --check` against the pre-change tree. Semantic
+validity beyond the pinned shapes is best-effort: verify with the
+D.3 round-trip recipe before trusting a compression.
+
+Empty changes print empty stdout + `(no changes)` on stderr (never
+pipe empties into `applyrs` — empty input is the T59 authoring
+error). Failures exit 2 with the stdout-only `RSMPL_IO_CONFLICT`
+envelope family (same as `applyrs`, Section D.2). JSON shape:
+`{version, files: [{path}], patch}`.
+
 ---

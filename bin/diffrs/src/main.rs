@@ -13,10 +13,10 @@
 //! diffrs --format json
 //! ```
 //!
-//! v0 emits ordinary hunks only (passthrough, T340); semantic
-//! compression (rename/call-sweep fan-out) is T341. The output always
-//! parses as RSmPL-Git and round-trips through `applyrs --check`
-//! against the pre-change tree.
+//! v1 compresses fn/item renames and N-site call sweeps into
+//! semantic hunks (SPEC D.4) and passes everything else through as
+//! ordinary hunks. The output always parses as RSmPL-Git and
+//! round-trips through `applyrs --check` against the pre-change tree.
 
 use std::path::PathBuf;
 

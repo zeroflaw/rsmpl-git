@@ -253,7 +253,9 @@ dependencies = [
 name = "rsmpl_diff_infer"
 version = "0.1.0"
 dependencies = [
+ "quote",
  "rsmpl_patch",
+ "syn 2.0.119",
  "thiserror",
 ]
 
