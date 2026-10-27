@@ -1365,6 +1365,11 @@ Any other `# root=` value (`pat`, `impl_item`, `trait_item`, or a typo)
 is rejected with `RSMPL_PATTERN_CONFLICT` — only the four force paths above
 are implemented in v0.1, and silently falling through to heuristic routing
 would violate Section 2.6. The remaining parse contexts are future work.
+The `# root=item` path is strict the same way: a minus side that is not a
+single declared metavariable fails fast instead of falling through to
+heuristic routing, which would silently ignore the directive (the same
+Section 2.6 violation — a call-shaped minus would otherwise apply as a
+call rewrite with `# root=item` doing nothing).
 
 Engine-verbatim (exit 2; `bogus` is the offending value, backticked):
 
@@ -1378,6 +1383,18 @@ reason: unknown `# root=` value `bogus` (only `item/expr/stmt/type` are supporte
 The failure carries `rule:`/`file:` but no `old_range:`/`suggestion:` lines
 (null fields are omitted from text output; the JSON envelope carries
 explicit `range: null` / `suggestion: null`).
+
+The `# root=item` mismatch fails the same way (exit 2; `rule:` + `file:`;
+text omits the null `range:`/`suggestion:` lines, JSON carries explicit
+`range: null` / `suggestion: null`) — the sibling of the C3/C4/C5
+mismatches for the fourth force path:
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable)
+```
 
 ---
 
@@ -3187,6 +3204,7 @@ case where an ordinary hunk cannot express the edit.
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
+| C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -3990,7 +4008,7 @@ invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (three engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons) or structural fn-pattern misuse (eleven engine-verbatim reasons, both Section 14.7); any concrete-shape, missing-name, bare-side-mismatch, or lexical-name item pattern (six engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9) — plus the two bare-side `use` fences in the same section; and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
 The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. It gains three further members: the Section 9.6 declaration-name fences (`missing name`, `invalid name`, `empty path`, `empty capture`), the Section 16 standalone-`...` fence, and the Section 17.8 repeat-both fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
-It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C1-C12 compile-time fences (`...` in general shape, `let-else`, three `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6), each pinned text+JSON+untouched in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections).
+It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C1-C12 compile-time fences (`...` in general shape, `let-else`, four `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6), each pinned text+JSON+untouched in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections; C16 pinned in `root_item_verbatim_e2e.rs`).
 
 It gains one further member: the Section 14.8 item attr-merge fence (plus-side-omitted verbatim reason, rule+file envelope with null range/suggestion; the differ case reuses the 14.6 second fence byte-identical, suggestion set). Defensive-only, documented without pins (T287/T290/T291 precedent — no CLI trigger, so no fence to pin): the seven `expected X pattern` dispatch arms (`function`, `item capture`, `insertion`, `impl-context`, `expression`, `use-path`, `generalized stmt/expr/type` — plan.rs routes each `PatternKind` to its own matcher, cf. the 21.3 macro note), the `cannot analyze method signature` synth backstop (rendered from an already-parsed signature; no CLI trigger post-T190/T221), the `general statement patterns must be ...` arm alongside the `invalid let`/`expression`/`type` match-time re-parses the body list already names (the classifier pre-validates the same strings at compile time), and the span-guard family (`span line ... outside file`, `edit range ... outside file`, `... name span mismatch (file changed during matching?)`, `use prefix span is empty (file changed during matching?)` — the target file is immutable during matching).
 

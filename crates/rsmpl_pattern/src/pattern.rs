@@ -503,10 +503,16 @@ fn classify(
     // Explicit root wins.
     if let Some(r) = root {
         match r {
-            "item" if is_single_meta(m, table) => {
-                return Ok(PatternKind::ItemCapture {
-                    meta: m.to_string(),
-                });
+            "item" => {
+                if is_single_meta(m, table) {
+                    return Ok(PatternKind::ItemCapture {
+                        meta: m.to_string(),
+                    });
+                }
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "`# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable)",
+                ));
             }
             "expr" => {
                 let (minus, maps, lits) = classify_call_pattern(m, table)?;
