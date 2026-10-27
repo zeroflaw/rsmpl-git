@@ -1,0 +1,9 @@
+diff --git src/lib.rs
+@@ -1,3 @@ rule=rename_decl
+# lang=rust
+  trait T {
+      ...
+-     fn foo();
++     fn bar();
+      ...
+  }

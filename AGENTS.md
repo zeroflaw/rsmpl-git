@@ -116,6 +116,7 @@ ellipsis positions are SPEC 16.
 ```sh
 # Read the target file, note the 1-based spans to rewrite, cite
 # @@ -start,len with L = end-start+1 (e.g. fn foo 1-3 → @@ -1,3 @@).
+# Doc/attr lines count: they are part of the item span (/// + #[x] + fn 1-5 → @@ -1,5 @@).
 ```
 
 Small file already held? Skip discovery: `@@ -1,1 @@` + `# scope=file`

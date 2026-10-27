@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,8 @@ rule=unbox
+# allow=many
+# repeat
+# expr E
+- Box::new(E)
++ E

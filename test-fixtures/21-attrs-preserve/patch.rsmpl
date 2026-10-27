@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,5 @@ rule=rename_documented
+# lang=rust
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }

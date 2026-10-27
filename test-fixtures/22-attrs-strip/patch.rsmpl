@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,5 @@ rule=strip_docs
+# attrs=strip
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }

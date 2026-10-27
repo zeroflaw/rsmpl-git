@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,5 @@ rule=wrap_add
+# allow=many
+# expr E
+- E + 1
++ E.wrapping_add(1)
