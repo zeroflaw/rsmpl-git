@@ -1552,6 +1552,28 @@ fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
     assert!(!out.status.success(), "wrong content must fail");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("GIT_HUNK_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains("old_range: 1..4"),
+        "range is start..start+len (@@ -1,3 @@ -> 1..4), got: {stderr}"
+    );
+    assert!(
+        stderr.contains("removal mismatch at line 2: expected `WRONG`"),
+        "reason must be engine-verbatim, got: {stderr}"
+    );
+    let out = run_stdin(dir.path(), wrong_content, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(v["error"]["code"], serde_json::json!("GIT_HUNK_CONFLICT"));
+    assert_eq!(v["error"]["range"], serde_json::json!("1..4"));
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("removal mismatch"),
+        "got: {v}"
+    );
 }
 
 #[test]
@@ -1669,6 +1691,10 @@ fn too_many_matches_saturates_at_two() {
         stderr.contains("expected one match, found 2"),
         "got: {stderr}"
     );
+    assert!(
+        stderr.contains("old_range: 1..7"),
+        "range is start..start+len (@@ -1,6 @@ -> 1..7), got: {stderr}"
+    );
     let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1678,6 +1704,7 @@ fn too_many_matches_saturates_at_two() {
         v["error"]["code"],
         serde_json::json!("RSMPL_MATCH_CONFLICT")
     );
+    assert_eq!(v["error"]["range"], serde_json::json!("1..7"));
     assert_eq!(
         v["error"]["reason"],
         serde_json::json!("expected one match, found 2")

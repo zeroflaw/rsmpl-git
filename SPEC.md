@@ -3088,14 +3088,16 @@ Rust parsing failed.
 
 ```text
 RSMPL_PARSE_CONFLICT
-rule: rename_foo
 file: src/lib.rs
-reason: target file does not parse as Rust
+reason: target file does not parse as Rust: cannot parse string into token stream
 ```
 
-The Rust-parse gate fires only for files carrying >=1 RSmPL hunk
-(Section 11): ordinary-only sections skip both the original parse and
-the rewritten-file reparse, so non-Rust targets apply cleanly.
+The `: ...` suffix is the underlying parser error and varies per file; the
+failure carries no `rule:`/`old_range:`/`suggestion:` lines (null fields are
+omitted from text output; the JSON envelope carries explicit `rule: null` /
+`range: null` / `suggestion: null`). The Rust-parse gate fires only for files
+carrying >=1 RSmPL hunk (Section 11): ordinary-only sections skip both the
+original parse and the rewritten-file reparse, so non-Rust targets apply cleanly.
 
 A `diff --git a/old b/new` section whose stripped paths differ is also a
 parse conflict (a file rename, rejected fail-fast per Section 2.6 — v0.1
@@ -3149,7 +3151,7 @@ No match or too many matches.
 RSMPL_MATCH_CONFLICT
 rule: rename_calls
 file: src/lib.rs
-old_range: 40..47
+old_range: 40..48
 reason: expected one match, found 2
 suggestion: add `# allow=many` if multiple rewrites are intended
 ```
@@ -3157,7 +3159,9 @@ suggestion: add `# allow=many` if multiple rewrites are intended
 (Text mode prints `reason:`/`suggestion:` lines; the count saturates at
 2 under `# allow=one`, so the example never shows an exact total — see
 the saturation note below. JSON mode carries the same `reason` string in
-its `{version, error: {...}}` envelope, Section D.2.)
+its `{version, error: {...}}` envelope, Section D.2.) The `old_range` is
+`start..start+len`, so the canonical `@@ -40,8 @@` range reports `40..48`
+(Section 25.1 states the same convention).
 
 A zero-match failure names the file to read instead:
 
@@ -3165,7 +3169,7 @@ A zero-match failure names the file to read instead:
 RSMPL_MATCH_CONFLICT
 rule: rename_calls
 file: src/lib.rs
-old_range: 40..47
+old_range: 40..48
 reason: no match found
 suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`
 ```
@@ -3240,9 +3244,18 @@ A normal Git hunk failed.
 
 ```text
 GIT_HUNK_CONFLICT
+rule:
 file: src/lib.rs
-hunk: @@ -1,4 +1,5 @@
+old_range: 1..5
+reason: removal mismatch at line 2: expected `wrong`
 ```
+
+The `rule:` line is empty (ordinary hunks carry no rule name; JSON reports
+`"rule": ""`), and `old_range` follows the same `start..start+len` convention
+(`@@ -1,4 @@` → `1..5`). The `reason` names the failing line and the
+expected text (`removal mismatch ...`, `context mismatch ...`, or
+`removal beyond EOF ...`); no `hunk:` line is ever emitted and no suggestion
+follows (JSON carries `"suggestion": null`).
 
 ### 25.8 I/O conflict
 

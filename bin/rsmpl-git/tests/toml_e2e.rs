@@ -53,4 +53,13 @@ fn rsmpl_hunk_on_toml_is_parse_conflict() {
         serde_json::json!("RSMPL_PARSE_CONFLICT"),
         "got: {v}"
     );
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("does not parse as Rust:"),
+        "reason carries the parser-error suffix, got: {v}"
+    );
+    assert!(v["error"]["rule"].is_null(), "got: {v}");
+    assert!(v["error"]["range"].is_null(), "got: {v}");
 }
