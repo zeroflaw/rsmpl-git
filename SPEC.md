@@ -1308,6 +1308,17 @@ impl/trait-context hunk carrying `# returns=none` requires the target
 method to carry no explicit return type (Section 13.4 shares the slot
 planner).
 
+ On a non-function hunk the directive fails fast with
+ `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits the null
+ range/suggestion lines, JSON carries explicit nulls):
+
+ ```text
+ RSMPL_PATTERN_CONFLICT
+ rule: r
+ file: src/lib.rs
+ reason: `# returns=none` requires a function-item pattern
+ ```
+
 ### 14.3 Explicitly matching visibility
 
 To match a public function, write `pub`:
@@ -2420,6 +2431,28 @@ Rules:
   macro shapes stay verbatim-only by design (Section 21). Extending
   repeat to other shapes is future work.
 
+ The engine reports shape-specific reasons (rule + file lines; text
+ omits the null range/suggestion lines, JSON carries explicit nulls
+ unless noted):
+
+ ```text
+ RSMPL_PATTERN_CONFLICT
+ rule: r
+ file: src/lib.rs
+ reason: `# repeat` is not supported on `let`-statement patterns in v1 (folding an expression rule inside a bound pattern or type would be surprising); emit one ordered hunk per nesting level
+ ```
+
+ Type patterns report `` `# repeat` is not supported on type patterns
+ in v1; emit one ordered hunk per nesting level ``; every other shape
+ reports `` `# repeat` requires a call/method-call or
+ general-expression rewrite pattern (other shapes are future work) ``
+ (both suggestion null). A `# repeat` hunk that also declares
+ `# bind=`/`# use=` reports `` `# repeat` cannot be combined with
+ `# bind=`/`# use=` (captures move verbatim) `` with suggestion
+ `remove `# repeat` from the cut/paste hunk`. Here `v1` names the
+ general-matcher generation (the SPEC 18.6 C-table namespace), not
+ the SPEC v0.1 version.
+
 ---
 
 ## 18. Rewrite Semantics
@@ -2907,6 +2940,19 @@ is rejected in v0.1: the tool never shells out to a formatter. Run
 (evolved signatures, rewritten nodes) with no availability or version-drift
 failure modes inside the binary. `# format_scope=*` is likewise rejected
 (the parser already points at removing the directive).
+
+ Verbatim (rule + file lines; text omits the null range line, JSON
+ explicit nulls; the suggestion rides in both modes):
+
+ ```text
+ RSMPL_PATTERN_CONFLICT
+ rule: r
+ file: src/lib.rs
+ reason: only `# format=preserve` is supported in v0.1
+ suggestion: remove the directive and run `cargo fmt` after apply
+ ```
+
+ The same reason covers `# format=canonical` (Section 22.3).
 
 ### 22.3 Canonical mode
 
