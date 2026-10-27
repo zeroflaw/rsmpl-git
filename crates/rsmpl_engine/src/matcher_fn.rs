@@ -1179,38 +1179,44 @@ pub fn apply_impl_context_hunk(
         )> = Vec::new();
         match it {
             syn::Item::Impl(imp) if !want_trait => {
-                let header_tokens: Vec<&str> = want.split_whitespace().collect();
-                // Verify the impl's self type + optional trait match the pattern by
-                // comparing normalized renderings.
-                let pat_self = header_tokens.join(" ");
-                let got_self = quote::quote!(#imp.self_ty)
-                    .to_string()
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let got_trait = imp
-                    .trait_
-                    .as_ref()
-                    .map(|(_, p, _)| {
-                        quote::quote!(#p)
-                            .to_string()
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    })
-                    .unwrap_or_default();
-                let pat_has_trait = pat_self.contains(&got_trait) && !got_trait.is_empty();
-                let pat_mentions_self = header_tokens.iter().any(|t| {
-                    got_self.split_whitespace().any(|g| g == *t) || pat_self.contains(&got_self)
-                });
-                if !pat_has_trait && !pat_mentions_self {
-                    // Fallback: accept impl blocks overlapping the range and let the
-                    // inner fn match decide (range-gated).
-                    let s = it.span().start().line as u32;
-                    let e = it.span().end().line as u32;
-                    let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-                    if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
-                        continue;
+                // T336: under `# scope=file` the header is purely advisory
+                // (SPEC 13.4) — every `impl` block is scanned and the inner
+                // fn match decides, giving impl/trait sweep parity.
+                if hunk.scope() != Scope::File {
+                    let header_tokens: Vec<&str> = want.split_whitespace().collect();
+                    // Verify the impl's self type + optional trait match the pattern by
+                    // comparing normalized renderings.
+                    let pat_self = header_tokens.join(" ");
+                    let self_ty = &imp.self_ty;
+                    let got_self = quote::quote!(#self_ty)
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let got_trait = imp
+                        .trait_
+                        .as_ref()
+                        .map(|(_, p, _)| {
+                            quote::quote!(#p)
+                                .to_string()
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default();
+                    let pat_has_trait = pat_self.contains(&got_trait) && !got_trait.is_empty();
+                    let pat_mentions_self = header_tokens.iter().any(|t| {
+                        got_self.split_whitespace().any(|g| g == *t) || pat_self.contains(&got_self)
+                    });
+                    if !pat_has_trait && !pat_mentions_self {
+                        // Fallback: accept impl blocks overlapping the range and let the
+                        // inner fn match decide (range-gated).
+                        let s = it.span().start().line as u32;
+                        let e = it.span().end().line as u32;
+                        let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
+                        if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
+                            continue;
+                        }
                     }
                 }
                 for item in &imp.items {
@@ -1220,18 +1226,22 @@ pub fn apply_impl_context_hunk(
                 }
             }
             syn::Item::Trait(t) if want_trait => {
-                // T182: the header names the trait ident
-                // (`trait T<U>: B ...` → `T`). Anything else (attribute
-                // lines, garbage) falls back to the range-overlap check so
-                // a mistyped header fails as no-match, never a wrong match.
-                let ident_ok =
-                    rsmpl_pattern::trait_header_ident(&impl_header).is_some_and(|w| t.ident == w);
-                if !ident_ok {
-                    let s = it.span().start().line as u32;
-                    let e = it.span().end().line as u32;
-                    let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-                    if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
-                        continue;
+                // T336: under `# scope=file` the header is purely advisory
+                // (SPEC 13.4) — every `trait` block is scanned, impl parity.
+                if hunk.scope() != Scope::File {
+                    // T182: the header names the trait ident
+                    // (`trait T<U>: B ...` → `T`). Anything else (attribute
+                    // lines, garbage) falls back to the range-overlap check so
+                    // a mistyped header fails as no-match, never a wrong match.
+                    let ident_ok = rsmpl_pattern::trait_header_ident(&impl_header)
+                        .is_some_and(|w| t.ident == w);
+                    if !ident_ok {
+                        let s = it.span().start().line as u32;
+                        let e = it.span().end().line as u32;
+                        let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
+                        if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
+                            continue;
+                        }
                     }
                 }
                 for item in &t.items {

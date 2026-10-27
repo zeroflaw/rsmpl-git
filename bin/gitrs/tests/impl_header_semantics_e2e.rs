@@ -145,3 +145,33 @@ fn scope_file_sweeps_all_impl_blocks() {
         "got: {v}"
     );
 }
+const TRAIT_SWEEP_SOURCE: &str =
+    "trait T {\n    fn old(&self);\n}\ntrait U {\n    fn old(&self);\n}\n";
+const TRAIT_SWEEP_PATCH: &str = "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep\n# scope=file\n# allow=many\n  trait T {\n-     fn old(...);\n+     fn new(...);\n  }\n";
+const TRAIT_SWEEP_NONSENSE_PATCH: &str = "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep\n# scope=file\n# allow=many\n  trait ZZZ {\n-     fn old(...);\n+     fn new(...);\n  }\n";
+
+#[test]
+fn scope_file_sweeps_all_trait_blocks() {
+    for patch in [TRAIT_SWEEP_PATCH, TRAIT_SWEEP_NONSENSE_PATCH] {
+        let dir = init_repo();
+        write(dir.path(), "src/lib.rs", TRAIT_SWEEP_SOURCE);
+        let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+        assert!(
+            out.status.success(),
+            "patch {patch:?} stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+        assert_eq!(
+            v["rules"][0]["matches"],
+            serde_json::json!(2),
+            "patch {patch:?} got: {v}"
+        );
+        assert_eq!(
+            v["rules"][0]["spans"],
+            serde_json::json!([[2, 2], [5, 5]]),
+            "patch {patch:?} got: {v}"
+        );
+    }
+}

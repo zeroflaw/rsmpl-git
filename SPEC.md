@@ -1422,6 +1422,8 @@ on mismatch it falls back to range-overlap gating — any `impl` (resp.
 `trait`) block overlapping the old range is accepted and the inner fn
 match decides. To target one block, scope the range to that block;
 to sweep every block, use `# scope=file` with `@@ -1,1 @@`.
+Under `# scope=file` the header gate is skipped entirely (header purely
+advisory): both halves sweep every block whose methods match.
 
 ---
 
