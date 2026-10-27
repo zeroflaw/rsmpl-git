@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git"))
+    PathBuf::from(env!("CARGO_BIN_EXE_gitrs"))
 }
 
 pub fn init_repo() -> tempfile::TempDir {
@@ -78,7 +78,7 @@ pub fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Outpu
 pub fn run_raw(args: &[&str]) -> std::process::Output {
     // T254: isolate off default `--repo .` so `--patch` runs archive
     // `.history/` into a throwaway tempdir (auto-deleted), never into
-    // `bin/rsmpl-git/.history/`. Clap-usage failures exit before any
+    // `bin/gitrs/.history/`. Clap-usage failures exit before any
     // history write, so the extra `--repo` is harmless there. Skip
     // injection when the caller already passes `--repo`.
     if args.contains(&"--repo") {
@@ -94,7 +94,7 @@ pub fn run_raw(args: &[&str]) -> std::process::Output {
 }
 
 pub fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR = <root>/bin/rsmpl-git
+    // CARGO_MANIFEST_DIR = <root>/bin/gitrs
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

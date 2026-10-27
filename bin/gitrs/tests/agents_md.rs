@@ -1,7 +1,7 @@
 //! T41 anti-rot: `AGENTS.md` stays short and its citations stay true.
 //!
 //! Every `SPEC <token>` anchor cited by the cheat-sheet must resolve in
-//! `SPEC.md`, and every ` --<flag>` it cites must exist in `rsmpl-git
+//! `SPEC.md`, and every ` --<flag>` it cites must exist in `gitrs
 //! --help`. The three recipe skeletons must appear verbatim so the sheet
 //! alone suffices for rename + call-rewrite + move patches.
 
@@ -55,7 +55,7 @@ fn agents_md_citations_resolve() {
     }
 
     // CLI flags cited by the cheat-sheet must exist in --help.
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git"));
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_gitrs"));
     let out = Command::new(&binary).arg("--help").output().unwrap();
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout).to_string();
@@ -94,7 +94,7 @@ fn agents_md_citations_resolve() {
 
     // T117 anti-rot: the patch-first skill exists and teaches the token
     // loop (scope=file over file reads, budget flags) plus the repair path.
-    let skill = read_root("skills/rsmpl-git/SKILL.md");
+    let skill = read_root("skills/gitrs/SKILL.md");
     assert!(
         skill.lines().count() <= 150,
         "skill budget is 150 lines, got {}",
@@ -149,15 +149,15 @@ fn agents_md_citations_resolve() {
         );
     }
     assert!(
-        agents.contains("skills/rsmpl-git/SKILL.md"),
+        agents.contains("skills/gitrs/SKILL.md"),
         "AGENTS.md should point to the skill"
     );
     assert!(
-        readme.contains("skills/rsmpl-git/SKILL.md"),
+        readme.contains("skills/gitrs/SKILL.md"),
         "README.md should point to the skill"
     );
     assert!(
-        spec.contains("skills/rsmpl-git/SKILL.md"),
+        spec.contains("skills/gitrs/SKILL.md"),
         "SPEC.md Appendix D should point to the skill"
     );
 
@@ -166,9 +166,9 @@ fn agents_md_citations_resolve() {
     // `.claude/`, `.agents/` project-local paths — `skills/` alone is
     // invisible to the `skill` tool). Content equality fails loudly if the
     // link is deleted or the canonical moves.
-    let via_link = read_root(".opencode/skills/rsmpl-git/SKILL.md");
+    let via_link = read_root(".opencode/skills/gitrs/SKILL.md");
     assert_eq!(
         via_link, skill,
-        ".opencode/skills/rsmpl-git/SKILL.md should match skills/rsmpl-git/SKILL.md"
+        ".opencode/skills/gitrs/SKILL.md should match skills/gitrs/SKILL.md"
     );
 }

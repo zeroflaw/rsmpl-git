@@ -1,8 +1,8 @@
-# rsmpl-git
+# gitrs
 
 > Built for the Meta Global AI Developer Hackathon — an experiment in agentic, token-efficient refactoring.
 
-Instead of agents manually deleting and adding large sections of code, `rsmpl-git`
+Instead of agents manually deleting and adding large sections of code, `gitrs`
 provides an understandable semantic patching language for human and machine:
 name the file and range once, describe the change as a Rust-shaped pattern,
 and let the engine lower it to a concrete Git diff.
@@ -10,19 +10,19 @@ and let the engine lower it to a concrete Git diff.
 Combine SmPL (Semantic Patch Language), Git and Rust language semantics into
 an agent-centric tool for token-efficient code refactoring.
 
-`rsmpl-git` takes an **RSmPL-Git patch** (Git-like hunks plus Rust semantic
+`gitrs` takes an **RSmPL-Git patch** (Git-like hunks plus Rust semantic
 rewrite hunks) and applies it to a repository by first lowering it to an
 ordinary Git patch, then running `git apply`. See `SPEC.md` for the full
 patch format (v0.1 notes mark the implemented subset). Agent? Start with
 `AGENTS.md` (one-page authoring reference, ~140 lines); `SPEC.md` is the
-full contract; `skills/rsmpl-git/SKILL.md` is the tool-driven patch-first
+full contract; `skills/gitrs/SKILL.md` is the tool-driven patch-first
 loop (read → author → check → apply).
 
 ## Install
 
 ```sh
-cargo install --path bin/rsmpl-git
-# or: cargo build --release -p rsmpl-git
+cargo install --path bin/gitrs
+# or: cargo build --release -p gitrs
 ```
 
 Requires `git` on `PATH` for the check/apply step (the CLI shells out to
@@ -37,16 +37,16 @@ Run from the repo root (else add `--repo ./my-repo` to any command).
 ### Preview (nothing applied)
 
 ```sh
-cat change.rsmpl | rsmpl-git --check
-rsmpl-git --file change.rsmpl --check
-rsmpl-git --patch "$(cat change.rsmpl)" --check
-rsmpl-git --file change.rsmpl --repo /tmp/empty --check  # lint only; `no match found` = well-formed (SPEC D.2.4)
+cat change.rsmpl | gitrs --check
+gitrs --file change.rsmpl --check
+gitrs --patch "$(cat change.rsmpl)" --check
+gitrs --file change.rsmpl --repo /tmp/empty --check  # lint only; `no match found` = well-formed (SPEC D.2.4)
 ```
 
 ### Apply
 
 ```sh
-rsmpl-git --file change.rsmpl --output lowered.patch
+gitrs --file change.rsmpl --output lowered.patch
 ```
 
 Every run archives the raw patch to `<repo>/.history/{id}.rsmpl` (last 128 kept).
@@ -56,9 +56,9 @@ small file already held? `@@ -1,1 @@` + `# scope=file` searches the whole file (
 ### Token-bounded JSON
 
 ```sh
-rsmpl-git --file change.rsmpl --format json --check
-rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
-rsmpl-git --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
+gitrs --file change.rsmpl --format json --check
+gitrs --file change.rsmpl --format json --diff-max-lines 0 --check
+gitrs --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
 ```
 
 `--format` picks text vs JSON; `--diff-max-lines N` (`0` omits) trims the
@@ -145,7 +145,7 @@ Key rules for authors:
 ## Layout
 
 ```
-bin/rsmpl-git/        CLI: patch -> lowered Git diff -> `git apply`
+bin/gitrs/        CLI: patch -> lowered Git diff -> `git apply`
 crates/rsmpl_patch/   patch document model + parser
 crates/rsmpl_pattern/ Rust pattern language (metavars, ellipsis, fn slots)
 crates/rsmpl_engine/  semantic matching + plan/move engine

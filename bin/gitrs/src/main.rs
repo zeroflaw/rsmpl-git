@@ -1,17 +1,17 @@
-//! `rsmpl-git`: convert an RSmPL-Git patch into an ordinary Git patch and apply it.
+//! `gitrs`: convert an RSmPL-Git patch into an ordinary Git patch and apply it.
 //!
 //! Agent-centric usage:
 //!
 //! ```sh
 //! # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 //! # Piped patch, no temp file (no input flags means stdin):
-//! cat change.rsmpl | rsmpl-git --check
+//! cat change.rsmpl | gitrs --check
 //! # From a file, printing the lowered diff without applying:
-//! rsmpl-git --file change.rsmpl --check
+//! gitrs --file change.rsmpl --check
 //! # Inline, no temp file (archived to `<repo>/.history/{id}.rsmpl`):
-//! rsmpl-git --patch "$(cat change.rsmpl)" --check
+//! gitrs --patch "$(cat change.rsmpl)" --check
 //! # Machine-readable report:
-//! rsmpl-git --file change.rsmpl --format json --check
+//! gitrs --file change.rsmpl --format json --check
 //! ```
 //!
 //! Flow (SPEC 26.1): parse RSmPL-Git patch -> apply semantic + ordinary hunks
@@ -36,7 +36,7 @@ enum Format {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "rsmpl-git",
+    name = "gitrs",
     version,
     about = "Apply RSmPL-Git semantic patches via lowering to Git patches"
 )]
@@ -149,7 +149,7 @@ fn run() -> Result<(), CliError> {
                     .trim()
                     .to_string();
                 let s = StructuredError::new(ErrorCode::IoConflict, reason)
-                    .with_suggestion("run `rsmpl-git --help` for usage");
+                    .with_suggestion("run `gitrs --help` for usage");
                 return Err(CliError::Structured(s));
             }
             e.exit();
@@ -167,7 +167,7 @@ fn run() -> Result<(), CliError> {
         })?,
         (None, None) => {
             // Unix filter default (T129): no input flags means stdin, so
-            // `cat change.rsmpl | rsmpl-git --check` just works. Empty stdin
+            // `cat change.rsmpl | gitrs --check` just works. Empty stdin
             // surfaces as the T59 empty-patch `RSMPL_PARSE_CONFLICT`, not
             // silent success. Like any filter, a bare interactive call
             // blocks on stdin — pipe or pass `--file`/`--patch` instead.

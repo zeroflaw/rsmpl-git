@@ -1,11 +1,11 @@
 [package]
-name = "rsmpl-git"
+name = "gitrs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "rsmpl-git"
+name = "gitrs"
 path = "src/main.rs"
 
 [dependencies]

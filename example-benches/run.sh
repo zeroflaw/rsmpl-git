@@ -4,9 +4,9 @@
 # Usage: ./run.sh  (run from the repo root; builds the binary if needed)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-BIN=target/debug/rsmpl-git
+BIN=target/debug/gitrs
 if [ ! -x "$BIN" ]; then
-    cargo build -q -p rsmpl-git
+    cargo build -q -p gitrs
 fi
 printf '| bench | rsmpl bytes/lines | native bytes/lines | saved |\n'
 printf '|---|---|---|---|\n'

@@ -1,13 +1,13 @@
 ---
-name: rsmpl-git
-description: Patch-first Rust refactoring with rsmpl-git semantic hunks (read, author, check, apply).
+name: gitrs
+description: Patch-first Rust refactoring with gitrs semantic hunks (read, author, check, apply).
 ---
 
-# rsmpl-git skill
+# gitrs skill
 
-Use `rsmpl-git` for every Rust refactoring or modification — never hand-edit
+Use `gitrs` for every Rust refactoring or modification — never hand-edit
 what a semantic hunk can express. Text edits that need no semantics still go
-through `rsmpl-git` as ordinary hunks, so one tool owns every change.
+through `gitrs` as ordinary hunks, so one tool owns every change.
 
 ## When to use / when not to
 
@@ -109,9 +109,9 @@ marker; hunks with other directives omit it (SPEC 7.1).
 
 ```sh
 # read the target file first — note the 1-based spans to rewrite
-rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
-rsmpl-git --file change.rsmpl --output full.patch   # full diff while preview stays small
-rsmpl-git --file change.rsmpl                       # apply for real
+gitrs --file change.rsmpl --format json --diff-max-lines 0 --check
+gitrs --file change.rsmpl --output full.patch   # full diff while preview stays small
+gitrs --file change.rsmpl                       # apply for real
 ```
 
 - The lowering itself is always 0-context (minimal tokens, still appliable);
@@ -121,7 +121,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 - Verify the JSON `matches` count equals the sites you read — fewer means
   a site (e.g. inside a macro) needs an ordinary hunk; per-rule `spans`
   (`[[start,end], …]`, original-source lines) need no re-read.
-- Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
+- Piped patches avoid temp files: `cat change.rsmpl | gitrs --check`
   (no input flags means stdin; `--file -` is the explicit alias; `--patch`
   passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
 

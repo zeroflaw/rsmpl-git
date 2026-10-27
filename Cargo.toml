@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "bin/rsmpl-git",
+  "bin/gitrs",
   "crates/rsmpl_patch",
   "crates/rsmpl_pattern",
   "crates/rsmpl_engine",

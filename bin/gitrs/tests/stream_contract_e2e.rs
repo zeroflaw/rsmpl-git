@@ -122,7 +122,7 @@ fn failing_check_still_writes_output() {
             .arg(&saved)
             .arg("--repo")
             .arg(dir.path())
-            .env("PATH", "/nonexistent-rsmpl-git-bin")
+            .env("PATH", "/nonexistent-gitrs-bin")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

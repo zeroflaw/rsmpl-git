@@ -1,9 +1,9 @@
-# AGENTS.md — rsmpl-git one-page authoring reference
+# AGENTS.md — gitrs one-page authoring reference
 
 Agent? Start here. This file alone suffices for rename + call-rewrite +
 move patches. SPEC.md is the full contract; citations below name the
 normative section (SPEC 9.3, SPEC 14.1, SPEC 18.6, SPEC D.3, …).
-Skill: `skills/rsmpl-git/SKILL.md` teaches the patch-first loop
+Skill: `skills/gitrs/SKILL.md` teaches the patch-first loop
 (read → author → check → apply) for tool-driven agents.
 
 ## Patch skeleton
@@ -129,12 +129,12 @@ searches the whole file (SPEC 17.3).
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-cat change.rsmpl | rsmpl-git --check
-rsmpl-git --file change.rsmpl --check
-rsmpl-git --patch "$(cat change.rsmpl)" --check  # inline, no temp file
-rsmpl-git --file change.rsmpl --format json --check
-rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
-rsmpl-git --file change.rsmpl --output full.patch
+cat change.rsmpl | gitrs --check
+gitrs --file change.rsmpl --check
+gitrs --patch "$(cat change.rsmpl)" --check  # inline, no temp file
+gitrs --file change.rsmpl --format json --check
+gitrs --file change.rsmpl --format json --diff-max-lines 0 --check
+gitrs --file change.rsmpl --output full.patch
 ```
 
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).

@@ -35,7 +35,7 @@ fn assert_envelope(out: &std::process::Output, needle: &str) {
     );
     assert_eq!(
         v["error"]["suggestion"],
-        serde_json::json!("run `rsmpl-git --help` for usage"),
+        serde_json::json!("run `gitrs --help` for usage"),
         "got: {v}"
     );
     // T89 symmetry: stdout-only envelope, no stderr `error:` line.

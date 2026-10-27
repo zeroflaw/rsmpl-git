@@ -27,7 +27,7 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
     let normalized = text.replace("\r\n", "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
 
-    // Handle optional top-level version marker `# rsmpl-git=0.1` (SPEC 33.1).
+    // Handle optional top-level version marker `# gitrs=0.1` (SPEC 33.1).
     let mut idx = 0;
     // Skip leading blank lines.
     while idx < lines.len() && lines[idx].trim().is_empty() {
@@ -165,7 +165,7 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
 
 fn is_version_marker(line: &str) -> bool {
     let t = line.trim();
-    t.starts_with("# rsmpl-git=") || t.starts_with("#rsmpl-git=")
+    t.starts_with("# gitrs=") || t.starts_with("#gitrs=")
 }
 
 fn parse_diff_git_header(line: &str) -> Option<(String, String)> {
@@ -1158,7 +1158,7 @@ mod tests {
 
     #[test]
     fn parses_version_marker() {
-        let text = "# rsmpl-git=0.1\ndiff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
+        let text = "# gitrs=0.1\ndiff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
         let p = parse_patch(text).unwrap();
         assert!(p.version.is_some());
     }
@@ -1230,7 +1230,7 @@ mod tests {
 
     #[test]
     fn empty_patch_rejected() {
-        for text in ["", "  \n\n", "# rsmpl-git=0.1\n"] {
+        for text in ["", "  \n\n", "# gitrs=0.1\n"] {
             let e = parse_patch(text).unwrap_err();
             let msg = format!("{e}");
             assert!(msg.contains("RSMPL_PARSE_CONFLICT"), "got: {msg}");

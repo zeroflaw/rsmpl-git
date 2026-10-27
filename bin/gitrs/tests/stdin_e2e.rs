@@ -1,4 +1,4 @@
-//! Stdin-patch e2e: `rsmpl-git` reading the patch from stdin, piped or
+//! Stdin-patch e2e: `gitrs` reading the patch from stdin, piped or
 //! via the T129 no-input-flags default.
 //!
 //! Split from `cli_e2e.rs` to keep every test file under the 2000-LOC
