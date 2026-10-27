@@ -32,6 +32,7 @@ the table embedded in the top-level README.
 | 16-symbol-sweep | `Old`→`New` rewrites 5 qualified `crate::old_api` sites, bare/other distractors untouched | 179 B / 10 ln | 425 B / 14 ln | 58% |
 | 17-macro-sweep | `old_mac!`→`new_mac!` over 5 sites, `other_mac!` distractor untouched, 1 hunk | 128 B / 7 ln | 285 B / 14 ln | 55% |
 | 18-attrs-sweep | `V`/`Q`/`G`/`W` rename `foo`→`baz` over 4 attributed sigs, attrs preserved, `bar` untouched, 1 hunk | 210 B / 12 ln | 407 B / 15 ln | 48% |
+| 19-impl-sweep | 1 hunk renames `old_name`→`new_name` over 4 heterogeneous `impl` blocks, `;` decl + free fn untouched | 186 B / 12 ln | 391 B / 15 ln | 52% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Single-ident edits (09, 10) are size-parity — there the payoff is not bytes

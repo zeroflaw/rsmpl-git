@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -11 +11 @@
+-    fn old_name(&self) -> i32 {
++    fn new_name(&self) -> i32 {
+@@ -17 +17 @@
+-    fn old_name(&self) -> i32 {
++    fn new_name(&self) -> i32 {
+@@ -23 +23 @@
+-    fn old_name(&self) -> i32 {
++    fn new_name(&self) -> i32 {
+@@ -29 +29 @@
+-    fn old_name(&self) -> i32 {
++    fn new_name(&self) -> i32 {
