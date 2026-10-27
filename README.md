@@ -104,7 +104,9 @@ gitrs diff > change.rsmpl && git stash -q && gitrs apply --file change.rsmpl --c
 History dogfood: `bin/diffrs/tests/history_e2e.rs` converts a
 curated selection of this repo's own commits (`checkout c` +
 `diffrs c~1`, empty tree for root) and round-trips each through
-`applyrs --check` — failing conversions become pins there.
+`applyrs --check` plus a real-apply byte-compared against the child
+tree (T361: `--check` is blind to sweep over-match) — failing
+conversions become pins there.
 
 `--format` picks text vs JSON; `--diff-max-lines N` (`0` omits) trims the
 preview only — `--check`/apply/`--output` always use the full 0-context

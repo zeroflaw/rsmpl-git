@@ -5801,8 +5801,9 @@ second checkout, so the `applyrs` `.history/` audit write lands in
 the throwaway pre-image instead of polluting the diffrs worktree).
 The curated selection in `bin/diffrs/tests/history_e2e.rs` is the
 pinned generator: every entry must convert and check clean with
-its pinned semantic-hunk count — failing conversions become pins
-there.
+its pinned semantic-hunk count, then real-apply byte-identical to
+the child tree (T361: `--check` is blind to sweep over-match) —
+failing conversions become pins there.
 
 Empty changes print empty stdout + `(no changes)` on stderr (never
 pipe empties into `applyrs` — empty input is the T59 authoring

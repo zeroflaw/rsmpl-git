@@ -7,6 +7,8 @@
 //! isolated pre-change tree. A failing conversion fails this test —
 //! that is the pin mechanism: reproduce with the recipe, then extend
 //! the table.
+//! `--check` is followed by a real apply byte-compared against the
+//! child tree (T361: sweeps can over-match invisibly to `--check`).
 //!
 //! The table pins exact semantic-hunk counts, so both inference
 //! improvements (more compression) and regressions (conversion
@@ -190,6 +192,89 @@ fn materialize_parent(top: &Path, parent: &str, dest: &Path) -> bool {
     matches!(tar.wait(), Ok(st) if st.success())
 }
 
+/// Byte-compare two materialized trees (T361): `--check` cannot see
+/// sweep over-match (extra sites still match; a `;;` side is valid
+/// Rust), so the harness real-applies each captured patch and
+/// compares the result against the child tree. Tool-internal paths
+/// (top-level `.history/`, defensive `.git`) are ignored; modes are
+/// not compared (the engine promises no exec-bit preservation).
+/// Returns one line per mismatch (empty = identical).
+fn compare_trees(applied: &Path, expect: &Path) -> Vec<String> {
+    fn walk(root: &Path, out: &mut Vec<PathBuf>) {
+        let mut stack = vec![PathBuf::new()];
+        while let Some(rel) = stack.pop() {
+            let entries = match std::fs::read_dir(root.join(&rel)) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let rel_path = rel.join(entry.file_name());
+                if rel_path
+                    .components()
+                    .next()
+                    .is_some_and(|c| c.as_os_str() == ".history" || c.as_os_str() == ".git")
+                {
+                    continue;
+                }
+                let ft = match entry.file_type() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                if ft.is_dir() {
+                    stack.push(rel_path.clone());
+                }
+                out.push(rel_path);
+            }
+        }
+    }
+    fn kind_of(p: &Path) -> Option<&'static str> {
+        let md = std::fs::symlink_metadata(p).ok()?;
+        let ft = md.file_type();
+        Some(if ft.is_symlink() {
+            "symlink"
+        } else if ft.is_dir() {
+            "dir"
+        } else {
+            "file"
+        })
+    }
+    let mut a_paths = Vec::new();
+    let mut e_paths = Vec::new();
+    walk(applied, &mut a_paths);
+    walk(expect, &mut e_paths);
+    a_paths.sort();
+    e_paths.sort();
+    let mut both: Vec<PathBuf> = a_paths;
+    both.extend(e_paths);
+    both.sort();
+    both.dedup();
+    let mut diffs = Vec::new();
+    for rel in &both {
+        let a = applied.join(rel);
+        let e = expect.join(rel);
+        match (kind_of(&a), kind_of(&e)) {
+            (None, None) => {}
+            (None, _) => diffs.push(format!("missing in applied: {}", rel.display())),
+            (_, None) => diffs.push(format!("extra in applied: {}", rel.display())),
+            (Some(x), Some(y)) if x != y => {
+                diffs.push(format!("kind differs ({x} vs {y}): {}", rel.display()))
+            }
+            (Some("dir"), _) => {}
+            (Some("symlink"), _) => {
+                if std::fs::read_link(&a).ok() != std::fs::read_link(&e).ok() {
+                    diffs.push(format!("symlink target differs: {}", rel.display()));
+                }
+            }
+            _ => {
+                if std::fs::read(&a).ok() != std::fs::read(&e).ok() {
+                    diffs.push(format!("content differs: {}", rel.display()));
+                }
+            }
+        }
+    }
+    diffs
+}
+
 fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
     let short = &case.commit[..7];
     if !git_ok(wt, &["checkout", "-qf", case.commit]) {
@@ -270,6 +355,42 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
             checked.status,
             String::from_utf8_lossy(&checked.stderr)
         ));
+    }
+    // Apply-and-compare (T361): `--check` is blind to sweep
+    // over-match (extra sites still match; a `;;` rewrite is valid
+    // Rust), so real-apply onto the throwaway pre-image and
+    // byte-compare against the child tree. `.history/` (apply audit)
+    // is ignored by the comparator.
+    let applied = Command::new(sibling_applyrs())
+        .arg("--file")
+        .arg(&patch_path)
+        .arg("--repo")
+        .arg(pre)
+        .output()
+        .unwrap();
+    if !applied.status.success() {
+        failures.push(format!(
+            "{short}: applyrs apply exited {}: {}",
+            applied.status,
+            String::from_utf8_lossy(&applied.stderr)
+        ));
+        return;
+    }
+    let expect_tmp = tempfile::tempdir().unwrap();
+    if !materialize_parent(top, case.commit, expect_tmp.path()) {
+        failures.push(format!("{short}: git archive {} failed", case.commit));
+        return;
+    }
+    let diffs = compare_trees(pre, expect_tmp.path());
+    if !diffs.is_empty() {
+        let mut msg = format!("{short}: applied tree differs from {}:", case.commit);
+        for d in diffs.iter().take(5) {
+            msg.push_str(&format!("\n  {d}"));
+        }
+        if diffs.len() > 5 {
+            msg.push_str(&format!("... and {} more", diffs.len() - 5));
+        }
+        failures.push(msg);
     }
 }
 
