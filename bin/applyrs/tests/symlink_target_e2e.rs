@@ -86,6 +86,45 @@ fn symlink_create_real_apply_materializes_link() {
 }
 
 #[test]
+fn file_to_symlink_typechange_real_apply_swaps_type() {
+    // T357: git's delete+create pair for one path must lower as the
+    // pair (differing modes) — a plain modify keeps the old type.
+    const TYPECHANGE: &str = "diff --git a/f b/f\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/f\n+++ /dev/null\n@@ -1 +0,0 @@\n-hello\ndiff --git a/f b/f\nnew file mode 120000\nindex 0000000..2222222\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+target\n\\ No newline at end of file\n";
+    let dir = init_repo();
+    write(dir.path(), "f", "hello\n");
+    let out = run_stdin(dir.path(), TYPECHANGE, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let target = std::fs::read_link(dir.path().join("f")).expect("f must become a symlink");
+    assert_eq!(target.to_string_lossy(), "target");
+}
+
+#[test]
+fn symlink_to_file_typechange_real_apply_swaps_type() {
+    // T357 reverse direction: 120000 delete + 100644 create.
+    const TYPECHANGE: &str = "diff --git a/f b/f\ndeleted file mode 120000\nindex 2222222..0000000\n--- a/f\n+++ /dev/null\n@@ -1 +0,0 @@\n-target\n\\ No newline at end of file\ndiff --git a/f b/f\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+hello\n";
+    let dir = init_repo();
+    symlink("target", dir.path().join("f")).unwrap();
+    let out = run_stdin(dir.path(), TYPECHANGE, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = std::fs::symlink_metadata(dir.path().join("f")).unwrap();
+    assert!(!md.file_type().is_symlink(), "f must become a regular file");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("f")).unwrap(),
+        "hello\n"
+    );
+}
+
+#[test]
 fn symlink_retarget_real_apply_keeps_exact_target() {
     // T355: retargeting must not append `\n` (was `'other\n'`, dangling).
     let dir = init_repo();

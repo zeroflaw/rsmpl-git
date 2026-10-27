@@ -268,6 +268,47 @@ fn run() -> Result<(), CliError> {
         // content) lower with `deleted file mode` headers so `git apply`
         // removes them instead of truncating (T350); an ordinary
         // all-minus hunk truncates and keeps the file.
+        // T357: same-path delete+create pair (git's file<->symlink
+        // typechange shape). When the declared modes differ, lower as
+        // the pair so `git apply` swaps the type; same-type pairs
+        // stay a single plain modify (minimal tokens).
+        if !is_new.contains(rel) {
+            let has_delete = patch
+                .files
+                .iter()
+                .any(|s| s.target_path == *rel && s.is_deleted_file);
+            let create_mode = patch
+                .files
+                .iter()
+                .find(|s| s.target_path == *rel && s.is_new_file)
+                .and_then(|s| {
+                    s.metadata
+                        .iter()
+                        .find_map(|m| m.strip_prefix("new file mode "))
+                })
+                .filter(|m| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit()));
+            if has_delete && create_mode.is_some() {
+                let new_mode = create_mode.unwrap_or("100644");
+                let old_symlink = is_symlink.contains(rel);
+                let new_symlink = new_mode == "120000";
+                if old_symlink != new_symlink {
+                    let pair = rsmpl_git::unified_diff_for_typechange_with_context(
+                        rel,
+                        old,
+                        new,
+                        old_symlink,
+                        new_mode,
+                        0,
+                    );
+                    if !pair.is_empty() {
+                        let (added, removed) = rsmpl_git::file_line_stats(old, new);
+                        changed.push((rel.clone(), added, removed));
+                        sections.extend(pair);
+                    }
+                    continue;
+                }
+            }
+        }
         let section = if is_new.contains(rel) {
             // Honor the author's declared `new file mode` (T355):
             // `diffrs` emits `120000` for symlink creates; anything

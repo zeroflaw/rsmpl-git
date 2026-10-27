@@ -4582,7 +4582,9 @@ diff applies with a bare `git apply`; deleted files mirror it with
 target string, never followed (T353). Creates honor the input
 section's declared `new file mode` (`100644` default, `120000` for
 symlink creates); ordinary hunks preserve a missing trailing
-newline instead of appending one (T355).
+newline instead of appending one (T355). A same-path delete+create
+pair (git's file<->symlink typechange shape) lowers as the pair
+when the declared modes differ, else a single plain modify (T357).
 `--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
 local artifact, not repo content. File renames are not a containment

@@ -96,6 +96,32 @@ pub fn unified_diff_for_deleted_file_with_context(
     Some(out)
 }
 
+/// Build a `diff --git` delete+create pair for a file↔symlink typechange.
+///
+/// Git represents a typechange as two same-path sections: a delete half
+/// (`deleted file mode <old>`) plus a create half (`new file mode <new>`,
+/// T357). `old_symlink` selects the delete mode line (120000 vs 100644,
+/// T353); `new_mode` is the declared create mode (120000 vs 100644,
+/// T355 default). Empty-side halves drop (`None` when `old`/`new` is
+/// empty), so the caller gets 0-2 sections in git order (delete first).
+pub fn unified_diff_for_typechange_with_context(
+    path: &str,
+    old: &str,
+    new: &str,
+    old_symlink: bool,
+    new_mode: &str,
+    context: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(s) = unified_diff_for_deleted_file_with_context(path, old, context, old_symlink) {
+        out.push(s);
+    }
+    if let Some(s) = unified_diff_for_new_file_with_context(path, new, context, new_mode) {
+        out.push(s);
+    }
+    out
+}
+
 /// Assemble per-file sections into one patch document.
 pub fn assemble_patch(sections: Vec<String>) -> String {
     let mut out = String::new();
@@ -261,6 +287,42 @@ mod tests {
         let d = unified_diff_for_deleted_file_with_context("link", "target\n", 0, true).unwrap();
         assert!(d.contains("deleted file mode 120000"), "got: {d}");
         assert!(!d.contains("100644"), "got: {d}");
+    }
+
+    #[test]
+    fn typechange_file_to_symlink_emits_delete_plus_120000_create() {
+        // T357: git's file->symlink shape is a delete+create pair.
+        let pair =
+            unified_diff_for_typechange_with_context("f", "hello\n", "target", false, "120000", 0);
+        assert_eq!(pair.len(), 2, "got: {pair:?}");
+        assert!(
+            pair[0].contains("deleted file mode 100644"),
+            "got: {}",
+            pair[0]
+        );
+        assert!(pair[0].contains("-hello"), "got: {}", pair[0]);
+        assert!(pair[1].contains("new file mode 120000"), "got: {}", pair[1]);
+        assert!(pair[1].contains("+target"), "got: {}", pair[1]);
+        assert!(
+            pair[1].contains("No newline at end of file"),
+            "got: {}",
+            pair[1]
+        );
+    }
+
+    #[test]
+    fn typechange_symlink_to_file_emits_120000_delete_plus_create() {
+        // T357 reverse direction: 120000 delete + 100644 create.
+        let pair =
+            unified_diff_for_typechange_with_context("f", "target", "hello\n", true, "100644", 0);
+        assert_eq!(pair.len(), 2, "got: {pair:?}");
+        assert!(
+            pair[0].contains("deleted file mode 120000"),
+            "got: {}",
+            pair[0]
+        );
+        assert!(pair[1].contains("new file mode 100644"), "got: {}", pair[1]);
+        assert!(pair[1].contains("+hello"), "got: {}", pair[1]);
     }
 
     #[test]
