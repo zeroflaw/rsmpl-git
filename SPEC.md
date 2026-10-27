@@ -5769,6 +5769,17 @@ through `applyrs --check` against the pre-change tree. Semantic
 validity beyond the pinned shapes is best-effort: verify with the
 D.3 round-trip recipe before trusting a compression.
 
+History-per-commit regression recipe (T346): `checkout c` +
+`diffrs c~1` converts commit `c` (worktree `== c` makes the rev
+diff exactly that commit); the root commit has no parent, so it
+converts against the empty tree (`git hash-object -t tree
+/dev/null`). Round-trip each capture with `checkout c~1` (an empty
+dir for root) + `applyrs --file change.rsmpl --check`. The curated
+selection in `bin/diffrs/tests/history_e2e.rs` is the pinned
+generator: every entry must convert and check clean with its
+pinned semantic-hunk count — failing conversions become pins
+there.
+
 Empty changes print empty stdout + `(no changes)` on stderr (never
 pipe empties into `applyrs` — empty input is the T59 authoring
 error). Failures exit 2 with the stdout-only `RSMPL_IO_CONFLICT`
