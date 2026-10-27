@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! T250: shared e2e helpers for all `tests/*_e2e.rs` binaries.
 //!
 //! Dedupes the `binary` / `init_repo` / `write` / `read` / `run` /

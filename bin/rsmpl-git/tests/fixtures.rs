@@ -6,14 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR = <root>/bin/rsmpl-git
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .unwrap()
-}
+mod common;
+use common::*;
 
 fn copy_tree(src: &Path, dst: &Path) {
     for entry in fs::read_dir(src).unwrap() {

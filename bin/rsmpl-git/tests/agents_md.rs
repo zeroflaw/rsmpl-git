@@ -5,16 +5,11 @@
 //! --help`. The three recipe skeletons must appear verbatim so the sheet
 //! alone suffices for rename + call-rewrite + move patches.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .unwrap()
-}
+mod common;
+use common::*;
 
 fn read_root(rel: &str) -> String {
     let root = workspace_root();
