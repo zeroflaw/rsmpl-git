@@ -1,5 +1,12 @@
 # rsmpl-git
 
+> Hackathon prototype — an experiment in agentic, token-efficient refactoring.
+
+Instead of agents manually deleting and adding large sections of code, `rsmpl-git`
+provides an understandable semantic patching language for human and machine:
+name the file and range once, describe the change as a Rust-shaped pattern,
+and let the engine lower it to a concrete Git diff.
+
 Combine SmPL (Semantic Patch Language), Git and Rust language semantics into
 an agent-centric tool for token-efficient code refactoring.
 
@@ -23,68 +30,42 @@ Requires `git` on `PATH` for the check/apply step (the CLI shells out to
 (is git installed?)``. Matching, lowering, and `--output`
 need no git.
 
-## Usage (agent-oriented)
+## Usage
+
+Run from the repo root (else add `--repo ./my-repo` to any command).
+
+### Preview (nothing applied)
 
 ```sh
-# Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-# Piped patch, no temp file (no input flags means stdin):
 cat change.rsmpl | rsmpl-git --check
-
-# From a file, preview the lowered Git diff without applying:
 rsmpl-git --file change.rsmpl --check
-
-# Inline, no temp file (archived to <repo>/.history/{id}.rsmpl, last 128 kept):
 rsmpl-git --patch "$(cat change.rsmpl)" --check
+rsmpl-git --file change.rsmpl --repo /tmp/empty --check  # lint only; `no match found` = well-formed (SPEC D.2.4)
+```
 
-  # Machine-readable result (rules, files stats, diff + line counts, check):
-  rsmpl-git --file change.rsmpl --format json --check
+### Apply
 
-  # Token-bounded verification: stats + check, no diff tokens ...
-  rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
-  # ... or skim the first 40 diff lines (stats stay exact, --output stays full):
-  rsmpl-git --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
-  # Rule of thumb: `--format` picks text vs JSON, `--diff-max-lines`
-  # trims the preview only (the lowering itself is always 0-context,
-  # still appliable), `--output` always saves the full diff.
-  # Defaults stay: text report; `--repo` defaults to `.`.
-  # Lint authoring without a checkout (parse/directives/captures):
-  # mkdir -p /tmp/empty && rsmpl-git --file change.rsmpl --repo /tmp/empty --check
-  # (`no match found` = well-formed; triage table: SPEC D.2.4).
-
-# Range discovery is a targeted file read: note the 1-based spans to
-# rewrite and cite `@@ -start,len` (`L = end-start+1`). Small file already
-# held? `@@ -1,1 @@` + `# scope=file` searches the whole file (SPEC 17.3/D.3).
-
-# Apply and save the concrete diff for review:
+```sh
 rsmpl-git --file change.rsmpl --output lowered.patch
 ```
 
-Exit codes: `0` applied/clean, `2` patch error (structured
-`RSMPL_*`/`GIT_*` diagnostic on stderr). Text `--check` previews the lowered
-diff to stdout (plain apply stays quiet); `--format json` prints
-`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check, history}` to stdout
-(`version` = report schema, currently `1`; `rules` = per-rule match counts + per-match `spans`; `files` = per-file `added`/`removed`;
-`diff_truncated` = reported diff hides a non-empty lowering;
-`diff_lines`/`diff_shown` = full vs reported line counts so the next
-`--diff-max-lines N` is computable);
-`--diff-max-lines N` (`0` omits) bounds the reported diff only
-(`--check`/apply/`--output` always use the full diff — but `--output`
-writes nothing when the lowering is empty, and it is written before
-`--check` runs so a failing check still leaves the full diff).
-The lowering itself is always 0-context (minimal tokens, still appliable:
-`--check`/apply use `git apply --unidiff-zero`; piping a saved patch
-elsewhere needs that flag) (stats unaffected); JSON
-mode is stdout-only for both success and failure (no stderr `check:` or
-`error:` lines — the `"check":true` payload or the `{version, error: {...}}`
-envelope is the signal), while `warning:` lines stay stderr-only in both
-modes, so JSON consumers must also read stderr; failures print
-`{version, error: {code, rule, file, range, reason, suggestion}}` to stdout only
-(`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files and
-flag-usage errors — bad flags envelop in JSON mode, stay clap text
-otherwise).
-Every run archives the raw patch to `<repo>/.history/{id}.rsmpl` (last 128
-kept; path on stderr `history:` + JSON `history`).
-Stream/empty/output contract: SPEC D.2.3.
+Every run archives the raw patch to `<repo>/.history/{id}.rsmpl` (last 128 kept).
+Range discovery is a targeted file read: cite `@@ -start,len` (`L = end-start+1`);
+small file already held? `@@ -1,1 @@` + `# scope=file` searches the whole file (SPEC 17.3/D.3).
+
+### Token-bounded JSON
+
+```sh
+rsmpl-git --file change.rsmpl --format json --check
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
+rsmpl-git --file change.rsmpl --format json --diff-max-lines 40 --check --output full.patch
+```
+
+`--format` picks text vs JSON; `--diff-max-lines N` (`0` omits) trims the
+preview only — `--check`/apply/`--output` always use the full 0-context
+lowering (still appliable via `git apply --unidiff-zero`). Exit `0` clean,
+`2` patch error (`RSMPL_*`/`GIT_*` + suggestion). Full envelope contract:
+SPEC D.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 
