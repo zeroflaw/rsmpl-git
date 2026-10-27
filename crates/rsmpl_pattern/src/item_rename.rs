@@ -138,14 +138,24 @@ fn is_raw_ident(word: &str) -> bool {
     word.strip_prefix("r#").is_some_and(is_ident)
 }
 
-/// Split leading `#[...]` attribute lines; returns (attrs, rest).
+/// Split leading attribute lines (`#[...]`, plus `///`/`//!`/single-line
+/// `/** */` doc lines normalized to `#[doc = "..."]` via the shared
+/// helper — T155 parity for the item front-end, T156); returns
+/// (attrs, rest).
 fn split_attrs(text: &str) -> (Vec<String>, String) {
     let lines: Vec<&str> = text.lines().collect();
     let mut attrs = Vec::new();
     let mut idx = 0;
     while idx < lines.len() {
         if !lines[idx].trim_start().starts_with("#[") {
-            break;
+            match crate::fn_pattern::doc_comment_to_attr(lines[idx].trim()) {
+                Some(attr) => {
+                    attrs.push(attr);
+                    idx += 1;
+                    continue;
+                }
+                None => break,
+            }
         }
         let mut depth = 0i32;
         let start = idx;
@@ -506,6 +516,28 @@ mod tests {
     #[test]
     fn rejects_meta_names() {
         assert!(parse_side("struct $S").is_err());
+    }
+
+    #[test]
+    fn peels_doc_comment_lines_like_other_front_ends() {
+        // T156: item parity with the T155 fn/general normalization —
+        // `///`, `//!`, and single-line `/** */` peel to `#[doc]`.
+        let side = parse_side("/// Doc.\nstruct Old").unwrap().unwrap();
+        assert_eq!(side.attrs, vec!["#[doc = \" Doc.\"]"]);
+        let side = parse_side("//! Inner.\nstruct Old").unwrap().unwrap();
+        assert_eq!(side.attrs, vec!["#[doc = \" Inner.\"]"]);
+        let side = parse_side("/** Block doc. */\nstruct Old")
+            .unwrap()
+            .unwrap();
+        assert_eq!(side.attrs, vec!["#[doc = \" Block doc. \"]"]);
+        // Mixed `#[...]` + doc lines peel in order.
+        let side = parse_side("#[inline]\n/// Doc.\nstruct Old")
+            .unwrap()
+            .unwrap();
+        assert_eq!(side.attrs, vec!["#[inline]", "#[doc = \" Doc.\"]"]);
+        // Ordinary comments still stop the peel (fallthrough preserved).
+        assert!(parse_side("//// Not doc.\nstruct Old").unwrap().is_none());
+        assert!(parse_side("/** Unclosed.\nstruct Old").unwrap().is_none());
     }
 
     #[test]

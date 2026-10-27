@@ -1612,6 +1612,8 @@ Supported attribute policies are:
 
 `# attrs=strip` is intentionally explicit because accidentally deleting documentation or attributes is high-risk.
 
+Doc-comment mirrors (`///`, `//!`, and single-line `/** ... */`) normalize to `#[doc = "..."]` on any pattern path that accepts mirrored attributes; multi-line block docs cannot be mirrored — use an ordinary hunk.
+
 ### 14.7 Signature evolution
 
 A function hunk whose `-` and `+` sides differ in more than the name evolves each explicitly written slot independently. Slots not written differently are preserved byte-for-byte (including the body, which is never rewritten). The reference implementation compares slots whitespace-insensitively against target text sliced from the original source:

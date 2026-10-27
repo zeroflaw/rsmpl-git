@@ -381,6 +381,23 @@ mod tests {
     }
 
     #[test]
+    fn explicit_doc_comment_mirrors_apply() {
+        // T156: item parity with the T155 fn/general normalization —
+        // `///` and single-line `/** */` mirrors compare like `#[doc]`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# attrs=explicit\n- /// Doc.\n- struct Old\n+ /// Doc.\n+ struct New\n";
+        let out = apply(patch, "/// Doc.\nstruct Old {\n    x: i32,\n}\n").unwrap();
+        assert!(out.contains("struct New {"), "got: {out}");
+        assert!(out.contains("/// Doc."), "got: {out}");
+        let block = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# attrs=explicit\n- /** Block doc. */\n- struct Old\n+ /** Block doc. */\n+ struct New\n";
+        let out = apply(block, "/** Block doc. */\nstruct Old {\n    x: i32,\n}\n").unwrap();
+        assert!(out.contains("struct New {"), "got: {out}");
+        assert!(out.contains("/** Block doc. */"), "got: {out}");
+        // Wrong doc text still fails instead of silently matching.
+        let wrong = patch.replace("- /// Doc.", "- /// Other.");
+        assert!(apply(&wrong, "/// Doc.\nstruct Old {\n    x: i32,\n}\n").is_err());
+    }
+
+    #[test]
     fn renames_each_supported_kind() {
         let cases = [
             (

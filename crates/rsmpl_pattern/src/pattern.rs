@@ -632,6 +632,17 @@ fn try_general(
     }
     let (minus_attrs, minus_rest) = split_leading_attrs(minus_raw);
     let (plus_attrs, plus_rest) = split_leading_attrs(plus_raw);
+    // A leading `/*` the peel cannot normalize (multi-line block doc,
+    // ordinary block comment) is never a valid general-pattern start —
+    // fail fast instead of a misleading match-time error (T156).
+    for rest in [minus_rest.trim_start(), plus_rest.trim_start()] {
+        if rest.starts_with("/*") {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "block comments (`/* ... */`) are not supported in patterns in v1 (mirror doc comments with `#[doc = \"...\"]` or use an ordinary hunk)",
+            ));
+        }
+    }
     // Mask backtick literals so substitution cannot mistake them for
     // metavariables, then restore them in the substituted pattern.
     let (masked, sentinels) = mask_literal_spans(&minus_rest)?;
@@ -1134,6 +1145,15 @@ mod tests {
         let (none, same) = split_leading_attrs("//// Not doc.\nfn foo() {}");
         assert!(none.is_empty(), "got: {none:?}");
         assert_eq!(same, "//// Not doc.\nfn foo() {}");
+        // T156: single-line block docs peel to `#[doc]`; multi-line
+        // openers and ordinary block comments stop the peel.
+        let (attrs, rest) = split_leading_attrs("/** Block doc. */\nlet x = E;");
+        assert_eq!(attrs, vec!["#[doc = \" Block doc. \"]".to_string()]);
+        assert_eq!(rest, "let x = E;");
+        let (none, _) = split_leading_attrs("/** Unclosed.\nlet x = E;");
+        assert!(none.is_empty(), "got: {none:?}");
+        let (none, _) = split_leading_attrs("/* plain */\nlet x = E;");
+        assert!(none.is_empty(), "got: {none:?}");
     }
 
     #[test]
@@ -1289,6 +1309,32 @@ mod tests {
             "got: {:?}",
             c.kind
         );
+    }
+
+    #[test]
+    fn block_comment_gate_single_line_normalizes_multi_line_needles() {
+        // T156: single-line `/** */` peels and the `let` compiles;
+        // multi-line block docs fail fast with the targeted needle.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,2 +2,2 @@ rule=x\n# lang=rust\n# expr E\n- /** Block doc. */\n- let x = E;\n+ /** Block doc. */\n+ let y = E;\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(
+                &c.kind,
+                PatternKind::General {
+                    shape: GeneralShape::Stmt,
+                    ..
+                }
+            ),
+            "got: {:?}",
+            c.kind
+        );
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,3 +2,3 @@ rule=x\n# lang=rust\n# expr E\n- /** Multi\n- line. */\n- let x = E;\n+ /** Multi\n+ line. */\n+ let y = E;\n",
+        );
+        let err = compile(&h).unwrap_err().to_string();
+        assert!(err.contains("block comments"), "unexpected: {err}");
     }
 
     #[test]

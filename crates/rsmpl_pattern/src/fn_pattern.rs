@@ -190,14 +190,17 @@ fn fn_qualifiers(item: &syn::ItemFn) -> impl Iterator<Item = String> {
     v.into_iter()
 }
 
-/// Normalize a leading doc-comment line (`/// text`, `//! text`) to its
-/// canonical attribute form (`#[doc = " text"]`) so whitespace-insensitive
-/// attribute comparison meets `quote!`-rendered targets (T155).
+/// Normalize a leading doc-comment line (`/// text`, `//! text`, or
+/// single-line `/** text */`) to its canonical attribute form
+/// (`#[doc = " text"]`) so whitespace-insensitive attribute comparison
+/// meets `quote!`-rendered targets (T155; `/** */` arm T156).
 ///
-/// Returns `None` for non-doc lines — including `////...`, which is an
-/// ordinary comment, never a doc attribute. The body is kept verbatim
-/// (leading space included: `/// X` maps to `" X"`, matching `syn`), with
-/// `\` and `"` escaped so the canonical form stays well-formed.
+/// Returns `None` for non-doc lines — including `////...` (an ordinary
+/// comment, never a doc attribute) and multi-line block docs (no
+/// leading-line structure, so they stay fail-fast). The body is kept
+/// verbatim (leading space included: `/// X` maps to `" X"`, matching
+/// `syn`), with `\` and `"` escaped so the canonical form stays
+/// well-formed.
 pub(crate) fn doc_comment_to_attr(trimmed_line: &str) -> Option<String> {
     let body = if let Some(rest) = trimmed_line.strip_prefix("///") {
         // `////` or more is an ordinary comment, never a doc attribute.
@@ -205,6 +208,14 @@ pub(crate) fn doc_comment_to_attr(trimmed_line: &str) -> Option<String> {
             return None;
         }
         rest
+    } else if let Some(rest) = trimmed_line.strip_prefix("/**") {
+        // Single-line block docs only (`/** text */`); `/***...` and
+        // `/**/` are ordinary comments, multi-line stays `None`.
+        if rest.starts_with('/') || rest.starts_with('*') {
+            return None;
+        }
+        let inner = rest.strip_suffix("*/")?;
+        inner
     } else {
         trimmed_line.strip_prefix("//!")?
     };
@@ -227,9 +238,10 @@ pub fn parse_fn_pattern(
     returns_none: bool,
 ) -> Result<FnPattern, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg);
-    // Leading doc-comment lines (`/// text`, `//! text`): peel at the string
-    // level — the whitespace tokenizer below cannot preserve a doc line's
-    // trailing text — and normalize to `#[doc = "..."]` (T155).
+    // Leading doc-comment lines (`///`, `//!`, single-line `/** */`):
+    // peel at the string level — the whitespace tokenizer below cannot
+    // preserve a doc line's trailing text — and normalize to
+    // `#[doc = "..."]` (T155; block arm T156).
     let mut attrs_written = Vec::new();
     let all_lines: Vec<&str> = text.lines().collect();
     let mut peeled = 0;
@@ -241,6 +253,15 @@ pub fn parse_fn_pattern(
             }
             None => break,
         }
+    }
+    // A leading `/*` the helper cannot normalize (multi-line block doc,
+    // ordinary block comment) is never a valid fn-pattern start — fail
+    // fast instead of the misleading missing-`fn`-keyword error (T156).
+    if peeled < all_lines.len() && all_lines[peeled].trim_start().starts_with("/*") {
+        return Err(fail(
+            "block comments (`/* ... */`) are not supported in patterns in v1 (mirror doc comments with `#[doc = \"...\"]` or use an ordinary hunk)"
+                .to_string(),
+        ));
     }
     let toks = tokenize_pattern(&all_lines[peeled..].join("\n"));
     let mut i = 0;
@@ -669,5 +690,66 @@ mod tests {
             doc_comment_to_attr("/// Say \"hi\" \\ bye."),
             Some("#[doc = \" Say \\\"hi\\\" \\\\ bye.\"]".to_string())
         );
+        // T156: single-line block docs normalize with the verbatim inner
+        // body (leading/trailing space kept, matching `syn`).
+        assert_eq!(
+            doc_comment_to_attr("/** Block doc. */"),
+            Some("#[doc = \" Block doc. \"]".to_string())
+        );
+        assert_eq!(
+            doc_comment_to_attr("/**No spaces*/"),
+            Some("#[doc = \"No spaces\"]".to_string())
+        );
+        assert_eq!(
+            doc_comment_to_attr("/** Say \"hi\" \\ bye. */"),
+            Some("#[doc = \" Say \\\"hi\\\" \\\\ bye. \"]".to_string())
+        );
+        // Not doc comments: `/**/` (empty block), `/***...` (extra star),
+        // unclosed `/**` (multi-line opener), ordinary block/line comments.
+        assert_eq!(doc_comment_to_attr("/**/"), None);
+        assert_eq!(doc_comment_to_attr("/***/"), None);
+        assert_eq!(doc_comment_to_attr("/*** Doc. */"), None);
+        assert_eq!(doc_comment_to_attr("/** Unclosed."), None);
+        assert_eq!(doc_comment_to_attr("/* plain */"), None);
+        assert_eq!(doc_comment_to_attr("/* plain"), None);
+    }
+
+    #[test]
+    fn leading_block_comment_fails_fast_with_needle() {
+        // T156: a leading `/*` the helper cannot normalize fails with the
+        // targeted needle, not the misleading missing-`fn`-keyword error.
+        let err = parse_fn_pattern(
+            "/* plain */\nfn foo(...) { ... }",
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("block comments"), "unexpected: {err}");
+        let err = parse_fn_pattern(
+            "/** Multi\nline. */\nfn foo(...) { ... }",
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("block comments"), "unexpected: {err}");
+        // Single-line block doc normalizes and parses (T156).
+        let pat = parse_fn_pattern(
+            "/** Block doc. */\nfn foo(...) { ... }",
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
+        assert_eq!(pat.attrs_written, vec!["#[doc = \" Block doc. \"]"]);
     }
 }

@@ -1864,3 +1864,46 @@ fn explicit_doc_comment_mirror_applies_end_to_end() {
     let text = read(dir.path(), "src/lib.rs");
     assert_eq!(text, "/// Doc comment.\nfn bar() {}\n", "got: {text:?}");
 }
+
+#[test]
+fn item_slash_doc_and_block_doc_mirrors_apply_end_to_end() {
+    // T156: item `///` parity + single-line `/** */` normalization end to
+    // end; multi-line block docs fail safe with the needle (JSON pin).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "/// Doc.\nstruct Old {\n    x: i32,\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# attrs=explicit\n- /// Doc.\n- struct Old\n+ /// Doc.\n+ struct New\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("struct New {"), "got: {text:?}");
+    assert!(text.contains("/// Doc."), "got: {text:?}");
+
+    write(
+        &dir.path().join(""),
+        "src/block.rs",
+        "/** Block doc. */\nfn foo() {}\n",
+    );
+    let block = "diff --git src/block.rs\n@@ -1,2 @@ rule=r\n# attrs=explicit\n- /** Block doc. */\n- fn foo(...) {\n+ /** Block doc. */\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), block, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Multi-line block docs fail safe with the targeted needle.
+    write(&dir.path().join(""), "src/multi.rs", "fn foo() {}\n");
+    let multi = "diff --git src/multi.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- /** Multi\n- line. */\n- fn foo(...) {\n+ /** Multi\n+ line. */\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), multi, &["--format", "json"]);
+    assert!(!out.status.success(), "must fail");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("block comments"), "got: {stdout}");
+}

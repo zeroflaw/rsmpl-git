@@ -161,6 +161,28 @@ pub fn parse_use_prefix(
     if s.is_empty() {
         return Ok(None);
     }
+    // Mirrored attributes before a `use` shape are not supported in v1
+    // (docs are preserved by default) — fail fast instead of a silent
+    // no-match downstream (T156). Only a later `use`-led line triggers;
+    // `#[...]`-led fn/item shapes keep their fallthrough.
+    let non_empty: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
+    if non_empty.len() > 1
+        && {
+            let first = non_empty[0].trim_start();
+            first.starts_with("#[")
+                || first.starts_with("///")
+                || first.starts_with("//!")
+                || first.starts_with("/*")
+        }
+        && non_empty[1..].iter().any(|l| {
+            let t = skip_visibility(skip_ws(l));
+            eat_keyword(t, "use").is_some()
+        })
+    {
+        return err(
+            "mirrored attributes are not supported in `use`-path patterns in v1 (docs are preserved by default; drop the attribute lines or use an ordinary hunk)",
+        );
+    }
     let Some(after_use) = eat_keyword(s, "use") else {
         return Ok(None);
     };
@@ -337,6 +359,38 @@ mod tests {
                 "must reject: {bad}"
             );
         }
+    }
+
+    #[test]
+    fn mirrored_attributes_fail_fast_with_needle() {
+        // T156: leading attr-ish lines before a `use` shape fail fast
+        // instead of a silent no-match downstream; docs stay preserved
+        // by default.
+        for bad in [
+            "/// Doc.\nuse crate::old",
+            "//! Doc.\nuse crate::old",
+            "/** Doc. */\nuse crate::old",
+            "#[doc = \" Doc. \"]\nuse crate::old",
+            "/* plain */\nuse crate::old",
+            "#[inline]\npub use crate::old",
+        ] {
+            let err = parse_use_prefix(bad, &table()).unwrap_err();
+            assert!(
+                err.render().contains("mirrored attributes"),
+                "must needle: {bad} got: {}",
+                err.render()
+            );
+        }
+        // Non-use shapes with leading attrs keep their fallthrough.
+        assert!(parse_use_prefix("#[inline]\nfn foo", &table())
+            .unwrap()
+            .is_none());
+        assert!(parse_use_prefix("#[inline]\npub fn foo", &table())
+            .unwrap()
+            .is_none());
+        assert!(parse_use_prefix("/// Doc.\nstruct Old", &table())
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -1233,6 +1233,29 @@ mod tests {
     }
 
     #[test]
+    fn explicit_single_line_block_doc_mirror_applies() {
+        // T156: single-line `/** */` normalizes like `///`, so explicit
+        // block-doc mirroring on `let` applies byte-exact.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=explicit\n# stmt S\n# expr E\n- /** Block doc. */\n- let x = E;\n+ /** Block doc. */\n+ let y = E;\n";
+        let out = apply(
+            patch,
+            "fn f() {\n    /** Block doc. */\n    let x = 1;\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            out, "fn f() {\n    /** Block doc. */\n    let y = 1;\n}\n",
+            "got: {out:?}"
+        );
+        // Multi-line block docs fail fast with the needle (T156), not the
+        // wrong-policy "requires none" message.
+        let multi = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# attrs=explicit\n# stmt S\n# expr E\n- /** Multi\n- line. */\n- let x = E;\n+ /** Multi\n+ line. */\n+ let y = E;\n";
+        let err = apply(multi, "fn f() {\n    let x = 1;\n}\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("block comments"), "unexpected: {err}");
+    }
+
+    #[test]
     fn let_pattern_is_strict_about_annotations() {
         // `let x = E;` must not match `let x: i32 = 1;`.
         let src = "fn a() {\n    let x: i32 = 1;\n}\n";
