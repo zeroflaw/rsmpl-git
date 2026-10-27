@@ -1722,7 +1722,7 @@ cleanly, so a full rename composes follow-up hunks (all probe-verified):
 |---|---|
 | `x: Old`, `-> Old` | `- Old` / `+ New` with `# root=type` + `# allow=many` |
 | unit value `Old` | `- Old` / `+ New` with `# root=expr` |
-| `Old { a: 1 }` | `- Old { a: E }` / `+ New { a: E }` (`# expr E`) |
+| `Old { a: 1 }` (concrete `m::Old { a: 1 }` matches the same spelling with the qualifier written out) | `- Old { a: E }` / `+ New { a: E }` (`# expr E`; write the qualifier concretely — a placeholder qualifier such as `E::Old` never matches, use one concrete hunk per qualifier) |
 | `E::V(..)` | call-shape `- E::V(A)` / `+ E::W(A)` (`# expr A`) |
 | `use …::Old` | use-path prefix `- use crate::Old` / `+ use crate::New` (`# allow=many`, Section 14.9) |
 
