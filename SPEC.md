@@ -504,6 +504,19 @@ Invalid:
 + bar(E)
 ```
 
+Engine-verbatim misplaced-directive rejection (exit 2; reason + set
+suggestion; text omits the null `rule:`/`file:`/`range:` lines, JSON
+carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: directive line must appear immediately after hunk header, before body lines
+suggestion: move the `#` line above the first `-`/`+`/` ` line
+```
+
+The canonical fence lives in Section 25.3, which contrasts it with the
+empty-body rejection (rule-only envelope).
+
 ### 7.4 Directive lines are not source lines
 
 Directive lines are not part of the source file and are not counted against old or new hunk line counts.
@@ -567,6 +580,18 @@ The elided form defaults the new side to the old side and is
 RSmPL-only: ordinary hunks (no `#` directives) must keep both ranges,
 because Git semantics need them. An elided new side on an ordinary
 hunk is rejected with `RSMPL_PARSE_CONFLICT`.
+
+Engine-verbatim (exit 2; the reason echoes the offending header line;
+text omits the null `rule:`/`file:`/`range:` lines, JSON carries
+explicit nulls):
+
+```text
+RSMPL_PARSE_CONFLICT
+reason: ordinary hunk requires both -old,len +new,len ranges: @@ -1,1 @@
+suggestion: write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add a `#` directive line to make it an RSmPL hunk
+```
+
+The canonical fence lives in Section 25.2.
 
 Example:
 
@@ -652,6 +677,35 @@ Not preferred:
 ```
 
 The hunk header should stay close to normal Git style.
+
+Malformed hunk headers fail fast with `RSMPL_PARSE_CONFLICT` (exit 2).
+All three share one envelope: `old_range: line N` (the hunk-header line
+number, not a `start..start+len` range; null `rule:`/`file:`/
+`suggestion:` lines omitted from text, explicit nulls in JSON).
+Engine-verbatim (`{line}` / `{range}` echo the offending spelling):
+
+```text
+RSMPL_PARSE_CONFLICT
+old_range: line 2
+reason: invalid hunk header (missing closing @@): @@ -1,1 rule=r
+```
+
+```text
+RSMPL_PARSE_CONFLICT
+old_range: line 2
+reason: invalid hunk header ranges: @@ -1,1 +1,1 +1,1 @@ rule=r
+```
+
+```text
+RSMPL_PARSE_CONFLICT
+old_range: line 2
+reason: invalid hunk range: -foo
+```
+
+The bare `invalid hunk header: {line}` arm (no leading `@@`) is
+defensive-only: the header parser only runs on `@@`-led lines, so the
+CLI never emits it (T287/T290/T291 precedent — documented, not pinned).
+The canonical fences live in Section 25.2.
 
 ---
 
@@ -1111,6 +1165,10 @@ Example:
 - I
 ```
 
+A hunk whose directive block is followed by zero body lines is rejected
+with `RSMPL_PATTERN_CONFLICT` (rule-only envelope, verbatim reason +
+envelope in Section 25.3) — an empty pattern is an authoring typo, never
+a no-op.
 This may remove a 50-line function using one pattern line.
 
 ---
@@ -3543,6 +3601,57 @@ reason: file rename a/src/old.rs -> b/src/new.rs is not supported in v0.1
 suggestion: use `git mv` first, then one file section per path with matching a/b sides (see SPEC 6)
 ```
 
+Three further structural rejections share the `RSMPL_PARSE_CONFLICT`
+code (all exit 2). First, the RSmPL-only elision gate (Section 8):
+
+```text
+RSMPL_PARSE_CONFLICT
+reason: ordinary hunk requires both -old,len +new,len ranges: @@ -1,1 @@
+suggestion: write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add a `#` directive line to make it an RSmPL hunk
+```
+
+Text omits the null `rule:`/`file:`/`range:` lines (JSON explicit
+nulls); the reason echoes the offending header line.
+
+Second, the malformed-header family (Section 8 documents the same
+fences): `invalid hunk header (missing closing @@): {line}`,
+`invalid hunk header ranges: {line}`, `invalid hunk range: {range}` —
+each carries `old_range: line N` (the hunk-header line number) with null
+`rule:`/`file:`/`suggestion:` lines omitted from text (explicit nulls
+in JSON):
+
+```text
+RSMPL_PARSE_CONFLICT
+old_range: line 2
+reason: invalid hunk header (missing closing @@): @@ -1,1 rule=r
+```
+
+```text
+RSMPL_PARSE_CONFLICT
+old_range: line 2
+reason: invalid hunk header ranges: @@ -1,1 +1,1 +1,1 @@ rule=r
+```
+
+```text
+RSMPL_PARSE_CONFLICT
+old_range: line 2
+reason: invalid hunk range: -foo
+```
+
+The bare `invalid hunk header: {line}` arm is defensive-only
+(unreachable via the CLI — the header parser only runs on `@@`-led
+lines; T287/T290/T291 precedent, documented not pinned).
+
+Third, a hunk header outside any file section:
+
+```text
+RSMPL_PARSE_CONFLICT
+reason: hunk header outside file section
+```
+
+Bare reason (null `rule:`/`file:`/`range:`/`suggestion:` — omitted
+from text, explicit nulls in JSON).
+
 ### 25.3 Pattern conflict
 
 The RSmPL pattern failed to parse. Unknown directives (`# foo`,
@@ -3575,6 +3684,11 @@ or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
+
+Two further structural pattern rejections are fenced below: an RSmPL
+hunk with no pattern body lines (rule-only envelope), and a `#`
+directive line after body lines started (reason + set suggestion
+envelope, Section 7.3).
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -3623,6 +3737,27 @@ file: a.rs
 reason: unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)
 ```
 
+An RSmPL hunk whose directive block is followed by zero body lines is
+the empty-body rejection (exit 2; `rule:` + `reason:` only — text omits
+the null `file:`/`range:`/`suggestion:` lines, JSON carries `rule` set
+with the rest null):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+reason: RSmPL hunk has no pattern body lines
+```
+
+A `#` directive line after body lines started is the
+misplaced-directive rejection (exit 2; reason + set suggestion — text
+omits the null `rule:`/`file:`/`range:` lines, JSON carries explicit
+nulls; Section 7.3 documents the same fence):
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: directive line must appear immediately after hunk header, before body lines
+suggestion: move the `#` line above the first `-`/`+`/` ` line
+```
 Directive-parse failures are not uniform (all exit 2). A bare unknown
 directive (`# foo=bar`) carries no `rule:`/`file:`/`range:` lines (null
 fields are omitted from text output; the JSON envelope carries explicit
