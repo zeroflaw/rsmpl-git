@@ -600,7 +600,7 @@ Example:
 @@ -80,20 @@ rule=rename_calls
 ```
 
-The rule name is used for diagnostics, captures, dependency tracking, and review display. It is RECOMMENDED for multi-hunk patches but OPTIONAL for single-hunk patches; a hunk without `rule=` is valid and diagnostics show `<unnamed>` for it.
+The rule name is used for diagnostics, captures, dependency tracking, and review display. It is RECOMMENDED for multi-hunk patches but OPTIONAL for single-hunk patches; a hunk without `rule=` is valid and diagnostics show `<unnamed>` for it. Names are per-hunk labels and need not be unique: reports list one entry per hunk in document order, so same-named hunks are distinguished by file and range.
 
 ### 8.3 Header tag syntax
 
@@ -4175,11 +4175,15 @@ prints one JSON object to stdout:
   hunk order within a section), so a multi-hunk patch reads
   top-to-bottom like the patch itself — including move cut/paste
   hunks, which the engine evaluates in a different pass but
-  reports in document position.
+  reports in document position. `rule=` names need not be unique:
+  each hunk reports its own entry, and same-named hunks are told apart
+  by `file`/`spans`.
 - `files` follows patch file-section order.
 - `--output <path>` writes the full diff file in both modes, even when
-  the reported `diff` is truncated or omitted — but writes nothing when
-  the lowering is empty (no changes, no file). It is written before
+  the reported `diff` is truncated or omitted — with an empty lowering it
+  instead removes a pre-existing file at that path and otherwise creates
+  nothing, so the path is present iff the lowering is non-empty (never a
+  stale diff from a previous run). It is written before
   `--check` runs, so a failing `--check` still leaves the full appliable
   diff for debugging (see D.2.3). Missing parent directories are created
   automatically; unwritable targets stay `RSMPL_IO_CONFLICT` (25.8).
@@ -4323,7 +4327,10 @@ Rules:
    `(no changes)` to stdout; JSON returns the report silently
    (`"diff": ""`, `"diff_truncated": false`, `"files": []`,
    `"check": true` when `--check` was passed, else `false`).
-  `--output` writes nothing when the lowering is empty.
+   `--output` mirrors the current lowering: a non-empty lowering writes
+   the full diff, while an empty lowering removes a pre-existing file at
+   that path and otherwise creates nothing — the path never holds a stale
+   diff from a previous run. An unremovable file is `RSMPL_IO_CONFLICT`.
 - `--output` is written before `--check` runs, so a failing `--check`
   still leaves the full appliable diff on disk for debugging.
 - A truncated report (`--diff-max-lines N` cut lines off) is

@@ -263,25 +263,45 @@ fn run() -> Result<(), CliError> {
     // before `--check` runs, so a failing `--check` still leaves the full
     // appliable diff on disk (SPEC D.2.3). An empty lowering writes nothing:
     // no changes means no file (SPEC D.2.3).
-    if !lowered.trim().is_empty() {
+    if lowered.trim().is_empty() {
+        // Mirror invariant (SPEC D.2.3): `--output` reflects the current
+        // lowering, so an empty lowering removes a stale file left by a
+        // previous run instead of leaving a phantom diff behind. No
+        // pre-existing file stays the no-op success. Removal is silent:
+        // `(no changes)` / `files: []` already signal emptiness.
+        // An unremovable file fails loud (SPEC 2.6), like write errors.
         if let Some(out) = &cli.output {
-            if let Some(parent) = out.parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        CliError::io_file(
-                            format!("cannot write {}: {e}", out.display()),
-                            &out.to_string_lossy(),
-                        )
-                    })?;
+            match std::fs::remove_file(out) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(CliError::io_file(
+                        format!(
+                            "cannot remove stale {} (empty lowering): {e}",
+                            out.display()
+                        ),
+                        &out.to_string_lossy(),
+                    ));
                 }
             }
-            std::fs::write(out, &lowered).map_err(|e| {
-                CliError::io_file(
-                    format!("cannot write {}: {e}", out.display()),
-                    &out.to_string_lossy(),
-                )
-            })?;
         }
+    } else if let Some(out) = &cli.output {
+        if let Some(parent) = out.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    CliError::io_file(
+                        format!("cannot write {}: {e}", out.display()),
+                        &out.to_string_lossy(),
+                    )
+                })?;
+            }
+        }
+        std::fs::write(out, &lowered).map_err(|e| {
+            CliError::io_file(
+                format!("cannot write {}: {e}", out.display()),
+                &out.to_string_lossy(),
+            )
+        })?;
     }
 
     if cli.format == Format::Json {

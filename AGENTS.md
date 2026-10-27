@@ -140,14 +140,13 @@ rsmpl-git --file change.rsmpl --output full.patch
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 `--file` names a patch file (avoids quoting for large patches); `--patch`
 passes it inline (archived to `<repo>/.history/{id}.rsmpl`, last 128 kept,
-path on stderr + JSON `history`). JSON prints
-`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check, history}` (SPEC D.2);
-`version` is the report schema (currently `1`); `check` is boolean (`true` =
-`--check` ran clean, `false` = skipped); each `rules` entry carries per-match
-`spans` (`[[start,end], …]`, original-source 1-based lines, one per emitted edit — `len == matches` except evolution delete+insert pairs);
+path on stderr + JSON `history`). JSON prints `{version, rules, files, diff,`
+`diff_truncated, diff_lines, diff_shown, check, history}` (SPEC D.2);
+`version` is the report schema (currently `1`); `check` is boolean (`true` = `--check` ran clean, `false` = skipped); each `rules` entry carries per-match `spans` (`[[start,end], …]`, original-source 1-based lines, one per emitted edit — `len == matches` except evolution delete+insert pairs);
 JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes
-the full diff before `--check` runs but nothing when the lowering is empty;
+the full diff before `--check` runs; on an empty lowering it removes a
+stale file at that path, else creates nothing (mirror, SPEC D.2.3);
 truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
 `--diff-max-lines N` (`0` omits) bounds only the reported diff while
 `--check`/`--output`/apply use the full lowering (SPEC D.2.1); the lowering

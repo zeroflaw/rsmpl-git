@@ -182,6 +182,31 @@ fn empty_lowering_writes_no_output_file() {
 }
 
 #[test]
+fn empty_lowering_removes_preexisting_output_file() {
+    // D.2.3 (T258 mirror invariant): `--output` reflects the current
+    // lowering, so an empty lowering removes a stale file left by a
+    // previous run instead of leaving a phantom diff behind.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    let saved = dir.path().join("stale.patch");
+    fs::write(&saved, "stale diff from a previous run\n").unwrap();
+    let out = run_stdin(
+        dir.path(),
+        noop_patch(),
+        &["--check", "--output", saved.to_str().unwrap()],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !saved.exists(),
+        "empty lowering must remove a pre-existing output file"
+    );
+}
+
+#[test]
 fn empty_text_check_prints_no_changes() {
     // D.2.3 (T76): text `--check` on an empty lowering prints
     // `(no changes)` to stdout and exits clean without touching git.
