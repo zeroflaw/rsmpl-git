@@ -25,6 +25,7 @@ loop (read → author → check → apply).
 ```sh
 cargo install --path bin/applyrs
 cargo install --path bin/gitrs
+cargo install --path bin/diffrs
 # or: cargo build --release -p gitrs -p applyrs -p diffrs
 ```
 
