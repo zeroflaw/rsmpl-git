@@ -45,7 +45,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
 | `# scope=file` | whole-file search; dummy `@@ -1,1 @@`, no discovery |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable |
 | `# item I` + `# bind=N` / `# use=N` | cut / paste a moved item |
-| `# attrs=preserve` | default: ignore + preserve attrs/doc comments |
+| `# attrs=preserve` | default: ignore + preserve attrs/doc comments; write `#[...]` on its own diff line (single-line `#[a] let x = E;` never matches) |
 | `# root=item\|expr\|stmt\|type` | force parse context |
 | `# fallback=syntax` | syntactic match when `# symbol` can't resolve |
 | `# returns=none` | minus-side requires no return type (fn only) |
