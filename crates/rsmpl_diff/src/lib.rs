@@ -4,7 +4,7 @@
 //! The pub API boundary the `diffrs` binary and T341 tests pin:
 //! `compress` collects the native diff and returns a validated
 //! RSmPL-Git patch (v1: fn/item renames + slot-sweep renames +
-//! call-sweep fan-out compressed inside `rsmpl_diff_infer`, rest
+//! method-to-function + method-to-method + call-sweep fan-out compressed inside `rsmpl_diff_infer`, rest
 //! ordinary passthrough).
 
 use std::path::Path;

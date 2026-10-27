@@ -19,6 +19,10 @@ Promote to TASKS.md when they earn it; keep this list short.
   empty-hunk diagnostic) would save debugging time. Not filed —
   needs a CLI-minimality weigh-up first (T338 found no clutter;
   any new flag/diagnostic must clear the same bar).
+- Large-patch sharp edge (not a defect): a ~1 MB `diffrs` conversion
+  exceeds the shell's inline-arg limit (`Argument list too long` via
+  `--patch "$(…)"`) — large patches must go through `--file`
+  (already the documented path). Not filed — no tool change.
 - diffrs history-per-commit recipe (`checkout c` + `diffrs c~1` as
   regression-case generator, converting this repo's own commits).
   Already backlog as T346.

@@ -5743,9 +5743,15 @@ on collision).
   whose rest token-equals the method args, with one shared method
   ident, one shared function callee, and uniform minus-arity →
   one `# allow=many` hunk (`# expr Receiver` + `# expr E0…`).
+- Method-to-method sweep: N ≥ 2 `-`/`+` pairs, each a method call
+  (`syn`-parsed, no turbofish either side, non-`&` receivers) →
+  a method call whose receiver and args token-equal per site, with
+  one shared old-method ident, one shared new-method ident
+  (`old != new`), and uniform arity → one `# allow=many` hunk
+  (`# expr Receiver` + `# expr E0…`).
 - Everything else (multi-line edits, pure deletions/additions,
-  non-`.rs` files, unbalanced hunks, method→method renames,
-  turbofish/`&`-receiver sites, paths, macro interiors) stays
+  non-`.rs` files, unbalanced hunks, turbofish/`&`-receiver sites,
+  paths, macro interiors) stays
   ordinary-hunk passthrough.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
