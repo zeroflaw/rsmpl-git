@@ -393,8 +393,8 @@ The file contains:
 
 The `---` / `+++` / `index` lines above are optional file metadata
 (`git_metadata*` in the grammar); the parser only requires the
-`diff --git` line before the hunks. An empty patch (zero file
-sections) is rejected with `RSMPL_PARSE_CONFLICT`: an empty patch
+`diff --git` line before the hunks. An empty patch (zero file sections) is
+rejected with `RSMPL_PARSE_CONFLICT` (verbatim fence in Section 25.2): an empty patch
 input (stdin, `--file`, or `--patch`) is almost certainly an authoring typo,
 and silent success would violate Section 2.6. (A non-empty patch
 whose hunks lower to no changes still succeeds with an empty
@@ -889,13 +889,15 @@ invalid repeat value `bogus` (write bare `# repeat`): # repeat=bogus
 invalid symbol directive (want `# symbol Name=path`): # symbol JustName
 metavariable directive missing name: # expr
 invalid name `1bad` (must start with letter or _)
+invalid name `foo-bar` (only alphanumeric + _ allowed)
 symbol path must not be empty: # symbol Old=
 empty metavariable/capture name
+empty directive: #
 ```
 
-The last four are malformed declarations, not values: a `=`-less `# symbol`
-line, a nameless `# expr`-family line, a bad name, and an empty path or
-capture name. Engine-verbatim (all exit 2; all parse-time, before any
+The last six are malformed declarations or empty lines, not values: a `=`-less `# symbol`
+line, a nameless `# expr`-family line, two bad-name spellings, an empty path or
+capture name, and a lone `#`. Engine-verbatim (all exit 2; all parse-time, before any
 `rule:`/`file:` is attached — text carries the bare `reason:` line only;
 JSON carries explicit `rule: null` / `file: null` / `range: null` /
 `suggestion: null`):
@@ -912,6 +914,11 @@ reason: invalid name `1bad` (must start with letter or _)
 
 ```text
 RSMPL_PATTERN_CONFLICT
+reason: invalid name `foo-bar` (only alphanumeric + _ allowed)
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
 reason: symbol path must not be empty: # symbol Old=
 ```
 
@@ -920,12 +927,20 @@ RSMPL_PATTERN_CONFLICT
 reason: empty metavariable/capture name
 ```
 
+```text
+RSMPL_PATTERN_CONFLICT
+reason: empty directive: #
+```
+
 `{line}` echoes the offending `#` directive line (`# expr` bare, `# symbol
-Old=` with its empty path); `` `1bad` `` is the offending name (backticked).
-The first fires when the directive carries no name at all; the second when
-the name fails validation (must start with a letter or `_`); the third when
-a `# symbol Name=` line carries no path; the fourth only for empty
-`# bind=`/`# use=` names. Note the engine's own wording —
+Old=` with its empty path, lone `#` verbatim); backticked names echo the
+offending spelling. The first fires when the directive carries no name at
+all; the next two split name validation — a leading digit fails the
+start-char gate (`` `1bad` ``), other charset violations (`` `foo-bar` ``)
+fail the alphanumeric gate; the fourth fires when a `# symbol Name=` line
+carries no path; the fifth only for empty `# bind=`/`# use=` names; the
+sixth fires on a lone `#` line (trailing whitespace ignored). Note the
+engine's own wording —
 `allow`/`attrs`/`optional`/`repeat` say "value", the rest don't; only `allow`
 carries `(want one|many)`, only `returns` carries `(only `none` supported)`,
 only `repeat` carries `(write bare `# repeat`)` plus the echoed offending
@@ -3249,7 +3264,7 @@ In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST o
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
-The four shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fence in Section 25.6, which sets `suggestion:`):
+The five shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fence in Section 25.6, which sets `suggestion:`):
 
 ```text
 RSMPL_CAPTURE_CONFLICT
@@ -3279,7 +3294,15 @@ file: src/lib.rs
 reason: duplicate `# bind=Helper` (scalar captures must be unique)
 ```
 
-In the last fence `Helper` echoes the offending `# bind=` name.
+```text
+RSMPL_CAPTURE_CONFLICT
+rule: r
+file: src/lib.rs
+reason: hunk both binds and uses `H` (self-cycle)
+```
+
+In the duplicate fence `Helper` echoes the offending `# bind=` name; in the
+self-cycle fence `` `H` `` echoes the hunk's own `# bind=`/`# use=` name.
 
 
 Unlike v0.4, captures are not limited to later hunks in document order. Implementations must support **forward capture references** within the same patch file. A `# use=Helper` hunk may appear before the hunk that declares `# bind=Helper`.
@@ -3805,15 +3828,39 @@ The bare `invalid hunk header: {line}` arm is defensive-only
 (unreachable via the CLI — the header parser only runs on `@@`-led
 lines; T287/T290/T291 precedent, documented not pinned).
 
-Third, a hunk header outside any file section:
+Third, lines outside any file section — a hunk header, file metadata,
+or anything else:
 
 ```text
 RSMPL_PARSE_CONFLICT
 reason: hunk header outside file section
 ```
 
-Bare reason (null `rule:`/`file:`/`range:`/`suggestion:` — omitted
-from text, explicit nulls in JSON).
+```text
+RSMPL_PARSE_CONFLICT
+reason: file metadata outside file section: --- a/src/lib.rs
+```
+
+```text
+RSMPL_PARSE_CONFLICT
+reason: unexpected line outside file section: hello
+```
+
+All three carry the bare reason only (null `rule:`/`file:`/`range:`/
+`suggestion:` — omitted from text, explicit nulls in JSON);
+`{line}` echoes the offending line verbatim.
+
+Fourth, an empty patch (zero file sections):
+
+```text
+RSMPL_PARSE_CONFLICT
+reason: empty patch: no `diff --git` file sections
+suggestion: provide at least one `diff --git a/.. b/..` file section with a hunk (see SPEC 6 minimal recipe); check for an empty patch input (stdin, --file, or --patch)
+```
+
+Bare-plus-suggestion (null `rule:`/`file:`/`range:` omitted from text,
+explicit nulls in JSON) — the same envelope as the Section 7.3
+misplaced-directive fence; the prose contract lives in Section 6.
 
 ### 25.3 Pattern conflict
 
@@ -3849,6 +3896,7 @@ invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (three engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons) or structural fn-pattern misuse (eleven engine-verbatim reasons, both Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
 The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. It gains three further members: the Section 9.6 declaration-name fences (`missing name`, `invalid name`, `empty path`, `empty capture`), the Section 16 standalone-`...` fence, and the Section 17.8 repeat-both fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
+It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence.
 
 Two further structural pattern rejections are fenced below: an RSmPL
 hunk with no pattern body lines (rule-only envelope), and a `#`
@@ -4089,6 +4137,7 @@ under distinct names instead (Section 20.3). The failure carries `rule:`/`file:`
 like the shape fences in Section 20.3 (text omits the null `range:`/`suggestion:` lines,
 JSON carries explicit nulls); suggestion is null — the missing-capture fence
 above is the only 25.6 entry with a set suggestion.
+A third needs no separate hunk either: one hunk carrying both `# bind=H` and `# use=H` fails with the Section 20.3 self-cycle fence (same `rule:`/`file:` envelope, null suggestion).
 
 ### 25.7 Git hunk conflict
 
