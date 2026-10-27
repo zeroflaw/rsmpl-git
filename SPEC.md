@@ -2352,7 +2352,7 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 >
 > Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >
-> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, and `?`. General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, and `_` (which matches any type). Anything else (blocks, `if`/`match`/loops/closures, `let-else` targets, turbofish placeholders like `P::<...>`, `...` wildcards in these shapes) rejects the candidate rather than guessing. Lifetimes are wildcards in v1 and are not compared. An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
+> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, and `?`. General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, and `_` (which matches any type). Anything else (blocks, `if`/`match`/loops/closures, `let-else` targets, parenthesized path arguments such as `Fn(A) -> B` with placeholders, `...` wildcards in these shapes) rejects the candidate rather than guessing. Placeholder path segments may carry generic arguments (`P<u8>`, `P::<T>`) and method-call turbofish compares structurally (`collect::<T>` binds `T`); lifetimes are wildcards in v1 and are not compared. A call shape must consume the whole pattern: `foo(E) + 1` and `E.foo() + 1` route to the general matcher, not to a `foo(E)`/`E.foo()` call prefix (only a trailing `;` keeps call routing, so `foo(E);` stays a call). An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
 
 Example:
 
@@ -2460,7 +2460,10 @@ as a `let(...)` call (likewise `let [E, x]` and `let x = foo(E)`).
 `let (E, x) = E;` at gate C8 (embedded metavariables), not with a bogus
 `no match found` from the call matcher. Callees containing whitespace or
 a statement keyword (`if`/`match`/`return`/...) likewise fall through to
-the general matcher.
+the general matcher. A call shape must additionally consume the whole
+pattern (balanced parens, then only whitespace or a lone `;`): `foo(E) + 1`
+and `E.foo() + 1` route to the general matcher rather than a `foo(E)` /
+`E.foo()` call prefix, while `foo(E);` keeps call routing.
 
 #### Match-time silent rejections (surface as `no match found`)
 
@@ -2468,7 +2471,7 @@ the general matcher.
 |---|---|---|---|
 | R1 | block, `if`, `match`, loops, or closures as the general expression | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`; anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
 | R2 | `let-else` in the *target* file | v1 never matches `let-else` targets (`diverge.is_some()` rejects the candidate) | an ordinary Git hunk |
-| R3 | turbofish placeholder (`P::<...>` — a placeholder path segment carrying generic arguments) | placeholder segments with arguments never match (concrete turbofish such as `::<u8>` compares by rendered text and works) | a concrete turbofish, or a whole-expression `# expr E` placeholder |
+| R3 | (closed by T144) placeholder path segments with generic arguments now match structurally (`P<u8>`, `P::<T>` bind the segment ident and compare args via `match_generic_arg`); method-call turbofish compares structurally too (lifetimes wildcard, `_` matches any type) | parenthesized path arguments (`Fn(A) -> B` shapes with placeholders) still reject via rendered-text comparison | — |
 | R4 | `P @ ...` subpattern bindings in `let` | `subpat.is_some()` rejects the candidate | a whole-pattern `# pat P` placeholder or a concrete pattern |
 | R5 | unsupported type variants (`impl Trait`, `dyn Trait`, fn-pointer types, macro types, …) | supported: paths with generic arguments, references, slices, arrays, tuples, parentheses, `_` (matches any type), `!`; anything else rejects the candidate | a concrete type or a whole-type `# type T` placeholder |
 

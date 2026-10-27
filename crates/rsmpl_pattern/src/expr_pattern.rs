@@ -214,6 +214,57 @@ fn is_statement_keyword(callee: &str) -> bool {
     )
 }
 
+/// Byte index of the `)` matching the `(` at `open`, skipping `"..."`
+/// string literals (escape-aware). Returns `None` when unbalanced.
+///
+/// The call router must only claim a call shape when the call consumes the
+/// whole pattern (modulo a trailing `;`): without this, `foo(E) + 1` and
+/// `E.foo() + 1` classify as a `foo(E)`/`E.foo()` call prefix and the
+/// trailing `+ 1` is silently swallowed — the same router-precision family
+/// as the T16a `let(...)` trap. Char literals containing parens (e.g.
+/// `foo(')')`) are a known v1 limitation: the scan closes early and the
+/// shape falls through to `Raw` (fails safe, never misclassifies).
+fn balanced_close(s: &str, open: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.get(open) != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut i = open;
+    let mut in_str = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+        } else if b == b'"' {
+            in_str = true;
+        } else if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// True when `rest` (text after a call's closing paren) is empty or a lone
+/// `;`: `foo(E)` and `foo(E);` are calls, `foo(E) + 1` is not.
+fn is_call_trailer(rest: &str) -> bool {
+    let t = rest.trim();
+    t.is_empty() || t == ";"
+}
+
 /// High-level classify used by `pattern.rs`.
 pub fn classify_call_pattern(
     minus_raw: &str,
@@ -251,43 +302,48 @@ pub fn classify_call_pattern(
     }
     // Method call `recv.method(args)`. A receiver carrying `=`/`;` (e.g.
     // `let x = a.b(c)`, already bypassed above for `let`) or a method
-    // containing whitespace is not a method call; fall through.
+    // containing whitespace is not a method call; fall through. The call
+    // must consume the whole pattern (T144 router-precision fix): trailing
+    // text such as `+ 1` falls through to the general matcher.
     if let Some(dot) = sub.rfind('.') {
-        if let Some(paren) = sub[dot..].find('(') {
-            let recv = sub[..dot].trim().to_string();
-            let method = sub[dot + 1..dot + paren].trim().to_string();
-            let recv_ok = !recv.is_empty() && !recv.contains('=') && !recv.contains(';');
-            let method_ok = !method.is_empty() && !method.contains(char::is_whitespace);
-            if recv_ok && method_ok {
-                let args_inner = sub[dot + paren + 1..]
-                    .rsplit_once(')')
-                    .map(|(a, _)| a)
-                    .unwrap_or("");
-                let args = classify_args(args_inner, table);
-                return Ok((
-                    ExprPatternKind::MethodCall {
-                        receiver: recv,
-                        method,
-                        args,
-                    },
-                    maps,
-                    lit_strs,
-                ));
+        if let Some(paren_rel) = sub[dot..].find('(') {
+            let open = dot + paren_rel;
+            if let Some(close) = balanced_close(&sub, open) {
+                if is_call_trailer(&sub[close + 1..]) {
+                    let recv = sub[..dot].trim().to_string();
+                    let method = sub[dot + 1..open].trim().to_string();
+                    let recv_ok = !recv.is_empty() && !recv.contains('=') && !recv.contains(';');
+                    let method_ok = !method.is_empty() && !method.contains(char::is_whitespace);
+                    if recv_ok && method_ok {
+                        let args = classify_args(&sub[open + 1..close], table);
+                        return Ok((
+                            ExprPatternKind::MethodCall {
+                                receiver: recv,
+                                method,
+                                args,
+                            },
+                            maps,
+                            lit_strs,
+                        ));
+                    }
+                }
             }
         }
     }
     // Plain call `callee(args)`. A callee containing whitespace or a Rust
     // statement keyword (`let`/`if`/`match`/...) is not a call callee;
-    // return `Raw` so the caller can try the general matcher.
+    // return `Raw` so the caller can try the general matcher. Like method
+    // calls, the call must consume the whole pattern (trailing `;` kept so
+    // `foo(E);` still routes to the call matcher).
     if let Some(paren) = sub.find('(') {
-        let callee = sub[..paren].trim().to_string();
-        if !callee.contains(char::is_whitespace) && !is_statement_keyword(&callee) {
-            let args_inner = sub[paren + 1..]
-                .rsplit_once(')')
-                .map(|(a, _)| a)
-                .unwrap_or("");
-            let args = classify_args(args_inner, table);
-            return Ok((ExprPatternKind::Call { callee, args }, maps, lit_strs));
+        if let Some(close) = balanced_close(&sub, paren) {
+            if is_call_trailer(&sub[close + 1..]) {
+                let callee = sub[..paren].trim().to_string();
+                if !callee.contains(char::is_whitespace) && !is_statement_keyword(&callee) {
+                    let args = classify_args(&sub[paren + 1..close], table);
+                    return Ok((ExprPatternKind::Call { callee, args }, maps, lit_strs));
+                }
+            }
         }
     }
     Ok((
@@ -361,6 +417,40 @@ mod tests {
             let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
             assert!(
                 matches!(kind, ExprPatternKind::Raw { .. }),
+                "{text:?} got: {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trailing_text_falls_through_to_general() {
+        // T144 router-precision fix (same family as T16a): a call shape
+        // must consume the whole pattern. `foo(E) + 1` is a binary general
+        // expression, not a `foo(E)` call prefix; likewise `E.foo() + 1`
+        // is not a bare `E.foo()` method call. `Raw` lets `pattern.rs` try
+        // the general matcher. (Residual: `a.b(c) + d.e(f)` still claims
+        // the last-dot method call and fails safe with no match — split
+        // multi-call binaries need an explicit general shape; see TASKS.)
+        for text in ["foo(E) + 1", "__RSMPL_E.foo() + 1", "foo(E) + foo(E)"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(
+                matches!(kind, ExprPatternKind::Raw { .. }),
+                "{text:?} got: {kind:?}"
+            );
+        }
+        // Genuine calls (incl. trailing `;` and nested args) are untouched.
+        for text in [
+            "foo(E)",
+            "foo(E);",
+            "Receiver.old_method(Arg)",
+            "__RSMPL_E.foo();",
+            "foo(a(b))",
+            "foo(__RSMPL_E, x)",
+        ] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(
+                matches!(kind, ExprPatternKind::Call { .. })
+                    || matches!(kind, ExprPatternKind::MethodCall { .. }),
                 "{text:?} got: {kind:?}"
             );
         }

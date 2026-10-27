@@ -180,10 +180,18 @@ fn match_path(pat: &syn::Path, tgt: &syn::Path, cx: &mut MatchCx) -> bool {
     for (ps, ts) in pat.segments.iter().zip(tgt.segments.iter()) {
         let id = ps.ident.to_string();
         if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
-            if !matches!(ps.arguments, syn::PathArguments::None) {
-                return false; // `P::<...>` shapes are not supported in v1
-            }
             if !cx.bind(&name, &ts.ident.to_string()) {
+                return false;
+            }
+            // Placeholder segments may carry generic arguments (T144):
+            // `P<u8>`, `P::<T>` match structurally via `match_path_args`.
+            // Bare `P` (no args) keeps the wildcard behavior below since
+            // `match_path_args(None, <anything>)` only accepts `None`.
+            // To preserve the historical bare-`P` wildcard (matches any
+            // target args), skip the args check when the pattern has none.
+            if !matches!(ps.arguments, syn::PathArguments::None)
+                && !match_path_args(&ps.arguments, &ts.arguments, cx)
+            {
                 return false;
             }
             continue;
@@ -235,6 +243,35 @@ fn match_generic_arg(
         }
         (syn::GenericArgument::Const(a), syn::GenericArgument::Const(b)) => match_expr(a, b, cx),
         _ => render_eq(pat, tgt),
+    }
+}
+
+/// Structural method-call turbofish comparison (T144): `None/None`
+/// matches, `Some/Some` compares `::` presence + each generic argument
+/// via `match_generic_arg` (so `collect::<T>` binds `T`). Anything else
+/// (including `None` vs `Some`) fails.
+fn match_turbofish(
+    pat: &Option<syn::AngleBracketedGenericArguments>,
+    tgt: &Option<syn::AngleBracketedGenericArguments>,
+    cx: &mut MatchCx,
+) -> bool {
+    match (pat, tgt) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            if a.colon2_token.is_some() != b.colon2_token.is_some() {
+                return false;
+            }
+            if a.args.len() != b.args.len() {
+                return false;
+            }
+            for (pa, ta) in a.args.iter().zip(b.args.iter()) {
+                if !match_generic_arg(pa, ta, cx) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
     }
 }
 
@@ -292,7 +329,7 @@ fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> bool {
                     .all(|(x, y)| match_expr(x, y, cx))
         }
         (syn::Expr::MethodCall(a), syn::Expr::MethodCall(b)) => {
-            render(&a.turbofish) == render(&b.turbofish)
+            match_turbofish(&a.turbofish, &b.turbofish, cx)
                 && match_expr(&a.receiver, &b.receiver, cx)
                 && method_name_matches(&a.method, &b.method, cx)
                 && a.args.len() == b.args.len()
@@ -1265,14 +1302,6 @@ mod tests {
                 reason: "no match found",
                 suggestion: NO_MATCH,
             },
-            // R3: turbofish placeholder (placeholder path segment with args).
-            Row {
-                patch: "@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type P\n- P<u8>\n+ Vec<u8>\n",
-                file: "fn a(x: Vec<u8>) {}\n",
-                code: "RSMPL_MATCH_CONFLICT",
-                reason: "no match found",
-                suggestion: NO_MATCH,
-            },
             // R4: `P @ ...` subpattern binding in `let`.
             Row {
                 patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# pat P\n# expr E\n- let P @ E = E;\n+ let P @ E = E;\n",
@@ -1325,8 +1354,8 @@ mod tests {
         ];
         assert_eq!(
             rows.len(),
-            13,
-            "SPEC 18.6 lists R1-R5 + C10-C13 runtime rows"
+            12,
+            "SPEC 18.6 lists R1,R2,R4,R5 + C10-C13 runtime rows (R3 closed by T144)"
         );
         for row in rows {
             let patch = format!("{head}{}", row.patch);
@@ -1352,12 +1381,53 @@ mod tests {
 
     #[test]
     fn concrete_generic_args_match_structurally() {
-        // R3 counterpart (SPEC 18.6): concrete generic arguments compare
-        // structurally — only placeholder segments carrying arguments are
-        // rejected. A fully concrete `Vec<u8>` rewrite must succeed.
+        // Concrete generic arguments compare structurally (SPEC 18.6).
+        // A fully concrete `Vec<u8>` rewrite must succeed.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n- Vec<u8>\n+ Box<u8>\n";
         let out = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap();
         assert!(out.contains("Box<u8>"), "got: {out}");
         assert!(!out.contains("Vec<u8>"), "got: {out}");
+    }
+
+    #[test]
+    fn placeholder_segment_with_args_matches_structurally() {
+        // T144 (closes SPEC 18.6 R3): `P<u8>` binds `P=Vec`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type P\n- P<u8>\n+ Box<u8>\n";
+        let out = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap();
+        assert!(out.contains("Box<u8>"), "got: {out}");
+    }
+
+    #[test]
+    fn placeholder_generic_arg_matches_concrete() {
+        // T144: `Vec<T>` with `# type T` matches `Vec<u8>`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type T\n- Vec<T>\n+ Box<T>\n";
+        let out = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap();
+        assert!(out.contains("Box<u8>"), "got: {out}");
+    }
+
+    #[test]
+    fn method_turbofish_placeholder_matches() {
+        // T144: `collect::<T>` binds `T=u8` structurally. The binary
+        // wrapper keeps the shape in the general matcher (a bare
+        // `E.collect::<T>()` routes to the call matcher, which stays
+        // text-based in v0.1).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# expr E\n# type T\n- E.collect::<T>() + 1\n+ E.collect::<Vec<T>>() + 1\n";
+        let file =
+            "fn a(v: Vec<u8>) {\n    let x = v.iter().collect::<u8>() + 1;\n    let _ = x;\n}\n";
+        let out = apply(patch, file).unwrap();
+        assert!(out.contains("collect::<Vec<u8>>() + 1"), "got: {out}");
+    }
+
+    #[test]
+    fn turbofish_mismatch_still_rejects() {
+        // Arity / `::` mismatches still fail safe (no guessing).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type T\n- Vec<T, T>\n+ Box<T>\n";
+        let err = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Parenthesized path args still reject via rendered-text comparison
+        // (SPEC 18.6 R3 exception): `P(T)` never equals angle-bracketed `Vec<u8>`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type P\n# type T\n- P(T)\n+ Box<T>\n";
+        let err = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 }
