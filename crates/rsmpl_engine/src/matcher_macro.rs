@@ -281,7 +281,6 @@ pub fn apply_macro_hunk(
             &minus_name_pat,
             &cand.path_text,
             &reverse_map,
-            &compiled.table.symbols,
             &mut bindings,
         ) {
             continue;
@@ -384,12 +383,12 @@ fn match_macro_name(
     pattern: &str,
     target: &str,
     reverse_map: &HashMap<String, String>,
-    symbols: &HashMap<String, String>,
     bindings: &mut HashMap<String, String>,
 ) -> bool {
     // The minus pattern here is raw hunk text, so a declared macro-name
     // metavariable appears under its declared spelling (`M`), not the
     // `__RSMPL_` placeholder used in substituted classifier output.
+    // (`# symbol` is call-shape-only per C14, so no symbol arms here.)
     let declared = reverse_map.get(pattern).cloned().or_else(|| {
         let bare = pattern.trim_start_matches('$');
         reverse_map
@@ -398,13 +397,6 @@ fn match_macro_name(
             .then(|| bare.to_string())
     });
     if let Some(orig) = declared {
-        if let Some(sym_path) = symbols.get(&orig) {
-            let want_last = sym_path.rsplit("::").next().unwrap_or(sym_path);
-            let got_last = target.rsplit("::").next().unwrap_or(target);
-            if got_last != want_last {
-                return false;
-            }
-        }
         let name = orig.trim_start_matches('$').to_string();
         match bindings.get(&name) {
             Some(prev) => prev == target,
@@ -413,11 +405,6 @@ fn match_macro_name(
                 true
             }
         }
-    } else if let Some(sym_path) = symbols.get(pattern) {
-        // Raw (unsubstituted) symbol name in the pattern.
-        let want_last = sym_path.rsplit("::").next().unwrap_or(sym_path);
-        let got_last = target.rsplit("::").next().unwrap_or(target);
-        got_last == want_last
     } else {
         pattern == target
     }

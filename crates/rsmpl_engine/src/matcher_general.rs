@@ -707,28 +707,6 @@ pub fn apply_general_hunk(
     };
     let rule = hunk.rule_name();
 
-    // Symbol gate (SPEC 19.3, same as call matching): without a semantic
-    // environment, fail unless `# fallback=syntax` is set.
-    let fallback_syntax = hunk
-        .directives
-        .iter()
-        .any(|d| matches!(d, rsmpl_patch::Directive::FallbackSyntax(true)));
-    if !compiled.table.symbols.is_empty() && !fallback_syntax {
-        let name = compiled
-            .table
-            .symbols
-            .keys()
-            .next()
-            .cloned()
-            .unwrap_or_default();
-        return Err(StructuredError::new(
-            ErrorCode::SymbolConflict,
-            format!("symbol `{name}` could not be resolved (no semantic environment in v0.1)"),
-        )
-        .with_rule(&rule)
-        .with_suggestion("add `# fallback=syntax` to allow syntactic matching"));
-    }
-
     // Attribute shape validation up front (clear errors, no guessing).
     if shape != GeneralShape::Stmt && (!minus_attrs.is_empty() || !plus_attrs.is_empty()) {
         return Err(StructuredError::new(
