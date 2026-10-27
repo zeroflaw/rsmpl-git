@@ -4585,6 +4585,13 @@ symlink creates); ordinary hunks preserve a missing trailing
 newline instead of appending one (T355). A same-path delete+create
 pair (git's file<->symlink typechange shape) lowers as the pair
 when the declared modes differ, else a single plain modify (T357).
+Empty sides lower as headers only (exactly what real git emits for
+empty files, no hunks): an empty create is created, an empty delete
+is removed (T364 -- the old `None` silently dropped both). A pure
+mode change (content equal, `old mode`/`new mode` differ) lowers as
+a headers-only flip section; mode lines also ride along content
+changes, spliced after the `diff --git` header. A declared `100755`
+(untracked executables, unix) is honored like `120000`.
 `--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
 local artifact, not repo content. File renames are not a containment
@@ -5706,6 +5713,8 @@ Collection: unstaged worktree-vs-index plus untracked files (emitted
 as new-file ordinary sections, since `git diff` never shows them;
 untracked symlinks read as their link-target string, never followed,
 with `new file mode 120000`);
+empty files emit headers only (no hunk, exactly real git's shape);
+untracked executables emit `100755` (unix) so +x round-trips (T364);
 `--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
 same mechanism. `git diff` runs with `--no-color --no-ext-diff
 --no-renames --unified=0`: rename detection stays off because RSmPL-Git v0.1

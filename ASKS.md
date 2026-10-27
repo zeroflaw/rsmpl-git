@@ -54,3 +54,20 @@ Promote to TASKS.md when they earn it; keep this list short.
   well-known hash would serve the T346 root recipe, but it
   special-cases a magic value in a pure source path — needs the
   T338 CLI-minimality weigh-up before filing.
+
+- Verbatim identical-pair sweep (T364 probe, no task): N≥2
+  textually identical `-/+` line pairs both parsing as `syn::Expr`
+  (e.g. 712ad9d’s 2x `&cand.body_text` →
+  `std::slice::from_ref(&cand.body_text)`) compress to one verbatim
+  `# allow=many` general-expr hunk -- the engine probe-passes
+  (`matches == 2`). Rejected for diffrs: the minus text also occurs
+  in an unchanged match guard, so the sweep over-matches (3 rewrites
+  vs 2 sites; history byte-compare fails). Sub-expression matching
+  is inherent (the terminator never reaches the pattern), so no
+  textual tightening fixes it -- needs content-aware occurrence
+  counting (layering break) or engine scoping. Not filed.
+- Vis-evolution sweep (T364 probe, no task): N≥2 `fn name` →
+  `pub(crate) fn name` pairs with differing names (27f2aba, N=2).
+  Probe-passes per name, but fn-name slots don’t exist (the slot
+  sweep hardcodes one name) -- per-name hunks have no token win.
+  Not filed.

@@ -34,25 +34,28 @@ pub fn unified_diff_for_file_with_context(
 
 /// Build a `diff --git` section for a newly created file.
 ///
-/// Emits `new file mode {mode}` + `--- /dev/null` headers so the
-/// lowered patch applies with a bare `git apply` (SPEC 27.6).
-/// Callers pass the input section's declared mode (`100644`
-/// default; `120000` for symlink creates — T355); only use this
-/// when the target did not exist before the patch; an
-/// existing-but-empty file keeps the ordinary `--- a/…` headers.
-/// Returns `None` when `new` is empty (no changes, nothing to create).
+/// Emits `new file mode {mode}` headers (+ `--- /dev/null` and hunks
+/// when `new` is non-empty) so the lowered patch applies with a bare
+/// mode (`100644` default; `120000` for symlink creates -- T355;
+/// mode (`100644` default; `120000` for symlink creates -- T355;
+/// `100755` for executables); only use this when the target did not
+/// exist before the patch; an existing-but-empty file keeps the
+/// ordinary `--- a/...` headers. An empty `new` emits headers only
+/// (exactly what real git shows for an empty new file -- T364):
+/// `git apply` creates it, while the old `None` silently dropped
+/// the create.
 pub fn unified_diff_for_new_file_with_context(
     path: &str,
     new: &str,
     context: usize,
     mode: &str,
 ) -> Option<String> {
-    if new.is_empty() {
-        return None;
-    }
     let mut out = String::new();
     out.push_str(&format!("diff --git a/{path} b/{path}\n"));
     out.push_str(&format!("new file mode {mode}\n"));
+    if new.is_empty() {
+        return Some(out);
+    }
     out.push_str("--- /dev/null\n");
     out.push_str(&format!("+++ b/{path}\n"));
     let diff = similar::TextDiff::from_lines("", new);
@@ -61,26 +64,24 @@ pub fn unified_diff_for_new_file_with_context(
     Some(out)
 }
 
-/// Build a `diff --git` section for a deleted file.
-///
 /// Emits `deleted file mode 100644` (regular files) or `deleted file
-/// mode 120000` (symlinks) + `+++ /dev/null` headers so the lowered
-/// patch removes the path with a bare `git apply` instead of
-/// truncating it to empty (T350). `git apply` type-checks the mode
-/// line, so a symlink deleted as 100644 fails with `wrong type`
-/// (T353 history dogfood: 53372c4). Callers must only use this when
-/// the input section targets `/dev/null` and the engine emptied the
-/// content; an ordinary all-minus hunk truncates the file and keeps
-/// it.
+/// mode 120000` (symlinks) headers (+ `--- a/...`, `+++ /dev/null`,
+/// and hunks when `old` is non-empty) so the lowered patch removes the
+/// path with a bare `git apply` instead of truncating it to empty
+/// (T350). `git apply` type-checks the mode line, so a symlink
+/// deleted as 100644 fails with `wrong type` (T353 history dogfood:
+/// 53372c4). Callers must only use this when the input section targets
+/// `/dev/null` and the engine emptied the content; an ordinary
+/// all-minus hunk truncates the file and keeps it. An empty `old`
+/// emits headers only (exactly what real git shows for deleting an
+/// empty file -- T364): `git apply` removes it, while the old `None`
+/// silently kept it.
 pub fn unified_diff_for_deleted_file_with_context(
     path: &str,
     old: &str,
     context: usize,
     symlink: bool,
 ) -> Option<String> {
-    if old.is_empty() {
-        return None;
-    }
     let mut out = String::new();
     out.push_str(&format!("diff --git a/{path} b/{path}\n"));
     out.push_str(if symlink {
@@ -88,6 +89,9 @@ pub fn unified_diff_for_deleted_file_with_context(
     } else {
         "deleted file mode 100644\n"
     });
+    if old.is_empty() {
+        return Some(out);
+    }
     out.push_str(&format!("--- a/{path}\n"));
     out.push_str("+++ /dev/null\n");
     let diff = similar::TextDiff::from_lines(old, "");
@@ -102,8 +106,8 @@ pub fn unified_diff_for_deleted_file_with_context(
 /// (`deleted file mode <old>`) plus a create half (`new file mode <new>`,
 /// T357). `old_symlink` selects the delete mode line (120000 vs 100644,
 /// T353); `new_mode` is the declared create mode (120000 vs 100644,
-/// T355 default). Empty-side halves drop (`None` when `old`/`new` is
-/// empty), so the caller gets 0-2 sections in git order (delete first).
+/// T355 default). Empty-side halves emit headers only (the new-file and
+/// delete helpers never return `None` anymore -- T364), so the caller
 pub fn unified_diff_for_typechange_with_context(
     path: &str,
     old: &str,
@@ -118,6 +122,37 @@ pub fn unified_diff_for_typechange_with_context(
     }
     if let Some(s) = unified_diff_for_new_file_with_context(path, new, context, new_mode) {
         out.push(s);
+    }
+    out
+}
+
+/// Build a headers-only mode-flip section (`old mode` + `new mode`, no
+/// hunks) for a tracked file whose content is unchanged. Exactly what
+/// real git emits for a pure mode change -- T364: `git apply` flips the
+/// mode, while content-only lowering silently dropped it.
+pub fn mode_change_section(path: &str, old_mode: &str, new_mode: &str) -> String {
+    format!("diff --git a/{path} b/{path}\nold mode {old_mode}\nnew mode {new_mode}\n")
+}
+
+/// Splice `old mode`/`new mode` lines into a lowered content section
+/// (right after the `diff --git` header, where git puts them) so a
+/// content change that also flips the mode keeps both -- T364. The
+/// input section must actually declare both modes (equal or absent
+/// means content-only, today's behavior).
+pub fn with_mode_lines(section: &str, old_mode: &str, new_mode: &str) -> String {
+    if old_mode == new_mode {
+        return section.to_string();
+    }
+    let mut out = String::new();
+    let mut lines = section.lines();
+    if let Some(first) = lines.next() {
+        out.push_str(first);
+        out.push('\n');
+    }
+    out.push_str(&format!("old mode {old_mode}\nnew mode {new_mode}\n"));
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
     }
     out
 }
@@ -259,7 +294,13 @@ mod tests {
 
     #[test]
     fn new_file_empty_returns_none() {
-        assert!(unified_diff_for_new_file_with_context("x", "", 3, "100644").is_none());
+        // T364: an empty create emits headers only (exactly what real
+        // git shows) instead of `None` -- the old `None` silently
+        // dropped the create.
+        let d = unified_diff_for_new_file_with_context("x", "", 3, "100644").unwrap();
+        assert!(d.contains("new file mode 100644"), "got: {d}");
+        assert!(!d.contains("@@"), "got: {d}");
+        assert!(!d.contains("--- /dev/null"), "got: {d}");
     }
 
     #[test]
@@ -277,7 +318,12 @@ mod tests {
 
     #[test]
     fn deleted_file_empty_returns_none() {
-        assert!(unified_diff_for_deleted_file_with_context("x", "", 3, false).is_none());
+        // T364: deleting an empty file emits headers only (exactly
+        // what real git shows) instead of `None` -- the old `None`
+        // silently kept the file.
+        let d = unified_diff_for_deleted_file_with_context("x", "", 3, false).unwrap();
+        assert!(d.contains("deleted file mode 100644"), "got: {d}");
+        assert!(!d.contains("@@"), "got: {d}");
     }
 
     #[test]
@@ -335,5 +381,52 @@ mod tests {
         assert!(d.contains("+real.txt"), "got: {d}");
         assert!(d.contains("No newline at end of file"), "got: {d}");
         assert!(!d.contains("100644"), "got: {d}");
+    }
+
+    #[test]
+    fn mode_change_section_is_headers_only() {
+        // T364: a pure mode change lowers to the exact shape real git
+        // emits (no hunks) -- `git apply` flips the mode.
+        let d = mode_change_section("run.sh", "100755", "100644");
+        assert!(d.contains("old mode 100755"), "got: {d}");
+        assert!(d.contains("new mode 100644"), "got: {d}");
+        assert!(!d.contains("@@"), "got: {d}");
+        assert!(!d.contains("--- "), "got: {d}");
+    }
+
+    #[test]
+    fn with_mode_lines_splices_after_diff_git_header() {
+        // T364: content+mode changes keep both -- mode lines land
+        // where git puts them (right after `diff --git`).
+        let section = unified_diff_for_file_with_context("f", "a\n", "b\n", 0).unwrap();
+        let d = with_mode_lines(&section, "100644", "100755");
+        let mut lines = d.lines();
+        assert_eq!(lines.next(), Some("diff --git a/f b/f"));
+        assert_eq!(lines.next(), Some("old mode 100644"));
+        assert_eq!(lines.next(), Some("new mode 100755"));
+        assert!(d.contains("--- a/f"), "got: {d}");
+    }
+
+    #[test]
+    fn with_mode_lines_equal_modes_is_identity() {
+        // Equal modes mean content-only, no-op.
+        let section = unified_diff_for_file_with_context("f", "a\n", "b\n", 0).unwrap();
+        assert_eq!(with_mode_lines(&section, "100644", "100644"), section);
+    }
+
+    #[test]
+    fn typechange_empty_sides_emit_headers_only_pair() {
+        // T364: empty halves no longer drop -- the pair stays complete
+        // (delete headers + create headers), in git order.
+        let pair = unified_diff_for_typechange_with_context("f", "", "", false, "120000", 0);
+        assert_eq!(pair.len(), 2, "got: {pair:?}");
+        assert!(
+            pair[0].contains("deleted file mode 100644"),
+            "got: {}",
+            pair[0]
+        );
+        assert!(!pair[0].contains("@@"), "got: {}", pair[0]);
+        assert!(pair[1].contains("new file mode 120000"), "got: {}", pair[1]);
+        assert!(!pair[1].contains("@@"), "got: {}", pair[1]);
     }
 }

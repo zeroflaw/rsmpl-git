@@ -879,3 +879,144 @@ fn use_prefix_sweep_compresses_to_one_hunk() {
     let text = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
     assert_eq!(text, rewritten, "applied tree differs");
 }
+
+#[test]
+fn empty_untracked_converts_to_headers_only_and_checks_clean() {
+    // T364: an empty untracked file converts to exactly what real git
+    // shows (headers only, no hunk) and round-trips through
+    // `applyrs --check` against the pre-change tree.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("empty.txt"), "").unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        patch.contains("diff --git a/empty.txt b/empty.txt"),
+        "got: {patch}"
+    );
+    assert!(patch.contains("new file mode 100644"), "got: {patch}");
+    assert!(
+        !patch.contains("@@"),
+        "empty file must emit no hunk, got: {patch}"
+    );
+
+    // Stash the untracked file away; the captured patch must check
+    // clean against the pre-change tree.
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_bit_untracked_round_trips_through_real_apply() {
+    // T364: an untracked +x script converts as `new file mode 100755`
+    // (the old hardcoded 100644 silently dropped +x); a real apply
+    // materializes it +x. Real-apply, not just `--check` (T361).
+    use std::os::unix::fs::PermissionsExt;
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "run.sh", "#!/bin/sh\necho hi\n");
+    std::fs::set_permissions(
+        dir.path().join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("new file mode 100755"), "got: {patch}");
+
+    // Stash the untracked file away, apply for real, compare mode
+    // and bytes against the pre-change-plus-patch expectation.
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let mode = std::fs::metadata(dir.path().join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_ne!(mode & 0o111, 0, "exec bit must survive the round-trip");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
+        "#!/bin/sh\necho hi\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mode_only_pending_change_converts_and_checks_clean() {
+    // T364: a chmod-only worktree change converts as passthrough
+    // (zero semantic hunks) and checks clean against the pre-change
+    // tree. The flip itself is pinned by real-apply in applyrs
+    // mode_empty_e2e.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = init_repo();
+    write(dir.path(), "run.sh", "#!/bin/sh\n");
+    std::fs::set_permissions(
+        dir.path().join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    commit_all(dir.path());
+    std::fs::set_permissions(
+        dir.path().join("run.sh"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("old mode 100755"), "got: {patch}");
+    assert!(patch.contains("new mode 100644"), "got: {patch}");
+    assert!(
+        !patch.contains("rule="),
+        "mode-only must stay ordinary, got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}

@@ -114,6 +114,14 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
                     sec.is_deleted_file = true;
                 } else if line == "--- /dev/null" || line == "--- dev/null" {
                     sec.is_new_file = true;
+                } else if line.starts_with("deleted file mode") {
+                    // T364: real git omits `---`/`+++` for empty files,
+                    // so mirror the mode lines too -- a `deleted file
+                    // mode` section is a delete even with no `+++` line,
+                    // and `new file mode` a create even with no `---`.
+                    sec.is_deleted_file = true;
+                } else if line.starts_with("new file mode") {
+                    sec.is_new_file = true;
                 }
                 sec.metadata.push(line.to_string());
                 idx += 1;
@@ -1072,6 +1080,20 @@ mod tests {
         assert_eq!(created.files[0].target_path, "src/new.rs");
     }
 
+    #[test]
+    fn bare_mode_lines_set_create_delete_flags() {
+        // T364: real git omits `---`/`+++` for empty files, so the
+        // mode lines alone must mark the section (headers-only input
+        // lowers to a headers-only section).
+        let created =
+            parse_patch("diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n").unwrap();
+        assert!(created.files[0].is_new_file);
+        assert!(!created.files[0].is_deleted_file);
+        let deleted =
+            parse_patch("diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n").unwrap();
+        assert!(deleted.files[0].is_deleted_file);
+        assert!(!deleted.files[0].is_new_file);
+    }
     #[test]
     fn detects_rsmpl_hunk() {
         let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,7 +10,7 @@ rule=rename_foo\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";

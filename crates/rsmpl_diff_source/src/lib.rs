@@ -95,9 +95,9 @@ impl GitSource {
             // T353 applyrs read side): a dangling symlink would fail
             // `std::fs::read` with `SourceError` (exit 2) and a
             // link-to-dir with EISDIR; `read_link` serves both.
-            let (content, symlink) = match std::fs::symlink_metadata(&abs) {
+            let (content, mode) = match std::fs::symlink_metadata(&abs) {
                 Ok(md) if md.file_type().is_symlink() => match std::fs::read_link(&abs) {
-                    Ok(target) => (target.to_string_lossy().into_owned().into_bytes(), true),
+                    Ok(target) => (target.to_string_lossy().into_owned().into_bytes(), "120000"),
                     Err(e) => {
                         return Err(SourceError::Untracked {
                             path: path.clone(),
@@ -105,13 +105,22 @@ impl GitSource {
                         });
                     }
                 },
-                _ => (
+                Ok(md) => (
                     std::fs::read(&abs).map_err(|e| SourceError::Untracked {
                         path: path.clone(),
                         inner: e.to_string(),
                     })?,
-                    false,
+                    // T364: preserve the exec bit so scripts round-trip
+                    // with their mode (the old hardcoded 100644 silently
+                    // dropped +x).
+                    regular_file_mode(&md),
                 ),
+                Err(e) => {
+                    return Err(SourceError::Untracked {
+                        path: path.clone(),
+                        inner: e.to_string(),
+                    });
+                }
             };
             // Binary untracked files are skipped here; the infer stage
             // strips binary hunks with a warning, and raw bytes cannot
@@ -120,7 +129,7 @@ impl GitSource {
                 continue;
             }
             let text = String::from_utf8_lossy(&content);
-            raw.push_str(&new_file_section(path, &text, symlink));
+            raw.push_str(&new_file_section(path, &text, mode));
         }
 
         let mut files = files_in_diff(&raw);
@@ -166,15 +175,36 @@ fn untracked_files(repo: &Path) -> Result<Vec<String>, String> {
 fn is_history_path(path: &str) -> bool {
     path == ".history" || path.starts_with(".history/")
 }
+/// Mode for an untracked regular file (T364): `100755` when any exec
+/// bit is set, else `100644`. Unix only -- elsewhere everything is
+/// `100644` (no exec-bit concept to preserve).
+#[cfg(unix)]
+fn regular_file_mode(md: &std::fs::Metadata) -> &'static str {
+    use std::os::unix::fs::PermissionsExt;
+    if md.permissions().mode() & 0o111 != 0 {
+        "100755"
+    } else {
+        "100644"
+    }
+}
+#[cfg(not(unix))]
+fn regular_file_mode(_md: &std::fs::Metadata) -> &'static str {
+    "100644"
+}
 
-/// A new-file ordinary section for untracked `path` with `content`.
-/// Symlinks emit `new file mode 120000` with the link-target string
-/// as content (exactly what `git diff` shows for a staged symlink).
-fn new_file_section(path: &str, content: &str, symlink: bool) -> String {
-    let mode = if symlink { "120000" } else { "100644" };
-    let mut section = format!(
-        "diff --git a/{path} b/{path}\nnew file mode {mode}\n--- /dev/null\n+++ b/{path}\n"
-    );
+/// A new-file ordinary section for untracked `path` with `content` and
+/// `mode` (`100644`, `100755`, or `120000` -- exactly what `git diff`
+/// shows for a staged new file). The caller selects the mode: symlinks
+/// read as `120000` (T354), executables as `100755` (T364, unix only).
+/// Empty content emits headers only, exactly what real git shows for
+/// an empty new file (T364) -- the old `@@ -0,0 +1,0 @@` shape was
+/// never git's and masked the empty-create drop.
+fn new_file_section(path: &str, content: &str, mode: &str) -> String {
+    let mut section = format!("diff --git a/{path} b/{path}\nnew file mode {mode}\n");
+    if content.is_empty() {
+        return section;
+    }
+    section.push_str(&format!("--- /dev/null\n+++ b/{path}\n"));
     let line_count = content.lines().count();
     section.push_str(&format!("@@ -0,0 +1,{line_count} @@\n"));
     for line in content.lines() {
@@ -225,7 +255,7 @@ mod tests {
 
     #[test]
     fn new_file_section_shape() {
-        let section = new_file_section("src/new.rs", "fn n() {}\n", false);
+        let section = new_file_section("src/new.rs", "fn n() {}\n", "100644");
         assert!(section.starts_with("diff --git a/src/new.rs b/src/new.rs\n"));
         assert!(section.contains("new file mode 100644\n"));
         assert!(section.contains("--- /dev/null\n"));
@@ -237,7 +267,7 @@ mod tests {
     fn new_file_section_symlink_mode() {
         // Link-target strings carry no trailing newline, so the
         // section reproduces git's exact shape (`+target` + marker).
-        let section = new_file_section("link.txt", "real.txt", true);
+        let section = new_file_section("link.txt", "real.txt", "120000");
         assert!(section.contains("new file mode 120000\n"));
         assert!(section.contains("+real.txt\n"));
         assert!(section.contains("\\ No newline at end of file\n"));
@@ -245,8 +275,28 @@ mod tests {
 
     #[test]
     fn new_file_section_marks_missing_trailing_newline() {
-        let section = new_file_section("x.txt", "no-newline", false);
+        let section = new_file_section("x.txt", "no-newline", "100644");
         assert!(section.contains("\\ No newline at end of file\n"));
+    }
+
+    #[test]
+    fn new_file_section_empty_is_headers_only() {
+        // T364: an empty untracked file emits exactly what real git
+        // shows (headers only, no hunk) -- the old `@@ -0,0 +1,0 @@`
+        // shape never occurs in git output.
+        let section = new_file_section("empty.txt", "", "100644");
+        assert!(section.contains("new file mode 100644\n"));
+        assert!(!section.contains("@@"), "got: {section}");
+        assert!(!section.contains("--- /dev/null"), "got: {section}");
+    }
+
+    #[test]
+    fn new_file_section_exec_mode_passes_through() {
+        // T364: the caller-selected 100755 for executables reaches
+        // the section verbatim (the lowering honors it).
+        let section = new_file_section("run.sh", "#!/bin/sh\n", "100755");
+        assert!(section.contains("new file mode 100755\n"));
+        assert!(section.contains("--- /dev/null\n"));
     }
 
     #[test]

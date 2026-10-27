@@ -338,7 +338,21 @@ fn run() -> Result<(), CliError> {
                 is_symlink.contains(rel),
             )
         } else {
-            rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0)
+            // T364: carry `old mode`/`new mode` into the lowering. A
+            // content change that also flips the mode keeps both; a pure
+            // mode change (old == new) lowers as a headers-only flip
+            // section (exactly what real git emits) instead of today's
+            // silent drop.
+            let content = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0);
+            match (content, section_modes(&patch, rel)) {
+                (Some(s), Some((old_mode, new_mode))) => {
+                    Some(rsmpl_git::with_mode_lines(&s, &old_mode, &new_mode))
+                }
+                (None, Some((old_mode, new_mode))) => {
+                    Some(rsmpl_git::mode_change_section(rel, &old_mode, &new_mode))
+                }
+                (content, None) => content,
+            }
         };
         if let Some(s) = section {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
@@ -477,6 +491,27 @@ fn run() -> Result<(), CliError> {
     let names: Vec<&str> = changed.iter().map(|(p, _, _)| p.as_str()).collect();
     eprintln!("applied {} file(s): {}", names.len(), names.join(", "));
     Ok(())
+}
+
+/// Declared `old mode`/`new mode` for `rel` (the T364 mode-flip input:
+/// real git's pure-mode-change shape), or `None` when the section
+/// carries no mode pair (content-only, today's behavior) or both
+/// modes agree (no flip). Verbatim passthrough: a bogus pair fails
+/// loud in `git apply`, never silently (SPEC 2.6).
+fn section_modes(patch: &rsmpl_patch::Patch, rel: &str) -> Option<(String, String)> {
+    let section = patch.files.iter().find(|s| s.target_path == rel)?;
+    let old_mode = section
+        .metadata
+        .iter()
+        .find_map(|m| m.strip_prefix("old mode "))?;
+    let new_mode = section
+        .metadata
+        .iter()
+        .find_map(|m| m.strip_prefix("new mode "))?;
+    if old_mode == new_mode {
+        return None;
+    }
+    Some((old_mode.to_string(), new_mode.to_string()))
 }
 
 /// Bound the *reported* diff for token budget (SPEC D.2.1).
