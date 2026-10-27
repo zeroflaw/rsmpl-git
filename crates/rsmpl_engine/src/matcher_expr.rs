@@ -896,6 +896,11 @@ fn match_callee(
         return match_callee_turbofish(callee, cand, &reverse_map, bindings);
     }
     let target_segments = &cand.callee_segments;
+    // T177: a bare pattern (no `::<...>`) never matches a turbofish site
+    // (None-vs-Some fails, general-matcher parity) — spell `::<T>` explicitly.
+    if cand.callee_arg_texts.iter().any(|v| !v.is_empty()) {
+        return false;
+    }
     // Placeholder-generated names look like `__RSMPL_E`; map back via the
     // declared-name table. Anything still shaped like a placeholder with no
     // entry is treated as concrete (shouldn't happen).
@@ -1071,10 +1076,13 @@ fn match_receiver_or_method(
     if !recv_ok {
         return false;
     }
-    // Method: meta allowed (bind, turbofish ignored), else exact — unless
-    // the pattern carries a turbofish (`collect::<T>`), which compares
-    // structurally (T176, mirror of T145's `match_callee_turbofish`).
+    // Method: turbofish presence must agree (T177, general-matcher parity):
+    // a bare pattern never matches a turbofish site and vice versa. `<`-
+    // carrying patterns compare structurally (T176, mirror of T145).
     if let Some(orig) = reverse_map.get(method_pat) {
+        if cand.method_turbofish.is_some() {
+            return false;
+        }
         let text = cand.method_text.clone().unwrap_or_default();
         match bindings.get(orig) {
             Some(prev) => prev == &text,
@@ -1086,6 +1094,9 @@ fn match_receiver_or_method(
     } else if method_pat.contains('<') {
         match_method_turbofish(method_pat, cand, reverse_map, bindings)
     } else {
+        if cand.method_turbofish.is_some() {
+            return false;
+        }
         method_pat == cand.method_text.clone().unwrap_or_default()
     }
 }
@@ -1133,8 +1144,9 @@ fn match_method_turbofish(
             return false;
         }
         if matches!(seg.arguments, syn::PathArguments::None) {
-            // Concrete bare method vs turbofish site: keep drop-behavior (T177).
-            return true;
+            // T177: unreachable via the router (bare patterns never route
+            // here), but a bare segment must never match a turbofish site.
+            return false;
         }
     }
     let syn::PathArguments::AngleBracketed(pat_bracketed) = &seg.arguments else {
@@ -1368,15 +1380,40 @@ mod tests {
     }
 
     #[test]
-    fn method_bare_pattern_still_drops_turbofish() {
-        // T176/T177 preservation pin: a bare `R.collect()` still matches a
-        // turbofish site and drops the turbofish (exit 0). T177 decides
-        // whether that drop stays or fails fast — this test pins today's
-        // behavior so the decision lands deliberately.
+    fn method_bare_pattern_rejects_turbofish_site() {
+        // T177: a bare `R.collect()` never matches a turbofish site
+        // (None-vs-Some fails, general-matcher parity) — spell `::<T>`.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n- R.collect()\n+ R.collected()\n";
         let src = "fn a() {\n    let x = v.into_iter().collect::<Vec<i32>>();\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
+    fn method_bare_pattern_still_matches_clean_site() {
+        // T177 control: the same bare pattern still rewrites a
+        // turbofish-free site byte-exact.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n- R.collect()\n+ R.collected()\n";
+        let src = "fn a() {\n    let x = v.into_iter().collect();\n}\n";
         let out = apply(patch, src).unwrap();
         assert!(out.contains("collected()"), "got: {out}");
+    }
+
+    #[test]
+    fn call_bare_pattern_rejects_turbofish_site() {
+        // T177: a bare `foo(E)` never matches `foo::<u8>(..)` —
+        // spell `foo::<T>(E)` with `# type T` (T145).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    let a = foo::<u8>(1u8);\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
+    fn call_placeholder_callee_rejects_turbofish_site() {
+        // T177: a bare whole-callee `P(E)` never matches a turbofish
+        // site either — spell `P::<T>(E)` (T144/T145).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr P\n# expr E\n- P(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    let a = foo::<u8>(1u8);\n}\n";
+        assert!(apply(patch, src).is_err());
     }
 
     #[test]
