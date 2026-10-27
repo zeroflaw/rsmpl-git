@@ -1,62 +1,10 @@
 //! End-to-end tests driving the `rsmpl-git` binary in temp worktrees.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git"))
-}
-
-fn init_repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let st = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .status()
-        .unwrap();
-    assert!(st.success());
-    fs::create_dir_all(dir.path().join("src")).unwrap();
-    dir
-}
-
-fn write(dir: &Path, rel: &str, text: &str) {
-    fs::write(dir.join(rel), text).unwrap();
-}
-
-fn read(dir: &Path, rel: &str) -> String {
-    fs::read_to_string(dir.join(rel)).unwrap()
-}
-
-fn run(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(binary())
-        .args(args)
-        .arg("--repo")
-        .arg(dir)
-        .output()
-        .unwrap()
-}
-
-fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Output {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = Command::new(binary())
-        .args(extra)
-        .arg("--repo")
-        .arg(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(patch.as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
-}
+mod common;
+use common::*;
 
 #[test]
 fn inline_fn_rename_applies() {

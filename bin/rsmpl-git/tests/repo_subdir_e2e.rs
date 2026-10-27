@@ -10,9 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git"))
-}
+mod common;
+use common::*;
 
 fn init_repo_with_sub() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();

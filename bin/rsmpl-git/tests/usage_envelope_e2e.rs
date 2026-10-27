@@ -6,16 +6,8 @@
 //! `--format=json` form) and the T105 single-scanner state (only
 //! `wants_json` remains; the inspect hint scanner died with T122).
 
-use std::path::PathBuf;
-use std::process::Command;
-
-fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git"))
-}
-
-fn run_raw(args: &[&str]) -> std::process::Output {
-    Command::new(binary()).args(args).output().unwrap()
-}
+mod common;
+use common::*;
 
 fn assert_envelope(out: &std::process::Output, needle: &str) {
     assert_eq!(

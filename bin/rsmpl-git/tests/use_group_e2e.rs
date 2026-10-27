@@ -3,53 +3,8 @@
 //! Split into its own file to keep every test file under the 2000-LOC
 //! repo limit (`no_rust_file_exceeds_2000_lines`).
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git"))
-}
-
-fn init_repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let st = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .status()
-        .unwrap();
-    assert!(st.success());
-    dir
-}
-
-fn write(dir: &Path, rel: &str, text: &str) {
-    fs::write(dir.join(rel), text).unwrap();
-}
-
-fn read(dir: &Path, rel: &str) -> String {
-    fs::read_to_string(dir.join(rel)).unwrap()
-}
-
-fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Output {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = Command::new(binary())
-        .args(extra)
-        .arg("--repo")
-        .arg(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(patch.as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
-}
+mod common;
+use common::*;
 
 #[test]
 fn group_member_prefix_rewrites_text() {
