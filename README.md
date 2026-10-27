@@ -159,6 +159,7 @@ Key rules for authors:
 - Moves use `# item I` + `# bind=Name` (cut) and `# use=Name` (paste);
   paste hunks may precede cut hunks.
 - Ordinary Git hunks and semantic hunks can mix but must not overlap.
+- Ordinary hunks are language-agnostic (`Cargo.toml`/`.toml` included); semantic hunks are Rust-only (SPEC 11).
 
 ## Layout
 

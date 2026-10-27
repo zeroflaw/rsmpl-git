@@ -968,7 +968,7 @@ Ordinary hunks may appear before, between, or after RSmPL hunks.
 
 A file section touched only by ordinary hunks is language-agnostic
 (T137): the engine performs no Rust parse of the original file and no
-Rust reparse of the rewritten file, so Markdown, configs, and any other
+Rust reparse of the rewritten file, so Markdown, Cargo.toml / .toml configs, and any other
 plain text flow through the same tool. Any section whose file carries
 >=1 RSmPL hunk requires the target to parse as Rust (Section 25.2).
 
