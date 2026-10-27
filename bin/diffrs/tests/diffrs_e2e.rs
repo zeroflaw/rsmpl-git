@@ -302,6 +302,35 @@ fn rev_scope_excludes_untracked_files() {
     assert!(!patch.contains("u.txt"), "got: {patch}");
 }
 
+// T246s23: same gate for the `--staged [rev]` combo — `git diff
+// --cached <rev>` never shows untracked files, so neither must
+// `diffrs --staged <rev>` (the T392 gate covers it; this pins the
+// previously unprobed CLI form).
+#[test]
+fn staged_rev_combo_excludes_untracked_files() {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn a() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "a.rs", "fn a() {}\n// staged\n");
+    git(dir.path(), &["add", "a.rs"]);
+    write(dir.path(), "u.txt", "untracked body\n");
+
+    let out = run(dir.path(), &["--staged", "HEAD"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("a.rs"), "got: {patch}");
+    assert!(!patch.contains("u.txt"), "got: {patch}");
+    let json = run(dir.path(), &["--staged", "HEAD", "--format", "json"]);
+    assert_eq!(json.status.code(), Some(0));
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json.stdout)).unwrap();
+    assert_eq!(
+        v["files"],
+        serde_json::json!([{"path": "a.rs"}]),
+        "got: {v}"
+    );
+}
+
 #[test]
 fn rev_argument_covers_history() {
     let dir = init_repo();
