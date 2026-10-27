@@ -165,4 +165,15 @@ fn agents_md_citations_resolve() {
         spec.contains("skills/rsmpl-git/SKILL.md"),
         "SPEC.md Appendix D should point to the skill"
     );
+
+    // T121 anti-rot: the `.opencode/skills/` discovery symlink must resolve
+    // to the canonical skill (OpenCode only searches `.opencode/`,
+    // `.claude/`, `.agents/` project-local paths — `skills/` alone is
+    // invisible to the `skill` tool). Content equality fails loudly if the
+    // link is deleted or the canonical moves.
+    let via_link = read_root(".opencode/skills/rsmpl-git/SKILL.md");
+    assert_eq!(
+        via_link, skill,
+        ".opencode/skills/rsmpl-git/SKILL.md should match skills/rsmpl-git/SKILL.md"
+    );
 }
