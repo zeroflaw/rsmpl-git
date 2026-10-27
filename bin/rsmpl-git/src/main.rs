@@ -8,6 +8,8 @@
 //! cat change.rsmpl | rsmpl-git --check
 //! # From a file, printing the lowered diff without applying:
 //! rsmpl-git --file change.rsmpl --check
+//! # Inline, no temp file (archived to `<repo>/.history/{id}.rsmpl`):
+//! rsmpl-git --patch "$(cat change.rsmpl)" --check
 //! # Machine-readable report:
 //! rsmpl-git --file change.rsmpl --format json --check
 //! ```
@@ -40,8 +42,15 @@ enum Format {
 )]
 struct Cli {
     /// Patch file path, or `-` for stdin (no input flags also reads stdin).
-    #[arg(long)]
+    /// Conflicts with `--patch`.
+    #[arg(long, conflicts_with = "patch")]
     file: Option<PathBuf>,
+
+    /// Inline patch text (no temp file needed; archived to
+    /// `<repo>/.history/{id}.rsmpl`, SPEC D.1). Conflicts with `--file`.
+    /// Prefer `--file` for large patches (shell quoting/arg-length limits).
+    #[arg(long, value_name = "PATCH")]
+    patch: Option<String>,
 
     /// Repo worktree (default: .).
     #[arg(long, default_value = ".")]
@@ -147,23 +156,36 @@ fn run() -> Result<(), CliError> {
         }
     };
 
-    let patch_text = match &cli.file {
-        Some(f) if f.as_os_str() == "-" => read_stdin()?,
-        Some(f) => std::fs::read_to_string(f).map_err(|e| {
+    let patch_text = match (&cli.patch, &cli.file) {
+        (Some(p), _) => p.clone(),
+        (None, Some(f)) if f.as_os_str() == "-" => read_stdin()?,
+        (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| {
             CliError::io_file(
                 format!("cannot read patch file {}: {e}", f.display()),
                 &f.to_string_lossy(),
             )
         })?,
-        None => {
+        (None, None) => {
             // Unix filter default (T129): no input flags means stdin, so
             // `cat change.rsmpl | rsmpl-git --check` just works. Empty stdin
             // surfaces as the T59 empty-patch `RSMPL_PARSE_CONFLICT`, not
             // silent success. Like any filter, a bare interactive call
-            // blocks on stdin — pipe or pass `--file` instead.
+            // blocks on stdin — pipe or pass `--file`/`--patch` instead.
             read_stdin()?
         }
     };
+
+    // T253: archive every raw patch input to `<repo>/.history/{id}.rsmpl`
+    // (last 128 kept) and report the path. Runs before parsing so even
+    // authoring failures leave audit. History IO never fails the run:
+    // write/prune faults are `warning:` lines on stderr.
+    let history_path = save_history(&cli.repo, &patch_text);
+    let history_display = history_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string());
+    if let Some(h) = &history_display {
+        eprintln!("history: {h}");
+    }
 
     let patch = rsmpl_patch::parse_patch(&patch_text).map_err(parse_err)?;
 
@@ -287,6 +309,7 @@ fn run() -> Result<(), CliError> {
             "diff_lines": total_lines,
             "diff_shown": reported.lines().count(),
             "check": cli.check,
+            "history": history_display,
         });
         println!(
             "{}",
@@ -403,6 +426,65 @@ fn read_stdin() -> Result<String, CliError> {
         .read_to_string(&mut buf)
         .map_err(|e| CliError::io(format!("cannot read stdin: {e}")))?;
     Ok(buf)
+}
+
+/// T253: archive raw patch text to `<repo>/.history/{id}.rsmpl`, prune to
+/// the last 128 entries (lexicographic id order == chronological), and
+/// return the path. Never fatal: every IO fault is a stderr `warning:`
+/// and yields `None` so the patch still checks/applies.
+fn save_history(repo: &std::path::Path, patch_text: &str) -> Option<PathBuf> {
+    let dir = repo.join(".history");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("warning: history: cannot create {}: {e}", dir.display());
+        return None;
+    }
+    let id = history_id();
+    let path = dir.join(format!("{id}.rsmpl"));
+    if let Err(e) = std::fs::write(&path, patch_text) {
+        eprintln!("warning: history: cannot write {}: {e}", path.display());
+        return None;
+    }
+    prune_history(&dir);
+    Some(path)
+}
+
+/// Monotonic-ish unique id without extra deps: zero-padded
+/// `{unix_secs:010}-{nanos:09}-{pid:06}-{ctr:04}` sorts chronologically.
+fn history_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CTR: AtomicU32 = AtomicU32::new(0);
+    let ctr = CTR.fetch_add(1, Ordering::Relaxed);
+    let (secs, nanos) = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs(), d.subsec_nanos()))
+        .unwrap_or((0, 0));
+    format!("{secs:010}-{nanos:09}-{:06}-{ctr:04}", std::process::id())
+}
+
+/// Keep the last 128 `.rsmpl` entries by id order; failures warn only.
+fn prune_history(dir: &std::path::Path) {
+    const KEEP: usize = 128;
+    let mut entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "rsmpl"))
+            .collect(),
+        Err(e) => {
+            eprintln!("warning: history: cannot list {}: {e}", dir.display());
+            return;
+        }
+    };
+    entries.sort();
+    if entries.len() > KEEP {
+        for stale in entries.iter().take(entries.len() - KEEP) {
+            if let Err(e) = std::fs::remove_file(stale) {
+                eprintln!(
+                    "warning: history: cannot prune {}: {e}",
+                    stale.display()
+                );
+            }
+        }
+    }
 }
 
 fn parse_err(e: rsmpl_patch::ParseError) -> CliError {

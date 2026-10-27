@@ -117,13 +117,13 @@ rsmpl-git --file change.rsmpl                       # apply for real
 - The lowering itself is always 0-context (minimal tokens, still appliable);
   `--diff-max-lines` trims only the preview; truncated stdout is
   review-only, never pipe it to `git apply` (SPEC D.2.1/D.2.2).
-- Lint without a checkout: `--repo /tmp/empty --check` — `no match found`
-  is the pass signal (SPEC D.2.4); re-check against the real repo after.
+- Lint without a checkout: `--repo /tmp/empty --check` — `no match found` is the pass signal (SPEC D.2.4); re-check after.
 - Verify the JSON `matches` count equals the sites you read — fewer means
   a site (e.g. inside a macro) needs an ordinary hunk; per-rule `spans`
   (`[[start,end], …]`, original-source lines) need no re-read.
 - Piped patches avoid temp files: `cat change.rsmpl | rsmpl-git --check`
-  (no input flags means stdin; `--file -` is the explicit alias, SPEC D.1).
+  (no input flags means stdin; `--file -` is the explicit alias; `--patch`
+  passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
 
 ## Errors: code → fix (SPEC 25)
 

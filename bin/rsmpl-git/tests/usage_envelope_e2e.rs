@@ -91,11 +91,26 @@ fn text_unknown_flag_stays_clap() {
 }
 
 #[test]
-fn json_removed_patch_flag_is_envelope() {
-    // T135 complement to the T128 `--context` pin: the removed `--patch`
-    // spelling is a usage error, so json mode envelops it.
+fn json_patch_flag_is_accepted_inline_source() {
+    // T253 reverses the T135 `--patch` removal: the inline spelling is a
+    // valid patch source again, so json mode reports the *patch* fault
+    // (`RSMPL_PARSE_CONFLICT` for "X"), not a usage envelope.
     let out = run_raw(&["--patch", "X", "--format", "json"]);
-    assert_envelope(&out, "--patch");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be the JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PARSE_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
 }
 
 #[test]

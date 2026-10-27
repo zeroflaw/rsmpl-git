@@ -33,6 +33,9 @@ cat change.rsmpl | rsmpl-git --check
 # From a file, preview the lowered Git diff without applying:
 rsmpl-git --file change.rsmpl --check
 
+# Inline, no temp file (archived to <repo>/.history/{id}.rsmpl, last 128 kept):
+rsmpl-git --patch "$(cat change.rsmpl)" --check
+
   # Machine-readable result (rules, files stats, diff + line counts, check):
   rsmpl-git --file change.rsmpl --format json --check
 
@@ -59,7 +62,7 @@ rsmpl-git --file change.rsmpl --output lowered.patch
 Exit codes: `0` applied/clean, `2` patch error (structured
 `RSMPL_*`/`GIT_*` diagnostic on stderr). Text `--check` previews the lowered
 diff to stdout (plain apply stays quiet); `--format json` prints
-`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` to stdout
+`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check, history}` to stdout
 (`version` = report schema, currently `1`; `rules` = per-rule match counts + per-match `spans`; `files` = per-file `added`/`removed`;
 `diff_truncated` = reported diff hides a non-empty lowering;
 `diff_lines`/`diff_shown` = full vs reported line counts so the next
@@ -79,6 +82,8 @@ modes, so JSON consumers must also read stderr; failures print
 (`RSMPL_IO_CONFLICT` covers unreadable patch/repo/output files and
 flag-usage errors — bad flags envelop in JSON mode, stay clap text
 otherwise).
+Every run archives the raw patch to `<repo>/.history/{id}.rsmpl` (last 128
+kept; path on stderr `history:` + JSON `history`).
 Stream/empty/output contract: SPEC D.2.3.
 
 ## Token savings

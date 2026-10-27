@@ -28,3 +28,7 @@ TASKS.md
 PLAN.md
 REVIEW.md
 agent_loop.*
+
+# T253: rsmpl-git patch audit log (<repo>/.history/, last 128 kept).
+# Bare pattern: tests invoking the binary with default --repo . land at any level.
+.history/

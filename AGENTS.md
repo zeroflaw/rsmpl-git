@@ -131,14 +131,17 @@ searches the whole file (SPEC 17.3).
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 cat change.rsmpl | rsmpl-git --check
 rsmpl-git --file change.rsmpl --check
+rsmpl-git --patch "$(cat change.rsmpl)" --check  # inline, no temp file
 rsmpl-git --file change.rsmpl --format json --check
 rsmpl-git --file change.rsmpl --format json --diff-max-lines 0 --check
 rsmpl-git --file change.rsmpl --output full.patch
 ```
 
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
-`--file` names a patch file (avoids quoting for large patches). JSON prints
-`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
+`--file` names a patch file (avoids quoting for large patches); `--patch`
+passes it inline (archived to `<repo>/.history/{id}.rsmpl`, last 128 kept,
+path on stderr + JSON `history`). JSON prints
+`{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check, history}` (SPEC D.2);
 `version` is the report schema (currently `1`); `check` is boolean (`true` =
 `--check` ran clean, `false` = skipped); each `rules` entry carries per-match
 `spans` (`[[start,end], …]`, original-source 1-based lines, one per emitted edit — `len == matches` except evolution delete+insert pairs);
@@ -171,7 +174,7 @@ reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2
 Format: SPEC 9.3 (directives), SPEC 13.4 (parse contexts), SPEC 14.1
 (functions), SPEC 14.8 (other items), SPEC 15 (metavariables), SPEC 16
 (ellipsis), SPEC 17.7 (equality), SPEC 18.6 (reject table), SPEC 19
-(symbols), SPEC 25 (errors), SPEC 26.1 (lowering). CLI: SPEC D.1 (stdin),
-SPEC D.2 (JSON), SPEC D.2.1 (budget), SPEC D.2.2 (lowering), SPEC D.3
-(ranges).
+(symbols), SPEC 25 (errors), SPEC 26.1 (lowering). CLI: SPEC D.1 (sources
++ history), SPEC D.2 (JSON), SPEC D.2.1 (budget), SPEC D.2.2 (lowering),
+SPEC D.3 (ranges).
 Recommended loop: SPEC D.3 (read → author → check → apply).

@@ -4072,9 +4072,9 @@ valid `@@ -old,len` ranges and verify results. The tool is patching-only:
 range discovery is a targeted file read (the agent's own tooling) plus
 whole-file scope (D.3), not a CLI listing mode.
 
-### D.1 Piped patches (stdin)
+### D.1 Patch sources (stdin, `--file`, `--patch`) + `.history/`
 
-No `--file` flag means stdin (Unix filter default), so the cheapest
+No input flag means stdin (Unix filter default), so the cheapest
 spelling needs no input flag at all:
 
 ```sh
@@ -4085,13 +4085,30 @@ cat change.rsmpl | rsmpl-git --check
 `--file -` spells the same stdin read explicitly. Empty stdin is rejected
 with the T59 `RSMPL_PARSE_CONFLICT` (empty input is an authoring typo,
 never silent success). A bare interactive call with no pipe blocks on
-stdin like any Unix filter — pipe or pass `--file`.
+stdin like any Unix filter — pipe or pass `--file`/`--patch`.
 
-Two sources cover every case: stdin keeps small patches temp-file-free
-while `--file` avoids shell-quoting for large patches (T135 removed the
-redundant `--patch '<diff>'` inline spelling, which duplicated stdin with
-worse quoting and arg-length failure modes). Canonical stdin spelling is
+Three sources cover every case (T253 reverses the T135 `--patch` removal:
+inline wins for agentic check loops — no `Write` round-trip — at the cost
+of shell quoting and arg-length limits, so large patches keep `--file`):
+
+```sh
+rsmpl-git --file change.rsmpl --check          # large patches, no quoting
+rsmpl-git --patch "$(cat change.rsmpl)" --check # inline, no temp file
+```
+
+`--patch '<diff>'` conflicts with `--file` (clap usage error, enveloped as
+`RSMPL_IO_CONFLICT` under `--format json`); an empty `--patch ""` is the
+same empty-patch `RSMPL_PARSE_CONFLICT`. Canonical stdin spelling is
 bare stdin (no flags); `--file -` is the explicit alias.
+
+Every run archives the raw patch text to `<repo>/.history/{id}.rsmpl`
+(`<repo>` = the `--repo` value, default `.`; id =
+`{unix_secs:010}-{nanos:09}-{pid:06}-{ctr:04}`, lexicographic order ==
+chronological) and reports it on stderr as `history: <path>` plus the
+additive JSON `"history"` key (Section D.2, `version` stays 1). Only the
+last 128 entries are kept (oldest pruned first). Archiving runs before
+parsing, so failures leave audit too; history IO faults are stderr
+`warning:` lines only and never fail the run.
 
 ### D.2 Machine-readable reports (`--format json`)
 
@@ -4107,7 +4124,8 @@ prints one JSON object to stdout:
   "diff_truncated": false,
   "diff_lines": 12,
   "diff_shown": 12,
-  "check": true
+  "check": true,
+  "history": "<repo>/.history/{id}.rsmpl"
 }
 ```
 
@@ -4138,7 +4156,11 @@ prints one JSON object to stdout:
   as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
 - `version` is the JSON report schema version (`1` = this contract:
   boolean `check`, no `files_changed`). Agents pin parsing on it; any
-  future breaking JSON change bumps it.
+  future breaking JSON change bumps it (additive keys like `history`
+  do not bump).
+- `history` is the `<repo>/.history/{id}.rsmpl` archive path of the raw
+  patch input (`null` when archiving warned), reported alongside the
+  stderr `history:` line (Section D.1).
 - `check` is a boolean: `true` when `--check` was passed (the lowering,
   empty or not, passed `git apply --check`), else `false`. Failures
   never reach this payload (exit 2 with the `{error}` envelope below),
@@ -4285,10 +4307,10 @@ exactly which bytes land on which stream. The contract, per mode:
 
 | Mode | stdout | stderr |
 |---|---|---|
-| text apply | empty (quiet by default) | `applied N file(s): …` (kept: one line of human reassurance) |
-| text `--check` | reported diff (empty when omitted/no changes) | budget markers + `check: lowered patch applies cleanly` |
-| JSON apply | report object | `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
-| JSON `--check` | report object with `"check":true` | `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
+| text apply | empty (quiet by default) | `history: …` + `applied N file(s): …` (kept: one line of human reassurance) |
+| text `--check` | reported diff (empty when omitted/no changes) | `history: …` + budget markers + `check: lowered patch applies cleanly` |
+| JSON apply | report object (incl. `"history"`) | `history: …` + `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
+| JSON `--check` | report object with `"check":true` (incl. `"history"`) | `history: …` + `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
 
 Rules:
 
@@ -4304,8 +4326,9 @@ Rules:
   review-only: never pipe truncated stdout to `git apply`. Re-run
   without the flag or take the full diff from `--output`.
 - `warning:` lines (`… treating as new (empty) file`, `skipping …:
-  …`) go to stderr in both modes. A `--format json` consumer parsing
-  stdout must also read stderr, or it will miss them.
+  …`, `history: cannot …`) go to stderr in both modes. A `--format json` consumer parsing
+  stdout must also read stderr, or it will miss them. The `history: …`
+  archive line goes to stderr in all modes (stdout stays pure diff-or-report).
 
 #### D.2.4 Repo-free patch lint (no new flags)
 
