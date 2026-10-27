@@ -182,3 +182,59 @@ fn brace_on_where_line_applies() {
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(stdout.contains("fn wtest2"), "got: {stdout}");
 }
+
+#[test]
+fn impl_pub_method_evolution_applies() {
+    // T175: explicit-`pub` impl-context evolution used to fail with
+    // `no match found` (the presence-gate synth dropped the method's
+    // visibility). `--check` previews the evolved signature, then a real
+    // apply lands byte-exact with the body preserved.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\n\nimpl S {\n    pub fn get(&self, x: i32) -> i32 {\n        x\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,4 @@ rule=t\n# lang=rust\n  impl S {\n      ...\n-     pub fn get(&self, x: i32) -> i32 {\n+     pub fn get(&self, x: i64) -> i64 {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("pub fn get(&self, x: i64) -> i64"),
+        "got: {stdout}"
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "struct S;\n\nimpl S {\n    pub fn get(&self, x: i64) -> i64 {\n        x\n    }\n}\n"
+    );
+}
+
+#[test]
+fn impl_pub_method_evolution_json_check() {
+    // T175 JSON pin: `--check` reports `"check":true` with the rule match.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,4 @@ rule=t\n# lang=rust\n  impl S {\n      ...\n-     pub fn make(x: i32) -> i32 {\n+     pub fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+}

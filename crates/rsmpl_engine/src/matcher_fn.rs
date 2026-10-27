@@ -1230,17 +1230,19 @@ pub fn apply_impl_context_hunk(
             if !inside {
                 continue;
             }
-            // Qualifier strictness via minus pattern on a synthetic ItemFn.
+            // Qualifier/visibility strictness via minus pattern on a
+            // synthetic ItemFn. The synth carries the method's real
+            // visibility: `Signature` alone renders inherited vis, which
+            // would fail every explicit-`pub` pattern (T175).
             let synth: syn::ItemFn =
-                syn::parse_str(&format!("{} {{}}", full_sig_without_body(&m.sig))).map_err(
-                    |_| {
+                syn::parse_str(&format!("{} {{}}", full_sig_without_body(&m.vis, &m.sig)))
+                    .map_err(|_| {
                         StructuredError::new(
                             ErrorCode::PatternConflict,
                             "cannot analyze method signature",
                         )
                         .with_rule(&rule)
-                    },
-                )?;
+                    })?;
             if !minus_pat.matches_item_fn(&synth) {
                 continue;
             }
@@ -1285,8 +1287,10 @@ fn pattern_name(name: &rsmpl_pattern::NamePat) -> String {
     }
 }
 
-/// Render a signature without its body for synthetic parsing.
-fn full_sig_without_body(sig: &syn::Signature) -> String {
+/// Render a signature without its body for synthetic parsing, carrying the
+/// item's real visibility: `Signature` alone has none, so without `vis` the
+/// synth would read as inherited and fail every explicit-`pub` pattern.
+fn full_sig_without_body(vis: &syn::Visibility, sig: &syn::Signature) -> String {
     let mut s = quote::quote!(#sig).to_string();
     // `quote` renders `fn foo (x : i32)` etc.; parse needs no trailing body.
     // Drop anything from the first `{` (shouldn't be present for Signature).
@@ -1296,11 +1300,18 @@ fn full_sig_without_body(sig: &syn::Signature) -> String {
     // Ensure it starts with `fn` (methods have receiver; keep as-is for
     // qualifier checks by wrapping in a trait? No: parse as ItemFn requires
     // no `self`. Replace `self` params textually for the check.)
+    // NOTE: the `self` rewrite stays scoped to the sig text -- it runs
+    // before the vis prepend so `pub(in self::...)` paths are untouched.
     s = s.replace("self", "_self_placeholder : u8");
     if !s.trim_start().starts_with("fn ") {
         s = format!("fn {s}");
     }
-    s
+    let vis_text = quote::quote!(#vis).to_string();
+    if vis_text.trim().is_empty() {
+        s
+    } else {
+        format!("{vis_text} {s}")
+    }
 }
 
 fn range_err(rule: &str, line: u32) -> StructuredError {
@@ -1692,5 +1703,41 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert!(out.contains("fn old(&self) -> i32"), "got: {out}");
         assert!(out.contains("fn other(&self)"));
+    }
+
+    #[test]
+    fn evolves_pub_assoc_fn_inside_impl() {
+        // T175: the impl-context presence gate builds its synthetic
+        // ItemFn from the `Signature` only, which carries no visibility.
+        // The synth now carries the method's real vis, so an explicit
+        // `pub` pattern matches a `pub` method (bare patterns are
+        // unaffected: inherited vis renders empty).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     pub fn make(x: i32) -> i32 {\n+     pub fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+        let src = "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("pub fn make(x: i64) -> i64"), "got: {out}");
+    }
+
+    #[test]
+    fn evolves_pub_self_method_inside_impl() {
+        // T175 `&self` variant: the receiver is preserved, never rebound.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     pub fn get(&self, x: i32) -> i32 {\n+     pub fn get(&self, x: i64) -> i64 {\n          ...\n      }\n  }\n";
+        let src =
+            "struct S;\n\nimpl S {\n    pub fn get(&self, x: i32) -> i32 {\n        x\n    }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(
+            out.contains("pub fn get(&self, x: i64) -> i64"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn bare_vis_pattern_still_rejects_pub_method() {
+        // T175 negative control: strictness parity holds -- a vis-less
+        // pattern still requires inherited vis, even in impl context.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     fn make(...) {\n+     fn put(...) {\n          ...\n      }\n  }\n";
+        let src = "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n";
+        let err = apply(patch, src).unwrap_err();
+        assert!(err.contains("no match found"), "got: {err}");
     }
 }
