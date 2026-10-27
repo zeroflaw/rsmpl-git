@@ -134,7 +134,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 | `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# repeat` needs a call/general-expr shape + bare spelling; `# symbol` is call-shape-only (C14); lone `# fallback` without `# symbol` + non-default `# attrs=` on call/macro shapes rejected (C15) |
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ best-match preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many`; if the preview shows `let-else`/block/`if`/`match`/closure/macro-type, use an ordinary hunk (SPEC 18.6 R1/R2/R4/R5) |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
-| `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |
+| `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` anywhere in the patch — fix names (order irrelevant, paste may precede cut, SPEC 20.3) |
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
 | `RSMPL_IO_CONFLICT` | unreadable path or bad flags (`--format json` → stdout envelope) — fix per suggestion; absolute/`..`-escaping targets rejected |
 

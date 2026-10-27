@@ -3194,8 +3194,12 @@ A capture is missing or invalid.
 RSMPL_CAPTURE_CONFLICT
 rule: paste_helper
 capture: Helper
-reason: no previous hunk bound this capture
+reason: capture `Helper` is not bound by any hunk
+suggestion: add a hunk with `# bind=Helper`
 ```
+
+Captures are patch-local, not document-ordered: a `# use=Helper` paste
+may precede its `# bind=Helper` cut (forward references, Section 20.3).
 
 ### 25.7 Git hunk conflict
 
