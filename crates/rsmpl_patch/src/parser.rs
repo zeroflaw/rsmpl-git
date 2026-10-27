@@ -522,10 +522,13 @@ fn parse_body_lines(
             // Whitespace-only line: same lookahead rule (T212).
             let next_is_body = idx + 1 < lines.len() && is_body_start(lines[idx + 1]);
             if next_is_body {
-                out.push(BodyLine {
-                    prefix: ' ',
-                    text: String::new(),
-                });
+                // T388: preserve content byte-exact. A leading `' '`
+                // is the context prefix (git emits `" " + content`,
+                // so `"    "` is a 3-space file line, not an empty
+                // one). Any other leading whitespace has no
+                // diff-prefix meaning; keep the T212 empty reading.
+                let text = l.strip_prefix(' ').unwrap_or_default().to_string();
+                out.push(BodyLine { prefix: ' ', text });
                 idx += 1;
                 continue;
             }
@@ -1621,6 +1624,26 @@ mod tests {
                 }
                 _ => panic!("expected ordinary, blank={blank:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn ws_only_context_preserves_content() {
+        // T388: a whitespace-only context line (`" " + content`) keeps
+        // its content byte-exact — `"    "` is a 3-space file line,
+        // not an empty one (the T212 branch used to record `""`,
+        // failing `applyrs --check` with `context mismatch` while
+        // `git apply` succeeded).
+        let text = "diff --git f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,5 +1,5 @@\n line1\n    \n-line3\n+line3b\n line4\n line5\n";
+        let p = parse_patch(text).unwrap();
+        assert_eq!(p.files[0].hunks.len(), 1);
+        match &p.files[0].hunks[0] {
+            Hunk::Ordinary(oh) => {
+                assert_eq!(oh.lines.len(), 6);
+                assert_eq!(oh.lines[1].prefix, ' ');
+                assert_eq!(oh.lines[1].text, "   ");
+            }
+            _ => panic!("expected ordinary"),
         }
     }
 
