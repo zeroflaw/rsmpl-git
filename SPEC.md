@@ -3181,6 +3181,24 @@ a macro body goes through ordinary hunks — the same one-tool composition
 as §14.9 (no new flags or directives; extending the macro matcher with a
 token-level expression splitter is rejected, not deferred).
 
+Engine-verbatim shape rejections (both exit 2; both carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: m
+file: a.rs
+reason: v0.1 macro patterns must have `NAME!(...)` shape, got `foo(E)`
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: m
+file: a.rs
+reason: v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body
+```
+
+The first `got ...` tail echoes the offending minus text verbatim (here `foo(E)`); the second fires when the minus side is macro-shaped but the body is not a bare `...`. The `expected macro pattern` fallthrough arm is dispatch-unreachable (the planner routes only macro-classified patterns there) and carries no fence.
+
 ### 21.4 Ellipsis in token-tree mode
 
 In `# macro=token_tree` mode, `...` is a token-tree wildcard. It matches any sequence of zero or more tokens inside the current token-tree delimiter, subject to balanced delimiter preservation.
@@ -3551,6 +3569,8 @@ than the `-` side has argument ellipses to replay (verbatim reason +
 suggestion, Section 16.3),
 any `# mode=tokens` hunk outside a macro token-tree pattern, or any
 hunk whose `+` side names an unbound metavariable (both fenced below),
+any non-`NAME!(...)` macro pattern or non-verbatim `# macro=token_tree`
+body (both fenced in Section 21.3),
 or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
