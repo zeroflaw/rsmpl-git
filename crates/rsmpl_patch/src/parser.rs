@@ -343,9 +343,11 @@ fn parse_body_lines(
             // line as "" (zero-length) or " " — while a truly blank line
             // separates hunks. Look ahead: if the next line is a body line,
             // treat "" as an empty context line; otherwise end the hunk.
+            // The lookahead alone decides, even for the first body line:
+            // a hunk header is always followed by body lines, so a leading
+            // blank followed by body lines belongs to the hunk (T212).
             let next_is_body = idx + 1 < lines.len() && is_body_start(lines[idx + 1]);
-            let prev_was_body = !out.is_empty();
-            if prev_was_body && next_is_body {
+            if next_is_body {
                 out.push(BodyLine {
                     prefix: ' ',
                     text: String::new(),
@@ -356,9 +358,9 @@ fn parse_body_lines(
             break;
         }
         if l.trim().is_empty() {
-            // Whitespace-only line: same lookahead rule.
+            // Whitespace-only line: same lookahead rule (T212).
             let next_is_body = idx + 1 < lines.len() && is_body_start(lines[idx + 1]);
-            if !out.is_empty() && next_is_body {
+            if next_is_body {
                 out.push(BodyLine {
                     prefix: ' ',
                     text: String::new(),
@@ -1272,6 +1274,28 @@ mod tests {
         match &p.files[0].hunks[0] {
             Hunk::Rsmpl(rh) => assert_eq!(rh.scope(), Scope::File),
             _ => panic!("expected rsmpl"),
+        }
+    }
+
+    #[test]
+    fn leading_blank_context_is_hunk_body() {
+        // T212: a leading blank context line belongs to the hunk (git
+        // parses hunk bodies by count); it must not end the hunk early
+        // with zero body lines.
+        for blank in [" ", ""] {
+            let text = format!("diff --git f.md\n@@ -2,3 +2,2 @@\n{blank}\n-l3\n l4\n");
+            let p = parse_patch(&text).unwrap();
+            assert_eq!(p.files[0].hunks.len(), 1);
+            match &p.files[0].hunks[0] {
+                Hunk::Ordinary(oh) => {
+                    assert_eq!(oh.lines.len(), 3);
+                    assert_eq!(oh.lines[0].prefix, ' ');
+                    assert_eq!(oh.lines[0].text, "");
+                    assert_eq!(oh.lines[1].prefix, '-');
+                    assert_eq!(oh.lines[1].text, "l3");
+                }
+                _ => panic!("expected ordinary, blank={blank:?}"),
+            }
         }
     }
 
