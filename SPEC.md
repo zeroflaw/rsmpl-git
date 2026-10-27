@@ -967,6 +967,28 @@ If an ordinary hunk and an RSmPL hunk edit overlapping original source ranges, t
 1. prove that the edits are compatible and merge them deterministically; or
 2. reject the patch with an overlap conflict.
 
+Engine-verbatim overlap rejection (exit 2; any overlapping pair -- semantic-semantic, ordinary-semantic, or an insertion strictly inside a deleted/replaced range):
+
+```text
+GIT_HUNK_CONFLICT
+file: src/lib.rs
+reason: overlapping edits cannot be merged
+suggestion: apply the overlapping rewrites in separate runs, or make the ranges disjoint
+```
+
+The failure carries `file:` but no `rule:`/`old_range:` lines (null fields are omitted from text output; the JSON envelope carries explicit `rule: null` / `range: null` with `file` set and the same `reason`/`suggestion` strings). Compatible (disjoint) edits merge normally per option 1 above. The canonical fence lives in Section 25.7, which contrasts this shape with the ordinary-hunk content conflict.
+
+Engine-verbatim overlap rejection (exit 2; any overlapping pair -- semantic-semantic, ordinary-semantic, or an insertion strictly inside a deleted/replaced range):
+
+```text
+GIT_HUNK_CONFLICT
+file: src/lib.rs
+reason: overlapping edits cannot be merged
+suggestion: apply the overlapping rewrites in separate runs, or make the ranges disjoint
+```
+
+The failure carries `file:` but no `rule:`/`old_range:` lines (null fields are omitted from text output; the JSON envelope carries explicit `rule: null` / `range: null` with `file` set and the same `reason`/`suggestion` strings). Compatible (disjoint) edits merge normally per option 1 above. The canonical fence lives in Section 25.7, which contrasts this shape with the ordinary-hunk content conflict.
+
 The engine must not silently reinterpret an RSmPL old-side range using accumulated offsets from previous ordinary or semantic hunks.
 
 ### 10.7 Rationale: avoiding line-number drift for LLMs
@@ -3130,6 +3152,17 @@ Instead, hunk 2 must be matched against the original AST spans for the range it 
 
 This remains true regardless of output line-count drift: a rewrite may
 produce a different number of lines than the input (in v0.1
+Engine-verbatim overlap rejection (exit 2):
+
+```text
+GIT_HUNK_CONFLICT
+file: src/lib.rs
+reason: overlapping edits cannot be merged
+suggestion: apply the overlapping rewrites in separate runs, or make the ranges disjoint
+```
+
+Text carries `file:` but no `rule:`/`old_range:` lines (JSON: `rule: null` / `range: null`, file set, same `reason`/`suggestion`). The canonical fence plus the contrast with the ordinary-hunk content conflict lives in Section 25.7.
+
 `# format=rustfmt` is rejected, so any reformatting happens via post-apply
 `cargo fmt` — later hunks still cite original lines).
 
@@ -3140,6 +3173,17 @@ Ordinary hunks retain normal unified-diff meaning, but an RSmPL-aware engine sho
 If an ordinary hunk and an RSmPL hunk target disjoint original source ranges, they may be combined normally.
 
 If they overlap, the engine must reject the patch unless it can prove that the ordinary hunk is a textual refinement of the same semantic transformation.
+
+Engine-verbatim overlap rejection (exit 2):
+
+```text
+GIT_HUNK_CONFLICT
+file: src/lib.rs
+reason: overlapping edits cannot be merged
+suggestion: apply the overlapping rewrites in separate runs, or make the ranges disjoint
+```
+
+Text carries `file:` but no `rule:`/`old_range:` lines (JSON: `rule: null` / `range: null`, file set, same `reason`/`suggestion`). The canonical fence plus the contrast with the ordinary-hunk content conflict lives in Section 25.7.
 
 Document order is the deterministic tie-breaker for non-overlapping insertions at exactly the same original insertion point: the first insertion hunk in the patch appears first (topmost) in the final file. Same-anchor capture pastes additionally gain one blank line between items (Section 20.2).
 
@@ -3441,6 +3485,30 @@ may precede its `# bind=Helper` cut (forward references, Section 20.3).
 A second capture failure needs no missing name: a hunk declaring both
 `# bind=<Name>` and `# allow=many` fails with `RSMPL_CAPTURE_CONFLICT`
 (reason: `` `# bind=<Name>` cannot be combined with `# allow=many` in v0.1
+An overlap conflict is a different `GIT_HUNK_CONFLICT` shape from the content
+failure above: it fires when two edits overlap in original coordinates
+(semantic-semantic, ordinary-semantic, or an insertion strictly inside a
+deleted/replaced range), regardless of which hunk kinds produced them.
+Engine-verbatim (exit 2):
+
+```text
+GIT_HUNK_CONFLICT
+file: src/lib.rs
+reason: overlapping edits cannot be merged
+suggestion: apply the overlapping rewrites in separate runs, or make the ranges disjoint
+```
+
+Text carries `file:` but no `rule:`/`old_range:` lines (nulls omitted; JSON
+carries explicit `rule: null` / `range: null` with `file` set and the same
+`reason`/`suggestion` strings). Contrast:
+
+| conflict | `rule` | `old_range`/`range` | `suggestion` |
+|---|---|---|---|
+| ordinary-hunk content mismatch | `""` (empty line in text) | present (`start..start+len` / JSON `range`) | null (no line in text) |
+| overlap (`overlapping edits ...`) | absent in text / `null` in JSON | absent in text / `null` in JSON | present (repair pointer) |
+
+Disjoint edits in one patch merge normally (Section 10.6 option 1).
+
 (scalar captures only) ``). Move several items with separate scalar captures
 under distinct names instead (Section 20.3).
 
@@ -3462,6 +3530,30 @@ The `rule:` line is empty (ordinary hunks carry no rule name; JSON reports
 expected text (`removal mismatch ...`, `context mismatch ...`, or
 `removal beyond EOF ...`); no `hunk:` line is ever emitted and no suggestion
 follows (JSON carries `"suggestion": null`).
+
+An overlap conflict is a different `GIT_HUNK_CONFLICT` shape from the content
+failure above: it fires when two edits overlap in original coordinates
+(semantic-semantic, ordinary-semantic, or an insertion strictly inside a
+deleted/replaced range), regardless of which hunk kinds produced them.
+Engine-verbatim (exit 2):
+
+```text
+GIT_HUNK_CONFLICT
+file: src/lib.rs
+reason: overlapping edits cannot be merged
+suggestion: apply the overlapping rewrites in separate runs, or make the ranges disjoint
+```
+
+Text carries `file:` but no `rule:`/`old_range:` lines (nulls omitted; JSON
+carries explicit `rule: null` / `range: null` with `file` set and the same
+`reason`/`suggestion` strings). Contrast:
+
+| conflict | `rule` | `old_range`/`range` | `suggestion` |
+|---|---|---|---|
+| ordinary-hunk content mismatch | `""` (empty line in text) | present (`start..start+len` / JSON `range`) | null (no line in text) |
+| overlap (`overlapping edits ...`) | absent in text / `null` in JSON | absent in text / `null` in JSON | present (repair pointer) |
+
+Disjoint edits in one patch merge normally (Section 10.6 option 1).
 
 ### 25.8 I/O conflict
 
