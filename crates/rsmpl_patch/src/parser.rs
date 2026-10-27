@@ -1311,4 +1311,18 @@ mod tests {
             "got: {msg}"
         );
     }
+
+    #[test]
+    fn parses_table_gap_directives() {
+        // T246: SPEC 9.3 names every implemented directive family.
+        let d = parse_directives(&[
+            "# returns=none".to_string(),
+            "# root=expr".to_string(),
+            "# fallback=syntax".to_string(),
+            "# symbol Old=crate::old_api".to_string(),
+            "# metavars=sigiled".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(d.len(), 5);
+    }
 }

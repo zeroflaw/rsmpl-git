@@ -712,6 +712,11 @@ hunks that already carry other directives omit it.
 | `# format=preserve` | Preserve original formatting where possible. Default recommendation. |
 | `# format=rustfmt` | Rejected in v0.1 (run `cargo fmt` after apply, Section 22.2). |
 | `# format=canonical` | Rejected in v0.1 (run `cargo fmt` after apply, Section 22.3). |
+| `# returns=none` | Minus-side requires no explicit return type (function items only, Section 14.2). |
+| `# root=item/expr/stmt/type` | Force the parse context when the shape is ambiguous (Section 13.4). |
+| `# fallback=syntax` | Allow syntactic match when `# symbol` cannot resolve (required in v0.1, Section 19). |
+| `# symbol Name=path` | Bind a semantic symbol to a fully-qualified path (Sections 9.5, 19). |
+| `# metavars=sigiled/bare` | Sigiled mode requires `$Name` in bodies; bare is the token-efficient default (Section 15.5). |
 
 ### 9.4 Metavariable directives
 
@@ -728,6 +733,8 @@ A metavariable declaration has:
 ```text
 # <kind> <name>
 ```
+
+The full implemented kind list lives in Section 15.1 (`symbol`, `expr`, `stmt`, `item`, `type`, `pat`, `generic_params`, `where_clause`, `visibility`, `qualifier`, `qualifier_list`, `block`, `macro`, `token_tree`; `identifier`/`path`/`lifetime`/`field`/`attributes` are rejected).
 
 Multiple metavariables of the same kind may be declared in separate lines:
 
