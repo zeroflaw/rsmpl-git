@@ -622,6 +622,19 @@ engine never read) is rejected with `RSMPL_PATTERN_CONFLICT` — accepting
 dead tags would be a silent no-op against Section 2.6. Bare words without
 `=` are human section text and stay ignored.
 
+Engine-verbatim (exit 2; `bogus=1` is the offending token, backticked):
+
+```text
+RSMPL_PATTERN_CONFLICT
+old_range: line 2
+reason: unknown header tag `bogus=1` (only `rule=` is supported in v0.1; remove it, see SPEC 8.3)
+```
+
+The failure carries no `rule:`/`file:`/`suggestion:` lines (null fields are
+omitted from text output; the JSON envelope carries explicit `rule: null` /
+`file: null` / `range: "line 2"` / `suggestion: null` — `line 2` is the
+hunk-header line number, not a `start..start+len` range).
+
 Most RSmPL-specific configuration should be placed in directive lines, not the hunk header.
 
 Preferred:
@@ -1145,6 +1158,19 @@ Any other `# root=` value (`pat`, `impl_item`, `trait_item`, or a typo)
 is rejected with `RSMPL_PATTERN_CONFLICT` — only the four force paths above
 are implemented in v0.1, and silently falling through to heuristic routing
 would violate Section 2.6. The remaining parse contexts are future work.
+
+Engine-verbatim (exit 2; `bogus` is the offending value, backticked):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: x
+file: a.rs
+reason: unknown `# root=` value `bogus` (only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4)
+```
+
+The failure carries `rule:`/`file:` but no `old_range:`/`suggestion:` lines
+(null fields are omitted from text output; the JSON envelope carries
+explicit `range: null` / `suggestion: null`).
 
 ---
 
@@ -3204,8 +3230,9 @@ suggestion: use `git mv` first, then one file section per path with matching a/b
 The RSmPL pattern failed to parse. Unknown directives (`# foo`,
 `# foo=bar`), `# edition=*`, and `# format_scope=*` are rejected here
 (no silent ignore, Section 9.6), as is any hunk-header `k=v` tag other
-than `rule=` (no silent dead tags, Section 8.3), any `# root=` value other
-than `item/expr/stmt/type` (no silent heuristic fallthrough, Section 13.4),
+than `rule=` (no silent dead tags — verbatim reason + envelope, Section 8.3),
+any `# root=` value other than `item/expr/stmt/type` (no silent heuristic
+fallthrough — verbatim reason + envelope, Section 13.4),
 any `# identifier/# path/# lifetime/# field` metavariable declaration
 (no kind-specific binding in v0.1, Section 15.1), any `# repeat=<value>`
 (write bare `# repeat`, Section 17.8), any `# repeat` on a
@@ -3227,9 +3254,15 @@ suggestion: check SPEC 9.3 for the supported directive list
 ```
 
 Directive-parse failures carry no `rule:`/`file:`/`range:` lines (null
+Directive-parse failures are not uniform (all exit 2). A bare unknown
+directive (`# foo=bar`) carries no `rule:`/`file:`/`range:` lines (null
 fields are omitted from text output; the JSON envelope carries explicit
-`rule: null`/`file: null`/`range: null`). Later-stage pattern failures
-(item shapes, prefixes, `# root=`, `# repeat`) include `rule:`/`file:`
+`rule: null`/`file: null`/`range: null`), while an unknown header tag
+carries `old_range: line 2` — the hunk-header line number, not a
+`start..start+len` range — with null rule/file (verbatim in Section 8.3).
+Later-stage pattern failures
+(item shapes, prefixes, `# root=` — verbatim in Section 13.4, `# repeat`)
+include `rule:`/`file:`
 with a specific reason — the body list above enumerates the categories,
 and no generic `invalid item pattern` string is ever emitted.
 

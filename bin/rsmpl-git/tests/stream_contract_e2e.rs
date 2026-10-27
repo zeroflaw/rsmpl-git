@@ -262,6 +262,8 @@ fn text_failure_keeps_stderr_code() {
 fn unknown_header_tag_fails_fast_text_and_json() {
     // T107 (SPEC 2.6/8.3): dead header tags fail fast. Text keeps the
     // stderr diagnostic; JSON carries the stdout-only envelope (exit 2).
+    // T274 (SPEC 8.3/25.3, feeds T246): verbatim reason + `old_range: line 2`
+    // envelope (header line number, null rule/file/suggestion).
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x id=y\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
@@ -270,6 +272,14 @@ fn unknown_header_tag_fails_fast_text_and_json() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("unknown header tag"), "got: {stderr}");
+    assert!(stderr.contains("old_range: line 2"), "got: {stderr}");
+    assert!(
+        stderr.contains("reason: unknown header tag `id=y` (only `rule=` is supported in v0.1; remove it, see SPEC 8.3)"),
+        "got: {stderr}"
+    );
+    assert!(!stderr.contains("rule:"), "got: {stderr}");
+    assert!(!stderr.contains("file:"), "got: {stderr}");
+    assert!(!stderr.contains("suggestion:"), "got: {stderr}");
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -279,6 +289,14 @@ fn unknown_header_tag_fails_fast_text_and_json() {
         v["error"]["code"],
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
+    assert_eq!(
+        v["error"]["reason"],
+        serde_json::json!("unknown header tag `id=y` (only `rule=` is supported in v0.1; remove it, see SPEC 8.3)")
+    );
+    assert_eq!(v["error"]["range"], serde_json::json!("line 2"));
+    assert!(v["error"]["rule"].is_null(), "got: {v}");
+    assert!(v["error"]["file"].is_null(), "got: {v}");
+    assert!(v["error"]["suggestion"].is_null(), "got: {v}");
 }
 
 #[test]
@@ -313,6 +331,34 @@ fn unknown_root_and_kind_fail_fast_text_and_json() {
             serde_json::json!("RSMPL_PATTERN_CONFLICT")
         );
     }
+    // T274 (SPEC 13.4/25.3, feeds T246): the `# root=` arm verbatim —
+    // `rule:` + `file:`, null range/suggestion, em dash before the pointer.
+    let root_patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# root=bogus\n- foo\n+ bar\n";
+    let out = run_stdin(dir.path(), root_patch, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("rule: x"), "got: {stderr}");
+    assert!(stderr.contains("file: src/lib.rs"), "got: {stderr}");
+    assert!(
+        stderr.contains("reason: unknown `# root=` value `bogus` (only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4)"),
+        "got: {stderr}"
+    );
+    assert!(!stderr.contains("old_range:"), "got: {stderr}");
+    assert!(!stderr.contains("suggestion:"), "got: {stderr}");
+    let out = run_stdin(dir.path(), root_patch, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["reason"],
+        serde_json::json!("unknown `# root=` value `bogus` (only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4)")
+    );
+    assert_eq!(v["error"]["rule"], serde_json::json!("x"));
+    assert_eq!(v["error"]["file"], serde_json::json!("src/lib.rs"));
+    assert!(v["error"]["range"].is_null(), "got: {v}");
+    assert!(v["error"]["suggestion"].is_null(), "got: {v}");
 }
 
 #[test]

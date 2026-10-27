@@ -494,6 +494,8 @@ fn differing_diff_git_paths_fail_fast_text_and_json() {
 fn unknown_directive_fails_fast_text_and_json() {
     // T113: silent no-op directives fail fast (SPEC 2.6) — text keeps the
     // stderr diagnostic, JSON carries the envelope on stdout (exit 2 both).
+    // T274 (SPEC 9.3/25.3, feeds T246): verbatim reason + suggestion, null
+    // rule/file/range on both sides of the envelope.
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# foo=bar\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
@@ -503,10 +505,17 @@ fn unknown_directive_fails_fast_text_and_json() {
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("unknown directive"), "got: {stderr}");
     assert!(
-        stderr.contains("unknown directive `#foo=bar`"),
+        stderr.contains("reason: unknown directive `#foo=bar`: # foo=bar"),
         "got: {stderr}"
     );
     assert!(stderr.contains("SPEC 9.3"), "got: {stderr}");
+    assert!(
+        stderr.contains("suggestion: check SPEC 9.3 for the supported directive list"),
+        "got: {stderr}"
+    );
+    assert!(!stderr.contains("rule:"), "got: {stderr}");
+    assert!(!stderr.contains("file:"), "got: {stderr}");
+    assert!(!stderr.contains("old_range:"), "got: {stderr}");
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -516,14 +525,16 @@ fn unknown_directive_fails_fast_text_and_json() {
         v["error"]["code"],
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
-    assert!(
-        v["error"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("unknown directive `#foo=bar`"),
-        "got: {v}"
+    assert_eq!(
+        v["error"]["reason"],
+        serde_json::json!("unknown directive `#foo=bar`: # foo=bar")
+    );
+    assert_eq!(
+        v["error"]["suggestion"],
+        serde_json::json!("check SPEC 9.3 for the supported directive list")
     );
     assert!(v["error"]["rule"].is_null(), "got: {v}");
+    assert!(v["error"]["file"].is_null(), "got: {v}");
     assert!(v["error"]["range"].is_null(), "got: {v}");
 }
 
