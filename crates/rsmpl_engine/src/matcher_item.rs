@@ -320,7 +320,6 @@ pub fn apply_item_rename_hunk(
     if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
         if hunk.attrs_policy() != AttrsPolicy::Strip
             && !minus_attrs.is_empty()
-            && !plus_attrs.is_empty()
             && !attrs_text_equal(&minus_attrs, plus_attrs)
         {
             return Err(StructuredError::new(
@@ -701,5 +700,12 @@ mod tests {
         let out = apply(&strip, "/// Local thing.\nstruct Local;\n").unwrap();
         assert!(out.contains("struct Remote;"), "got: {out}");
         assert!(!out.contains("Local thing"), "got: {out}");
+        // Plus-side attr omission is also a differ (T241, fn/general
+        // parity): the plus side must mirror the minus side exactly
+        // (SPEC 14.6), never silently drop.
+        let drop = mirror.replace("+ /// Local thing.\n", "");
+        let err = apply(&drop, "/// Local thing.\nstruct Local;\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("differ from matched attributes"), "got: {err}");
     }
 }

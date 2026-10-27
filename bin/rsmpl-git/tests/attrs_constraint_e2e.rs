@@ -149,3 +149,27 @@ fn item_plus_attrs_differ_rejected_with_needle() {
         "/// Other thing.\nstruct Other;\n"
     );
 }
+
+#[test]
+fn item_plus_attrs_dropped_rejected_with_needle() {
+    // T241: minus writes attrs, plus omits them -- fn/general hunks
+    // reject this drop with `RSMPL_PATTERN_CONFLICT` (SPEC 14.6), and
+    // item renames now match instead of applying cleanly.
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "#[inline]\nstruct Old;\n");
+    let patch = "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- #[inline]\n- struct Old\n+ struct New\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    assert!(err.contains("differ from matched attributes"), "got: {err}");
+    assert_eq!(read(dir.path(), "a.rs"), "#[inline]\nstruct Old;\n");
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(!out.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(payload["error"]["code"], "RSMPL_PATTERN_CONFLICT");
+}
