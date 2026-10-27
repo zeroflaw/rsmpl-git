@@ -41,7 +41,8 @@ impl GitSource {
             .arg("diff")
             .arg("--no-color")
             .arg("--no-ext-diff")
-            .arg("--no-renames");
+            .arg("--no-renames")
+            .arg("--unified=0");
         if self.staged {
             cmd.arg("--cached");
         }
@@ -64,6 +65,9 @@ impl GitSource {
         // express (file renames are unsupported, SPEC 6); callers
         // configure `--no-renames` above so moves surface as
         // delete+create ordinary hunks that round-trip cleanly.
+        // `--unified=0` keeps ordinary passthrough minimal-token:
+        // zero-context hunks still round-trip through `applyrs
+        // --check`, and inference reads only `-`/`+` lines.
 
         // Untracked files never appear in `git diff`; emit them as
         // new-file ordinary sections so the patch covers all pending

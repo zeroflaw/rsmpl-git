@@ -37,12 +37,13 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
-    // Compressing selections (T349 per-hunk wins on test-fn renames).
+    // Compressing selections (T349 per-hunk wins on test-fn renames;
+    // T351 zero-context splits hunks finer, so more runs compress).
     Case {
         commit: "7cfa9f0b625d351c83cfc7366664fb60d913f91b",
         rev: None,
         root: false,
-        expect_sem: 3,
+        expect_sem: 5,
     },
     Case {
         commit: "b57d0f2c3a77a18326dc2612b0eb8c2e28f229bb",
@@ -54,7 +55,7 @@ const CASES: &[Case] = &[
         commit: "12d70c6b4e3d027f22f52316243f05989afd6d55",
         rev: None,
         root: false,
-        expect_sem: 3,
+        expect_sem: 4,
     },
     // Ordinary selections (convert + round-trip, zero semantic).
     Case {

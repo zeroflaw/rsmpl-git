@@ -5699,9 +5699,11 @@ Collection: unstaged worktree-vs-index plus untracked files (emitted
 as new-file ordinary sections, since `git diff` never shows them);
 `--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
 same mechanism. `git diff` runs with `--no-color --no-ext-diff
---no-renames`: rename detection stays off because RSmPL-Git v0.1
+--no-renames --unified=0`: rename detection stays off because RSmPL-Git v0.1
 cannot express file renames (Section 6) — moves surface as
-delete+create ordinary hunks that round-trip. Binary files are
+delete+create ordinary hunks that round-trip. Context radius is 0, so
+ordinary passthrough carries no untouched context lines yet still
+round-trips. Binary files are
 stripped with a stderr `warning:` per path (a patch is UTF-8;
 `applyrs` cannot read binary worktree files). Git's trailing
 `@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL

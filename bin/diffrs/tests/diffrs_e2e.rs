@@ -682,3 +682,33 @@ fn mixed_file_compresses_sweep_hunk_and_round_trips() {
         serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(2), "got: {v}");
 }
+
+// T351: ordinary edits are collected zero-context (`--unified=0`):
+// a mid-file one-line edit emits no ` ` context body lines and
+// still round-trips through `applyrs --check`.
+#[test]
+fn ordinary_edit_emits_zero_context_and_round_trips() {
+    let dir = init_repo();
+    let before: String = (0..10).map(|i| format!("line {i}\n")).collect();
+    write(dir.path(), "f.txt", &before);
+    commit_all(dir.path());
+    let after = before.replace("line 5\n", "line FIVE\n");
+    write(dir.path(), "f.txt", &after);
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("-line 5\n"), "got: {patch}");
+    assert!(patch.contains("+line FIVE\n"), "got: {patch}");
+    let context: Vec<&str> = patch.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
