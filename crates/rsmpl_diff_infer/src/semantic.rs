@@ -1,6 +1,10 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
-//! method-to-fn, method-to-method, &-receiver strip, and use-path
-//! prefix fan-outs.
+//! method-to-function, method-to-method, &-receiver strip, and use-path
+//! prefix fan-outs. Every emission clears a token-win guard (T375): the
+//! semantic hunk is kept only when byte-smaller than the ordinary
+//! hunk(s) it replaces (bytes proxy tokens), else the ordinary text
+//! stays — small singles and tiny sweeps never cost more than the
+//! passthrough.
 //!
 //! Pure detectors over a binary-stripped native diff. Whole-file
 //! first: a section whose every pair shares one shape is fully
@@ -87,12 +91,21 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     // global order pairing stays sound. Gate failures skip straight
     // to the per-hunk fallback (T349).
     let whole = balanced && saw_hunk && minuses.len() == pluses.len() && !minuses.is_empty();
+    // T375: every whole-section candidate clears the token-win guard
+    // (byte-smaller than the ordinary section, same prelude either
+    // way); a losing shape truncates its reserved rule name and falls
+    // through to the per-hunk retry so one losing shape never vetoes
+    // winning runs in other hunks.
+    let checkpoint = used_rules.len();
     if whole && minuses.len() == 1 {
         // Single pair: fn/item rename only (a lone call rewrite has
         // no token win over the ordinary hunk; a lone heterogeneous
         // fn header likewise costs more as a slot hunk than ordinary).
         if let Some(rename) = try_item_rename(minuses[0], pluses[0], &path, used_rules) {
-            return Some(rename);
+            if rename.len() < section.len() {
+                return Some(rename);
+            }
+            used_rules.truncate(checkpoint);
         }
         return compress_section_per_hunk(section, &path, used_rules);
     }
@@ -102,25 +115,43 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     // N >= 2 heterogeneous fn/method renames compress to one slot
     // sweep (T344); fall through to the call sweep otherwise.
     if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, used_rules) {
-        return Some(slot);
+        if slot.len() < section.len() {
+            return Some(slot);
+        }
+        used_rules.truncate(checkpoint);
     }
     // N >= 2 method-to-function fan-outs (T345), method-to-method
     // renames (T347), `&`-receiver strips (T359), and use-path prefix
     // renames (T363); fall through to the bare-call sweep otherwise.
     if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, used_rules) {
-        return Some(m2f);
+        if m2f.len() < section.len() {
+            return Some(m2f);
+        }
+        used_rules.truncate(checkpoint);
     }
     if let Some(m2m) = try_method_to_method_sweep(&minuses, &pluses, &path, used_rules) {
-        return Some(m2m);
+        if m2m.len() < section.len() {
+            return Some(m2m);
+        }
+        used_rules.truncate(checkpoint);
     }
     if let Some(strip) = try_ref_method_strip_sweep(&minuses, &pluses, &path, used_rules) {
-        return Some(strip);
+        if strip.len() < section.len() {
+            return Some(strip);
+        }
+        used_rules.truncate(checkpoint);
     }
     if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, &path, used_rules) {
-        return Some(uses);
+        if uses.len() < section.len() {
+            return Some(uses);
+        }
+        used_rules.truncate(checkpoint);
     }
     if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, used_rules) {
-        return Some(sweep);
+        if sweep.len() < section.len() {
+            return Some(sweep);
+        }
+        used_rules.truncate(checkpoint);
     }
     // Per-hunk fallback (T349): the whole-section detectors above need
     // every pair in the file to share one shape, so one doc tweak, one
@@ -212,12 +243,20 @@ fn compress_section_per_hunk(
         };
         match semantic {
             Some(full) => {
-                compressed_any = true;
                 // Detectors return a full `diff --git` section; keep
                 // only the hunk body (everything after the header
                 // line) so the reassembled section keeps one header.
+                // T375: the body must beat the ordinary hunk it
+                // replaces (prelude is shared either way); else the
+                // hunk stays ordinary and the rule name is released.
                 let body = full.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-                out.push_str(body);
+                if body.len() < hunk.len() {
+                    compressed_any = true;
+                    out.push_str(body);
+                } else {
+                    used_rules.truncate(checkpoint);
+                    out.push_str(hunk);
+                }
             }
             None => {
                 // A failed detector may have reserved a rule name
@@ -1138,9 +1177,12 @@ mod tests {
 
     #[test]
     fn fn_rename_compresses() {
+        // Long-signature rename: the `fn …(...)` pattern lines are far
+        // shorter than the ordinary lines, so the semantic hunk wins
+        // (T375 guard). Short headers stay ordinary (see below).
         let raw = section(
             "f.rs",
-            "@@ -1,3 +1,3 @@\n-fn foo() {\n+fn bar() {\n     1\n }\n",
+            "@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
@@ -1151,26 +1193,37 @@ mod tests {
     }
 
     #[test]
-    fn struct_rename_compresses() {
+    fn short_fn_rename_stays_passthrough() {
+        // T375 token-win guard: a short-header single rename costs more
+        // as a semantic hunk (rule + scope + lang + body) than the one
+        // ordinary hunk it replaces.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn foo() {\n+fn bar() {\n     1\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn struct_rename_stays_passthrough() {
+        // T375: non-fn singles can never win — the pattern lines are
+        // verbatim copies of the ordinary lines, so the rule + scope
+        // overhead always exceeds the replaced `@@` header.
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-struct Old {\n+struct New {\n     x: i32,\n }\n",
         );
-        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
-        assert!(out.contains("- struct Old\n"), "got: {out}");
-        assert!(out.contains("+ struct New\n"), "got: {out}");
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
 
     #[test]
-    fn pub_struct_rename_echoes_vis() {
+    fn pub_struct_rename_stays_passthrough() {
+        // Same T375 math with a vis prefix: verbatim lines, pure overhead.
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-pub struct Old {\n+pub struct New {\n     x: i32,\n }\n",
         );
-        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
-        assert!(out.contains("- pub struct Old\n"), "got: {out}");
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
 
     #[test]
@@ -1223,11 +1276,11 @@ mod tests {
     fn call_sweep_multi_arg() {
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1, x);\n-    foo(2, y);\n+    bar(1, x);\n+    bar(2, y);\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    old_function(first, second);\n-    old_function(third, fourth);\n-    old_function(fifth, sixth);\n+    new_function(first, second);\n+    new_function(third, fourth);\n+    new_function(fifth, sixth);\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
-        assert!(out.contains("- foo(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("- old_function(E0, E1)\n"), "got: {out}");
         assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
     }
 
@@ -1235,7 +1288,7 @@ mod tests {
     fn call_sweep_split_hunks_pair_in_order() {
         let raw = section(
             "f.rs",
-            "@@ -1,2 +1,2 @@\n-    foo(1);\n+    bar(1);\n@@ -9,2 +9,2 @@\n-    foo(2);\n+    bar(2);\n",
+            "@@ -1,2 +1,2 @@\n-    old_function(first_argument);\n+    new_function(first_argument);\n@@ -9,2 +9,2 @@\n-    old_function(second_argument);\n+    new_function(second_argument);\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
@@ -1297,26 +1350,32 @@ mod tests {
     fn method_to_fn_sweep_multi_arg() {
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old(1, x);\n-    b.old(2, y);\n+    new_fn(a, 1, x);\n+    new_fn(b, 2, y);\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    source.old_operation(first, second);\n-    target.old_operation(third, fourth);\n-    other.old_operation(fifth, sixth);\n+    new_operation(source, first, second);\n+    new_operation(target, third, fourth);\n+    new_operation(other, fifth, sixth);\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
-        assert!(out.contains("- Receiver.old(E0, E1)\n"), "got: {out}");
-        assert!(out.contains("+ new_fn(Receiver, E0, E1)\n"), "got: {out}");
+        assert!(
+            out.contains("- Receiver.old_operation(E0, E1)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ new_operation(Receiver, E0, E1)\n"),
+            "got: {out}"
+        );
     }
 
     #[test]
     fn method_to_fn_sweep_zero_arg() {
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old();\n-    b.old();\n+    new_fn(a);\n+    new_fn(b);\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    source.old_operation();\n-    target.old_operation();\n-    other.old_operation();\n+    new_operation(source);\n+    new_operation(target);\n+    new_operation(other);\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(!out.contains("# expr E"), "got: {out}");
-        assert!(out.contains("- Receiver.old()\n"), "got: {out}");
-        assert!(out.contains("+ new_fn(Receiver)\n"), "got: {out}");
+        assert!(out.contains("- Receiver.old_operation()\n"), "got: {out}");
+        assert!(out.contains("+ new_operation(Receiver)\n"), "got: {out}");
     }
 
     #[test]
@@ -1359,14 +1418,14 @@ mod tests {
     fn method_to_method_sweep_compresses() {
         let raw = section(
             "f.rs",
-            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.foo(1);\n-    b.foo(2);\n-    c.foo(3);\n+    a.bar(1);\n+    b.bar(2);\n+    c.bar(3);\n }\n",
+            "@@ -1,6 +1,6 @@\n fn m() {\n-    a.old_method(1);\n-    b.old_method(2);\n-    c.old_method(3);\n-    d.old_method(4);\n+    a.new_method(1);\n+    b.new_method(2);\n+    c.new_method(3);\n+    d.new_method(4);\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("# expr Receiver\n"), "got: {out}");
-        assert!(out.contains("- Receiver.foo(E0)\n"), "got: {out}");
-        assert!(out.contains("+ Receiver.bar(E0)\n"), "got: {out}");
+        assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.new_method(E0)\n"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
@@ -1374,26 +1433,32 @@ mod tests {
     fn method_to_method_sweep_multi_arg() {
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.foo(1, x);\n-    b.foo(2, y);\n+    a.bar(1, x);\n+    b.bar(2, y);\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.old_method(first, second);\n-    b.old_method(third, fourth);\n-    c.old_method(fifth, sixth);\n+    a.new_method(first, second);\n+    b.new_method(third, fourth);\n+    c.new_method(fifth, sixth);\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
-        assert!(out.contains("- Receiver.foo(E0, E1)\n"), "got: {out}");
-        assert!(out.contains("+ Receiver.bar(E0, E1)\n"), "got: {out}");
+        assert!(
+            out.contains("- Receiver.old_method(E0, E1)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.new_method(E0, E1)\n"),
+            "got: {out}"
+        );
     }
 
     #[test]
     fn method_to_method_sweep_zero_arg() {
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.foo();\n-    b.foo();\n+    a.bar();\n+    b.bar();\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.old_operation();\n-    b.old_operation();\n-    c.old_operation();\n+    a.new_operation();\n+    b.new_operation();\n+    c.new_operation();\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(!out.contains("# expr E"), "got: {out}");
-        assert!(out.contains("- Receiver.foo()\n"), "got: {out}");
-        assert!(out.contains("+ Receiver.bar()\n"), "got: {out}");
+        assert!(out.contains("- Receiver.old_operation()\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.new_operation()\n"), "got: {out}");
     }
 
     #[test]
@@ -1465,16 +1530,24 @@ mod tests {
     #[test]
     fn free_slot_sweep_heterogeneous_compresses() {
         // Heterogeneous vis/qual across sites, rename-only per site.
+        // Long headers: the slot pattern beats the ordinary lines
+        // (T375 guard); `foo`/`bar`-scale headers stay ordinary.
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-async fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n+async fn bar(x: i32) -> i32 {\n",
+            "@@ -1,4 +1,4 @@\n-fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n-async fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n+fn new_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n+async fn new_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(out.contains("# visibility V\n"), "got: {out}");
         assert!(out.contains("# qualifier_list Q\n"), "got: {out}");
-        assert!(out.contains("- V Q fn foo G (...) W {\n"), "got: {out}");
-        assert!(out.contains("+ V Q fn bar G (...) W {\n"), "got: {out}");
+        assert!(
+            out.contains("- V Q fn old_function_name G (...) W {\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ V Q fn new_function_name G (...) W {\n"),
+            "got: {out}"
+        );
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
         assert!(
             !out.contains("impl Svc"),
@@ -1483,16 +1556,33 @@ mod tests {
     }
 
     #[test]
+    fn short_slot_sweep_stays_passthrough() {
+        // T375: two short headers cost more as a slot sweep (four slot
+        // directives + wrapper) than as two ordinary hunks.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-async fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n+async fn bar(x: i32) -> i32 {\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
     fn method_slot_sweep_compresses_with_impl_wrapper() {
         let raw = section(
             "f.rs",
-            "@@ -1,5 +1,5 @@\n impl T {\n-    fn foo(&self) {\n-    pub fn foo(&self) {\n+    fn bar(&self) {\n+    pub fn bar(&self) {\n     }\n }\n",
+            "@@ -1,5 +1,5 @@\n impl T {\n-    fn old_method_name(&self, first_argument: FirstLongType) {\n-    pub fn old_method_name(&self, first_argument: FirstLongType) {\n+    fn new_method_name(&self, first_argument: FirstLongType) {\n+    pub fn new_method_name(&self, first_argument: FirstLongType) {\n     }\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
         assert!(out.contains("impl Svc {\n"), "got: {out}");
-        assert!(out.contains("-     V Q fn foo G (...) W {\n"), "got: {out}");
-        assert!(out.contains("+     V Q fn bar G (...) W {\n"), "got: {out}");
+        assert!(
+            out.contains("-     V Q fn old_method_name G (...) W {\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+     V Q fn new_method_name G (...) W {\n"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1537,27 +1627,33 @@ mod tests {
     fn rule_names_unique_across_files() {
         let a = section(
             "a.rs",
-            "@@ -1,2 +1,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            "@@ -1,4 +1,4 @@\n-    old_function(argument1);\n-    old_function(argument2);\n-    old_function(argument3);\n+    new_function(argument1);\n+    new_function(argument2);\n+    new_function(argument3);\n",
         );
         let b = section(
             "b.rs",
-            "@@ -1,2 +1,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            "@@ -1,4 +1,4 @@\n-    old_function(argument1);\n-    old_function(argument2);\n-    old_function(argument3);\n+    new_function(argument1);\n+    new_function(argument2);\n+    new_function(argument3);\n",
         );
         let out = infer_semantic(&[a, b]).unwrap();
         validated(&out);
-        assert!(out.contains("rule=calls_foo_to_bar\n"), "got: {out}");
-        assert!(out.contains("rule=calls_foo_to_bar_2\n"), "got: {out}");
+        assert!(
+            out.contains("rule=calls_old_function_to_new_function\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("rule=calls_old_function_to_new_function_2\n"),
+            "got: {out}"
+        );
     }
 
     #[test]
     fn per_hunk_sweep_compresses_beside_ordinary_hunk() {
-        // Mixed file: hunk 1 is a 2-site call sweep, hunk 2 a body
+        // Mixed file: hunk 1 is a 3-site call sweep, hunk 2 a body
         // edit. The whole-section detectors stay passthrough; the
         // per-hunk fallback (T349) compresses hunk 1 and keeps hunk 2
         // ordinary.
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n@@ -10,3 +10,3 @@\n fn n() {\n-    1\n+    2\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    foo(argument1);\n-    foo(argument2);\n-    foo(argument3);\n+    bar(argument1);\n+    bar(argument2);\n+    bar(argument3);\n }\n@@ -10,3 +10,3 @@\n fn n() {\n-    1\n+    2\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
@@ -1573,7 +1669,7 @@ mod tests {
         // stays ordinary, the sweep still compresses (T349).
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n@@ -6,0 +7,2 @@\n+fn added() {}\n+// new\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    foo(argument1);\n-    foo(argument2);\n-    foo(argument3);\n+    bar(argument1);\n+    bar(argument2);\n+    bar(argument3);\n }\n@@ -6,0 +7,2 @@\n+fn added() {}\n+// new\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
@@ -1631,11 +1727,11 @@ mod tests {
         // Empty arg list renders as `()` with no metavars.
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.flush();\n-    &b.flush();\n+    a;\n+    b;\n }\n",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    &alpha.shutdown();\n-    &beta.shutdown();\n-    &gamma.shutdown();\n+    alpha;\n+    beta;\n+    gamma;\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated(&out);
-        assert!(out.contains("- &Receiver.flush()\n"), "got: {out}");
+        assert!(out.contains("- &Receiver.shutdown()\n"), "got: {out}");
         assert!(out.contains("+ Receiver\n"), "got: {out}");
     }
 

@@ -279,13 +279,24 @@ fn bad_repo_fails_with_envelope() {
 }
 
 // T341: a whole-file fn rename (identical body, one ident delta)
-// compresses to a single semantic hunk that round-trips.
+// compresses to a single semantic hunk that round-trips. The long
+// signature is load-bearing: the `fn …(...)` pattern lines must beat
+// the ordinary lines (T375 token-win guard) — short headers stay
+// ordinary.
 #[test]
 fn fn_rename_compresses_to_semantic_hunk() {
     let dir = init_repo();
-    write(dir.path(), "src/lib.rs", "fn foo() {\n    1\n}\n");
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n    1\n}\n",
+    );
     commit_all(dir.path());
-    write(dir.path(), "src/lib.rs", "fn bar() {\n    1\n}\n");
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n    1\n}\n",
+    );
 
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
@@ -364,30 +375,36 @@ fn call_sweep_two_files_round_trip() {
     write(
         dir.path(),
         "a.rs",
-        "fn m() {\n    foo(1);\n    foo(2);\n}\n",
+        "fn m() {\n    old_function(argument1);\n    old_function(argument2);\n    old_function(argument3);\n}\n",
     );
     write(
         dir.path(),
         "b.rs",
-        "fn n() {\n    foo(1);\n    foo(2);\n}\n",
+        "fn n() {\n    old_function(argument1);\n    old_function(argument2);\n    old_function(argument3);\n}\n",
     );
     commit_all(dir.path());
     write(
         dir.path(),
         "a.rs",
-        "fn m() {\n    bar(1);\n    bar(2);\n}\n",
+        "fn m() {\n    new_function(argument1);\n    new_function(argument2);\n    new_function(argument3);\n}\n",
     );
     write(
         dir.path(),
         "b.rs",
-        "fn n() {\n    bar(1);\n    bar(2);\n}\n",
+        "fn n() {\n    new_function(argument1);\n    new_function(argument2);\n    new_function(argument3);\n}\n",
     );
 
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("rule=calls_foo_to_bar\n"), "got: {patch}");
-    assert!(patch.contains("rule=calls_foo_to_bar_2\n"), "got: {patch}");
+    assert!(
+        patch.contains("rule=calls_old_function_to_new_function\n"),
+        "got: {patch}"
+    );
+    assert!(
+        patch.contains("rule=calls_old_function_to_new_function_2\n"),
+        "got: {patch}"
+    );
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);
@@ -697,11 +714,14 @@ fn method_to_fn_sweep_compresses_to_one_hunk() {
 #[test]
 fn mixed_file_compresses_sweep_hunk_and_round_trips() {
     let dir = init_repo();
-    let before = "fn m() {\n    foo(1);\n    foo(2);\n}\nconst A: i32 = 1;\nconst B: i32 = 2;\nconst C: i32 = 3;\nconst D: i32 = 4;\nconst E: i32 = 5;\nconst F: i32 = 6;\nconst G: i32 = 7;\nconst H: i32 = 8;\nfn n() {\n    1\n}\n";
+    let before = "fn m() {\n    foo(argument1);\n    foo(argument2);\n    foo(argument3);\n}\nconst A: i32 = 1;\nconst B: i32 = 2;\nconst C: i32 = 3;\nconst D: i32 = 4;\nconst E: i32 = 5;\nconst F: i32 = 6;\nconst G: i32 = 7;\nconst H: i32 = 8;\nfn n() {\n    1\n}\n";
     write(dir.path(), "src/lib.rs", before);
     commit_all(dir.path());
     let after = before
-        .replace("    foo(1);\n    foo(2);", "    bar(1);\n    bar(2);")
+        .replace(
+            "    foo(argument1);\n    foo(argument2);\n    foo(argument3);",
+            "    bar(argument1);\n    bar(argument2);\n    bar(argument3);",
+        )
         .replace("fn n() {\n    1\n}", "fn n() {\n    2\n}");
     write(dir.path(), "src/lib.rs", &after);
 
@@ -735,7 +755,7 @@ fn mixed_file_compresses_sweep_hunk_and_round_trips() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
-    assert_eq!(v["rules"][0]["matches"], serde_json::json!(2), "got: {v}");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(3), "got: {v}");
 }
 
 // T351: ordinary edits are collected zero-context (`--unified=0`):

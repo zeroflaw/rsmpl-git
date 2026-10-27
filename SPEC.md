@@ -5828,7 +5828,14 @@ on collision).
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —
-`diffrs` never emits an unparseable patch. Every output therefore
+`diffrs` never emits an unparseable patch. Token-win guard (T375):
+a semantic hunk is kept only when byte-smaller (bytes proxy tokens)
+than the ordinary hunk(s) it replaces — whole-section candidates
+against the whole section, per-hunk candidates against their hunk
+(prelude shared either way; ties stay ordinary); a losing shape
+falls back to ordinary (whole-section losers still retry per hunk),
+so short singles and tiny sweeps never cost more than the
+passthrough. Every output therefore
 parses by construction; the pinned shapes additionally round-trip
 through `applyrs --check` against the pre-change tree. Semantic
 validity beyond the pinned shapes is best-effort: verify with the

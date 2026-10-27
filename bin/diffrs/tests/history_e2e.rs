@@ -46,25 +46,32 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
-    // Compressing selections (T349 per-hunk wins on test-fn renames;
-    // T351 zero-context splits hunks finer, so more runs compress).
+    // Compressing selections (T359 `&`-receiver strip; T375 guard
+    // demoted the T341/T349 single-rename rows below to zero semantic
+    // — their hunks cost more than the ordinary lines — but the rows
+    // stay as convert + round-trip regression coverage).
     Case {
         commit: "7cfa9f0b625d351c83cfc7366664fb60d913f91b",
         rev: None,
         root: false,
-        expect_sem: 5,
+        expect_sem: 0,
     },
     Case {
         commit: "b57d0f2c3a77a18326dc2612b0eb8c2e28f229bb",
         rev: None,
         root: false,
-        expect_sem: 1,
+        // T375: the lone long-name test-fn rename now stays ordinary
+        // (its semantic hunk cost +160 B over the ordinary hunk), so
+        // this row pins zero semantic — still converting + round-trip.
+        expect_sem: 0,
     },
     Case {
         commit: "12d70c6b4e3d027f22f52316243f05989afd6d55",
         rev: None,
         root: false,
-        expect_sem: 4,
+        // T375: four long-name test-fn renames, each semantic hunk
+        // costlier than its ordinary hunk — zero semantic by design.
+        expect_sem: 0,
     },
     // T359 `&`-receiver strip: 5 files of `&R.join("")` -> `R` sites
     // (bare arg-position lines + `write(...)`-nested) compress to 5 hunks.
