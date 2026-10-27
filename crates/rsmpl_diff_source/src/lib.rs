@@ -122,10 +122,15 @@ impl GitSource {
                     });
                 }
             };
-            // Binary untracked files are skipped here; the infer stage
-            // strips binary hunks with a warning, and raw bytes cannot
-            // ride a UTF-8 patch.
+            // Binary untracked files cannot ride a UTF-8 patch: emit the
+            // same `Binary files … differ` marker section `git diff`
+            // shows once staged, so the infer stage strips them with a
+            // warning (T378) instead of silently dropping them (T364
+            // silent-drop class).
             if content.contains(&0) {
+                raw.push_str(&format!(
+                    "diff --git a/{path} b/{path}\nBinary files a/{path} and b/{path} differ\n"
+                ));
                 continue;
             }
             let text = String::from_utf8_lossy(&content);
@@ -222,15 +227,19 @@ fn new_file_section(path: &str, content: &str, mode: &str) -> String {
 }
 
 /// Repo-relative paths covered by a unified diff: the `b/` side of
-/// every `diff --git a/… b/…` header.
+/// every `diff --git a/… b/…` header (unquoted spaces rejoined via
+/// `split_git_paths`, T379; a single-path header yields that path).
 pub fn files_in_diff(raw: &str) -> Vec<String> {
     let mut files = Vec::new();
     for line in raw.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
-            let mut parts = rest.splitn(2, ' ');
-            let b = parts.nth(1).unwrap_or("");
-            let path = b.strip_prefix("b/").unwrap_or(b);
-            let path = path.trim_matches('"').to_string();
+            let path = match rsmpl_patch::split_git_paths(rest) {
+                Some(parts) => {
+                    let side = parts.last().cloned().unwrap_or_default();
+                    side.strip_prefix("b/").unwrap_or(&side).to_string()
+                }
+                None => continue,
+            };
             if !files.contains(&path) {
                 files.push(path);
             }
@@ -303,6 +312,19 @@ mod tests {
     fn files_in_diff_empty() {
         assert!(files_in_diff("").is_empty());
         assert!(files_in_diff(SAMPLE) == vec!["src/lib.rs"]);
+    }
+
+    #[test]
+    fn files_in_diff_rejoins_unquoted_spaces() {
+        // T379: real git never quotes spaces, so the `b/` side is
+        // rejoined via the shared splitter instead of `splitn(2, ' ')`.
+        let raw = "diff --git a/my file.txt b/my file.txt\n@@ -1 +1 @@\n-a\n+b\n";
+        assert_eq!(files_in_diff(raw), vec!["my file.txt"]);
+        // A single-path header (SPEC 6) yields that path, not "".
+        assert_eq!(
+            files_in_diff("diff --git src/lib.rs\n@@\n"),
+            vec!["src/lib.rs"]
+        );
     }
 
     #[test]

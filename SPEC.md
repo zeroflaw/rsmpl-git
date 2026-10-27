@@ -366,6 +366,9 @@ differing real paths are a file rename, which v0.1 rejects with
 file section per path with matching a/b sides (single-path form
 preferred). `/dev/null` halves stay the create/delete spelling
 (`diff --git /dev/null b/new`, `diff --git a/old /dev/null`).
+Paths may be quoted; unquoted paths may contain spaces (real git never
+quotes spaces) — the header splits at the first `b/`-led part, or at a
+`/dev/null` half, else it fails to parse (T379).
 Repeated sections for one path are allowed and share original coordinates (Section 10): every `-old,len` cites the pre-patch file, never rebased by earlier sections or hunks.
 
 Example:
@@ -5751,7 +5754,10 @@ delete+create ordinary hunks that round-trip. Context radius is 0, so
 ordinary passthrough carries no untouched context lines yet still
 round-trips. Binary files are
 stripped with a stderr `warning:` per path (a patch is UTF-8;
-`applyrs` cannot read binary worktree files). Top-level `.history/`
+`applyrs` cannot read binary worktree files); untracked binaries emit
+the same marker sections `git diff` shows once staged, so they warn
+uniformly instead of vanishing silently, and an all-binary change
+reports empty + warnings (exit 0), not an error (T378). Top-level `.history/`
 audit files are skipped the same way (one `warning:`; they are tool
 output, never lowering inputs). Git's trailing
 `@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL

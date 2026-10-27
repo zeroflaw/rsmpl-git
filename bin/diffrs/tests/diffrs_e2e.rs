@@ -1049,6 +1049,97 @@ fn exec_bit_untracked_round_trips_through_real_apply() {
     );
 }
 
+// T378: a tracked binary-only change has nothing expressible in
+// RSmPL-Git — it reports empty + a warning (exit 0), not an
+// `empty patch` exit-2 error.
+#[test]
+fn tracked_binary_only_change_warns_and_reports_no_changes() {
+    let dir = init_repo();
+    write(dir.path(), "a.txt", "hello\n");
+    std::fs::write(dir.path().join("img.bin"), [0u8, 1, 2, 3]).unwrap();
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("img.bin"), [0u8, 1, 2, 4]).unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("img.bin"), "got: {stderr}");
+    assert!(stderr.contains("(no changes)"), "got: {stderr}");
+}
+
+// T378: an untracked binary is stripped with the same warning (never
+// silently dropped — T364 class); alongside text the text converts.
+#[test]
+fn untracked_binary_is_stripped_with_warning() {
+    let dir = init_repo();
+    write(dir.path(), "a.txt", "hello\n");
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("new.bin"), [0u8, 9, 9, 9]).unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("new.bin"), "got: {stderr}");
+
+    write(dir.path(), "a.txt", "hello world\n");
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git a/a.txt b/a.txt"), "got: {patch}");
+    assert!(!patch.contains("new.bin"), "binary embedded: {patch}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("new.bin"), "got: {stderr}");
+
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+// T379: real git never quotes spaces in `diff --git` headers — a
+// space-named file converts and round-trips through `applyrs --check`.
+#[test]
+fn space_path_converts_and_round_trips() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "my file.txt", "a\n");
+    commit_all(dir.path());
+    write(dir.path(), "my file.txt", "b\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        patch.contains("diff --git a/my file.txt b/my file.txt"),
+        "got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn mode_only_pending_change_converts_and_checks_clean() {

@@ -44,6 +44,17 @@ pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
         });
     }
     let (kept, stripped) = strip_binary_sections(raw);
+    if kept.is_empty() && !stripped.is_empty() {
+        // All-binary change (T378): nothing expressible in RSmPL-Git (a
+        // patch is UTF-8), so report empty + the stripped names (the
+        // binary warns) instead of failing the empty passthrough below
+        // as an authoring typo. Section-less non-binary input still
+        // falls through to the parse error.
+        return Ok(InferredPatch {
+            rsmpl: String::new(),
+            stripped_binary: stripped,
+        });
+    }
     // Native hunks often carry git's `@@ -a,b +c,d @@ <funcname>`
     // section title; RSmPL hunk headers admit only `rule=` tags
     // (SPEC 8.3), so ordinary titles must go — exactly like `git
@@ -155,10 +166,12 @@ fn flush(
 }
 
 fn b_side_path(rest: &str) -> Option<String> {
-    let mut parts = rest.splitn(2, ' ');
-    parts.nth(1).map(|b| {
-        b.strip_prefix("b/")
-            .unwrap_or(b)
+    // Unquoted spaces rejoined via the shared splitter (T379); a
+    // single-path header yields that path.
+    rsmpl_patch::split_git_paths(rest).map(|parts| {
+        let side = parts.last().cloned().unwrap_or_default();
+        side.strip_prefix("b/")
+            .unwrap_or(&side)
             .trim_matches('"')
             .to_string()
     })
@@ -225,6 +238,24 @@ mod tests {
         let out = infer_rsmpl(&raw).unwrap();
         assert_eq!(out.rsmpl, TEXT_STRIPPED);
         assert_eq!(out.stripped_binary, vec!["img.bin"]);
+    }
+
+    #[test]
+    fn all_binary_change_is_empty_not_an_error() {
+        // T378: a binary-only change has nothing expressible in RSmPL-Git
+        // (a patch is UTF-8) — report empty + the stripped names (the
+        // binary warns) instead of failing the empty passthrough as an
+        // authoring typo. Mixed input still keeps the text side.
+        let out = infer_rsmpl(BINARY_SECTION).unwrap();
+        assert!(out.rsmpl.is_empty(), "got: {}", out.rsmpl);
+        assert_eq!(out.stripped_binary, vec!["img.bin"]);
+        let two = format!(
+            "{BINARY_SECTION}diff --git a/other.bin b/other.bin\nBinary files a/other.bin and b/other.bin differ\n"
+        );
+        let out = infer_rsmpl(&two).unwrap();
+        assert!(out.rsmpl.is_empty());
+        assert_eq!(out.stripped_binary, vec!["img.bin", "other.bin"]);
+        rsmpl_patch::parse_patch(TEXT_STRIPPED).expect("sanity");
     }
 
     #[test]

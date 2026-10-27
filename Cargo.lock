@@ -263,6 +263,7 @@ dependencies = [
 name = "rsmpl_diff_source"
 version = "0.1.0"
 dependencies = [
+ "rsmpl_patch",
  "thiserror",
 ]
 

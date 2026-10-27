@@ -205,10 +205,9 @@ fn is_version_marker(line: &str) -> bool {
 
 fn parse_diff_git_header(line: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix("diff --git ")?;
-    // Paths may be quoted; split into one or two paths honoring quotes.
     // A single path (`diff --git <path>`, SPEC 6) is equivalent to the
     // duplicated two-path form; the two-path form stays for renames/compat.
-    let parts = split_paths(rest)?;
+    let parts = split_git_paths(rest)?;
     if parts.len() == 1 {
         return Some((parts[0].clone(), parts[0].clone()));
     }
@@ -216,6 +215,39 @@ fn parse_diff_git_header(line: &str) -> Option<(String, String)> {
         return None;
     }
     Some((parts[0].clone(), parts[1].clone()))
+}
+
+/// Split the rest of a `diff --git <old> <new>` header into paths,
+/// honoring quotes. Real git never quotes spaces, so unquoted paths may
+/// contain them (`diff --git a/my file.txt b/my file.txt`, T379): when
+/// whitespace-splitting yields more than two parts, rejoin at the first
+/// `b/`-led part (the joined old side must start with `a/`), else split
+/// at a `/dev/null` create/delete half, else fail (error as before).
+pub fn split_git_paths(rest: &str) -> Option<Vec<String>> {
+    let parts = split_paths(rest)?;
+    if parts.len() <= 2 {
+        return Some(parts);
+    }
+    if let Some(i) = parts.iter().position(|p| p.starts_with("b/")) {
+        if i > 0 && parts[..i].join(" ").starts_with("a/") {
+            return Some(vec![parts[..i].join(" "), parts[i..].join(" ")]);
+        }
+        return None;
+    }
+    if parts.len() > 2 && is_dev_null(&parts[parts.len() - 1]) {
+        return Some(vec![
+            parts[..parts.len() - 1].join(" "),
+            parts[parts.len() - 1].clone(),
+        ]);
+    }
+    if is_dev_null(&parts[0]) {
+        return Some(vec![parts[0].clone(), parts[1..].join(" ")]);
+    }
+    None
+}
+
+fn is_dev_null(p: &str) -> bool {
+    p == "/dev/null" || p == "dev/null"
 }
 
 fn split_paths(s: &str) -> Option<Vec<String>> {
@@ -1344,6 +1376,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.files[0].target_path, "my file.rs");
+    }
+
+    #[test]
+    fn unquoted_space_paths_rejoin() {
+        // T379: real git never quotes spaces, so `diff --git` headers
+        // arrive unquoted (`a/my file.txt b/my file.txt`) — the shared
+        // splitter rejoins at the `b/`-led part.
+        let p = parse_patch("diff --git a/my file.txt b/my file.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n")
+            .unwrap();
+        assert_eq!(p.files[0].target_path, "my file.txt");
+        // `/dev/null` create/delete halves split at the marker.
+        let p = parse_patch("diff --git a/my new.txt /dev/null\n@@ -1,1 +0,0 @@\n-a\n").unwrap();
+        assert_eq!(p.files[0].target_path, "my new.txt");
+        assert!(p.files[0].is_deleted_file);
+        let p =
+            parse_patch("diff --git a/gone file.txt b/gone file.txt\ndeleted file mode 100644\n")
+                .unwrap();
+        assert_eq!(p.files[0].target_path, "gone file.txt");
+        assert!(p.files[0].is_deleted_file);
+        // A genuinely renamed space path is still a rename (SPEC 6).
+        let e = parse_patch("diff --git a/my file.txt b/other file.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n")
+            .unwrap_err();
+        assert!(format!("{e}").contains("rename"), "got: {e}");
+        // Garbage with no valid split still fails fast.
+        assert!(parse_diff_git_header("diff --git a/x y z").is_none());
     }
 
     #[test]
