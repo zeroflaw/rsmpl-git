@@ -4258,6 +4258,32 @@ carries explicit `rule: null` / `range: null` with `file` set and the same
 
 Disjoint edits in one patch merge normally (Section 10.6 option 1).
 
+A git-spawn failure is a third `GIT_HUNK_CONFLICT` shape: the lowered
+diff was computed, but the `git apply` / `git apply --check` child
+could not be spawned (`git` missing from `PATH`; `PATH` lookup, no
+`--git-path` override). Engine-verbatim (exit 2, apply mode — text
+stdout is empty; `--check` text mode prints the lowering on stdout
+and this envelope on stderr, already pinned by
+`failing_check_still_writes_output`):
+
+```text
+GIT_HUNK_CONFLICT
+reason: failed to run `git apply` (is git installed?): No such file or directory (os error 2)
+```
+
+The trailing `<os error>` is platform-dependent (Linux reports
+`No such file or directory (os error 2)`); pins assert the verbatim
+`` failed to run `git apply` (is git installed?):  `` prefix. Text
+carries only the bare `reason:` line (no `rule:`/`file:`/
+`old_range:`/`suggestion:` lines; JSON carries explicit `rule: null` /
+`file: null` / `range: null` / `suggestion: null` with the same
+`reason` string). Unlike the overlap shape above, the spawn shape
+carries no `file:`. Full fences live in Section 31.7; the two sibling
+send/wait arms (`failed to feed patch to git: <os error>`,
+`` failed waiting for `git apply`: <os error> ``) share this
+context-less envelope by construction but never surface via the CLI
+(defensive backstops, documented in 31.7, not pinnable).
+
 ### 25.8 I/O conflict
 
 A filesystem operation failed: the patch file or stdin could not be read,
@@ -4910,10 +4936,34 @@ Implementations should document their exact comment attachment algorithm.
 
 The reference CLI shells out to bare `git apply` / `git apply --check`
 (`PATH` lookup, no `--git-path` override) for its final check/apply step, so
-`git` must be on `PATH`; without it that step fails with
-`` failed to run `git apply` (is git installed?) `` under
-`GIT_HUNK_CONFLICT`. Matching, lowering, and `--output` are
+`git` must be on `PATH`. Matching, lowering, and `--output` are
 pure and never spawn git.
+
+When the child cannot be spawned (`git` missing from `PATH`), the
+step fails with `GIT_HUNK_CONFLICT` (exit 2). Engine-verbatim text
+envelope (apply mode; `--check` text mode prints the lowering on
+stdout and this envelope on stderr):
+
+```text
+GIT_HUNK_CONFLICT
+reason: failed to run `git apply` (is git installed?): No such file or directory (os error 2)
+```
+
+The trailing `<os error>` is platform-dependent (Linux reports
+`No such file or directory (os error 2)`); the verbatim prefix is
+`` failed to run `git apply` (is git installed?):  ``. Text carries
+only the bare `reason:` line (no `rule:`/`file:`/`range:`/
+`suggestion:` lines); the JSON envelope carries the same `reason`
+with explicit `rule: null` / `file: null` / `range: null` /
+`suggestion: null` (stdout-only, history line on stderr, SPEC D.2).
+
+Two sibling arms share this context-less envelope by construction
+(`git_error()` sets no rule/file/range/suggestion) but never surface
+via the CLI — defensive backstops for library callers, documented but
+not pinnable (a small patch fits the stdin pipe even against an
+instantly-exiting `git`; `wait` fails only on OS-level errors):
+`failed to feed patch to git: <os error>` (stdin write failed) and
+`` failed waiting for `git apply`: <os error> `` (child wait failed).
 
 ---
 
