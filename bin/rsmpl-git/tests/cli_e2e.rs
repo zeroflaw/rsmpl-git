@@ -1588,3 +1588,40 @@ fn trailing_comma_params_json_spans() {
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
     assert_eq!(v["rules"][0]["spans"], serde_json::json!([[1, 1]]));
 }
+
+#[test]
+fn too_many_matches_saturates_at_two() {
+    // T246: four call sites under `# allow=one` fail with the saturated
+    // `expected one match, found 2` wording (matchers stop counting at 2),
+    // in text stderr and in the JSON envelope alike (SPEC 25.4).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn main() {\n    foo(1);\n    foo(2);\n    foo(3);\n    foo(4);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,6 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains("expected one match, found 2"),
+        "got: {stderr}"
+    );
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_MATCH_CONFLICT")
+    );
+    assert_eq!(
+        v["error"]["reason"],
+        serde_json::json!("expected one match, found 2")
+    );
+    // File untouched by the failed run.
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(4)"));
+}

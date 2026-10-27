@@ -3132,10 +3132,14 @@ RSMPL_MATCH_CONFLICT
 rule: rename_calls
 file: src/lib.rs
 old_range: 40..47
-expected: one
-actual: three
-suggestion: add "# allow=many" if multiple rewrites are intended
+reason: expected one match, found 2
+suggestion: add `# allow=many` if multiple rewrites are intended
 ```
+
+(Text mode prints `reason:`/`suggestion:` lines; the count saturates at
+2 under `# allow=one`, so the example never shows an exact total — see
+the saturation note below. JSON mode carries the same `reason` string in
+its `{version, error: {...}}` envelope, Section D.2.)
 
 A zero-match failure names the file to read instead:
 
