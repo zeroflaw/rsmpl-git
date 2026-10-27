@@ -1403,14 +1403,13 @@ To match a generic function with a where clause:
 ```diff
 @@ -20,12 @@ rule=rename_where_foo
 # lang=rust
-- fn foo<T>(...)
-+ fn bar<T>(...)
-  where
-      T: Clone,
-  {
+- fn foo<T>(...) where T: Clone {
++ fn bar<T>(...) where T: Clone {
       ...
   }
 ```
+
+The `where` clause lives on the `fn` pattern line: `- fn foo<T>(...) where T: Clone {`. A pattern line without `where` requires its absence (like every other slot, Section 14.1) — the multi-line `where`-as-context spelling never constrains the slot.
 
 To abstract over generic parameters and where clauses:
 
@@ -3449,11 +3448,8 @@ where
 diff --git src/lib.rs
 @@ -30,12 @@ rule=rename_complex_foo
 # lang=rust
-- pub async unsafe fn foo<T>(...)
-+ pub async unsafe fn bar<T>(...)
-  where
-      T: Clone,
-  {
+- pub async unsafe fn foo<T>(...) where T: Clone {
++ pub async unsafe fn bar<T>(...) where T: Clone {
       ...
   }
 ```
