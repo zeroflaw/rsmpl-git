@@ -1,7 +1,7 @@
 //! T286: engine-verbatim fn-slot `...` / body + item-shape + use-path tail
 //! rejections (SPEC 14.7 / 14.8 / 14.9 / 25.3).
 //!
-//! All ten fail at the pattern-parse stage: `RSMPL_PATTERN_CONFLICT`
+//! All eleven fail at the pattern-parse stage: `RSMPL_PATTERN_CONFLICT`
 //! (exit 2, `rule:`/`file:` set in text mode, explicit `range: null` /
 //! `suggestion: null` in JSON, worktree untouched in both modes).
 //! `{kind}`/kind/`{body}`/`{seg}` placeholders echo the offending
@@ -138,5 +138,14 @@ fn use_missing_path_rejected() {
         USE_BASE,
         "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# allow=many\n- use\n+ use crate::new\n",
         "missing path after `use` (write a bare `use <path>` prefix)",
+    );
+}
+
+#[test]
+fn concrete_item_shape_enum_rejected() {
+    check_ruled_null_envelope(
+        "enum Old { A }\n",
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- enum Old { A }\n+ enum New { A }\n",
+        "concrete item shape after `<enum> <name>` is not supported in v1 (write the bare `<enum> <Name>` form; visibility, generics and bodies are preserved)",
     );
 }

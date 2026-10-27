@@ -117,3 +117,14 @@ fn impl_visibility_illegal_verbatim() {
     let v = check_json(patch, "src/lib.rs", "struct Old {}\n");
     assert_eq!(v["error"]["reason"], serde_json::json!(reason), "got: {v}");
 }
+
+#[test]
+fn unsafe_prefix_illegal_enum_verbatim() {
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- unsafe enum Old\n+ unsafe enum New\n";
+    let reason =
+        "`unsafe` is only legal on `trait`/`impl` headers, not `enum` (write the bare `<enum> <Name>` form)";
+    check_text(patch, "src/lib.rs", "enum Old { A }\n", reason);
+    let v = check_json(patch, "src/lib.rs", "enum Old { A }\n");
+    assert_eq!(v["error"]["reason"], serde_json::json!(reason), "got: {v}");
+}
