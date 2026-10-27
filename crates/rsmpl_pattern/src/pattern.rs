@@ -925,12 +925,35 @@ fn first_fn_block(text: &str) -> String {
 /// falls through to fn/macro/call classification). Either side being an
 /// item shape while the other is not — or a kind mismatch — is a hard
 /// `PatternConflict`, never a silent fallthrough.
+///
+/// Escape hatch (T149): when `parse_side` fails on a side but both raw
+/// sides parse as Rust types (e.g. `- impl std::fmt::Display`, where the
+/// multi-segment bound trips the bare-name gate), the hunk falls through
+/// to the general type matcher instead of failing as a malformed rename.
+/// Genuine item typos (`struct Old<T>`, `$Meta`, `auto trait`) never parse
+/// as types, so they still fail here.
 fn classify_item_rename(
     minus_raw: &str,
     plus_raw: &str,
 ) -> Result<Option<PatternKind>, StructuredError> {
-    let minus = crate::item_rename::parse_side(minus_raw)?;
-    let plus = crate::item_rename::parse_side(plus_raw)?;
+    let minus = match crate::item_rename::parse_side(minus_raw) {
+        Ok(m) => m,
+        Err(e) => {
+            if is_type_pair(minus_raw, plus_raw) {
+                return Ok(None);
+            }
+            return Err(e);
+        }
+    };
+    let plus = match crate::item_rename::parse_side(plus_raw) {
+        Ok(p) => p,
+        Err(e) => {
+            if is_type_pair(minus_raw, plus_raw) {
+                return Ok(None);
+            }
+            return Err(e);
+        }
+    };
     match (minus, plus) {
         (Some(mside), Some(pside)) => {
             let mk = mside.kind;
@@ -975,16 +998,43 @@ fn classify_item_rename(
                 plus_attrs: pattrs,
             }))
         }
-        (Some(_), None) => Err(StructuredError::new(
-            ErrorCode::PatternConflict,
-            "item rename plus side must be a bare `<kind> <Name>` pattern matching the minus kind",
-        )),
-        (None, Some(_)) => Err(StructuredError::new(
-            ErrorCode::PatternConflict,
-            "item rename minus side must be a bare `<kind> <Name>` pattern matching the plus kind",
-        )),
+        (Some(_), None) => {
+            // `impl Trait` type patterns (T149): a bare `impl Name` minus
+            // with a non-item plus (e.g. `Box<dyn Display>`) is a general
+            // type rewrite, not a malformed item rename — fall through
+            // when both sides parse as Rust types. Anything else stays a
+            // hard authoring error (fail over guessing).
+            if is_type_pair(minus_raw, plus_raw) {
+                return Ok(None);
+            }
+            Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "item rename plus side must be a bare `<kind> <Name>` pattern matching the minus kind",
+            ))
+        }
+        (None, Some(_)) => {
+            // Symmetric with the above: a non-item minus with a bare-item
+            // plus falls through only when both sides are Rust types.
+            if is_type_pair(minus_raw, plus_raw) {
+                return Ok(None);
+            }
+            Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "item rename minus side must be a bare `<kind> <Name>` pattern matching the plus kind",
+            ))
+        }
         (None, None) => Ok(None),
     }
+}
+
+/// True when both pattern sides parse as Rust types (T149): lets `impl
+/// Trait` type rewrites (`- impl Display` / `+ Box<dyn Display>`) fall
+/// through the item-rename classifier to the general type matcher instead
+/// of failing as malformed renames. Raw text (declared metavars are plain
+/// idents here); backticked literals stay hard errors — fail safe.
+fn is_type_pair(minus_raw: &str, plus_raw: &str) -> bool {
+    syn::parse_str::<syn::Type>(minus_raw.trim()).is_ok()
+        && syn::parse_str::<syn::Type>(plus_raw.trim()).is_ok()
 }
 
 #[cfg(test)]
@@ -1140,6 +1190,28 @@ mod tests {
             c.kind
         );
         assert!(c.unbound_plus.is_empty());
+    }
+
+    #[test]
+    fn impl_trait_multisegment_pair_routes_to_general_type() {
+        // T149: `- impl std::fmt::Display` trips the bare-name gate in
+        // `parse_side`, but both sides are Rust types, so the hunk falls
+        // through to the general type matcher instead of failing.
+        let h = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- impl std::fmt::Display\n+ Box<dyn std::fmt::Display>\n",
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(
+                &c.kind,
+                PatternKind::General {
+                    shape: GeneralShape::Type,
+                    ..
+                }
+            ),
+            "got: {:?}",
+            c.kind
+        );
     }
 
     #[test]

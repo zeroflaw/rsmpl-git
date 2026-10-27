@@ -11,7 +11,8 @@
 //!   calls, assignment, field access, indexing, arrays, tuples, struct
 //!   literals, ranges, `await`, `?`). Anything else rejects the candidate.
 //! - `Type`: a general Rust type over a bounded variant set (paths with
-//!   generic args, references, slices, arrays, tuples, parens, `_`).
+//!   generic args, references, slices, arrays, tuples, parens, raw
+//!   pointers, fn pointers, `impl Trait`, `dyn Trait`, `_`).
 //!
 //! Matching is structural with placeholder binders (`__RSMPL_X` idents
 //! standing for declared metavariables). Repeated occurrences must be
@@ -433,9 +434,87 @@ fn match_type(pat: &syn::Type, tgt: &syn::Type, cx: &mut MatchCx) -> bool {
         }
         (syn::Type::Paren(a), syn::Type::Paren(b)) => match_type(&a.elem, &b.elem, cx),
         (syn::Type::Group(a), syn::Type::Group(b)) => match_type(&a.elem, &b.elem, cx),
+        (syn::Type::Ptr(a), syn::Type::Ptr(b)) => {
+            // `*const T` never matches `*mut T`; the pointee recurses so a
+            // `# type T` placeholder binds.
+            render(&a.const_token) == render(&b.const_token)
+                && render(&a.mutability) == render(&b.mutability)
+                && match_type(&a.elem, &b.elem, cx)
+        }
+        (syn::Type::BareFn(a), syn::Type::BareFn(b)) => {
+            // `for<'a>` binders are ignored (lifetime-wildcard spirit);
+            // unsafety/ABI compare strictly; variadics never match (C1
+            // rejects `...` in patterns, so a variadic target fails safe).
+            a.variadic.is_none()
+                && b.variadic.is_none()
+                && render(&a.unsafety) == render(&b.unsafety)
+                && render(&a.abi) == render(&b.abi)
+                && a.inputs.len() == b.inputs.len()
+                && a.inputs
+                    .iter()
+                    .zip(b.inputs.iter())
+                    .all(|(x, y)| match_type(&x.ty, &y.ty, cx))
+                && match_return_type(&a.output, &b.output, cx)
+        }
+        (syn::Type::ImplTrait(a), syn::Type::ImplTrait(b)) => {
+            match_bounds(&a.bounds, &b.bounds, cx)
+        }
+        (syn::Type::TraitObject(a), syn::Type::TraitObject(b)) => {
+            // `dyn` presence compares strictly; a bare path is a different
+            // variant (`Type::Path`) and never reaches this arm.
+            a.dyn_token.is_some() == b.dyn_token.is_some() && match_bounds(&a.bounds, &b.bounds, cx)
+        }
         // `_` matches any type.
         (syn::Type::Infer(_), _) => true,
         (syn::Type::Never(_), syn::Type::Never(_)) => true,
+        _ => false,
+    }
+}
+
+/// Match `impl Trait` / `dyn Trait` bound lists structurally (T149): same
+/// length, each bound matches; plain lifetime bounds are wildcards per the
+/// SPEC deliberate-wildcards rule, `for<'a>` binders and `?` modifiers
+/// compare strictly.
+fn match_bounds(
+    pat: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>,
+    tgt: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>,
+    cx: &mut MatchCx,
+) -> bool {
+    pat.len() == tgt.len()
+        && pat
+            .iter()
+            .zip(tgt.iter())
+            .all(|(a, b)| match_type_param_bound(a, b, cx))
+}
+
+fn match_type_param_bound(
+    pat: &syn::TypeParamBound,
+    tgt: &syn::TypeParamBound,
+    cx: &mut MatchCx,
+) -> bool {
+    match (pat, tgt) {
+        // Lifetimes are wildcards in v1 (documented).
+        (syn::TypeParamBound::Lifetime(_), syn::TypeParamBound::Lifetime(_)) => true,
+        (syn::TypeParamBound::Trait(a), syn::TypeParamBound::Trait(b)) => {
+            render(&a.modifier) == render(&b.modifier)
+                && render(&a.lifetimes) == render(&b.lifetimes)
+                && match_path(&a.path, &b.path, cx)
+        }
+        _ => render_eq(pat, tgt),
+    }
+}
+
+/// Match `fn` return types structurally (T149): absent/absent matches, and
+/// a whole-type placeholder (`T`) binds the target span like elsewhere.
+fn match_return_type(pat: &syn::ReturnType, tgt: &syn::ReturnType, cx: &mut MatchCx) -> bool {
+    match (pat, tgt) {
+        (syn::ReturnType::Default, syn::ReturnType::Default) => true,
+        (syn::ReturnType::Type(_, a), syn::ReturnType::Type(_, b)) => {
+            if let Some(name) = single_placeholder_type(a, cx) {
+                return cx.bind_span(&name, b.span());
+            }
+            match_type(a, b, cx)
+        }
         _ => false,
     }
 }
@@ -1078,6 +1157,15 @@ mod tests {
     }
 
     #[test]
+    fn impl_trait_multisegment_bound_rewrites() {
+        // T149: the realistic `impl std::fmt::Display` spelling (which
+        // trips the item-rename bare-name gate) rewrites end to end.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=boxed\n# lang=rust\n- impl std::fmt::Display\n+ Box<dyn std::fmt::Display>\n";
+        let out = apply(patch, "fn a(x: impl std::fmt::Display) {}\n").unwrap();
+        assert!(out.contains("Box<dyn std::fmt::Display>"), "got: {out}");
+    }
+
+    #[test]
     fn wraps_binary_expr() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=wrap\n# lang=rust\n# allow=many\n# expr E\n- E + 1\n+ E.wrapping_add(1)\n";
         let src = "fn a() {\n    let x = y + 1;\n    let z = y + 2;\n}\n";
@@ -1288,7 +1376,9 @@ mod tests {
                 reason: "no match found",
                 suggestion: NO_MATCH,
             },
-            // R5: `dyn Trait` as the general type.
+            // R5 remainder (T149 implements pointers/fn/impl/dyn): a
+            // single-segment placeholder bound never matches a
+            // multi-segment path (`dyn T` vs `dyn std::fmt::Display`).
             Row {
                 patch: "@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type T\n- Box<dyn T>\n+ Box<dyn T>\n",
                 file: "fn a(x: Box<dyn std::fmt::Display>) {}\n",
@@ -1416,6 +1506,74 @@ mod tests {
         // (SPEC 18.6 R3 exception): `P(T)` never equals angle-bracketed `Vec<u8>`.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type P\n# type T\n- P(T)\n+ Box<T>\n";
         let err = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn raw_pointer_constness_is_structural() {
+        // T149: `*const T` binds `T=u8` and substitutes; `*mut` stays.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=ptr\n# lang=rust\n# type T\n- *const T\n+ *mut T\n";
+        let out = apply(patch, "fn a(x: *const u8) {}\n").unwrap();
+        assert!(out.contains("*mut u8"), "got: {out}");
+        assert!(!out.contains("*const u8"), "got: {out}");
+    }
+
+    #[test]
+    fn raw_pointer_constness_mismatch_rejects() {
+        // T149: `*const u8` never matches a `*mut u8` target (fail safe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=ptr\n# lang=rust\n- *const u8\n+ *mut u8\n";
+        let err = apply(patch, "fn a(x: *mut u8) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn impl_trait_rewrites_structurally() {
+        // T149: `impl Display` matches and rewrites; a longer bound list
+        // on the target rejects (fail safe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=boxed\n# lang=rust\n- impl Display\n+ Box<dyn Display>\n";
+        let out = apply(patch, "fn a(x: impl Display) {}\n").unwrap();
+        assert!(out.contains("Box<dyn Display>"), "got: {out}");
+        let err = apply(patch, "fn a(x: impl Display + Send) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn dyn_trait_binds_through_placeholder() {
+        // T149: `Box<dyn T>` binds `T=Display`; the `+ Send` tail is
+        // literal and preserved.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=dynsend\n# lang=rust\n# type T\n- Box<dyn T>\n+ Box<dyn T + Send>\n";
+        let out = apply(patch, "fn a(x: Box<dyn Display>) {}\n").unwrap();
+        assert!(out.contains("Box<dyn Display + Send>"), "got: {out}");
+    }
+
+    #[test]
+    fn dyn_trait_requires_dyn_on_both_sides() {
+        // T149: `dyn Display` never matches a bare `Display` (different
+        // variants), and `impl Display` never matches `dyn Display`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=d\n# lang=rust\n- dyn Display\n+ dyn Send\n";
+        let err = apply(patch, "fn a(x: Display) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=d\n# lang=rust\n- impl Display\n+ Box<dyn Display>\n";
+        let err = apply(patch, "fn a(x: dyn Display) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn fn_pointer_matches_and_binds_repeated_metavar() {
+        // T149: `fn(T) -> T` binds `T=u8` twice with equality; a
+        // heterogeneous `fn(u8) -> u16` target rejects.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=cb\n# lang=rust\n# type T\n- fn(T) -> T\n+ fn(T) -> Box<T>\n";
+        let out = apply(patch, "fn a(cb: fn(u8) -> u8) {}\n").unwrap();
+        assert!(out.contains("fn(u8) -> Box<u8>"), "got: {out}");
+        let err = apply(patch, "fn a(cb: fn(u8) -> u16) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn fn_pointer_unsafety_mismatch_rejects() {
+        // T149: a plain `fn(i32)` pattern never matches `unsafe fn(i32)`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=cb\n# lang=rust\n- fn(i32)\n+ fn(u8)\n";
+        let err = apply(patch, "fn a(cb: unsafe fn(i32)) {}\n").unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 }
