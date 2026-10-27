@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,4 +2,4 @@
+-    let a = &v.join("");
+-    let b = &p.join("");
+-    let c = &v.join("");
+-    let d = &p.join("");
++    let a = v;
++    let b = p;
++    let c = v;
++    let d = p;

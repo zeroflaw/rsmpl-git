@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=unref_join
+# scope=file
+# allow=many
+# expr E
+- &E.join("")
++ E

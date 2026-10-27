@@ -24,6 +24,8 @@ the table embedded in the top-level README.
 | 08-rename-fn-big-body | rename over a 54-line body (`...` keeps it) | 122 B / 7 ln | 149 B / 6 ln | 18% |
 | 09-sig-evolution | evolve 2 signatures, bodies preserved | 253 B / 14 ln | 251 B / 9 ln | -1% |
 | 10-item-rename | 3 bare-pair item renames in one file | 225 B / 15 ln | 210 B / 12 ln | -7% |
+| 11-repeat-general-expr | `repeat` folds nested `E + 0` in one hunk (general-expr shape) | 109 B / 8 ln | 213 B / 11 ln | 49% |
+| 12-amp-receiver | `&E.join("")` to `E` over 4 sites, 1 hunk (general-expr `&` bypass) | 102 B / 7 ln | 255 B / 12 ln | 60% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Single-ident edits (09, 10) are size-parity — there the payoff is not bytes
