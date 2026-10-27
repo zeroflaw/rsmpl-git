@@ -3096,7 +3096,11 @@ a typo'd `struct Betta` previews the real `struct Beta` one line further
 down, not the nearer `struct Alpha`. The preview is a single line of at most
 200 chars of source (plus a short `kind name at line N` label, whole string
 bounded); `suggestion` is unchanged. An empty file has nothing to preview
-and keeps the bare `no match found` reason.
+and keeps the bare `no match found` reason. If the preview shows a
+`let-else` target, a block / `if` / `match` / loop / closure expression,
+a `P @` subpattern, or a macro type, the shape itself is outside v0.1
+scope (Section 18.6 rows R1 / R2 / R4 / R5) — rewrite it with an
+ordinary hunk instead of re-shaping the pattern.
 
 ### 25.5 Symbol conflict
 
