@@ -3038,6 +3038,38 @@ In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST o
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
+The four shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fence in Section 25.6, which sets `suggestion:`):
+
+```text
+RSMPL_CAPTURE_CONFLICT
+rule: r
+file: src/lib.rs
+reason: only one `# bind=<Name>` per hunk is supported in v0.1
+```
+
+```text
+RSMPL_CAPTURE_CONFLICT
+rule: r
+file: src/lib.rs
+reason: v0.1 `# bind=` is only supported on item-capture cut hunks (`- I`)
+```
+
+```text
+RSMPL_CAPTURE_CONFLICT
+rule: r
+file: src/lib.rs
+reason: v0.1 `# use=` is only supported on pure insertion hunks (`+ Name`)
+```
+
+```text
+RSMPL_CAPTURE_CONFLICT
+rule: r
+file: src/lib.rs
+reason: duplicate `# bind=Helper` (scalar captures must be unique)
+```
+
+In the last fence `Helper` echoes the offending `# bind=` name.
+
 
 Unlike v0.4, captures are not limited to later hunks in document order. Implementations must support **forward capture references** within the same patch file. A `# use=Helper` hunk may appear before the hunk that declares `# bind=Helper`.
 
@@ -3719,7 +3751,10 @@ A second capture failure needs no missing name: a hunk declaring both
 `# bind=<Name>` and `# allow=many` fails with `RSMPL_CAPTURE_CONFLICT`
 (reason: `` `# bind=<Name>` cannot be combined with `# allow=many` in v0.1
 (scalar captures only) ``). Move several items with separate scalar captures
-under distinct names instead (Section 20.3).
+under distinct names instead (Section 20.3). The failure carries `rule:`/`file:`
+like the shape fences in Section 20.3 (text omits the null `range:`/`suggestion:` lines,
+JSON carries explicit nulls); suggestion is null — the missing-capture fence
+above is the only 25.6 entry with a set suggestion.
 
 ### 25.7 Git hunk conflict
 
