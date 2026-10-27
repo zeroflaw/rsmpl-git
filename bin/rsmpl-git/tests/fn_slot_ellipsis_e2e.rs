@@ -133,3 +133,52 @@ fn ellipsis_in_generics_where_return_fails_fast() {
         assert!(stdout.contains(needle), "got: {stdout}");
     }
 }
+
+#[test]
+fn unterminated_signature_fails_fast_with_needle() {
+    // T174: a dropped `{` lets the return/where accumulator swallow the
+    // body lines, tripping the T161 `...`-content gate with a needle that
+    // blames the slot content. Name the missing brace instead.
+    let cases = [
+        (
+            "fn rtest(x: i32) -> i32 {\n    x\n}\n",
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=t\n# scope=file\n# lang=rust\n- fn rtest(...) -> i32\n+ fn rtest2(...) -> i32\n      ...\n  }\n",
+        ),
+        (
+            "fn wtest<T>(x: T) where T: Clone {\n    x\n}\n",
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=t\n# scope=file\n- fn wtest<T>(...)\n- where T: Clone\n+ fn wtest2<T>(...)\n+ where T: Clone\n      ...\n  }\n",
+        ),
+    ];
+    for (src, patch) in cases {
+        let dir = init_repo();
+        write(dir.path(), "src/lib.rs", src);
+        let before = read(dir.path(), "src/lib.rs");
+        let out = run_stdin(dir.path(), patch, &["--check"]);
+        assert!(!out.status.success(), "must fail");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+        assert!(stderr.contains("missing its opening"), "got: {stderr}");
+        assert_eq!(read(dir.path(), "src/lib.rs"), before, "untouched");
+    }
+}
+
+#[test]
+fn brace_on_where_line_applies() {
+    // T174 PA control: the `{` may sit on the trailing `where` line —
+    // only the unterminated shape fails.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn wtest<T>(x: T) where T: Clone {\n    x\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=t\n# scope=file\n# lang=rust\n- fn wtest<T>(...)\n- where T: Clone {\n+ fn wtest2<T>(...)\n+ where T: Clone {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("fn wtest2"), "got: {stdout}");
+}

@@ -1409,7 +1409,7 @@ To match a generic function with a where clause:
   }
 ```
 
-The `where` clause lives on the `fn` pattern line: `- fn foo<T>(...) where T: Clone {`. A pattern line without `where` requires its absence (like every other slot, Section 14.1) — the multi-line `where`-as-context spelling never constrains the slot.
+The `where` clause lives on the `fn` pattern line: `- fn foo<T>(...) where T: Clone {`. A pattern line without `where` requires its absence (like every other slot, Section 14.1) — the multi-line `where`-as-context spelling never constrains the slot. The signature must be terminated by `{` (which may sit on the `fn` line or on a trailing `where` line) or `;`: an unterminated tail swallows the body `...` into the slot text and fails fast with a missing-brace needle.
 
 To abstract over generic parameters and where clauses:
 

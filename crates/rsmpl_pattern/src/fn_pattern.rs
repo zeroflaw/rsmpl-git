@@ -223,6 +223,16 @@ pub(crate) fn doc_comment_to_attr(trimmed_line: &str) -> Option<String> {
     Some(format!("#[doc = \"{escaped}\"]"))
 }
 
+/// Needle for an unterminated fn signature (T174): the return/where
+/// accumulator ran to end-of-tokens, so it swallowed trailing body lines
+/// (`...`, `}`) into the slot text. The real fault is the missing `{`
+/// (or `;`), not the slot content — say so before the `...`-content
+/// gates (T161) can misfire on the swallowed tokens.
+fn unterminated_sig(slot: &str) -> String {
+    format!(
+        "fn pattern {slot} is missing its opening `{{` (or `;` for declarations): the signature swallowed the body lines — put the brace on the signature line (SPEC 14.5)"
+    )
+}
 /// Parse a single function pattern string like
 /// `pub async fn foo<T>(...) -> T where T: Clone { ... }`.
 ///
@@ -484,6 +494,9 @@ pub fn parse_fn_pattern(
                 acc.push(toks[i].clone());
                 i += 1;
             }
+            if i == toks.len() && acc.iter().any(|t| t == "..." || t == "}") {
+                return Err(fail(unterminated_sig("`->` return type")));
+            }
             if acc.is_empty() {
                 return Err(fail("`->` without return type in fn pattern".to_string()));
             }
@@ -509,6 +522,9 @@ pub fn parse_fn_pattern(
         while i < toks.len() && toks[i] != "{" && toks[i] != ";" {
             acc.push(toks[i].clone());
             i += 1;
+        }
+        if i == toks.len() && acc.iter().any(|t| t == "..." || t == "}") {
+            return Err(fail(unterminated_sig("`where` clause")));
         }
         if acc.len() == 1 && where_metas.contains(&acc[0]) {
             where_clause = WherePat::Meta(acc[0].clone());
@@ -896,6 +912,40 @@ mod tests {
             &[],
             &[],
             &[],
+            &["W".into()],
+            false,
+        )
+        .unwrap();
+        assert_eq!(w.where_clause, WherePat::Meta("W".into()));
+    }
+
+    #[test]
+    fn unterminated_signature_fails_fast_with_needle() {
+        // T174: without a `{`/`;` terminator the return/where accumulator
+        // swallows the trailing body lines, tripping the T161 `...`-content
+        // gate with a needle that blames the slot content. Name the real fault.
+        for (shape, needle) in [
+            ("fn rtest(...) -> i32\n...\n}", "`->` return type"),
+            ("fn wtest<T>(...)\nwhere T: Clone\n...\n}", "`where` clause"),
+        ] {
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("missing its opening"), "unexpected: {err}");
+            assert!(err.contains(needle), "unexpected: {err}");
+        }
+        // Terminated `...` slots still hit the T161 content gates; `;`
+        // declarations and bare `W`-meta tails still parse.
+        let err = parse_fn_pattern("fn bar(...) -> ... { ... }", &[], &[], &[], &[], false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("return type"), "unexpected: {err}");
+        assert!(parse("fn foo(...) -> i32;").body_ellipsis);
+        let w = parse_fn_pattern(
+            "fn foo G (...) W",
+            &[],
+            &[],
+            &["G".into()],
             &["W".into()],
             false,
         )
