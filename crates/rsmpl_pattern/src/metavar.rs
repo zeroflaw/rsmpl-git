@@ -81,15 +81,6 @@ impl MetavarTable {
         }
         out
     }
-
-    /// Warn (not error) on lowercase metavariable names per SPEC 15.2.
-    pub fn lowercase_warnings(&self) -> Vec<String> {
-        self.kinds
-            .keys()
-            .filter(|n| n.starts_with(|c: char| c.is_ascii_lowercase()))
-            .map(|n| format!("metavariable `{n}` is lowercase (UpperCamel recommended)"))
-            .collect()
-    }
 }
 
 /// Classification of a pattern token for the engine.

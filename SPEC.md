@@ -2292,7 +2292,7 @@ Name validation is case-insensitive: any leading letter-or-`_` followed
 by alphanumeric-or-`_` characters is accepted (lowercase included),
 with no rejection path and no configuration knob in v0.1. Uppercase
 stays a style recommendation so patterns read apart from ordinary Rust
-identifiers.
+identifiers. No warning is emitted for lowercase names in v0.1.
 
 ### 15.3 Declaration examples
 
@@ -5398,8 +5398,8 @@ Rules:
 - A truncated report (`--diff-max-lines N` cut lines off) is
   review-only: never pipe truncated stdout to `git apply`. Re-run
   without the flag or take the full diff from `--output`.
-- `warning:` lines (`… treating as new (empty) file`, `skipping …:
-  …`, `history: cannot …`) go to stderr in both modes. A `--format json` consumer parsing
+- `warning:` lines (`… treating as new (empty) file`,
+-  `history: cannot …`) go to stderr in both modes. A `--format json` consumer parsing
   stdout must also read stderr, or it will miss them. The `history: …`
   archive line goes to stderr in all modes (stdout stays pure diff-or-report).
 
