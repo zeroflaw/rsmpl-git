@@ -2868,10 +2868,12 @@ For example, if the range points to the middle of a function and `scope=anchor` 
 Default.
 
 The matched AST node must be fully contained in the old-side range.
+Probed shape: an `fn` item spanning lines 1-4 is not matched by a mid-body `@@ -2,2 @@` range (node not fully inside); a multiline call spanning lines 2-4 is not matched by a first-line `@@ -2,1 @@` range either.
 
 #### `scope=anchor`
 
 The first concrete non-ellipsis token in the pattern must be inside the old-side range.
+Probed shape: the same mid-body `@@ -2,2 @@` range does not match the `fn` either (anchor sits on the `fn` keyword line, outside the range); a multiline call's first line `@@ -2,1 @@` matches (anchor inside), while its middle line `@@ -3,1 @@` does not.
 
 Useful for matching a call inside a larger expression or statement.
 
@@ -2880,12 +2882,14 @@ Useful for matching a call inside a larger expression or statement.
 #### `scope=overlap`
 
 The matched AST node may overlap the old-side range.
+Probed shape: the mid-body `@@ -2,2 @@` fn range matches, and so does a middle-line `@@ -3,1 @@` range over a multiline call — any overlap suffices.
 
 Useful when the provided line range cuts through a larger node.
 
 #### `scope=exact`
 
 The matched AST node span must exactly equal the old-side range after trivia normalization.
+Probed shape: a multiline call spanning lines 2-4 matches `@@ -2,3 @@` (full span) but not `@@ -2,1 @@` or `@@ -3,1 @@`; a single-line call matches its line range; an `fn` spanning lines 1-4 matches `@@ -1,4 @@` but not `@@ -2,2 @@`.
 
 Useful for precise item movement.
 
