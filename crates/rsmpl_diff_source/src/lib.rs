@@ -44,7 +44,6 @@ impl GitSource {
             .arg("diff")
             .arg("--no-color")
             .arg("--no-ext-diff")
-            .arg("--no-renames")
             .arg("--unified=0");
         if self.staged {
             cmd.arg("--cached");
@@ -64,11 +63,9 @@ impl GitSource {
         }
         let mut raw = String::from_utf8_lossy(&out.stdout).to_string();
         // `git diff` detects renames by default (`similarity index`
-        // + `rename from/to` headers), which RSmPL-Git v0.1 cannot
-        // express (file renames are unsupported, SPEC 6); callers
-        // configure `--no-renames` above so moves surface as
-        // delete+create ordinary hunks that round-trip cleanly.
-        // `--unified=0` keeps ordinary passthrough minimal-token:
+        // + `rename from/to` headers), which applyrs lowers back to
+        // rename sections (T377) -- moves stay moves instead of
+        // delete+create pairs. `--unified=0` keeps ordinary passthrough minimal-token:
         // zero-context hunks still round-trip through `applyrs
         // --check`, and inference reads only `-`/`+` lines.
 

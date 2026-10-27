@@ -467,27 +467,25 @@ fn symbol_in_macro_shape_is_pattern_conflict() {
 }
 
 #[test]
-fn differing_diff_git_paths_fail_fast_text_and_json() {
-    // T29: differing a/b paths are a file rename, rejected fail-fast
-    // (SPEC 6/25.2) instead of silently writing to the b-side.
+fn differing_diff_git_paths_apply_as_rename() {
+    // T377: differing a/b paths are a file rename section (SPEC 6) --
+    // applied via `git apply` rename, not rejected (replaces the T29
+    // fail-fast; fuller pins live in `rename_e2e.rs`).
     let dir = init_repo();
     write(dir.path(), "src/old.rs", "fn a() {}\n");
-    let patch = "diff --git a/src/old.rs b/src/new.rs\n@@ -1,1 +1,1 @@\n-fn a() {}\n+fn a() {}\n";
+    let patch = "diff --git a/src/old.rs b/src/new.rs\nrename from src/old.rs\nrename to src/new.rs\n--- a/src/old.rs\n+++ b/src/new.rs\n@@ -1,1 +1,1 @@\n-fn a() {}\n+fn b() {}\n";
     let out = run_stdin(dir.path(), patch, &[]);
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
-    assert!(stderr.contains("rename"), "got: {stderr}");
-    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let v: serde_json::Value =
-        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
     assert_eq!(
-        v["error"]["code"],
-        serde_json::json!("RSMPL_PARSE_CONFLICT")
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(v["version"], serde_json::json!(1));
+    assert_eq!(read(dir.path(), "src/new.rs"), "fn b() {}\n");
+    assert!(
+        std::fs::symlink_metadata(dir.path().join("src/old.rs")).is_err(),
+        "old path must be gone"
+    );
 }
 
 #[test]

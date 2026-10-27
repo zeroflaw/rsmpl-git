@@ -53,25 +53,11 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
             if let Some(sec) = current.take() {
                 patch.files.push(sec);
             }
-            // T29: differing real paths are a file rename, rejected fail-fast
-            // (SPEC 6/25.2). `/dev/null` halves stay the create/delete spelling.
-            if old != "/dev/null"
-                && old != "dev/null"
-                && new != "/dev/null"
-                && new != "dev/null"
-                && strip_ab_prefix(&old) != strip_ab_prefix(&new)
-            {
-                return Err(StructuredError::new(
-                    ErrorCode::ParseConflict,
-                    format!("file rename {old} -> {new} is not supported in v0.1"),
-                )
-                .with_file(strip_ab_prefix(&new))
-                .with_suggestion(
-                    "use `git mv` first, then one file section per path \
-                     with matching a/b sides (see SPEC 6)",
-                )
-                .into());
-            }
+            // T377: differing real paths are a file rename section
+            // (SPEC 6) -- accepted and lowered back to `rename
+            // from/to`. `/dev/null` halves stay the create/delete
+            // spelling. Genuinely different paths were rejected
+            // before v0.1 rename support (T29).
             current = Some(FileSection {
                 old_path: old.clone(),
                 new_path: new.clone(),
@@ -1121,20 +1107,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_differing_diff_git_paths_as_rename() {
-        // T29: differing real paths are a file rename, rejected fail-fast
-        // (SPEC 6/25.2) instead of silently writing to the b-side.
-        let text = "diff --git a/src/old.rs b/src/new.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
-        let err = parse_patch(text).unwrap_err();
-        let ParseError::Structured(s) = &err else {
-            panic!("expected structured PARSE_CONFLICT, got: {err}");
-        };
-        assert_eq!(s.code, ErrorCode::ParseConflict);
-        assert!(s.message.contains("rename"), "got: {err}");
-        assert!(
-            s.message.contains("old.rs") && s.message.contains("new.rs"),
-            "got: {err}"
-        );
+    fn accepts_differing_diff_git_paths_as_rename() {
+        // T377: differing real paths are a file rename section (SPEC
+        // 6) -- accepted, target resolves to the new side. Replaces
+        // the T29 fail-fast rejection.
+        let text = "diff --git a/src/old.rs b/src/new.rs\nrename from src/old.rs\nrename to src/new.rs\n--- a/src/old.rs\n+++ b/src/new.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n";
+        let p = parse_patch(text).unwrap();
+        assert_eq!(p.files.len(), 1);
+        assert!(p.files[0].is_rename());
+        assert_eq!(p.files[0].target_path, "src/new.rs");
+        assert!(!p.files[0].is_new_file);
+        assert!(!p.files[0].is_deleted_file);
+        // Pure renames (headers only, no hunks) parse too.
+        let pure = parse_patch(
+            "diff --git a/src/old.rs b/src/new.rs\nsimilarity index 100%\nrename from src/old.rs\nrename to src/new.rs\n",
+        )
+        .unwrap();
+        assert!(pure.files[0].is_rename());
+        assert!(pure.files[0].hunks.is_empty());
     }
 
     #[test]
@@ -1395,10 +1385,11 @@ mod tests {
                 .unwrap();
         assert_eq!(p.files[0].target_path, "gone file.txt");
         assert!(p.files[0].is_deleted_file);
-        // A genuinely renamed space path is still a rename (SPEC 6).
-        let e = parse_patch("diff --git a/my file.txt b/other file.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n")
-            .unwrap_err();
-        assert!(format!("{e}").contains("rename"), "got: {e}");
+        // A genuinely renamed space path is a rename section (T377).
+        let p = parse_patch("diff --git a/my file.txt b/other file.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n")
+            .unwrap();
+        assert!(p.files[0].is_rename());
+        assert_eq!(p.files[0].target_path, "other file.txt");
         // Garbage with no valid split still fails fast.
         assert!(parse_diff_git_header("diff --git a/x y z").is_none());
     }

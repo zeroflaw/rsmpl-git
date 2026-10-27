@@ -14,6 +14,6 @@ pub use apply::{apply_with_git, check_with_git};
 pub use diff::{
     assemble_patch, file_line_stats, mode_change_section,
     unified_diff_for_deleted_file_with_context, unified_diff_for_file_with_context,
-    unified_diff_for_new_file_with_context, unified_diff_for_typechange_with_context,
-    with_mode_lines,
+    unified_diff_for_new_file_with_context, unified_diff_for_rename_with_context,
+    unified_diff_for_typechange_with_context, with_mode_lines,
 };

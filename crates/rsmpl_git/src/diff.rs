@@ -157,6 +157,47 @@ pub fn with_mode_lines(section: &str, old_mode: &str, new_mode: &str) -> String 
     out
 }
 
+/// Build a `diff --git` section for a file rename (`old_rel` -> `new_rel`).
+///
+/// Emits `rename from/to` headers (+ `--- a/old` / `+++ b/new` and
+/// 0-context hunks when the content differs; headers only for a pure
+/// rename -- exactly what real git shows -- T377). `similarity index`
+/// and `index` lines are omitted: `git apply` needs neither, so the
+/// lowering stays minimal (same doctrine as the T343/T374 strips).
+/// `old_mode`/`new_mode` carry a mode flip declared by the input
+/// section (both `Some` and differing); otherwise no mode lines.
+/// Always returns `Some` -- even a content-equal rename must lower
+/// (to the headers-only shape), never silently drop.
+#[allow(clippy::too_many_arguments)]
+pub fn unified_diff_for_rename_with_context(
+    old_rel: &str,
+    new_rel: &str,
+    old: &str,
+    new: &str,
+    old_mode: Option<&str>,
+    new_mode: Option<&str>,
+    context: usize,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("diff --git a/{old_rel} b/{new_rel}\n"));
+    out.push_str(&format!("rename from {old_rel}\n"));
+    out.push_str(&format!("rename to {new_rel}\n"));
+    if let (Some(o), Some(n)) = (old_mode, new_mode) {
+        if o != n {
+            out.push_str(&format!("old mode {o}\nnew mode {n}\n"));
+        }
+    }
+    if old == new {
+        return out;
+    }
+    out.push_str(&format!("--- a/{old_rel}\n"));
+    out.push_str(&format!("+++ b/{new_rel}\n"));
+    let diff = similar::TextDiff::from_lines(old, new);
+    let hunks = diff.unified_diff().context_radius(context).to_string();
+    out.push_str(&hunks);
+    out
+}
+
 /// Assemble per-file sections into one patch document.
 pub fn assemble_patch(sections: Vec<String>) -> String {
     let mut out = String::new();
@@ -415,8 +456,67 @@ mod tests {
     }
 
     #[test]
-    fn typechange_empty_sides_emit_headers_only_pair() {
-        // T364: empty halves no longer drop -- the pair stays complete
+    fn rename_with_content_change_emits_rename_headers_and_hunks() {
+        // T377: rename+modify lowers to rename headers + ---/+++ +
+        // hunks, with no similarity/index lines (git apply needs
+        // neither) -- the minimal appliable shape.
+        let d = unified_diff_for_rename_with_context(
+            "old.txt",
+            "new.txt",
+            "a\n",
+            "b\n",
+            None,
+            None,
+            0,
+        );
+        assert!(d.contains("diff --git a/old.txt b/new.txt"), "got: {d}");
+        assert!(d.contains("rename from old.txt"), "got: {d}");
+        assert!(d.contains("rename to new.txt"), "got: {d}");
+        assert!(d.contains("--- a/old.txt"), "got: {d}");
+        assert!(d.contains("+++ b/new.txt"), "got: {d}");
+        assert!(d.contains("-a\n") && d.contains("+b\n"), "got: {d}");
+        assert!(!d.contains("similarity"), "got: {d}");
+        assert!(!d.contains("index "), "got: {d}");
+    }
+
+    #[test]
+    fn rename_pure_is_headers_only() {
+        // T377: a pure rename lowers to headers only, exactly what
+        // real git shows -- and never to an empty string.
+        let d = unified_diff_for_rename_with_context(
+            "old.txt",
+            "new.txt",
+            "same\n",
+            "same\n",
+            None,
+            None,
+            0,
+        );
+        assert!(d.contains("rename from old.txt"), "got: {d}");
+        assert!(d.contains("rename to new.txt"), "got: {d}");
+        assert!(!d.contains("@@"), "got: {d}");
+        assert!(!d.contains("--- "), "got: {d}");
+    }
+
+    #[test]
+    fn rename_carries_mode_flip() {
+        // T377: a rename that also flips the mode keeps both.
+        let d = unified_diff_for_rename_with_context(
+            "old.sh",
+            "new.sh",
+            "x\n",
+            "x\n",
+            Some("100644"),
+            Some("100755"),
+            0,
+        );
+        assert!(d.contains("old mode 100644"), "got: {d}");
+        assert!(d.contains("new mode 100755"), "got: {d}");
+        assert!(!d.contains("@@"), "got: {d}");
+    }
+
+    #[test]
+    fn typechange_empty_sides_emit_headers_only_pair() {        // T364: empty halves no longer drop -- the pair stays complete
         // (delete headers + create headers), in git order.
         let pair = unified_diff_for_typechange_with_context("f", "", "", false, "120000", 0);
         assert_eq!(pair.len(), 2, "got: {pair:?}");

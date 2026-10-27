@@ -47,6 +47,12 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     if !header.starts_with("diff --git ") {
         return None;
     }
+    // T377: rename sections stay ordinary passthrough. Detectors key
+    // emissions to the b-side path, which would seed from the wrong
+    // file; rename passthrough is already near-minimal.
+    if is_rename_header(header) {
+        return None;
+    }
     let path = b_side_path(header)?;
     if !path.ends_with(".rs") {
         return None;
@@ -1152,12 +1158,37 @@ fn unique_rule(used: &mut Vec<String>, base: &str) -> String {
     }
 }
 
+/// True when a `diff --git` header names a rename (differing real
+/// sides, T377) via the shared space-aware splitter.
+fn is_rename_header(header: &str) -> bool {
+    let header = header.lines().next().unwrap_or(header);
+    let Some(rest) = header.strip_prefix("diff --git ") else {
+        return false;
+    };
+    let Some(parts) = rsmpl_patch::split_git_paths(rest) else {
+        return false;
+    };
+    if parts.len() != 2 {
+        return false;
+    }
+    let old = parts[0].strip_prefix("a/").unwrap_or(&parts[0]);
+    let new = parts[1].strip_prefix("b/").unwrap_or(&parts[1]);
+    if old == "/dev/null" || old == "dev/null" || new == "/dev/null" || new == "dev/null" {
+        return false;
+    }
+    old != new
+}
+
 fn b_side_path(header: &str) -> Option<String> {
+    // Shared space-aware splitter (T379/T380): real git never quotes
+    // spaces, so the old `splitn(2, ' ')` mis-split them (space-path
+    // `.rs` files silently never compressed).
+    let header = header.lines().next().unwrap_or(header);
     let rest = header.strip_prefix("diff --git ")?;
-    let mut parts = rest.splitn(2, ' ');
-    parts.nth(1).map(|b| {
-        b.strip_prefix("b/")
-            .unwrap_or(b)
+    rsmpl_patch::split_git_paths(rest).map(|parts| {
+        let side = parts.last().cloned().unwrap_or_default();
+        side.strip_prefix("b/")
+            .unwrap_or(&side)
             .trim_matches('"')
             .to_string()
     })
@@ -1173,6 +1204,34 @@ mod tests {
 
     fn validated(patch: &str) {
         rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+    }
+
+    #[test]
+    fn rename_sections_stay_ordinary_passthrough() {
+        // T377: rename sections never compress -- detectors key
+        // emissions to the b-side path, which would seed from the
+        // wrong file. The content below is the `fn_rename_compresses`
+        // shape (a proven winner), yet the rename header vetoes it.
+        let raw = "diff --git a/old.rs b/new.rs\nsimilarity index 89%\nrename from old.rs\nrename to new.rs\n--- a/old.rs\n+++ b/new.rs\n@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n";
+        assert!(infer_semantic(&[raw.to_string()]).is_none());
+        assert!(is_rename_header("diff --git a/old.rs b/new.rs"));
+        assert!(!is_rename_header("diff --git a/f.rs b/f.rs"));
+        assert!(!is_rename_header(
+            "diff --git a/gone.rs b/gone.rs\ndeleted file mode 100644"
+        ));
+    }
+
+    #[test]
+    fn space_path_rs_sections_compress() {
+        // T380: the old `splitn(2, ' ')` b-side mis-split unquoted
+        // space paths (real git never quotes them), so a space-path
+        // `.rs` section silently never compressed. Shared splitter
+        // recovers the proven-winner shape.
+        let raw = "diff --git a/my file.rs b/my file.rs\n--- a/my file.rs\n+++ b/my file.rs\n@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n";
+        let out = infer_semantic(&[raw.to_string()]).expect("must compress");
+        validated(&out);
+        assert!(out.contains("diff --git a/my file.rs b/my file.rs"), "got: {out}");
+        assert!(out.contains("- fn foo(...) {"), "got: {out}");
     }
 
     #[test]

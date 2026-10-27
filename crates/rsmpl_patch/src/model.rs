@@ -24,6 +24,33 @@ impl FileSection {
     pub fn target(&self) -> &str {
         &self.target_path
     }
+
+    /// True for a file rename section: both halves are real paths
+    /// (neither `/dev/null`) and the stripped paths differ (T377).
+    /// diffrs emits these with rename detection on; applyrs lowers
+    /// them back to `rename from/to` sections.
+    pub fn is_rename(&self) -> bool {
+        if is_dev_null(&self.old_path) || is_dev_null(&self.new_path) {
+            return false;
+        }
+        stripped_path(&self.old_path) != stripped_path(&self.new_path)
+    }
+}
+
+/// Strip the `a/`/`b/` diff prefix (mirrors the parser's
+/// `strip_ab_prefix` for the two-path form).
+pub fn stripped_path(p: &str) -> String {
+    if let Some(s) = p.strip_prefix("a/") {
+        return s.to_string();
+    }
+    if let Some(s) = p.strip_prefix("b/") {
+        return s.to_string();
+    }
+    p.to_string()
+}
+
+fn is_dev_null(p: &str) -> bool {
+    p == "/dev/null" || p == "dev/null"
 }
 
 /// Unified-diff hunk header ranges + trailing tags.

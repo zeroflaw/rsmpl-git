@@ -360,11 +360,13 @@ hunk            ::= ordinary_hunk | rsmpl_hunk
 A single path (`diff --git src/lib.rs`) is equivalent to the duplicated
 two-path form (`diff --git a/src/lib.rs b/src/lib.rs`); an optional
 `a/`/`b/` prefix is stripped either way. The two-path form stays for
-compatibility with Git tooling. The two stripped paths must be identical:
-differing real paths are a file rename, which v0.1 rejects with
-`RSMPL_PARSE_CONFLICT` (Section 25.2) — run `git mv` first, then write one
-file section per path with matching a/b sides (single-path form
-preferred). `/dev/null` halves stay the create/delete spelling
+compatibility with Git tooling. The two stripped paths are usually
+identical; differing real paths are a file rename section (T377):
+hunks cite old-side coordinates and apply against the old file's
+content, and the section lowers back to `rename from`/`rename to`
+(+ `---`/`+++` and hunks when the content differs; headers only for a
+pure rename, exactly git's shape). RSmPL hunks may appear in rename
+sections and rewrite old-side content. `/dev/null` halves stay the create/delete spelling
 (`diff --git /dev/null b/new`, `diff --git a/old /dev/null`).
 Paths may be quoted; unquoted paths may contain spaces (real git never
 quotes spaces) — the header splits at the first `b/`-led part, or at a
@@ -3938,16 +3940,12 @@ reason: rewritten file does not parse as Rust: expected an expression
 
 One trigger is a `$`-prefixed spelling in bare (or default) mode: `$E` is not a metavariable reference there, so the literal `$` survives into the output (Section 15.5).
 
-A `diff --git a/old b/new` section whose stripped paths differ is also a
-parse conflict (a file rename, rejected fail-fast per Section 2.6 — v0.1
-never silently writes to the b-side):
-
-```text
-RSMPL_PARSE_CONFLICT
-file: src/new.rs
-reason: file rename a/src/old.rs -> b/src/new.rs is not supported in v0.1
-suggestion: use `git mv` first, then one file section per path with matching a/b sides (see SPEC 6)
-```
+A `diff --git a/old b/new` section whose stripped paths differ is a
+file rename section (Section 6): it applies against the old file's
+content and lowers back to `rename from`/`rename to` (never silently
+writing to the b-side as a plain modify). The pre-T377 fail-fast
+rejection (`file rename ... is not supported in v0.1` with the
+`git mv`-first suggestion) is retired.
 
 Three further structural rejections share the `RSMPL_PARSE_CONFLICT`
 code (all exit 2). First, the RSmPL-only elision gate (Section 8):
@@ -5748,9 +5746,9 @@ empty files emit headers only (no hunk, exactly real git's shape);
 untracked executables emit `100755` (unix) so +x round-trips (T364);
 `--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
 same mechanism. `git diff` runs with `--no-color --no-ext-diff
---no-renames --unified=0`: rename detection stays off because RSmPL-Git v0.1
-cannot express file renames (Section 6) — moves surface as
-delete+create ordinary hunks that round-trip. Context radius is 0, so
+--unified=0` (rename detection stays on: moves surface as `rename
+from/to` sections that round-trip through `applyrs`, T377).
+Context radius is 0, so
 ordinary passthrough carries no untouched context lines yet still
 round-trips. Binary files are
 stripped with a stderr `warning:` per path (a patch is UTF-8;
@@ -5830,7 +5828,10 @@ on collision).
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
   `&`-receiver sites, single-segment use prefixes, paths, macro
-  interiors) stays ordinary-hunk passthrough.
+  interiors, rename sections — detectors key emissions to the
+  b-side path, which would seed from the wrong file, so differing
+  `a/old b/new` sides stay ordinary passthrough, T377) stays
+  ordinary-hunk passthrough.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —

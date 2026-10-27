@@ -2,7 +2,7 @@
 //! RSmPL-Git patch (v0: ordinary-hunk passthrough).
 //!
 //! T341: semantic inference (fn/item rename, N-site call sweep) with
-//! round-trip pins; T343: hunk-title strip + `--no-renames`
+//! round-trip pins; T343: hunk-title strip; T377: renames on
 //! regressions.
 //!
 //! Validity = the output parses and `applyrs --check` accepts it
@@ -468,10 +468,11 @@ fn hunk_section_titles_do_not_break_conversion() {
     );
 }
 
-// T343: file moves surface as delete+create (`--no-renames`), never
-// as unsupported rename headers — conversion exits 0 and round-trips.
+// T377: file moves surface as `rename from/to` sections (rename
+// detection on), never as delete+create — conversion exits 0 and
+// round-trips (replaces the T343 delete+create pin).
 #[test]
-fn file_move_converts_as_delete_plus_create() {
+fn file_move_converts_as_rename_section() {
     let dir = init_repo();
     write(dir.path(), "old.rs", "fn moved() {}\n");
     commit_all(dir.path());
@@ -486,10 +487,12 @@ fn file_move_converts_as_delete_plus_create() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("old.rs"), "got: {patch}");
-    assert!(patch.contains("new.rs"), "got: {patch}");
+    assert!(patch.contains("rename from old.rs"), "got: {patch}");
+    assert!(patch.contains("rename to new.rs"), "got: {patch}");
+    assert!(!patch.contains("deleted file mode"), "got: {patch}");
+    assert!(!patch.contains("new file mode"), "got: {patch}");
 
-    // Back to the pre-move tree: delete+create must check clean.
+    // Back to the pre-move tree: the rename section must check clean.
     git(dir.path(), &["mv", "new.rs", "old.rs"]);
     let checked = check_with_applyrs(dir.path(), &patch);
     assert_eq!(

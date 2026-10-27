@@ -6,8 +6,9 @@
 //! in every case. The bare `invalid hunk header: {line}` arm carries no
 //! pin: it is unreachable via the CLI (the header parser only runs on
 //! `@@`-led lines — SPEC 8 / 25.2 document it as defensive-only).
-//! The `file rename ...` arm is already pinned by
-//! `cli_e2e::differing_diff_git_paths_fail_fast_text_and_json`.
+//! The rename round-trip is pinned by
+//! `cli_e2e::differing_diff_git_paths_apply_as_rename` (T377: renames
+//! apply since v0.1 rename support; the T29 fail-fast is retired).
 
 mod common;
 use common::*;

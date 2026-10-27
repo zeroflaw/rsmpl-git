@@ -197,6 +197,8 @@ fn run() -> Result<(), CliError> {
     let mut originals: HashMap<String, String> = HashMap::new();
     let mut is_new: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut is_symlink: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // T377: rename targets seeded from old-side content (`new -> old`).
+    let mut rename_from: HashMap<String, String> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     for section in &patch.files {
         let rel = section.target_path.clone();
@@ -206,7 +208,19 @@ fn run() -> Result<(), CliError> {
         if let Some(reason) = reject_escaped_target(&rel) {
             return Err(CliError::io_file(reason, &rel));
         }
-        let abs = cli.repo.join(&rel);
+        // T377: a rename section's hunks cite old-side coordinates, so
+        // seed the new-side entry from the OLD file's content (the
+        // engine then applies ordinary and RSmPL hunks transparently).
+        let (read_rel, is_rename) = if section.is_rename() {
+            let old_rel = rsmpl_patch::stripped_path(&section.old_path);
+            if let Some(reason) = reject_escaped_target(&old_rel) {
+                return Err(CliError::io_file(reason, &old_rel));
+            }
+            (old_rel, true)
+        } else {
+            (rel.clone(), false)
+        };
+        let abs = cli.repo.join(&read_rel);
         // Git stores a symlink's content as its target string (mode
         // 120000 blobs); `git diff` shows the target as the line
         // content. Read the link itself, never follow it: following a
@@ -229,7 +243,7 @@ fn run() -> Result<(), CliError> {
             _ => match std::fs::read_to_string(&abs) {
                 Ok(t) => t,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!("warning: {rel} not found, treating as new (empty) file");
+                    eprintln!("warning: {read_rel} not found, treating as new (empty) file");
                     is_new.insert(rel.clone());
                     String::new()
                 }
@@ -242,7 +256,13 @@ fn run() -> Result<(), CliError> {
             },
         };
         order.push(rel.clone());
-        originals.insert(rel, text);
+        originals.insert(rel.clone(), text);
+        // T377: record the rename source only when the old side was
+        // actually read; a missing old side stays the existing
+        // warn-and-create leniency (no rename marking).
+        if is_rename && !is_new.contains(&rel) {
+            rename_from.insert(rel, read_rel);
+        }
     }
 
     let mut updated = originals.clone();
@@ -261,6 +281,23 @@ fn run() -> Result<(), CliError> {
     for rel in &order {
         let old = &originals[rel];
         let new = &updated[rel];
+        // T377: rename sections lower back to `rename from/to`
+        // (seeded from old-side content, so the diff spans the move).
+        // Runs first -- including the content-equal case, where the
+        // ladder below would emit nothing (silent drop).
+        if let Some(old_rel) = rename_from.get(rel) {
+            let modes = section_modes(&patch, rel);
+            let (om, nm) = match &modes {
+                Some((o, n)) => (Some(o.as_str()), Some(n.as_str())),
+                None => (None, None),
+            };
+            let section =
+                rsmpl_git::unified_diff_for_rename_with_context(old_rel, rel, old, new, om, nm, 0);
+            let (added, removed) = rsmpl_git::file_line_stats(old, new);
+            changed.push((rel.clone(), added, removed));
+            sections.push(section);
+            continue;
+        }
         // Created files (missing before the patch) lower with `new file
         // mode` headers so `git apply` creates them (SPEC 27.6); an
         // existing-but-empty file keeps the ordinary headers.
