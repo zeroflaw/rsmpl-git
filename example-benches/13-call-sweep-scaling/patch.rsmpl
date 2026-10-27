@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=rename_calls
+# scope=file
+# allow=many
+# expr E
+- foo(E)
++ bar(E)
