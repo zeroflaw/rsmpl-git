@@ -1291,6 +1291,11 @@ Example:
   }
 ```
 
+The directive works for free functions and for methods: an
+impl/trait-context hunk carrying `# returns=none` requires the target
+method to carry no explicit return type (Section 13.4 shares the slot
+planner).
+
 ### 14.3 Explicitly matching visibility
 
 To match a public function, write `pub`:

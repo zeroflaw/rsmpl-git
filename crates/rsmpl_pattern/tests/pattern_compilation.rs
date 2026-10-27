@@ -847,6 +847,26 @@ fn trait_context_routes_to_method_context() {
 }
 
 #[test]
+fn returns_none_accepted_in_method_context() {
+    // T209: the `# returns=none` gate used to admit only `PatternKind::Fn`,
+    // but impl/trait-context methods share the slot planner and the engine
+    // already enforces the constraint there — the gate was the only hole.
+    for header in ["  impl S {", "  trait T {"] {
+        let h = hunk_of(
+            &format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=x\n# lang=rust\n# returns=none\n{header}\n      ...\n-     fn foo() {{\n+     fn bar() {{\n          ...\n      }}\n  }}\n"
+            ),
+        );
+        let c = compile(&h).unwrap();
+        assert!(
+            matches!(c.kind, PatternKind::ImplContext { .. }),
+            "header {header:?} got: {:?}",
+            c.kind
+        );
+    }
+}
+
+#[test]
 fn trait_header_ident_cases() {
     // T182: ident extraction for the engine header check — generics,
     // bounds, and `unsafe` strip; non-headers yield `None`.

@@ -231,8 +231,14 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         root.as_deref(),
     )?;
 
-    // `# returns=none` only meaningful on fn patterns.
-    if hunk.returns_none() && !matches!(kind, PatternKind::Fn { .. }) {
+    // `# returns=none` only meaningful on fn patterns (free functions
+    // and impl/trait-context methods share the constraint; T209).
+    if hunk.returns_none()
+        && !matches!(
+            kind,
+            PatternKind::Fn { .. } | PatternKind::ImplContext { .. }
+        )
+    {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`# returns=none` requires a function-item pattern".to_string(),

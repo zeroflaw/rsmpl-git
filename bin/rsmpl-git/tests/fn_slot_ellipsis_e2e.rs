@@ -367,3 +367,69 @@ fn impl_async_fn_evolution_json_report() {
     assert!(stdout.contains("\"spans\":[[4,4],[4,4]]"), "got: {stdout}");
     assert!(stdout.contains("\"check\":true"), "got: {stdout}");
 }
+
+#[test]
+fn impl_returns_none_constrains_and_applies() {
+    // T209: `# returns=none` in method context — the engine already
+    // enforced it, only the compile gate rejected the spelling.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\n\nimpl S {\n    pub fn make(x: i32) {\n        let _ = x;\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,4 @@ rule=t\n# lang=rust\n# returns=none\n  impl S {\n      ...\n-     pub fn make(...) {\n+     pub fn build(...) {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "struct S;\n\nimpl S {\n    pub fn build(x: i32) {\n        let _ = x;\n    }\n}\n"
+    );
+}
+
+#[test]
+fn impl_returns_none_rejects_typed_target() {
+    // T209 negative control: the target carries `-> i32`, so the
+    // minus-side constraint fails safe instead of rewriting.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,4 @@ rule=t\n# lang=rust\n# returns=none\n  impl S {\n      ...\n-     pub fn make(...) {\n+     pub fn build(...) {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        !out.status.success(),
+        "must fail safe: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("RSMPL_MATCH_CONFLICT"), "got: {stdout}");
+}
+
+#[test]
+fn trait_returns_none_decl_applies() {
+    // T209 trait half: `;`-declaration with no return type renames.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "trait T {\n    fn make(x: i32);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=t\n# lang=rust\n# returns=none\n  trait T {\n      ...\n-     fn make(...);\n+     fn build(...);\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "trait T {\n    fn build(x: i32);\n}\n"
+    );
+}
