@@ -133,3 +133,44 @@ fn no_rust_file_exceeds_2000_lines() {
     }
     assert!(over.is_empty(), "files over 2000 LOC: {over:#?}");
 }
+
+#[test]
+fn example_benches_stay_check_clean() {
+    // T248: every example-bench patch.rsmpl must still lower + `git apply
+    // --check` cleanly against its own repo/, so benches never rot.
+    let root = workspace_root();
+    let benches = root.join("example-benches");
+    let mut names: Vec<String> = fs::read_dir(&benches)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert!(!names.is_empty(), "no benches found");
+    for name in names {
+        let dir = benches.join(&name);
+        if !dir.is_dir() {
+            continue;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        copy_tree(&dir.join("repo"), tmp.path());
+        let st = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_rsmpl-git")))
+            .arg("--file")
+            .arg(dir.join("patch.rsmpl"))
+            .arg("--repo")
+            .arg(tmp.path())
+            .arg("--check")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "[{name}] bench patch fails --check:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

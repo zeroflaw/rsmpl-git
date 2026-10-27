@@ -13,6 +13,7 @@ printf '|---|---|---|---|\n'
 for d in example-benches/*/; do
     name=$(basename "$d")
     tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
     cp -r "$d/repo/." "$tmp/"
     git -C "$tmp" init -q
     "./$BIN" --file "$d/patch.rsmpl" --repo "$tmp" --output "$d/native.patch" >/dev/null
