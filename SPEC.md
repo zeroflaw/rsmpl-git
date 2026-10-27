@@ -2354,9 +2354,17 @@ Therefore:
 
 If a token is not declared as a metavariable, both `Foo` and `` `Foo` `` match the literal identifier `Foo`; the quoted form is allowed but unnecessary. For raw identifiers, both `r#type` and `` `r#type` `` match the literal raw identifier token `r#type`; the quoted form is allowed and is the canonical explicit escape.
 
-### 15.5 Optional sigiled metavariable mode
+### 15.5 Sigiled metavariable mode
 
-Implementations may support a stricter optional mode:
+v0.1 implements both modes. The default is:
+
+```diff
+# metavars=bare
+```
+
+Bare mode is more token-efficient and is the default for LLM-generated patches. Sigiled mode is available for tools or authors that prefer zero shadowing ambiguity. In bare mode a declared name is the metavariable reference (`E`); a `$`-prefixed spelling (`$E`) is not special — the `$` survives into the rewritten file and the reparse fails (mismatch fence below).
+
+The stricter optional mode is:
 
 ```diff
 # metavars=sigiled
@@ -2372,15 +2380,26 @@ In sigiled mode, metavariables must be written with a leading `$` in the pattern
 + new($E)
 ```
 
-In this mode, unprefixed `E` always means a literal Rust identifier.
+In this mode, unprefixed `E` always means a literal Rust identifier. A sigiled hunk that writes bare `E` therefore matches only a literal `E` in the target; against any other target it fails with the standard `RSMPL_MATCH_CONFLICT` no-match diagnostic (rule + file + old_range; Section 25.4):
 
-The default mode remains:
-
-```diff
-# metavars=bare
+```text
+RSMPL_MATCH_CONFLICT
+rule: r
+file: a.rs
+old_range: 1..2
+reason: no match found — nearest source at line 1: 'fn f() { let x = 1 + 2; }'
+suggestion: read `a.rs` to list valid ranges; check the pattern or add `# optional`
 ```
 
-Bare mode is more token-efficient and is the default for LLM-generated patches. Sigiled mode is available for tools or authors that prefer zero shadowing ambiguity.
+The quoted source line echoes the nearest candidate and varies per target (parameterized like Section 25.1); the JSON envelope carries the same `reason`/`suggestion` strings with `rule`/`file`/`range` set. Conversely, a `$`-prefixed spelling in bare (or default) mode is not a metavariable reference: the rewrite carries the literal `$` into the output and the rewritten-file reparse fails with `RSMPL_PARSE_CONFLICT` (file-only envelope — text omits the null `rule:`/`range:`/`suggestion:` lines, JSON carries explicit nulls; the `: {parser error}` suffix varies; canonical fence in Section 25.2):
+
+```text
+RSMPL_PARSE_CONFLICT
+file: a.rs
+reason: rewritten file does not parse as Rust: expected an expression
+```
+
+Explicit `# metavars=bare` behaves identically to the default. Success controls: sigiled `$E` against `1 + 2` applies cleanly, and sigiled bare `E` against a literal `E + 2` applies cleanly (proving the literal-identifier sentence).
 
 ### 15.6 Use examples
 
@@ -3646,6 +3665,16 @@ omitted from text output; the JSON envelope carries explicit `rule: null` /
 `range: null` / `suggestion: null`). The Rust-parse gate fires only for files
 carrying >=1 RSmPL hunk (Section 11): ordinary-only sections skip both the
 original parse and the rewritten-file reparse, so non-Rust targets apply cleanly.
+
+The rewritten-file reparse (validation item 3, Section 24.2) fails with `RSMPL_PARSE_CONFLICT` (exit 2; file-only envelope — text omits the null `rule:`/`range:`/`suggestion:` lines, JSON carries explicit nulls). Engine-verbatim (the `: {parser error}` suffix is the underlying parser error and varies per output):
+
+```text
+RSMPL_PARSE_CONFLICT
+file: a.rs
+reason: rewritten file does not parse as Rust: expected an expression
+```
+
+One trigger is a `$`-prefixed spelling in bare (or default) mode: `$E` is not a metavariable reference there, so the literal `$` survives into the output (Section 15.5).
 
 A `diff --git a/old b/new` section whose stripped paths differ is also a
 parse conflict (a file rename, rejected fail-fast per Section 2.6 — v0.1
