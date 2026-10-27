@@ -4387,7 +4387,7 @@ reason: cannot read patch file change.rsmpl: No such file or directory (os error
 
  Null fields are omitted from text output (no `rule:`/`range:`/`suggestion:` lines above); the JSON envelope carries explicit `rule: null` / `range: null` / `suggestion: null`.
 
-An unwritable `--output` target reports `reason: cannot write <path>: <os error>` with `file:` echoing the `--output` path, and aborts before checking or applying (`--output` is written before `--check` runs, Section D.2.3).
+An unwritable `--output` target reports `reason: cannot write <path>: <os error>` with `file:` echoing the `--output` path, and aborts before checking or applying (`--output` is written before `--check` runs, Section D.2.3). Its empty-lowering twin — a pre-existing file the mirror removal cannot delete — reports `reason: cannot remove stale <path> (empty lowering): <os error>` with the same envelope (exit 2; `file:` set to the `--output` path; text omits null `rule:`/`range:`/`suggestion:` lines, JSON explicit nulls; full fence in Section D.2.3).
 
 Patch `target_path` values that are absolute or escape the worktree
 root fail here too (Section 27.6 lists both engine-verbatim reasons) — before any file is read. Differing
@@ -5527,7 +5527,13 @@ Rules:
    `--output` mirrors the current lowering: a non-empty lowering writes
    the full diff, while an empty lowering removes a pre-existing file at
    that path and otherwise creates nothing — the path never holds a stale
-   diff from a previous run. An unremovable file is `RSMPL_IO_CONFLICT`.
+   diff from a previous run. An unremovable stale file fails loud with
+   `RSMPL_IO_CONFLICT` (exit 2) before `--check`/apply runs, engine-verbatim:
+   `reason: cannot remove stale <path> (empty lowering): <os error>`
+   with `file:` echoing the `--output` path (text omits the null
+   `rule:`/`range:`/`suggestion:` lines, JSON carries explicit nulls;
+   the `<os error>` tail is platform-dependent, like the sibling
+   `cannot write <path>: <os error>` shape in Section 25.8).
 - `--output` is written before `--check` runs, so a failing `--check`
   still leaves the full appliable diff on disk for debugging.
 - A truncated report (`--diff-max-lines N` cut lines off) is
