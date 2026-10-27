@@ -842,6 +842,25 @@ bad identifier — `` `1bad` `` at the start-char gate, `` `foo-bar` ``
 at the alphanumeric gate — after the whitespace split). The fix is the
 comma form above (`# expr E, F`).
 
+Re-declaring one name under one kind is allowed and idempotent
+(`# expr E` twice binds once). Re-declaring one name under two
+different kinds fails fast with `RSMPL_PATTERN_CONFLICT` (exit 2;
+rule + file lines; text omits the null range/suggestion lines, JSON
+carries explicit `range: null` / `suggestion: null`). The check runs
+in declaration order across both directive families, so `# expr E`
+then `# symbol E=...` fails the same way as the reverse order (the
+second declaration loses — there is no shadowing); a repeated
+`# symbol Old=...` under the same name keeps the `symbol` kind and the
+second path wins. `{name}` echoes the offending name, `(prev vs new)`
+echoes the kind spellings in declaration order. Engine-verbatim:
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: metavariable `E` declared twice with different kinds (expr vs type)
+```
+
 ### 9.5 Symbol directives
 
 A semantic symbol binding is declared with:
@@ -4013,6 +4032,8 @@ It gains three more members: the Section 9.6 empty-directive and second invalid-
 It gains one further member: the Section 14.8 item attr-merge fence (plus-side-omitted verbatim reason, rule+file envelope with null range/suggestion; the differ case reuses the 14.6 second fence byte-identical, suggestion set). Defensive-only, documented without pins (T287/T290/T291 precedent — no CLI trigger, so no fence to pin): the seven `expected X pattern` dispatch arms (`function`, `item capture`, `insertion`, `impl-context`, `expression`, `use-path`, `generalized stmt/expr/type` — plan.rs routes each `PatternKind` to its own matcher, cf. the 21.3 macro note), the `cannot analyze method signature` synth backstop (rendered from an already-parsed signature; no CLI trigger post-T190/T221), the `general statement patterns must be ...` arm alongside the `invalid let`/`expression`/`type` match-time re-parses the body list already names (the classifier pre-validates the same strings at compile time), and the span-guard family (`span line ... outside file`, `edit range ... outside file`, `... name span mismatch (file changed during matching?)`, `use prefix span is empty (file changed during matching?)` — the target file is immutable during matching).
 
 It gains one further member: the Section 9.4 whitespace-in-name fence (reason shape `invalid metavariable name ... in: ...`, parse-time bare envelope — text carries the bare `reason:` line only, JSON carries explicit nulls), pinned text+JSON+untouched in `metavar_space_verbatim_e2e.rs`.
+
+It gains one further member: the Section 9.4 duplicate-kind fence (reason shape `metavariable ... declared twice with different kinds (prev vs new)`, rule+file envelope with null range/suggestion), pinned text+JSON+untouched in `duplicate_kind_verbatim_e2e.rs`.
 
 Two further structural pattern rejections are fenced below: an RSmPL
 hunk with no pattern body lines (rule-only envelope), and a `#`

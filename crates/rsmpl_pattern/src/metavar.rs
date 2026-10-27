@@ -42,6 +42,17 @@ impl MetavarTable {
                     }
                 }
                 Directive::Symbol { name, path } => {
+                    if let Some(prev) = t.kinds.get(name) {
+                        if *prev != MetavarKind::Symbol {
+                            return Err(StructuredError::new(
+                                ErrorCode::PatternConflict,
+                                format!(
+                                    "metavariable `{name}` declared twice with different kinds ({} vs symbol)",
+                                    prev.as_str(),
+                                ),
+                            ));
+                        }
+                    }
                     t.kinds.insert(name.clone(), MetavarKind::Symbol);
                     t.declared.push((MetavarKind::Symbol, name.clone()));
                     t.symbols.insert(name.clone(), path.clone());
