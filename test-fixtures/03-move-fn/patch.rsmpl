@@ -10,11 +10,11 @@ diff --git a/src/old.rs b/src/old.rs
 diff --git a/src/new.rs b/src/new.rs
 --- a/src/new.rs
 +++ b/src/new.rs
+@@ -1,1 +1,2 @@
+ use crate::common;
++use crate::old_dependency;
+
 @@ -1,0 +1,0 @@ rule=paste_helper
 # lang=rust
 # use=Helper
 + Helper
-
-@@ -1,1 +1,2 @@
- use crate::common;
-+use crate::old_dependency;

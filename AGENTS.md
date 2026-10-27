@@ -95,7 +95,9 @@ receiver chain (`E.to_string()`); composite receivers never match (SPEC 18.5):
 
 Move — cut with `# item I` + `# bind=Helper` + `- I`, paste with
 `# use=Helper` + `+ Helper`; paste hunks may precede cut hunks; cross-file
-moves are two file sections (SPEC 9.3, SPEC 10.5).
+moves are two file sections (SPEC 9.3, SPEC 10.5). Same-anchor pastes land
+in document order (first hunk topmost) with one blank line between items
+(SPEC 20.2).
 
 Use-path prefix — after a `mod` rename, move imports with one hunk
 (`- use crate::old` / `+ use crate::new`, `# allow=many`); plain, grouped,

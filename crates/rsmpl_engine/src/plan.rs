@@ -89,8 +89,12 @@ pub fn apply_with_captures(
     let mut captures = CaptureStore::default();
     // Per-file edit lists, built across pass 1 (cuts) and pass 2 (rest).
     let mut file_edits: HashMap<String, Vec<TextEdit>> = HashMap::new();
+    // T249: same-anchor capture-paste edit indices per file, in document
+    // order. Used after pass 2 to join multi-pastes with one blank line.
+    let mut paste_marks: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     for path in states.keys() {
         file_edits.insert(path.clone(), Vec::new());
+        paste_marks.insert(path.clone(), Vec::new());
     }
     // Rule reports staged with their document position (T45): pass 1
     // evaluates cuts first, but the report must read in patch document
@@ -240,6 +244,24 @@ pub fn apply_with_captures(
                     let edits_before = edits.len();
                     let found = apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
                         .map_err(|e| e.with_file(path))?;
+                    // T249: record capture-paste edits for blank-join. A
+                    // paste hunk pushes exactly one insertion at
+                    // `edits_before`, so its index is stable.
+                    if matches!(
+                        &compiled.kind,
+                        PatternKind::Insertion {
+                            use_name: Some(_),
+                            ..
+                        }
+                    ) && found == 1
+                        && edits.len() == edits_before + 1
+                    {
+                        let pos = edits[edits_before].start;
+                        debug_assert_eq!(edits[edits_before].end, pos);
+                        if let Some(marks) = paste_marks.get_mut(path) {
+                            marks.push((pos, edits_before));
+                        }
+                    }
                     let spans = edit_spans(&state.index, &edits[edits_before..]);
                     // A non-insertion hunk carrying `# use=` has no v0.1 meaning.
                     if !rh.uses().is_empty()
@@ -293,6 +315,41 @@ pub fn apply_with_captures(
                             spans,
                         },
                     ));
+                }
+            }
+        }
+    }
+
+    // T249: join same-anchor multi-pastes with one blank line. Each paste
+    // pushes `captured.trim_end() + "\n"` (no separators by construction,
+    // since the cut absorbs the blank — SPEC 10.5). A lone paste is left
+    // alone (surrounding context unchanged); for N>1 pastes at the same
+    // byte position, every paste but the last in document order gains one
+    // extra "\n" so the document-order materialization (SPEC 23.5) yields
+    // exactly one blank line between items. Ordinary literal insertions
+    // are untouched — the agent controls their blanks explicitly.
+    for (path, marks) in &paste_marks {
+        if marks.len() < 2 {
+            continue;
+        }
+        let mut by_pos: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (pos, idx) in marks {
+            by_pos.entry(*pos).or_default().push(*idx);
+        }
+        if let Some(edits) = file_edits.get_mut(path) {
+            for indices in by_pos.values() {
+                if indices.len() < 2 {
+                    continue;
+                }
+                let mut ordered = indices.clone();
+                ordered.sort_unstable();
+                // All but the last in document order get the separator.
+                for idx in &ordered[..ordered.len() - 1] {
+                    let e = &mut edits[*idx];
+                    debug_assert!(e.is_insertion());
+                    if !e.replacement.ends_with("\n\n") {
+                        e.replacement.push('\n');
+                    }
                 }
             }
         }
@@ -822,6 +879,9 @@ fn unbound_plus(rh: &rsmpl_patch::RsmplHunk, names: &[String], path: &str) -> St
 }
 
 /// Paste captured item text at a zero-length anchor (SPEC 10.5, 20.2).
+/// Single pastes end with exactly one `\n`; same-anchor multi-pastes are
+/// blank-joined after pass 2 (SPEC 20.4) and materialize in document order
+/// (SPEC 23.5: first hunk topmost).
 fn paste_capture(
     captures: &CaptureStore,
     name: &str,
@@ -1246,5 +1306,39 @@ mod tests {
         let err = apply_multi(patch, vec![("NOTES.md", "# notes\n")]).unwrap_err();
         assert!(err.contains("RSMPL_PARSE_CONFLICT"), "got: {err}");
         assert!(err.contains("does not parse as Rust"), "got: {err}");
+    }
+
+    #[test]
+    fn same_anchor_multi_paste_keeps_document_order_with_blanks() {
+        // T249: three pastes at one anchor land in document order
+        // (first hunk topmost), joined with exactly one blank line.
+        // Mirrors the R2 stdin-trio move: pastes [one, two, three] must
+        // read [one, two, three], not reversed, with blanks restored.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=paste_one\n# use=One\n+ One\n\n@@ -1,0 @@ rule=paste_two\n# use=Two\n+ Two\n\n@@ -1,0 @@ rule=paste_three\n# use=Three\n+ Three\n\n@@ -2,1 @@ rule=cut_one\n# item I\n# bind=One\n- I\n\n@@ -4,1 @@ rule=cut_two\n# item I\n# bind=Two\n- I\n\n@@ -6,1 @@ rule=cut_three\n# item I\n# bind=Three\n- I\n";
+        let src = "fn top() {}\nfn one() {}\nfn mid() {}\nfn two() {}\nfn keep() {}\nfn three() {}\n";
+        let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        let p1 = out.find("fn one() {}").expect("one");
+        let p2 = out.find("fn two() {}").expect("two");
+        let p3 = out.find("fn three() {}").expect("three");
+        assert!(p1 < p2 && p2 < p3, "document order, got:\n{out}");
+        assert!(
+            out.contains("fn one() {}\n\nfn two() {}\n\nfn three() {}"),
+            "blank-joined, got:\n{out}"
+        );
+        assert_eq!(out.matches("fn one() {}").count(), 1);
+        assert_eq!(out.matches("fn two() {}").count(), 1);
+        assert_eq!(out.matches("fn three() {}").count(), 1);
+    }
+
+    #[test]
+    fn single_paste_gains_no_extra_blanks() {
+        // T249: the blank-join fires only for N>1 pastes at one anchor.
+        // A lone paste keeps the historical `trim_end + "\n"` bytes.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=paste_h\n# lang=rust\n# use=H\n+ H\n\n@@ -3,1 @@ rule=cut_h\n# lang=rust\n# item I\n# bind=H\n- I\n";
+        let src = "fn top() {}\nfn mid() {}\nfn helper() {}\n";
+        let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert_eq!(out, "fn top() {}\nfn helper() {}\nfn mid() {}\n");
     }
 }

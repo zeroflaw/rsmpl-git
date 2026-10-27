@@ -45,11 +45,23 @@ impl TextEdit {
 
 /// Apply edits (original coordinates) to `text`. Edits are sorted descending
 /// so earlier offsets stay valid. Overlapping non-nested edits are rejected.
-pub fn apply_edits(text: &str, mut edits: Vec<TextEdit>) -> Result<String, StructuredError> {
-    edits.sort_by(|a, b| b.start.cmp(&a.start).then(b.end.cmp(&a.end)));
+///
+/// Same-point insertions materialize in document order: the first-pushed
+/// edit appears first (topmost) in the output (SPEC 20.4, 23.5). The input
+/// `Vec` order is document order, so ties break on reverse sequence — the
+/// later-doc edit applies first, the earlier-doc edit applies last and ends
+/// up first in the file.
+pub fn apply_edits(text: &str, edits: Vec<TextEdit>) -> Result<String, StructuredError> {
+    let mut indexed: Vec<(usize, TextEdit)> = edits.into_iter().enumerate().collect();
+    indexed.sort_by(|(ai, a), (bi, b)| {
+        b.start
+            .cmp(&a.start)
+            .then(b.end.cmp(&a.end))
+            .then(bi.cmp(ai))
+    });
     let mut out = text.to_string();
     let mut applied: Vec<TextEdit> = Vec::new();
-    for e in edits {
+    for (_, e) in indexed {
         if e.end > out.len() || e.start > e.end {
             return Err(StructuredError::new(
                 ErrorCode::RangeConflict,
@@ -124,5 +136,20 @@ mod tests {
     fn trailing_comma_insensitive() {
         assert!(fragments_equal("foo(1, 2)", "foo(1, 2,)"));
         assert!(!fragments_equal("foo()", "bar()"));
+    }
+
+    #[test]
+    fn same_point_insertions_keep_document_order() {
+        // T249: first-pushed insertion appears first in the output.
+        let out = apply_edits(
+            "AB",
+            vec![
+                TextEdit::new(1, 1, "X\n".into()),
+                TextEdit::new(1, 1, "Y\n".into()),
+                TextEdit::new(1, 1, "Z\n".into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(out, "AX\nY\nZ\nB");
     }
 }

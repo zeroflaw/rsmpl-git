@@ -902,7 +902,7 @@ The insertion anchor is line 5 in the original source file. The inserted code le
 
 For insertions, `-old_start,0` is the normative anchor. `+new_start,new_len` remains review metadata and must not be used to rebase later semantic hunk ranges.
 
-> **v0.1 implementation note:** the anchor `-N,0` inserts *after* line `N` (at the start of line `N+1`, or EOF). `-0,0` inserts at the start of the file. Deleted-item cut ranges additionally absorb one adjacent blank separator line (following blank preferred, else preceding at EOF) so moves do not leave stray blank lines; the captured text itself excludes the separator.
+> **v0.1 implementation note:** the anchor `-N,0` inserts *after* line `N` (at the start of line `N+1`, or EOF). `-0,0` inserts at the start of the file. Deleted-item cut ranges additionally absorb one adjacent blank separator line (following blank preferred, else preceding at EOF) so moves do not leave stray blank lines; the captured text itself excludes the separator. Same-anchor multi-pastes restore one blank line between items on insertion (Section 20.2).
 
 ### 10.6 Interaction with ordinary Git hunk coordinates
 
@@ -2656,6 +2656,14 @@ This means:
 1. Retrieve the captured item `Helper`.
 2. Insert it at the target position near `src/new.rs` line `5`.
 
+Multiple `# use=` pastes at exactly the same anchor apply in document
+order: the first paste hunk in the patch appears first (topmost) in the
+final file (Section 23.5). Same-anchor capture pastes are joined with
+exactly one blank line between items; a lone paste ends with a single
+`\n` and gains no leading/trailing blanks. Ordinary literal insertions
+at the same anchor keep document order too but are never blank-joined —
+the author controls their blanks explicitly.
+
 ### 20.3 Capture naming and forward references
 
 The value of `# bind=Helper` creates a named capture.
@@ -2698,8 +2706,12 @@ The engine must verify that:
 - forward references are resolved before application, not treated as missing captures;
 - the cut hunk matched exactly one item;
 - the pasted item is syntactically valid at the insertion site;
-- a moved item is not simultaneously deleted, replaced, or moved by another incompatible hunk;
-- imports, visibility, and module paths are not silently fixed unless explicitly requested.
+ - a moved item is not simultaneously deleted, replaced, or moved by another incompatible hunk;
+ - imports, visibility, and module paths are not silently fixed unless explicitly requested;
+ - same-anchor multi-pastes read in document order with one blank line
+   between items (Section 20.2); mixing capture pastes and ordinary
+   literal insertions at one anchor keeps document order, with the
+   blank-join applying across the paste subsequence only.
 
 If a capture dependency graph contains a cycle, the implementation must reject the patch unless the cycle consists only of independent references that do not require materialized output from one another.
 
@@ -2977,9 +2989,9 @@ If an ordinary hunk and an RSmPL hunk target disjoint original source ranges, th
 
 If they overlap, the engine must reject the patch unless it can prove that the ordinary hunk is a textual refinement of the same semantic transformation.
 
-Document order may be used as a deterministic tie-breaker only for non-overlapping insertions at exactly the same original insertion point. Implementations should document their tie-breaking policy.
+Document order is the deterministic tie-breaker for non-overlapping insertions at exactly the same original insertion point: the first insertion hunk in the patch appears first (topmost) in the final file. Same-anchor capture pastes additionally gain one blank line between items (Section 20.2).
 
-> **v0.1 implementation note:** multiple insertions at exactly the same point are applied in a deterministic (stable, document-order-derived) sequence; an insertion strictly inside a deleted or replaced range is rejected as an overlap conflict.
+> **v0.1 implementation note:** multiple insertions at exactly the same point are applied in document order (first hunk topmost); an insertion strictly inside a deleted or replaced range is rejected as an overlap conflict.
 
 ---
 

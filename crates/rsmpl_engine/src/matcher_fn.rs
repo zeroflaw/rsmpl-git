@@ -626,8 +626,9 @@ fn plan_sig_edits(
                         let text = format!("{} ", compact_slot(&plus_q));
                         // A same-anchor visibility insertion may already exist
                         // (target had neither vis nor qualifiers); merge to keep
-                        // canonical `vis quals` order, since same-point inserts
-                        // materialize last-first.
+                        // canonical `vis quals` order in the single combined
+                        // edit (same-point inserts materialize in document
+                        // order, SPEC 23.5 — merging keeps order explicit).
                         if let Some(v) = edits
                             .iter_mut()
                             .find(|e| e.is_insertion() && e.start == fn_off)

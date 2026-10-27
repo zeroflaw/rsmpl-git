@@ -92,7 +92,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
   `# allow=many` when several match; definition only — follow up
   type/value/literal/variant/use sites per the SPEC 14.8 table.
 - Move: cut `- I` (`# item I` + `# bind=N`), paste `+ N` (`# use=N`);
-  paste may precede cut; cross-file = two sections (SPEC 20).
+  paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between.
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)
   moves imports after a `mod` rename; grouped/glob/`as` tails preserved;
   members at the matched position rewrite too, segment-wise (SPEC 14.9).
