@@ -452,6 +452,13 @@ fn count_ellipsis_tokens(text: &str) -> usize {
     count
 }
 
+/// True when the text uses `::...::` path ellipsis (SPEC 16.5), as opposed
+/// to argument/body ellipsis `foo(...)`. Local copy of the pattern-crate
+/// predicate (which is private there).
+fn plus_has_path_ellipsis(text: &str) -> bool {
+    text.contains("::...") || text.contains("...::")
+}
+
 fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
@@ -520,6 +527,17 @@ pub fn apply_expr_hunk(
         ExprPatternKind::Macro { .. } | ExprPatternKind::Raw { .. } => 0,
     };
     if count_ellipsis_tokens(plus_raw) > minus_ellipses {
+        // T166: a `+` path `...` (SPEC 16.5) never replays — only argument
+        // `...` replays (SPEC 16.3) — so it trips this count gate even when
+        // the minus side HAS a path `...`. Name the path case explicitly.
+        if plus_has_path_ellipsis(plus_raw) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "`...` in `+` path has nothing to replay (plus side must be concrete, SPEC 16.5)".to_string(),
+            )
+            .with_rule(&rule)
+            .with_suggestion("write a concrete `+` path (e.g. `+ crate::new(E)`) — path `...` replays nothing, only argument `...` replays"));
+        }
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`...` in `+` has no matching `- ...` to replay".to_string(),

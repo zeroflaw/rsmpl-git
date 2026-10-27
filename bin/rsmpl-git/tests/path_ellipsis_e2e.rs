@@ -120,3 +120,38 @@ fn path_ellipsis_json_check_reports_three_matches() {
     assert_eq!(payload["check"], true);
     assert_eq!(payload["rules"][0]["matches"], 3);
 }
+
+#[test]
+fn path_ellipsis_plus_side_path_needle_is_path_specific() {
+    // T166: a `+` path `...` trips the T157 count gate even though the
+    // minus side HAS a `...` (in the path, not the args) — the diagnostic
+    // must name the path case, not the arg-replay case.
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn m() { crate::a::old(1); }\n");
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# allow=many\n# expr E\n- crate::...::old(E)\n+ crate::...::new(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    assert!(
+        err.contains("plus side must be concrete"),
+        "path needle expected, got: {err}"
+    );
+}
+
+#[test]
+fn arg_ellipsis_excess_keeps_arg_needle() {
+    // T166 negative control: a pure argument-`...` excess (no path `...`
+    // anywhere) keeps the existing T157 arg-flavored needle.
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn m() { foo(1); }\n");
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E, ...)\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    assert!(
+        err.contains("no matching `- ...` to replay"),
+        "arg needle expected, got: {err}"
+    );
+}
