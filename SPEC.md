@@ -1509,6 +1509,24 @@ To match a generic function with a where clause:
 
 The `where` clause lives on the `fn` pattern line: `- fn foo<T>(...) where T: Clone {`. A pattern line without `where` requires its absence (like every other slot, Section 14.1) — the multi-line `where`-as-context spelling never constrains the slot. The signature must be terminated by `{` (which may sit on the `fn` line or on a trailing `where` line) or `;`: an unterminated tail swallows the body `...` into the slot text and fails fast with a missing-brace needle.
 
+Engine-verbatim missing-brace rejections (both exit 2; both carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: unexpected trailing tokens in fn pattern: `...`
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: fn pattern `where` clause is missing its opening `{` (or `;` for declarations): the signature swallowed the body lines — put the brace on the signature line (SPEC 14.5)
+```
+
+The first reason echoes the swallowed tail text (here the body `...` line); the second fires when the `fn` line carries a `where` clause but no opening brace or `;`.
+
 To abstract over generic parameters and where clauses:
 
 ```diff
@@ -1598,6 +1616,26 @@ let y = compute();
 ```
 
 If the replacement pattern explicitly supplies its own attributes, the implementation must follow the active `# attrs=...` policy and reject ambiguous merges rather than silently duplicating or dropping attributes.
+
+Engine-verbatim ambiguous-merge rejections (both exit 2; both carry `rule:`/`file:` plus a set `suggestion:` line — text carries it, JSON explicit; `range:` is null in both):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them
+suggestion: mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges
+suggestion: mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`
+```
+
+The first fires when the `+` side writes attributes the `-` side did not match; the second when both sides write attributes that differ. These are the only 14.x fences with a set suggestion (like the Section 9.6 `repeat`-value entry).
 
 #### Attribute preservation on rewrite
 
@@ -1863,6 +1901,49 @@ Rules:
   declared-metavariable segment — is a pattern error; targets may freely
   contain groups/globs/`as` tails, which are preserved — including members
   sitting directly inside a group at the matched position (see below).
+   The seven pattern-side rejections are engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; `{Name}` is the offending segment spelling):
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: grouped (`::{...}`) and glob (`::*`) tails are not supported in the `use` *pattern* in v1 (write the bare shared prefix; target items may still contain groups/globs)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: `as` renames are not supported in the `use` *pattern* in v1 (write the bare prefix; target `as` tails are preserved)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: v1 `use`-path patterns do not support `...` (write the concrete prefix path)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: `$Meta` abstracted names are not supported for `use`-path renames in v1 (write concrete paths)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: backtick literal quoting is not supported in `use`-path patterns in v1 (write the concrete path)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: metavariable `{Name}` is not supported in `use`-path patterns in v1 (write the concrete path)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: `use!` is a macro invocation, not a `use`-path rename (remove the `!` or use a macro pattern)
+   ```
 - Matching is segment-wise on the target's leading path segments: minus
   `crate::old` matches `crate::old::Thing` but never `crate::old2::Thing`
   (never a string prefix). Identical minus/plus prefixes are a pattern error, reported verbatim:
@@ -1894,7 +1975,7 @@ Rules:
 - No `# root=` is needed: a `use`-led minus/plus pair routes
   automatically (a `use_foo(E)` call keeps routing to the call matcher by
   the word-boundary rule). `# repeat` and `# returns=none` are rejected
-  on `use` hunks (call-only and function-only, respectively).
+  on `use` hunks with the Section 17.8 other-shape reason and the Section 14.2 function-only reason, respectively (both engine-verbatim there).
 
 Composition (no new shapes needed): call-site path prefixes already
 rewrite with the call matcher (`- old::foo(E)` / `+ new::foo(E)`), and
@@ -3396,6 +3477,7 @@ hunk whose `+` side names an unbound metavariable (both fenced below),
 or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
+Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6).
 
 ```text
 RSMPL_PATTERN_CONFLICT
