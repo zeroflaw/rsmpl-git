@@ -3185,6 +3185,9 @@ and keeps the bare `no match found` reason. If the preview shows a
 a `P @` subpattern, or a macro type, the shape itself is outside v0.1
 scope (Section 18.6 rows R1 / R2 / R4 / R5) — rewrite it with an
 ordinary hunk instead of re-shaping the pattern.
+The same holds when the preview shows a `use` nested inside a function body:
+only file- and inline-`mod`-level `use` items match (Section 14.9), so a
+fn-body `use` is ordinary-hunk territory too.
 
 ### 25.5 Symbol conflict
 

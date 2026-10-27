@@ -53,3 +53,48 @@ fn group_member_prefix_rewrites_json() {
     assert!(stdout.contains("\"matches\":2"), "got: {stdout}");
     assert!(stdout.contains("\"check\":true"), "got: {stdout}");
 }
+
+#[test]
+fn fn_body_use_needs_ordinary_hunk() {
+    // T261: only file- and inline-`mod`-level `use` items match (SPEC
+    // 14.9). A use-prefix hunk over a fn-body-only `use` fails with
+    // `RSMPL_MATCH_CONFLICT` (`no match found` — the "nearest use"
+    // preview names the very line that can never match semantically),
+    // while an ordinary hunk on the same line applies cleanly (SPEC 25.4).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "a.rs",
+        "fn outer() {\n    use crate::old::Thing;\n    let _ = Thing;\n}\n",
+    );
+    let semantic =
+        "diff --git a.rs\n@@ -1,4 @@ rule=mvimp\n# allow=many\n- use crate::old\n+ use crate::new\n";
+    let out = run_stdin(
+        dir.path(),
+        semantic,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(!out.status.success(), "fn-body use must not match");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_MATCH_CONFLICT"),
+        "got: {v}"
+    );
+    assert!(
+        v["error"]["reason"].as_str().unwrap().contains("no match found"),
+        "got: {v}"
+    );
+    let textual = "diff --git a.rs\n@@ -1,4 +1,4 @@\n fn outer() {\n-    use crate::old::Thing;\n+    use crate::new::Thing;\n     let _ = Thing;\n }\n";
+    let out = run_stdin(dir.path(), textual, &[]);
+    assert!(
+        out.status.success(),
+        "ordinary hunk must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "a.rs"),
+        "fn outer() {\n    use crate::new::Thing;\n    let _ = Thing;\n}\n"
+    );
+}
