@@ -1768,8 +1768,9 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 
 Trailing commas are ignored when comparing parameter lists and `where` predicates: a rustfmt-canonical multi-line target (`x: i32,`, `T: Clone,`) matches the single-line pattern spelling (`x: i32`, `T: Clone`), and a comma-only slot difference never emits an edit — the target text is preserved.
 
- The four slot/body misuses above fail fast with `RSMPL_PATTERN_CONFLICT`, engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout):
+ The five slot/body/param misuses above fail fast with `RSMPL_PATTERN_CONFLICT`, engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout):
  ```text
+ `...` in a function parameter list must stand alone: write `(...)` to match any parameters or fully-concrete parameters (SPEC 14.7)
  `...` is not supported as a return type in v0.1: omit `->` to match any return type or write a concrete type (SPEC 14.7)
  `...` is not supported in generic parameter lists in v0.1: write concrete `<T>` or abstract with `# generic_params G` + `fn foo G (...)` (SPEC 14.7)
  `...` is not supported in where clauses in v0.1: write concrete predicates or abstract with `# where_clause W` + `... W ...` (SPEC 14.7)
@@ -2608,6 +2609,14 @@ The engine must:
 3. accept the first candidate that matches and does not overlap an already accepted match;
 4. skip all descendants of an accepted match for that hunk;
 5. reject the hunk if two accepted candidates would partially overlap without one fully containing the other.
+ Engine-verbatim (exit 2; `RSMPL_MATCH_CONFLICT`, `rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null):
+ ```text
+ RSMPL_MATCH_CONFLICT
+ rule: r
+ file: src/lib.rs
+ reason: partially overlapping matches cannot be merged
+ ```
+ Any two AST nodes from one parse are nested or disjoint, so real Rust inputs hit outermost-wins skip (step 4) or disjoint-merge -- this reason is the defensive backstop for a non-nested overlap, and shares one spelling across the call, general-expression, general-type, and macro matchers. Contrast the plan-stage `overlapping edits cannot be merged` (`GIT_HUNK_CONFLICT`, file-only plus a set suggestion, Sections 10.6/23.5/25.7), which fires when edits from different hunks overlap.
 
 This means **outermost matches win**. The engine must not repeatedly re-run the same hunk until a fixpoint is reached. A hunk is one pass unless the specification later defines an explicit repeat directive.
 
@@ -3513,7 +3522,7 @@ hunk whose `+` side names an unbound metavariable (both fenced below),
 or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
-Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot `...`/body misuse (four engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); and any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9).
+Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); and any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9).
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -3675,6 +3684,8 @@ ordinary hunk instead of re-shaping the pattern.
 The same holds when the preview shows a `use` nested inside a function body:
 only file- and inline-`mod`-level `use` items match (Section 14.9), so a
 fn-body `use` is ordinary-hunk territory too.
+
+A matcher-stage partial overlap is a different `RSMPL_MATCH_CONFLICT` shape from the zero/too-many fences above (which carry `old_range:` plus a set suggestion): two accepted candidates that partially overlap without nesting fail with `reason: partially overlapping matches cannot be merged` (`rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null). The canonical fence lives in Section 17.6, which also contrasts it with the plan-stage `overlapping edits cannot be merged` (`GIT_HUNK_CONFLICT`, Section 25.7).
 
 ### 25.5 Symbol conflict
 
