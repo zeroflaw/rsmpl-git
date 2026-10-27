@@ -76,7 +76,21 @@ pub fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> std::process::Outpu
 }
 
 pub fn run_raw(args: &[&str]) -> std::process::Output {
-    Command::new(binary()).args(args).output().unwrap()
+    // T254: isolate off default `--repo .` so `--patch` runs archive
+    // `.history/` into a throwaway tempdir (auto-deleted), never into
+    // `bin/rsmpl-git/.history/`. Clap-usage failures exit before any
+    // history write, so the extra `--repo` is harmless there. Skip
+    // injection when the caller already passes `--repo`.
+    if args.iter().any(|a| *a == "--repo") {
+        return Command::new(binary()).args(args).output().unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    Command::new(binary())
+        .args(args)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap()
 }
 
 pub fn workspace_root() -> PathBuf {
