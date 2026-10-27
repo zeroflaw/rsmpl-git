@@ -712,3 +712,36 @@ fn ordinary_edit_emits_zero_context_and_round_trips() {
         String::from_utf8_lossy(&checked.stderr)
     );
 }
+
+// T352: untracked `.history/` audit files are skipped, never embedded.
+// A scratch repo with no `.gitignore` entry (like an old-commit
+// worktree) still converts small, warns once, and keeps real untracked
+// files.
+#[test]
+fn history_dir_untracked_is_skipped_with_warning() {
+    let dir = init_repo();
+    write(dir.path(), "base.txt", "base\n");
+    commit_all(dir.path());
+    write(dir.path(), ".history/old.rsmpl", "audit noise\n");
+    write(dir.path(), "new.txt", "new file\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        patch.contains("diff --git a/new.txt b/new.txt"),
+        "got: {patch}"
+    );
+    assert!(!patch.contains(".history"), "history embedded: {patch}");
+    assert!(stderr.contains("warning: .history/"), "got: {stderr}");
+
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}

@@ -5705,7 +5705,9 @@ delete+create ordinary hunks that round-trip. Context radius is 0, so
 ordinary passthrough carries no untouched context lines yet still
 round-trips. Binary files are
 stripped with a stderr `warning:` per path (a patch is UTF-8;
-`applyrs` cannot read binary worktree files). Git's trailing
+`applyrs` cannot read binary worktree files). Top-level `.history/`
+audit files are skipped the same way (one `warning:`; they are tool
+output, never lowering inputs). Git's trailing
 `@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL
 headers admit only `rule=` tags, Section 8.3; `git apply` likewise
 ignores them).

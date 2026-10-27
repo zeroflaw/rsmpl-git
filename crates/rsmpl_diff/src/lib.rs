@@ -26,6 +26,9 @@ pub struct CompressedPatch {
     pub files: Vec<String>,
     /// Binary paths stripped during inference (warned on stderr).
     pub stripped_binary: Vec<String>,
+    /// A `.history/` audit log was skipped during collection
+    /// (warned on stderr, never embedded).
+    pub skipped_history: bool,
 }
 
 pub fn compress(
@@ -45,5 +48,6 @@ pub fn compress(
         rsmpl: inferred.rsmpl,
         files,
         stripped_binary: inferred.stripped_binary,
+        skipped_history: collected.skipped_history,
     })
 }

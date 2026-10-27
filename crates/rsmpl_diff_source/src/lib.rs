@@ -31,6 +31,9 @@ pub struct GitSource {
 pub struct CollectedDiff {
     pub raw: String,
     pub files: Vec<String>,
+    /// A top-level `.history/` audit log was present but skipped
+    /// (warned on stderr, never embedded).
+    pub skipped_history: bool,
 }
 
 impl GitSource {
@@ -77,6 +80,15 @@ impl GitSource {
             inner: e,
         })?;
         untracked.sort();
+        // `.history/` is the `applyrs` audit log (SPEC D.1): tool
+        // output, never a lowering input. Old worktrees (whose
+        // `.gitignore` predates the T253 entry) still report it as
+        // untracked; embedding it would feed previous patches back
+        // into the next conversion, so skip it here (warned by the
+        // binary, like stripped binaries).
+        let (untracked, skipped): (Vec<String>, Vec<String>) =
+            untracked.into_iter().partition(|p| !is_history_path(p));
+        let skipped_history = !skipped.is_empty();
         for path in &untracked {
             let content =
                 std::fs::read(self.repo.join(path)).map_err(|e| SourceError::Untracked {
@@ -99,7 +111,11 @@ impl GitSource {
                 files.push(path);
             }
         }
-        Ok(CollectedDiff { raw, files })
+        Ok(CollectedDiff {
+            raw,
+            files,
+            skipped_history,
+        })
     }
 }
 
@@ -124,6 +140,13 @@ fn untracked_files(repo: &Path) -> Result<Vec<String>, String> {
         }
     }
     Ok(paths)
+}
+
+/// Tool-internal audit paths: `applyrs` archives every run under
+/// top-level `.history/` (SPEC D.1); those files are never lowering
+/// inputs, so the source skips them even when untracked.
+fn is_history_path(path: &str) -> bool {
+    path == ".history" || path.starts_with(".history/")
 }
 
 /// A new-file ordinary section for untracked `path` with `content`.
@@ -199,5 +222,14 @@ mod tests {
     fn files_in_diff_empty() {
         assert!(files_in_diff("").is_empty());
         assert!(files_in_diff(SAMPLE) == vec!["src/lib.rs"]);
+    }
+
+    #[test]
+    fn history_paths_are_detected() {
+        assert!(is_history_path(".history/x.rsmpl"));
+        assert!(is_history_path(".history"));
+        assert!(!is_history_path("src/.history/x"));
+        assert!(!is_history_path("history.rs"));
+        assert!(!is_history_path("src/lib.rs"));
     }
 }

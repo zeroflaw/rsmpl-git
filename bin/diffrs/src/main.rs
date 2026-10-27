@@ -137,6 +137,9 @@ fn run() -> Result<(), CliError> {
     for stripped in &patch.stripped_binary {
         eprintln!("warning: {stripped}: binary file stripped from semantic patch");
     }
+    if patch.skipped_history {
+        eprintln!("warning: .history/: tool audit log skipped in semantic patch");
+    }
 
     if cli.format == Format::Json {
         let payload = serde_json::json!({

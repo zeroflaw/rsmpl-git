@@ -90,7 +90,8 @@ untouched lines, still round-trip).
 Output always parses and round-trips through `gitrs apply --check`
 against the pre-change tree (measured: 10-site 2-arg sweep 548 B →
 148 B; trivial renames ~parity). Untracked files are included as
-new-file sections; binary files are stripped with a `warning:` line. Empty changes print `(no changes)`
+new-file sections; binary files are stripped with a `warning:` line and `.history/` audit
+files are skipped with a `warning:`. Empty changes print `(no changes)`
 on stderr with empty stdout (never pipe empties into `gitrs apply` —
 it rejects empty input). Round-trip recipe:
 

@@ -136,7 +136,7 @@ gitrs apply --file change.rsmpl --output full.patch
 ```
 
 Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v1 renames/slot-sweeps/call-sweeps
-compressed, rest ordinary; see README diff section, SPEC D.4; binaries stripped).
+compressed, rest ordinary; see README diff section, SPEC D.4; binaries stripped, `.history/` skipped).
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 `--file` names a patch file (avoids quoting for large patches); `--patch`
 passes it inline (archived to `<repo>/.history/{id}.rsmpl`, last 128 kept,
