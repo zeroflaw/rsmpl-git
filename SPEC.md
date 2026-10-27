@@ -3070,13 +3070,17 @@ The declared range is invalid.
 RSMPL_RANGE_CONFLICT
 rule: rename_calls
 file: src/lib.rs
-old_range: 40..47
-reason: range exceeds file length
+old_range: 40..48
+reason: old range 40,8 exceeds file length (1 lines)
 suggestion: read `src/lib.rs` to list valid ranges
 ```
 
-The `suggestion` names the file to read (repo-relative path) so an
-agent repairs without guessing flags.
+The `old_range` is `start..start+len` (so `@@ -40,8 @@` reports
+`40..48`), and the reason names the `@@` start/len and the file's line
+count `N`. The JSON envelope carries the same reason with explicit
+`range` (null fields are omitted from text output). The `suggestion`
+names the file to read (repo-relative path) so an agent repairs without
+guessing flags.
 
 ### 25.2 Parse conflict
 
@@ -3126,9 +3130,16 @@ drop the `+ ...` or add a `- ...`, Section 16.3).
 
 ```text
 RSMPL_PATTERN_CONFLICT
-rule: rename_foo
-reason: invalid item pattern
+reason: unknown directive `#foo=bar`: # foo=bar
+suggestion: check SPEC 9.3 for the supported directive list
 ```
+
+Directive-parse failures carry no `rule:`/`file:`/`range:` lines (null
+fields are omitted from text output; the JSON envelope carries explicit
+`rule: null`/`file: null`/`range: null`). Later-stage pattern failures
+(item shapes, prefixes, `# root=`, `# repeat`) include `rule:`/`file:`
+with a specific reason — the body list above enumerates the categories,
+and no generic `invalid item pattern` string is ever emitted.
 
 ### 25.4 Match conflict
 

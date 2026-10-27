@@ -502,6 +502,11 @@ fn unknown_directive_fails_fast_text_and_json() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("unknown directive"), "got: {stderr}");
+    assert!(
+        stderr.contains("unknown directive `#foo=bar`"),
+        "got: {stderr}"
+    );
+    assert!(stderr.contains("SPEC 9.3"), "got: {stderr}");
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -511,6 +516,15 @@ fn unknown_directive_fails_fast_text_and_json() {
         v["error"]["code"],
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unknown directive `#foo=bar`"),
+        "got: {v}"
+    );
+    assert!(v["error"]["rule"].is_null(), "got: {v}");
+    assert!(v["error"]["range"].is_null(), "got: {v}");
 }
 
 #[test]
@@ -681,6 +695,14 @@ fn json_envelope_on_range_failure_names_file_read() {
     let err = &v["error"];
     assert_eq!(err["code"], serde_json::json!("RSMPL_RANGE_CONFLICT"));
     assert_eq!(err["file"], serde_json::json!("src/lib.rs"));
+    assert_eq!(err["range"], serde_json::json!("90..98"));
+    assert!(
+        err["reason"]
+            .as_str()
+            .unwrap()
+            .contains("old range 90,8 exceeds file length (1 lines)"),
+        "reason must be engine-verbatim, got: {err}"
+    );
     assert!(
         err["suggestion"]
             .as_str()
