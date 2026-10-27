@@ -16,7 +16,7 @@ pub use expr_pattern::{try_parse_expr, ArgPat, ExprPattern, ExprPatternKind, Pla
 pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, VisPat, WherePat};
 pub use item_rename::{parse_side as parse_item_rename_side, ItemKind, ItemRenameSide};
 pub use metavar::{MetavarTable, TokenKind};
-pub use pattern::{compile, CompiledPattern, GeneralShape, PatternKind};
+pub use pattern::{compile, split_leading_attrs, CompiledPattern, GeneralShape, PatternKind};
 pub use quote_utils::{
     mask_literal_spans, strip_literal_quotes, unmask_literal_spans, validate_quoting, LiteralToken,
 };
