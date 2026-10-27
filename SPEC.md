@@ -2983,6 +2983,26 @@ Rules:
  bind/use fence above. Here `v1` names the general-matcher generation
  (the SPEC 18.6 C-table namespace), not the SPEC v0.1 version.
 
+Past the shape gates, pathological nesting fails at match time with
+`RSMPL_MATCH_CONFLICT` — both the call matcher and the
+general-expression matcher emit the identical reason + suggestion pair.
+Engine-verbatim (exit 2; `rule:` + `file:` lines; text omits the null
+`range:` line, JSON carries explicit `range: null`; `suggestion:` is
+set — contrast the suggestion-null shape gates above):
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: r
+file: src/lib.rs
+reason: repeat nesting exceeds 64 levels (pathological nesting?)
+suggestion: remove `# repeat` or simplify the nesting
+```
+
+Probed 2026-10-27: a 65-deep `Box::new` nest still folds clean while a
+70-deep nest fails, so the backstop trips strictly above the documented
+bound — e2e pins use 70-deep (fail) plus a shallow fold control and
+never the exact trip line.
+
 ---
 
 ## 18. Rewrite Semantics
@@ -4100,6 +4120,12 @@ only file- and inline-`mod`-level `use` items match (Section 14.9), so a
 fn-body `use` is ordinary-hunk territory too.
 
 A matcher-stage partial overlap is a different `RSMPL_MATCH_CONFLICT` shape from the zero/too-many fences above (which carry `old_range:` plus a set suggestion): two accepted candidates that partially overlap without nesting fail with `reason: partially overlapping matches cannot be merged` (`rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null). The canonical fence lives in Section 17.6, which also contrasts it with the plan-stage `overlapping edits cannot be merged` (`GIT_HUNK_CONFLICT`, Section 25.7).
+
+The `# repeat` nesting backstop shares the rule+file shape (but sets
+`suggestion:`, unlike the suggestion-null partial-overlap fence above):
+`reason: repeat nesting exceeds 64 levels (pathological nesting?)` with
+`suggestion: remove `# repeat` or simplify the nesting` — canonical
+fence in Section 17.8.
 
 ### 25.5 Symbol conflict
 
