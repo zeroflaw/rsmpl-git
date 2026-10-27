@@ -5805,6 +5805,10 @@ its pinned semantic-hunk count, then real-apply byte-identical to
 the child tree (T361: `--check` is blind to sweep over-match) —
 failing conversions become pins there.
 
+In a full checkout a missing curated pin fails the harness (stale
+recipe, not a skip); the root conversion ensures the empty-tree
+object via `git mktree` first (T362).
+
 Empty changes print empty stdout + `(no changes)` on stderr (never
 pipe empties into `applyrs` — empty input is the T59 authoring
 error). Failures exit 2 with the stdout-only `RSMPL_IO_CONFLICT`

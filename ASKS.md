@@ -36,3 +36,21 @@ Promote to TASKS.md when they earn it; keep this list short.
   `Reference` arm. Verbatim deltas (`- f(E0, &t[k])` /
   `+ f(E0, t[k])`) work. Not filed — zero history hits; promote
   only if a future commit shows N ≥ 2 shared-delta pairs.
+- Unbalanced insert+rename sweep (T362 dogfood, 38f28ea): 6x
+  `.filter_map(|d| match d {…})` → `.rev().find_map(|d| match
+  d {…})` — a 1-minus/2-plus pair per site (insert + rename).
+  Correctly passthrough today (detectors need balanced counts);
+  compressing it needs unbalanced-pair inference + an engine
+  shape for chained-callee plus sides. Not filed — single
+  commit; promote with a second independent exhibit.
+- De-indent move compression (T362 dogfood, 3baecc1): 821-line
+  module-flatten de-indent (balanced text, indentation-only
+  delta). Correctly ordinary today; compressing it needs move
+  inference in diffrs. Not filed — single commit; promote with
+  a second exhibit.
+- Empty-tree UX (T362 weigh-up, deferred): `diffrs <empty-tree>`
+  on a repo lacking the object fails with git’s `unknown
+  revision` (clean exit 2, not silent). A targeted hint for the
+  well-known hash would serve the T346 root recipe, but it
+  special-cases a magic value in a pure source path — needs the
+  T338 CLI-minimality weigh-up before filing.

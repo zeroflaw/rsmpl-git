@@ -17,11 +17,14 @@
 //! (the real checkout is never touched); the `applyrs --check` side
 //! materializes the parent via `git archive c~1 | tar -x -C <tmp>`
 //! (T356 isolation — no second checkout, no `.history/` pollution in
-//! the diffrs worktree); root checks against an empty dir; skips —
-//! never hard errors — outside a checkout, when `worktree add`
-//! fails, or when a curated commit is absent (shallow clones);
-//! `applyrs` always runs via `--file` because the large selections
-//! exceed the shell inline-arg limit.
+//! the diffrs worktree); root checks against an empty dir (the
+//! empty-tree object is ensured via `git mktree` first — fresh
+//! clones may lack it); skips — never hard errors — outside a
+//! checkout, when `worktree add` fails, or when a curated commit
+//! is absent (shallow clones; in a full checkout a missing pin
+//! fails as stale recipe, T362); `applyrs` always runs via
+//! `--file` because the large selections exceed the shell
+//! inline-arg limit.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -140,6 +143,15 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
         .args(args)
         .output()
         .is_ok_and(|o| o.status.success())
+}
+
+fn is_shallow(top: &Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(top)
+        .args(["rev-parse", "--is-shallow-repository"])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
 }
 
 fn toplevel() -> Option<PathBuf> {
@@ -400,13 +412,30 @@ fn history_selection_converts_and_round_trips() {
         eprintln!("skipping history_e2e: not a git checkout");
         return;
     };
-    // Only commits present locally participate (shallow clones skip).
-    let present: Vec<&Case> = CASES
+    // Only commits present locally participate (shallow clones skip);
+    // in a full checkout a missing curated pin is stale-recipe rot,
+    // not a skip — fail loudly instead of shrinking coverage (T362).
+    let mut failures: Vec<String> = Vec::new();
+    let (present, missing): (Vec<&Case>, Vec<&Case>) = CASES
         .iter()
-        .filter(|c| git_ok(&top, &["cat-file", "-e", c.commit]))
-        .collect();
+        .partition(|c| git_ok(&top, &["cat-file", "-e", c.commit]));
+    if !missing.is_empty() && !is_shallow(&top) {
+        failures.push(format!(
+            "stale history pins (absent in full checkout): {}",
+            missing
+                .iter()
+                .map(|c| c.commit[..7].to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
     if present.is_empty() {
         eprintln!("skipping history_e2e: no curated commits present");
+        assert!(
+            failures.is_empty(),
+            "history regressions:\n{}",
+            failures.join("\n")
+        );
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -424,7 +453,17 @@ fn history_selection_converts_and_round_trips() {
         eprintln!("skipping history_e2e: worktree add failed");
         return;
     }
-    let mut failures: Vec<String> = Vec::new();
+    // The root row converts against the well-known empty tree, which
+    // git creates lazily (a fresh clone may lack the object and the
+    // conversion would fail with `unknown revision`). `mktree` is
+    // idempotent and deterministic — ensure it once, best-effort (a
+    // real gap still fails loudly on the root row itself).
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&top)
+        .args(["mktree"])
+        .stdin(std::process::Stdio::null())
+        .output();
     for case in &present {
         check_case(&wt, &top, tmp.path(), case, &mut failures);
     }
