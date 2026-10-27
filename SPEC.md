@@ -710,8 +710,8 @@ hunks that already carry other directives omit it.
 | `# macro=token_tree` | Allow token-tree matching inside macro invocation bodies. |
 | `# macro=expanded` | Match macro-expanded output when build integration is available. |
 | `# format=preserve` | Preserve original formatting where possible. Default recommendation. |
-| `# format=rustfmt` | Format affected output with rustfmt. |
-| `# format=canonical` | Use engine canonical pretty-printer. |
+| `# format=rustfmt` | Rejected in v0.1 (run `cargo fmt` after apply, Section 22.2). |
+| `# format=canonical` | Rejected in v0.1 (run `cargo fmt` after apply, Section 22.3). |
 
 ### 9.4 Metavariable directives
 
@@ -1663,7 +1663,7 @@ for a corner case (Rust has no overloading, so multi-target stripping
 is rare), and `# returns=none` stays a minus-side constraint (requires
 absence; pairs with a concrete plus side for insertion).
 
-> **v0.1 implementation note:** evolved slots are emitted with canonical spacing (`<T>`, `x: i32`, `where T: Clone`); only `# format=preserve` is implemented, so no `rustfmt` normalization pass runs. Deleting a slot absorbs one following space to avoid doubled spacing.
+> **v0.1 implementation note:** evolved slots are emitted with canonical spacing (`<T>`, `x: i32`, `where T: Clone`); only `# format=preserve` is implemented, so no `rustfmt` normalization pass runs — run `cargo fmt` after apply (Section 22.2). Deleting a slot absorbs one following space to avoid doubled spacing.
 
 ### 14.8 Other item renames
 
@@ -2761,7 +2761,7 @@ If the engine cannot provide that mapping, it must fail.
 
 ### 22.1 Recommended default
 
-> **v0.1 implementation note:** only `# format=preserve` is implemented. Non-`preserve` values are rejected with a diagnostic instead of being silently ignored.
+> **v0.1 implementation note:** only `# format=preserve` is implemented. Non-`preserve` values are rejected fail-fast with a diagnostic pointing at `cargo fmt` instead of being silently ignored. Post-apply `cargo fmt` is the permanent answer for formatting (same composition as Section 21.3 for macro bodies): an in-tool formatting pass is rejected, not deferred, so no new flags or directives are needed.
 
 The recommended default is:
 
@@ -2780,23 +2780,15 @@ The engine should preserve:
 
 ### 22.2 Rustfmt mode
 
-If requested:
-
 ```text
 # format=rustfmt
 ```
 
-the engine may run `rustfmt` on the affected item, range, or file.
-
-The implementation must document the formatting scope.
-
-Recommended scopes:
-
-```text
-# format_scope=node
-# format_scope=range
-# format_scope=file
-```
+is rejected in v0.1: the tool never shells out to a formatter. Run
+`cargo fmt` after apply instead — one cheap command covers every case
+(evolved signatures, rewritten nodes) with no availability or version-drift
+failure modes inside the binary. `# format_scope=*` is likewise rejected
+(the parser already points at removing the directive).
 
 ### 22.3 Canonical mode
 
@@ -2804,7 +2796,9 @@ Recommended scopes:
 # format=canonical
 ```
 
-lets the engine emit syntax using its own pretty-printer. This is useful for prototypes but less ideal for human-reviewed patches.
+is rejected in v0.1 for the same reason: run `cargo fmt` after apply. An
+engine pretty-printer stays out of scope — prototypes do not need a second
+formatting dialect, and human-reviewed patches want `cargo fmt` output.
 
 ---
 
@@ -2896,13 +2890,10 @@ That behavior is forbidden for RSmPL hunks.
 
 Instead, hunk 2 must be matched against the original AST spans for the range it declared.
 
-This remains true even if hunk 1 requested:
-
-```text
-# format=rustfmt
-```
-
-and the formatted output has a different number of lines than the input.
+This remains true regardless of output line-count drift: a rewrite may
+produce a different number of lines than the input (in v0.1
+`# format=rustfmt` is rejected, so any reformatting happens via post-apply
+`cargo fmt` — later hunks still cite original lines).
 
 ### 23.5 Interaction with ordinary hunks
 

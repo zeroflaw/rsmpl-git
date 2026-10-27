@@ -732,7 +732,8 @@ fn gate_directives(
             "only `# format=preserve` is supported in v0.1",
         )
         .with_rule(rh.rule_name())
-        .with_file(path));
+        .with_file(path)
+        .with_suggestion("remove the directive and run `cargo fmt` after apply"));
     }
     let is_macro = matches!(
         &compiled.kind,
@@ -953,6 +954,16 @@ mod tests {
         let err =
             apply_multi(patch, vec![("src/lib.rs", "fn a() {\n    foo(1);\n}\n")]).unwrap_err();
         assert!(err.contains("RSMPL_CAPTURE_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn non_preserve_format_rejected_with_cargo_fmt_pointer() {
+        // T17: `# format=rustfmt` is rejected, not deferred — the
+        // suggestion must name the permanent answer (`cargo fmt`).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# format=rustfmt\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", "fn foo() {}\n")]).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("cargo fmt"), "got: {err}");
     }
 
     #[test]
