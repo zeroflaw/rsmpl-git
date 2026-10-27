@@ -3574,7 +3574,7 @@ body (both fenced in Section 21.3),
 or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
-Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); and any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9).
+Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -3608,6 +3608,20 @@ In the second fence `F` is the offending-name list (`, `-joined when
 several); the text `suggestion:` line is present only there (null
 suggestion omitted in the first fence, explicit `suggestion: null` in
 JSON for the first, `range: null` in both).
+
+The body list above gains one final member: a degenerate empty `-`/`+`
+pattern pair is the one reachable `PatternKind::Raw` shape. Every other
+classifier gate (fn, item, `use`, macro, call, generalized let/expr/type)
+passes an empty pattern by, so the plan stage rejects it with
+`RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the
+null `range:`/`suggestion:` lines, JSON carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: a.rs
+reason: unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)
+```
 
 Directive-parse failures are not uniform (all exit 2). A bare unknown
 directive (`# foo=bar`) carries no `rule:`/`file:`/`range:` lines (null
@@ -3791,9 +3805,45 @@ reason: removal mismatch at line 2: expected `wrong`
 The `rule:` line is empty (ordinary hunks carry no rule name; JSON reports
 `"rule": ""`), and `old_range` follows the same `start..start+len` convention
 (`@@ -1,4 @@` → `1..5`). The `reason` names the failing line and the
-expected text (`removal mismatch ...`, `context mismatch ...`, or
-`removal beyond EOF ...`); no `hunk:` line is ever emitted and no suggestion
-follows (JSON carries `"suggestion": null`).
+expected text — one of four engine-verbatim shapes (all exit 2; all share
+the empty-`rule:` / present-`old_range:` / null-suggestion envelope above).
+The two mismatch shapes echo the failing line and its expected text; the
+two EOF shapes fire when the body walks past the end of the file. Note the
+asymmetry: the context arm says `context line beyond EOF`, the removal arm
+says `removal beyond EOF` (no `line` word):
+
+```text
+GIT_HUNK_CONFLICT
+rule:
+file: src/lib.rs
+old_range: 1..2
+reason: context mismatch at line 1: expected `WRONG`
+```
+
+```text
+GIT_HUNK_CONFLICT
+rule:
+file: src/lib.rs
+old_range: 1..2
+reason: context line beyond EOF (line 2)
+```
+
+```text
+GIT_HUNK_CONFLICT
+rule:
+file: src/lib.rs
+old_range: 1..2
+reason: removal beyond EOF (line 2)
+```
+
+Three further engine arms never surface via the CLI, so they carry no fence
+here (defensive backstops for library callers, documented but not pinnable):
+`bad range` (a `LineIndex` miss after bounds checks passed), an `invalid diff
+prefix` rejection (the patch parser ends the hunk at any non-body line, so
+the engine never sees one — a `?` line yields an empty body and an empty
+lowering), and `target file not found in tree: {path}` (the CLI pre-fills
+every missing target as empty plus a `treating as new (empty) file` warning,
+so the plan-stage lookup never misses; Section 27.6).
 
 An overlap conflict is a different `GIT_HUNK_CONFLICT` shape from the content
 failure above: it fires when two edits overlap in original coordinates
