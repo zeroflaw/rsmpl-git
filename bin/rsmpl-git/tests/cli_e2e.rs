@@ -402,6 +402,20 @@ fn symbol_in_general_shape_is_pattern_conflict() {
 }
 
 #[test]
+fn empty_patch_suggestion_names_all_sources() {
+    // T246: the T59 empty-patch suggestion must name every empty source
+    // (stdin, --file, --patch) — the parser never learns the source, so
+    // the wording stays source-neutral. Classic trigger: `--patch "$(cat
+    // missing)"` expanding to `--patch ""`.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
+    let out = run(dir.path(), &["--patch", ""]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("--patch"), "got: {stderr}");
+}
+#[test]
 fn empty_patch_fails_json_envelope() {
     // T59: same failure in machine mode carries the JSON envelope.
     let dir = init_repo();

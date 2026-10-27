@@ -152,7 +152,8 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
         )
         .with_suggestion(
             "provide at least one `diff --git a/.. b/..` file section with a hunk \
-              (see SPEC 6 minimal recipe); check for an empty --file/stdin",
+              (see SPEC 6 minimal recipe); check for an empty patch input \
+              (stdin, --file, or --patch)",
         )
         .into());
     }

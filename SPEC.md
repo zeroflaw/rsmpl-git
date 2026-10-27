@@ -394,8 +394,8 @@ The file contains:
 The `---` / `+++` / `index` lines above are optional file metadata
 (`git_metadata*` in the grammar); the parser only requires the
 `diff --git` line before the hunks. An empty patch (zero file
-sections) is rejected with `RSMPL_PARSE_CONFLICT`: an empty
-`--file`/stdin is almost certainly an authoring typo,
+sections) is rejected with `RSMPL_PARSE_CONFLICT`: an empty patch
+input (stdin, `--file`, or `--patch`) is almost certainly an authoring typo,
 and silent success would violate Section 2.6. (A non-empty patch
 whose hunks lower to no changes still succeeds with an empty
 diff.) The canonical agent recipe is
@@ -4112,7 +4112,11 @@ chronological) and reports it on stderr as `history: <path>` plus the
 additive JSON `"history"` key (Section D.2, `version` stays 1). Only the
 last 128 entries are kept (oldest pruned first). Archiving runs before
 parsing, so failures leave audit too; history IO faults are stderr
-`warning:` lines only and never fail the run.
+`warning:` lines only and never fail the run. `.history/` is untracked
+audit noise, never a lowering input (the lowering is assembled in-memory
+from the old/new file contents; `git apply --check`/apply only ever
+sees the lowered diff) — adding it to `.gitignore` is always safe
+(the reference repo does).
 
 ### D.2 Machine-readable reports (`--format json`)
 
