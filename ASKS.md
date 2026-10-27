@@ -29,3 +29,10 @@ Promote to TASKS.md when they earn it; keep this list short.
   inconsistency. A count-vs-body validation with a precise error
   would save authoring rounds. Not filed — needs a weigh-up
   against parser minimality.
+- Engine coverage gap (T360 probe, no dogfood): a reference-of-
+  metavar call arg (`- f(E0, &E1)` / `+ f(E0, E1)`) never matches —
+  `classify_args` treats `&E1` as verbatim `Concrete`, and whole-
+  pattern calls never reach the general matcher's structural
+  `Reference` arm. Verbatim deltas (`- f(E0, &t[k])` /
+  `+ f(E0, t[k])`) work. Not filed — zero history hits; promote
+  only if a future commit shows N ≥ 2 shared-delta pairs.
