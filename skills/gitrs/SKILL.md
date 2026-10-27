@@ -109,9 +109,9 @@ marker; hunks with other directives omit it (SPEC 7.1).
 
 ```sh
 # read the target file first — note the 1-based spans to rewrite
-gitrs --file change.rsmpl --format json --diff-max-lines 0 --check
-gitrs --file change.rsmpl --output full.patch   # full diff while preview stays small
-gitrs --file change.rsmpl                       # apply for real
+gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
+gitrs apply --file change.rsmpl --output full.patch   # full diff while preview stays small
+gitrs apply --file change.rsmpl                       # apply for real
 ```
 
 - The lowering itself is always 0-context (minimal tokens, still appliable);
@@ -121,7 +121,7 @@ gitrs --file change.rsmpl                       # apply for real
 - Verify the JSON `matches` count equals the sites you read — fewer means
   a site (e.g. inside a macro) needs an ordinary hunk; per-rule `spans`
   (`[[start,end], …]`, original-source lines) need no re-read.
-- Piped patches avoid temp files: `cat change.rsmpl | gitrs --check`
+- Piped patches avoid temp files: `cat change.rsmpl | gitrs apply --check`
   (no input flags means stdin; `--file -` is the explicit alias; `--patch`
   passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
 

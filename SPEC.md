@@ -5339,8 +5339,8 @@ Modifiers and structural signature features must be explicitly written or explic
 
 ## Appendix D: Agent CLI Surface (stdin, JSON report, ranges)
 
-The patch format above is engine-agnostic, but the reference `gitrs`
-binary exposes agent-oriented conveniences. They do not change patch
+The patch format above is engine-agnostic, but the reference `applyrs`
+binary (reached via the `gitrs apply` dispatcher) exposes agent-oriented conveniences. They do not change patch
 semantics; they reduce the tokens and round-trips an LLM needs to author
 valid `@@ -old,len` ranges and verify results. The tool is patching-only:
 range discovery is a targeted file read (the agent's own tooling) plus
@@ -5353,7 +5353,7 @@ spelling needs no input flag at all:
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-cat change.rsmpl | gitrs --check
+cat change.rsmpl | gitrs apply --check
 ```
 
 `--file -` spells the same stdin read explicitly. Empty stdin is rejected
@@ -5367,8 +5367,8 @@ of shell quoting and arg-length limits, so large patches keep `--file`):
  T259 audit KEEP: each source traces to a distinct token cost (bare stdin = cheapest pipe, `--file` = large patches, `--patch` = inline loops), so the trio is final; if a future cleanup must drop a flag, drop `--patch` (inline loops fall back to temp files) — never `--file`, never the bare-stdin default.
 
 ```sh
-gitrs --file change.rsmpl --check          # large patches, no quoting
-gitrs --patch "$(cat change.rsmpl)" --check # inline, no temp file
+gitrs apply --file change.rsmpl --check          # large patches, no quoting
+gitrs apply --patch "$(cat change.rsmpl)" --check # inline, no temp file
 ```
 
 `--patch '<diff>'` conflicts with `--file` (clap usage error, enveloped as
@@ -5498,7 +5498,7 @@ prints one JSON object to stdout:
 - Flag-usage errors (unknown flag, bad value) are enveloped too: with
   `--format json` they print the same stdout-only `RSMPL_IO_CONFLICT`
   envelope (reason = clap's one-line error, suggestion = run
-  `gitrs --help` for usage) and exit 2. Text mode keeps clap's stderr
+  `applyrs --help` for usage) and exit 2. Text mode keeps clap's stderr
   error. (No-input is not an error: bare stdin is the default, D.1.)
   One caveat: a missing `--format` value cannot be detected as a json
   request, so it always takes the text path.
@@ -5512,13 +5512,13 @@ never changes what is checked, applied, or saved:
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 # Stats + check only, no diff tokens at all:
-gitrs --file change.rsmpl --format json --diff-max-lines 0 --check
+gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
 
 # First 40 lines of diff for a quick skim, stats stay exact:
-gitrs --file change.rsmpl --format json --diff-max-lines 40 --check
+gitrs apply --file change.rsmpl --format json --diff-max-lines 40 --check
 
 # Text equivalent (stdout is the reported diff, markers on stderr):
-gitrs --file change.rsmpl --check --diff-max-lines 40
+gitrs apply --file change.rsmpl --check --diff-max-lines 40
 ```
 
 Rules:
@@ -5553,13 +5553,13 @@ minimal tokens by default):
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 # Minimal tokens by default, still a real appliable patch:
-gitrs --file change.rsmpl --check
+gitrs apply --file change.rsmpl --check
 ```
 
 Rules:
 
 - The lowering shows only changed (`-`/`+`) lines; hunk headers stay
-  `@@ -a,b +c,d @@`. gitrs's own `--check`/apply/`--output` path handles
+  `@@ -a,b +c,d @@`. applyrs's own `--check`/apply/`--output` path handles
   it (it passes `git apply --unidiff-zero`, which plain `git apply`
   requires for zero-context hunks); piping a saved patch to a
   bare `git apply` needs that same flag.
@@ -5630,7 +5630,7 @@ plus-side binding) all run before matching, so an empty directory
 stands in for the repo:
 
 ```sh
-mkdir -p /tmp/empty && gitrs --file change.rsmpl --repo /tmp/empty --check
+mkdir -p /tmp/empty && gitrs apply --file change.rsmpl --repo /tmp/empty --check
 ```
 
 Triage the result: `RSMPL_PARSE_CONFLICT` /

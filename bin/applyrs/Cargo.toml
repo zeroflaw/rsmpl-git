@@ -1,0 +1,21 @@
+[package]
+name = "applyrs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "applyrs"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+rsmpl_patch = { workspace = true }
+rsmpl_pattern = { workspace = true }
+rsmpl_engine = { workspace = true }
+rsmpl_git = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }

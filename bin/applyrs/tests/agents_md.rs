@@ -1,9 +1,10 @@
 //! T41 anti-rot: `AGENTS.md` stays short and its citations stay true.
 //!
 //! Every `SPEC <token>` anchor cited by the cheat-sheet must resolve in
-//! `SPEC.md`, and every ` --<flag>` it cites must exist in `gitrs
-//! --help`. The three recipe skeletons must appear verbatim so the sheet
-//! alone suffices for rename + call-rewrite + move patches.
+//! `SPEC.md`, and every ` --<flag>` it cites must exist in `applyrs
+//! --help` (the flags' owner; the `gitrs apply` dispatcher forwards to
+//! `applyrs`). The three recipe skeletons must appear verbatim so the
+//! sheet alone suffices for rename + call-rewrite + move patches.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,7 +56,7 @@ fn agents_md_citations_resolve() {
     }
 
     // CLI flags cited by the cheat-sheet must exist in --help.
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_gitrs"));
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_applyrs"));
     let out = Command::new(&binary).arg("--help").output().unwrap();
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout).to_string();

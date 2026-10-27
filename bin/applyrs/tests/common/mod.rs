@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_gitrs"))
+    PathBuf::from(env!("CARGO_BIN_EXE_applyrs"))
 }
 
 pub fn init_repo() -> tempfile::TempDir {

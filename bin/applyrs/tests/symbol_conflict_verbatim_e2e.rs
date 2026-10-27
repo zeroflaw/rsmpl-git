@@ -2,7 +2,7 @@
 //!
 //! SPEC 25.5 carried the fence but its envelope sentence was loose (named
 //! only JSON `range: null`); the C13 table row carried no envelope at all
-//! (unlike C14/C15, hardened in T276). Probed `target/debug/gitrs`
+//! (unlike C14/C15, hardened in T276). Probed `target/debug/applyrs`
 //! (exit 2): text carries `rule:`/`file:`/`reason:`/`suggestion:` with the
 //! null range omitted (no `old_range:` line); JSON carries `rule`/`file`
 //! set, `range: null`, and the suggestion as a set string. `{Name}` echoes

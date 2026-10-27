@@ -129,12 +129,12 @@ searches the whole file (SPEC 17.3).
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
-cat change.rsmpl | gitrs --check
-gitrs --file change.rsmpl --check
-gitrs --patch "$(cat change.rsmpl)" --check  # inline, no temp file
-gitrs --file change.rsmpl --format json --check
-gitrs --file change.rsmpl --format json --diff-max-lines 0 --check
-gitrs --file change.rsmpl --output full.patch
+cat change.rsmpl | gitrs apply --check
+gitrs apply --file change.rsmpl --check
+gitrs apply --patch "$(cat change.rsmpl)" --check  # inline, no temp file
+gitrs apply --file change.rsmpl --format json --check
+gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
+gitrs apply --file change.rsmpl --output full.patch
 ```
 
 Piped patches avoid temp files — no input flags means stdin (SPEC D.1).

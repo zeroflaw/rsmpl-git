@@ -53,6 +53,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "applyrs"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "rsmpl_engine",
+ "rsmpl_git",
+ "rsmpl_patch",
+ "rsmpl_pattern",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -141,11 +154,6 @@ dependencies = [
 name = "gitrs"
 version = "0.1.0"
 dependencies = [
- "clap",
- "rsmpl_engine",
- "rsmpl_git",
- "rsmpl_patch",
- "rsmpl_pattern",
  "serde_json",
  "tempfile",
 ]

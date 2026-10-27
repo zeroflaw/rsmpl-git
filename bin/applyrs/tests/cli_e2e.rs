@@ -1,4 +1,4 @@
-//! End-to-end tests driving the `gitrs` binary in temp worktrees.
+//! End-to-end tests driving the `applyrs` binary in temp worktrees.
 
 use std::fs;
 use std::process::Command;

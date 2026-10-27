@@ -58,7 +58,7 @@ fn fixtures_apply_through_binary() {
             .unwrap();
         assert!(st.success());
 
-        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")))
+        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")))
             .arg("--file")
             .arg(dir.join("patch.rsmpl"))
             .arg("--repo")
@@ -153,7 +153,7 @@ fn example_benches_stay_check_clean() {
             .status()
             .unwrap();
         assert!(st.success());
-        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")))
+        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")))
             .arg("--file")
             .arg(dir.join("patch.rsmpl"))
             .arg("--repo")
@@ -201,7 +201,7 @@ fn example_bench_readme_table_matches_recomputed() {
             .unwrap();
         assert!(st.success());
         let fresh = tmp.path().join("fresh.patch");
-        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")))
+        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")))
             .arg("--file")
             .arg(dir.join("patch.rsmpl"))
             .arg("--repo")
