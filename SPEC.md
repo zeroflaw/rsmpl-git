@@ -3731,6 +3731,8 @@ A conforming implementation should process a patch using these phases:
 
 Implementations may use a different internal algorithm if the externally visible behavior is equivalent.
 
+A failure at any phase aborts the whole patch: matching, planning, and lowering are all-or-nothing across file sections — a match failure in one file section discards successful matches in the others. No file is written and nothing is applied (exit 2, worktree untouched in both `--check` and apply modes); the error envelope names the failing hunk (`rule` + `file`, e.g. Section 25.4).
+
 ### 23.2 Forward capture references are required
 
 A capture in any hunk may be used by any other hunk in the same patch file, regardless of document order.
