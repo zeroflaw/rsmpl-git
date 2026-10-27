@@ -5769,9 +5769,17 @@ on collision).
   one shared old-method ident, one shared new-method ident
   (`old != new`), and uniform arity → one `# allow=many` hunk
   (`# expr Receiver` + `# expr E0…`).
+- `&`-receiver strip sweep: N ≥ 2 `-`/`+` pairs, each containing
+  exactly one shared-reference-to-method call (`syn`-parsed, no
+  turbofish/`&mut`/explicit lifetime) with the plus side equal to
+  the minus with that span replaced by its receiver; one shared
+  method ident and shared arg token-texts (typically literals, bound
+  verbatim so `&d.join("repo")`-style sites can never over-match) →
+  one `# allow=many` general-expr hunk (`# expr Receiver` only).
+  Trailing `;`/`,` tolerated.
 - Everything else (multi-line edits, pure deletions/additions,
-  non-`.rs` files, unbalanced hunks, turbofish/`&`-receiver sites,
-  paths, macro interiors) stays
+  non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
+  `&`-receiver sites, paths, macro interiors) stays
   ordinary-hunk passthrough.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;

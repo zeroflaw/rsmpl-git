@@ -1,5 +1,5 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
-//! method-to-fn and method-to-method fan-outs.
+//! method-to-fn, method-to-method, and &-receiver strip fan-outs.
 //!
 //! Pure detectors over a binary-stripped native diff. Whole-file
 //! first: a section whose every pair shares one shape is fully
@@ -103,13 +103,17 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(slot);
     }
-    // N >= 2 method-to-function fan-outs (T345) and method-to-method
-    // renames (T347); fall through to the bare-call sweep otherwise.
+    // N >= 2 method-to-function fan-outs (T345), method-to-method
+    // renames (T347), and `&`-receiver strips (T359); fall through to
+    // the bare-call sweep otherwise.
     if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(m2f);
     }
     if let Some(m2m) = try_method_to_method_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(m2m);
+    }
+    if let Some(strip) = try_ref_method_strip_sweep(&minuses, &pluses, &path, used_rules) {
+        return Some(strip);
     }
     if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(sweep);
@@ -190,6 +194,10 @@ fn compress_section_per_hunk(
                 try_method_to_method_sweep(&minuses, &pluses, path, used_rules)
             {
                 Some(m2m)
+            } else if let Some(strip) =
+                try_ref_method_strip_sweep(&minuses, &pluses, path, used_rules)
+            {
+                Some(strip)
             } else {
                 try_call_sweep(&minuses, &pluses, path, used_rules)
             }
@@ -700,6 +708,155 @@ fn parse_method_to_method_pair(old_line: &str, new_line: &str) -> Option<(String
         return None;
     }
     Some((old_method, new_method, old_call.args.len()))
+}
+
+/// N-site (N ≥ 2) `&`-receiver strip fan-out (T359): every pair
+/// contains exactly one `&recv.method(args)` sub-expression (a shared
+/// reference to a turbofish-free method call) and the plus side equals
+/// the minus side with that sub-expression replaced by `recv`; the
+/// method ident and the arg token-texts are shared across sites
+/// (typically literals like `""`), so the emitted hunk binds them
+/// verbatim and can never over-match `&dir.join("repo")`-style sites.
+/// Bare arg-position lines carry a trailing `,` and call-nested sites
+/// a trailing `;`: one trailing `;` (else one `,`) is stripped before
+/// parsing. Emits one `# allow=many` + `# scope=file` general-expr
+/// hunk (`# expr Receiver` only); a lone site stays ordinary (no token
+/// win), as do turbofish, `&mut`, explicit-lifetime, divergent, and
+/// plus-is-not-receiver pairs.
+fn try_ref_method_strip_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() < 2 {
+        return None;
+    }
+    let mut method: Option<String> = None;
+    let mut args: Option<Vec<String>> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (meth, argv) = parse_ref_strip_pair(m, p)?;
+        if method.as_ref().is_some_and(|c| *c != meth) {
+            return None;
+        }
+        if args.as_ref().is_some_and(|a| *a != argv) {
+            return None;
+        }
+        method = Some(meth);
+        args = Some(argv);
+    }
+    let (method, args) = (method?, args?);
+    let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
+    let mut hunk = format!(
+        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n"
+    );
+    hunk.push_str(&format!(
+        "- &Receiver.{method}({})\n+ Receiver\n",
+        args.join(", ")
+    ));
+    Some(hunk)
+}
+
+/// Parse one `-`/`+` line pair as a `&`-receiver strip: the minus side
+/// parses as an expr containing exactly one shared-reference-to-method
+/// call, and the plus side is the minus with that span replaced by the
+/// receiver. Returns (method ident, arg token-texts) on success.
+fn parse_ref_strip_pair(old_line: &str, new_line: &str) -> Option<(String, Vec<String>)> {
+    let minus = strip_one_terminator(old_line.trim())?;
+    let plus = strip_one_terminator(new_line.trim())?;
+    if minus.is_empty() || plus.is_empty() {
+        return None;
+    }
+    let minus_expr: syn::Expr = syn::parse_str(minus).ok()?;
+    let mut hits: Vec<RefStripHit> = Vec::new();
+    collect_ref_strips(&minus_expr, &mut hits);
+    if hits.len() != 1 {
+        return None;
+    }
+    let hit = hits.pop()?;
+    // Whitespace-flat compare: `ToTokens` spacing never matches source
+    // spacing, and source lines carry indentation the pattern drops.
+    // Explicit lifetimes (`&'a r.m(..)`) never qualify: `syn` drops the
+    // lifetime, so the token text cannot prove its absence — check raw.
+    if flat_ws(&hit.cand).contains("&'") {
+        return None;
+    }
+    if count_occurrences(&flat_ws(minus), &flat_ws(&hit.cand)) != 1 {
+        return None;
+    }
+    if flat_ws(minus).replacen(&flat_ws(&hit.cand), &flat_ws(&hit.recv), 1) != flat_ws(plus) {
+        return None;
+    }
+    Some((hit.method, hit.args))
+}
+
+/// One `&recv.method(args)` span: token-texts for the containment
+/// check plus the shared method/args for cross-site agreement.
+struct RefStripHit {
+    method: String,
+    cand: String,
+    recv: String,
+    args: Vec<String>,
+}
+
+/// Walk an expr collecting every turbofish-free shared reference to a
+/// method call (`&recv.method(args)`); explicit lifetimes and `&mut`
+/// never qualify.
+fn collect_ref_strips(expr: &syn::Expr, out: &mut Vec<RefStripHit>) {
+    use quote::ToTokens;
+    use syn::visit::Visit;
+    struct Collector<'a>(&'a mut Vec<RefStripHit>);
+    impl<'ast> syn::visit::Visit<'ast> for Collector<'_> {
+        fn visit_expr_reference(&mut self, node: &'ast syn::ExprReference) {
+            if node.mutability.is_none() {
+                if let syn::Expr::MethodCall(call) = node.expr.as_ref() {
+                    if call.turbofish.is_none() {
+                        self.0.push(RefStripHit {
+                            method: call.method.to_string(),
+                            cand: node.to_token_stream().to_string(),
+                            recv: call.receiver.to_token_stream().to_string(),
+                            args: call
+                                .args
+                                .iter()
+                                .map(|a| a.to_token_stream().to_string())
+                                .collect(),
+                        });
+                    }
+                }
+            }
+            syn::visit::visit_expr_reference(self, node);
+        }
+    }
+    Collector(out).visit_expr(expr);
+}
+
+/// Strip one trailing statement/arg terminator (`;`, else `,`) for
+/// shape parsing; the emitted hunk matches sub-expressions, so the
+/// terminator never reaches the pattern.
+fn strip_one_terminator(text: &str) -> Option<&str> {
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = text.strip_suffix(';') {
+        return Some(stripped.trim_end());
+    }
+    if let Some(stripped) = text.strip_suffix(',') {
+        return Some(stripped.trim_end());
+    }
+    Some(text)
+}
+
+/// Whitespace-insensitive text for detection-time containment and
+/// replacement checks (the engine re-verifies structurally at apply).
+fn flat_ws(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+    haystack.match_indices(needle).count()
 }
 
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:
@@ -1300,6 +1457,106 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n fn m() {\n-    1\n+    2\n }\n@@ -10,3 +10,3 @@\n fn n() {\n-    3\n+    4\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn ref_strip_sweep_bare_and_nested_compresses() {
+        // T359 shape: bare arg-position lines (trailing `,`) and a
+        // `write(...)`-nested site share `&R.join("")` -> `R`.
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    &dir.path().join(\"\"),\n-    &dir.path().join(\"\"),\n-    write(&dir.path().join(\"\"), \"a\");\n+    dir.path(),\n+    dir.path(),\n+    write(dir.path(), \"a\");\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("# expr Receiver\n"), "got: {out}");
+        assert!(!out.contains("# expr E"), "got: {out}");
+        assert!(out.contains("- &Receiver.join(\"\")\n"), "got: {out}");
+        assert!(out.contains("+ Receiver\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn ref_strip_sweep_shared_nonempty_arg_compresses() {
+        // Shared literal args are the design point, not a hazard:
+        // `&d.join("repo")` -> `d` at two sites compresses.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    copy_tree(&a.join(\"repo\"), x);\n-    copy_tree(&b.join(\"repo\"), y);\n+    copy_tree(a, x);\n+    copy_tree(b, y);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("- &Receiver.join(\"repo\")\n"), "got: {out}");
+        assert!(out.contains("+ Receiver\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn ref_strip_sweep_zero_arg_compresses() {
+        // Empty arg list renders as `()` with no metavars.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.flush();\n-    &b.flush();\n+    a;\n+    b;\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("- &Receiver.flush()\n"), "got: {out}");
+        assert!(out.contains("+ Receiver\n"), "got: {out}");
+    }
+
+    #[test]
+    fn ref_strip_sweep_divergent_args_stay_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.join(\"\");\n-    &b.join(\"x\");\n+    a;\n+    b;\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn ref_strip_sweep_divergent_method_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.join(\"\");\n-    &b.push(\"\");\n+    a;\n+    b;\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn ref_strip_sweep_plus_not_receiver_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.join(\"\");\n-    &b.join(\"\");\n+    a;\n+    c;\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn ref_strip_sweep_turbofish_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.join::<T>(\"\");\n-    &b.join::<T>(\"\");\n+    a;\n+    b;\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn ref_strip_sweep_mut_ref_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &mut a.join(\"\");\n-    &mut b.join(\"\");\n+    a;\n+    b;\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn ref_strip_sweep_single_site_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    &a.join(\"\");\n+    a;\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }

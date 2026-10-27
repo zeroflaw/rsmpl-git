@@ -84,7 +84,9 @@ delta → one `# allow=many` hunk), N-site method-to-function
 fan-outs (`recv.old(args)` → `new_fn(recv, args)` → one `# allow=many`
 `Receiver` hunk), and N-site method-to-method renames
 (`recv.old(args)` → `recv.new(args)` → one `# allow=many` `Receiver`
-hunk) into semantic hunks — whole-file first, then per balanced
+hunk), and N-site `&`-receiver strips (`&recv.m(lits)` → `recv` → one
+`# allow=many` general-expr hunk) into semantic hunks — whole-file
+first, then per balanced
 hunk (T349); unrecognized runs stay 0-context ordinary hunks (no
 untouched lines, still round-trip).
 Output always parses and round-trips through `gitrs apply --check`

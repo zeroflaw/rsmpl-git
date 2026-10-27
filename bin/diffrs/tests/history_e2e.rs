@@ -61,6 +61,14 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 4,
     },
+    // T359 `&`-receiver strip: 5 files of `&R.join("")` -> `R` sites
+    // (bare arg-position lines + `write(...)`-nested) compress to 5 hunks.
+    Case {
+        commit: "57140fe11a54a337b0d2bb9d9a5a7c1a5c06412a",
+        rev: None,
+        root: false,
+        expect_sem: 5,
+    },
     // Ordinary selections (convert + round-trip, zero semantic).
     Case {
         commit: "82f6193843665bfab12b61b64e27070b9a729258",
@@ -224,8 +232,10 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
             case.expect_sem
         ));
     }
-    if case.expect_sem > 0 && !patch.contains("rule=rename_") {
-        failures.push(format!("{short}: expected rename compression, got none"));
+    if case.expect_sem > 0 && !(patch.contains("rule=rename_") || patch.contains("rule=calls_")) {
+        failures.push(format!(
+            "{short}: expected rename/sweep compression, got none"
+        ));
     }
     // Pre-change tree in isolation (T356): the parent commit
     // materialized via `git archive parent | tar -x -C <tmp>`, or an
