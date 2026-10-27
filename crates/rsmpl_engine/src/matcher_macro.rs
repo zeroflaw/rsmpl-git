@@ -428,42 +428,52 @@ fn match_macro_args(
         }
         return true;
     }
-    let mut ti = 0;
-    let mut pi = 0;
-    while pi < pattern.len() {
-        if pattern[pi] == ArgPat::Ellipsis {
-            if pi + 1 == pattern.len() {
+    // Backtracking alignment (T159 mirror of `match_args_from`): splits
+    // are tried left-to-right so greedy preference is preserved, but a
+    // failed tail retries later splits instead of failing first-fit-only.
+    // No remainder tracking here — plus-side `...` replays the whole
+    // macro body (T157), so only match success is at stake.
+    match_macro_args_from(pattern, 0, targets, 0, reverse_map, bindings)
+}
+
+/// Backtracking worker for [`match_macro_args`]: match `pattern[pi..]`
+/// against `targets[ti..]`.
+fn match_macro_args_from(
+    pattern: &[ArgPat],
+    pi: usize,
+    targets: &[String],
+    ti: usize,
+    reverse_map: &HashMap<String, String>,
+    bindings: &mut HashMap<String, String>,
+) -> bool {
+    if pi == pattern.len() {
+        return ti == targets.len();
+    }
+    if pattern[pi] == ArgPat::Ellipsis {
+        if pi + 1 == pattern.len() {
+            return true;
+        }
+        for k in ti..=targets.len() {
+            let saved = bindings.clone();
+            if match_macro_args_from(pattern, pi + 1, targets, k, reverse_map, bindings) {
                 return true;
             }
-            let next = &pattern[pi + 1];
-            let mut found = None;
-            for (k, target) in targets.iter().enumerate().skip(ti) {
-                let mut probe = bindings.clone();
-                if match_one(next, target, reverse_map, &mut probe) {
-                    found = Some((k, probe));
-                    break;
-                }
-            }
-            match found {
-                Some((k, probe)) => {
-                    *bindings = probe;
-                    ti = k + 1;
-                    pi += 2;
-                }
-                None => return false,
-            }
-        } else {
-            if ti >= targets.len() {
-                return false;
-            }
-            if !match_one(&pattern[pi], &targets[ti], reverse_map, bindings) {
-                return false;
-            }
-            ti += 1;
-            pi += 1;
+            *bindings = saved;
         }
+        return false;
     }
-    ti == targets.len()
+    if ti >= targets.len() {
+        return false;
+    }
+    let saved = bindings.clone();
+    if !match_one(&pattern[pi], &targets[ti], reverse_map, bindings) {
+        return false;
+    }
+    if match_macro_args_from(pattern, pi + 1, targets, ti + 1, reverse_map, bindings) {
+        return true;
+    }
+    *bindings = saved;
+    false
 }
 
 fn match_one(
@@ -617,5 +627,15 @@ mod tests {
         let src = "fn a() {\n    old!(foo(bar));\n}\n";
         let out = apply(patch, src).unwrap();
         assert!(out.contains("old!(foo(baz));"), "got: {out}");
+    }
+
+    #[test]
+    fn invocation_leading_ellipsis_backtracks() {
+        // T159: invocation-mode arg matching shares the backtracking
+        // alignment — `- foo!(..., E)` on `foo!(1, 2, 3)` binds `3`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo!(..., E)\n+ bar!(E)\n";
+        let src = "fn a() {\n    foo!(1, 2, 3);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar!(3);"), "got: {out}");
     }
 }

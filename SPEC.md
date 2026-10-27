@@ -2089,7 +2089,11 @@ bar(a)
 
 Each `...` in the `+` side replays, in order, the target args the
 matching `- ...` absorbed: `- foo(E, ...)` / `+ bar(E, ...)` rewrites
-`foo(1, 2, 3)` to `bar(1, 2, 3)`. A `...` that absorbs nothing replays
+`foo(1, 2, 3)` to `bar(1, 2, 3)`. Splits are tried left-to-right
+(greedy preference) with backtracking: a failed tail retries later
+splits, so `- foo(..., E)` / `+ bar(E)` rewrites `foo(1, 2, 3)` to
+`bar(3)`, and `- foo(A, ..., B)` / `+ bar(A, B)` rewrites it to
+`bar(1, 3)`. A `...` that absorbs nothing replays
 empty and swallows one adjacent comma, so the same hunk rewrites
 `foo(1)` to `bar(1)`. Omitting `...` on the `+` side is a deliberate
 arg-drop (`- foo(E, ...)` / `+ bar(E)` rewrites `foo(1, 2)` to
@@ -2759,7 +2763,7 @@ In token-tree mode, `...` is token-based, not AST-based. It does not enforce Rus
 
 If a token-tree pattern contains multiple `...` wildcards at the same delimiter depth, the engine must either use a documented deterministic left-to-right matching strategy or reject the pattern as ambiguous. Rejection is recommended for v0.1 unless the implementation documents exact behavior.
 
-> **v0.1 implementation note:** multiple `...` wildcards (argument lists, path segments, macro bodies) match with a documented left-to-right greedy strategy; `foo(...)` absorbs any argument count including zero.
+> **v0.1 implementation note:** multiple `...` wildcards (argument lists, path segments, macro bodies) match with a documented left-to-right greedy strategy with backtracking (earliest split first, later splits on tail failure); `foo(...)` absorbs any argument count including zero.
 
 ### 21.5 Expanded macro rewrite
 

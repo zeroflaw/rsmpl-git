@@ -1954,3 +1954,30 @@ fn ellipsis_plus_without_minus_fails_fast_json() {
     assert!(stdout.contains("RSMPL_PATTERN_CONFLICT"), "got: {stdout}");
     assert!(stdout.contains("no matching `- ...`"), "got: {stdout}");
 }
+
+#[test]
+fn ellipsis_leading_backtrack_applies() {
+    // T159: `- foo(..., E)` on `foo(1, 2, 3)` binds the last arg via
+    // backtracking (was a first-fit-only `no match found`).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1, 2, 3);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# allow=many\n# expr E\n- foo(..., E)\n+ bar(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("bar(3);"), "got: {text}");
+}

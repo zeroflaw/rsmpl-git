@@ -226,49 +226,74 @@ fn match_args(
         }
         return true;
     }
-    // With ellipses: align non-ellipsis pattern args in order (greedy).
-    let mut ti = 0;
-    let mut pi = 0;
-    while pi < pattern.len() {
-        if pattern[pi] == ArgPat::Ellipsis {
-            // If last pattern element, absorb the rest.
-            if pi + 1 == pattern.len() {
-                remainders.push(targets[ti..].join(", "));
+    // With ellipses: align with backtracking (T159). Splits are tried
+    // left-to-right so greedy preference is preserved, but a failed tail
+    // retries later splits instead of failing first-fit-only.
+    match_args_from(pattern, 0, targets, 0, reverse_map, bindings, remainders)
+}
+
+/// Backtracking worker for [`match_args`]: match `pattern[pi..]` against
+/// `targets[ti..]`. `remainders` gains one entry per `...` in pattern
+/// order on success (pushed before recursing, popped on failure).
+fn match_args_from(
+    pattern: &[ArgPat],
+    pi: usize,
+    targets: &[String],
+    ti: usize,
+    reverse_map: &HashMap<String, String>,
+    bindings: &mut HashMap<String, String>,
+    remainders: &mut Vec<String>,
+) -> bool {
+    if pi == pattern.len() {
+        // All pattern args consumed: success iff all targets consumed
+        // (trailing targets need a trailing `...` to absorb them).
+        return ti == targets.len();
+    }
+    if pattern[pi] == ArgPat::Ellipsis {
+        // If last pattern element, absorb the rest.
+        if pi + 1 == pattern.len() {
+            remainders.push(targets[ti..].join(", "));
+            return true;
+        }
+        for k in ti..=targets.len() {
+            let saved = bindings.clone();
+            remainders.push(targets[ti..k].join(", "));
+            if match_args_from(
+                pattern,
+                pi + 1,
+                targets,
+                k,
+                reverse_map,
+                bindings,
+                remainders,
+            ) {
                 return true;
             }
-            // Otherwise skip target args until the next non-ellipsis pattern
-            // arg matches (greedy first-fit).
-            let next = &pattern[pi + 1];
-            let mut found = None;
-            for (k, target) in targets.iter().enumerate().skip(ti) {
-                let mut probe = bindings.clone();
-                if match_single_arg(next, target, reverse_map, &mut probe) {
-                    found = Some((k, probe));
-                    break;
-                }
-            }
-            match found {
-                Some((k, probe)) => {
-                    remainders.push(targets[ti..k].join(", "));
-                    *bindings = probe;
-                    ti = k + 1;
-                    pi += 2;
-                }
-                None => return false,
-            }
-        } else {
-            if ti >= targets.len() {
-                return false;
-            }
-            if !match_single_arg(&pattern[pi], &targets[ti], reverse_map, bindings) {
-                return false;
-            }
-            ti += 1;
-            pi += 1;
+            remainders.pop();
+            *bindings = saved;
         }
+        return false;
     }
-    // Trailing targets must have been absorbed by a trailing ellipsis.
-    ti == targets.len()
+    if ti >= targets.len() {
+        return false;
+    }
+    let saved = bindings.clone();
+    if !match_single_arg(&pattern[pi], &targets[ti], reverse_map, bindings) {
+        return false;
+    }
+    if match_args_from(
+        pattern,
+        pi + 1,
+        targets,
+        ti + 1,
+        reverse_map,
+        bindings,
+        remainders,
+    ) {
+        return true;
+    }
+    *bindings = saved;
+    false
 }
 
 fn match_single_arg(
@@ -1334,5 +1359,57 @@ mod tests {
         let err = apply(patch, src).unwrap_err();
         assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
         assert!(err.contains("no matching `- ...`"), "got: {err}");
+    }
+
+    #[test]
+    fn ellipsis_leading_backtracks_to_last_arg() {
+        // T159: `- foo(..., E)` on `foo(1, 2, 3)` binds the last arg
+        // (first-fit alone would bind `1` and fail the tail check).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(..., E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1, 2, 3);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(3);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_middle_binds_both_ends() {
+        // T159: `- foo(A, ..., B)` on `foo(1, 2, 3)` binds `1` and `3`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr A\n# expr B\n- foo(A, ..., B)\n+ bar(A, B)\n";
+        let src = "fn a() {\n    foo(1, 2, 3);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1, 3);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_middle_replays_remainder() {
+        // T159: the absorbed middle replays positionally (T157 replay
+        // rides the backtracking alignment).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr A\n# expr B\n- foo(A, ..., B)\n+ bar(A, ..., B)\n";
+        let src = "fn a() {\n    foo(1, 2, 3);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1, 2, 3);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_backtrack_keeps_repeated_metavar_equal() {
+        // T159: `E` must stay structurally equal across the backtrack —
+        // `- foo(E, ..., E)` on `foo(1, 2, 1)` binds `E` to `1`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E, ..., E)\n+ bar(E, ...)\n";
+        let src = "fn a() {\n    foo(1, 2, 1);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1, 2);"), "got: {out}");
+        // Unequal ends fail safe rather than binding inconsistently.
+        let src = "fn a() {\n    foo(1, 2, 3);\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
+    fn ellipsis_leading_method_call_backtracks() {
+        // T159: the method-call arm shares `match_args`, so leading
+        // `...` backtracks there too.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n# expr E\n- R.foo(..., E)\n+ R.bar(E)\n";
+        let src = "fn a() {\n    r.foo(1, 2, 3);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("r.bar(3);"), "got: {out}");
     }
 }
