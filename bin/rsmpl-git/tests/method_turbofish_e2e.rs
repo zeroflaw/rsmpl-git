@@ -114,3 +114,31 @@ fn method_turbofish_rewrite_reports_json_match() {
     let payload: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
     assert_eq!(payload["rules"][0]["matches"], 1);
 }
+
+#[test]
+fn placeholder_method_turbofish_applies_text() {
+    // T178: `R.M::<T>()` binds the method ident + turbofish (P11 probe).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn main() {\n    let x = v.collect::<u8>();\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=placeholder_method_turbo\n# allow=many\n# expr R\n# expr M\n# type T\n- R.M::<T>()\n+ R.N::<T>()\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "text: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "fn main() {\n    let x = v.N::<u8>();\n}\n"
+    );
+}

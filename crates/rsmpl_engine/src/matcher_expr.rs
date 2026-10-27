@@ -1371,6 +1371,35 @@ mod tests {
     }
 
     #[test]
+    fn method_turbofish_placeholder_method_concrete_binds() {
+        // T178: `R.M::<u8>()` binds the method ident like callee
+        // `P::<T>` (T176 residual, works by construction — P10b probe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n# expr M\n- R.M::<u8>()\n+ R.N::<u8>()\n";
+        let src = "fn a() {\n    let x = v.collect::<u8>();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("v.N::<u8>()"), "got: {out}");
+    }
+
+    #[test]
+    fn method_turbofish_placeholder_method_type_binds() {
+        // T178: `R.M::<T>()` binds the method ident and `T`
+        // structurally (P11 probe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n# expr M\n# type T\n- R.M::<T>()\n+ R.N::<T>()\n";
+        let src = "fn a() {\n    let x = v.collect::<u8>();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("v.N::<u8>()"), "got: {out}");
+    }
+
+    #[test]
+    fn method_turbofish_placeholder_method_bare_rejects() {
+        // T178: bare `R.M()` never matches a turbofish site (T177
+        // parity on the placeholder-method arm — P9 probe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n# expr M\n- R.M()\n+ R.N()\n";
+        let src = "fn a() {\n    let x = v.collect::<Vec<i32>>();\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
     fn method_turbofish_concrete_mismatch_fails() {
         // T176: concrete turbofish args compare structurally; a mismatch
         // fails safe instead of rewriting.
