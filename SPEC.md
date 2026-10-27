@@ -4387,6 +4387,17 @@ reason: cannot read patch file change.rsmpl: No such file or directory (os error
 
  Null fields are omitted from text output (no `rule:`/`range:`/`suggestion:` lines above); the JSON envelope carries explicit `rule: null` / `range: null` / `suggestion: null`.
 
+A repo-file read failure reports `reason: cannot read <abs repo-joined>: <os error>` with `file:`
+echoing the repo-relative target (exit 2; text omits null `rule:`/`range:`/`suggestion:` lines, JSON
+explicit nulls; the `<os error>` tail is platform-dependent; fires while loading patch targets, before any
+matching or lowering, so the worktree is untouched in both `--check` and apply modes). Contrast the
+patch-file twin above: that reason carries the `patch file` infix and echoes the `--file` argument in
+both `file:` and the reason, while the repo twin carries no `patch file` infix and echoes the absolute
+repo-joined path in the reason. The `cannot read stdin: <os error>` and
+`cannot serialize JSON report: <os error>` arms are defensive-only: stdin IO errors are not triggerable via
+the CLI (the shell owns fd redirection) and the JSON payload is plain strings, so neither is pinnable --
+documented, not pinned (T287/T290/T291 precedent).
+
 An unwritable `--output` target reports `reason: cannot write <path>: <os error>` with `file:` echoing the `--output` path, and aborts before checking or applying (`--output` is written before `--check` runs, Section D.2.3). Its empty-lowering twin — a pre-existing file the mirror removal cannot delete — reports `reason: cannot remove stale <path> (empty lowering): <os error>` with the same envelope (exit 2; `file:` set to the `--output` path; text omits null `rule:`/`range:`/`suggestion:` lines, JSON explicit nulls; full fence in Section D.2.3).
 
 Patch `target_path` values that are absolute or escape the worktree
