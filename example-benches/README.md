@@ -29,6 +29,7 @@ the table embedded in the top-level README.
 | 13-call-sweep-scaling | 1 hunk rewrites 20 call sites, `scope=file` keeps input constant as native grows | 104 B / 7 ln | 649 B / 33 ln | 84% |
 | 14-slot-sweep | `V`/`Q`/`G`/`W` rename `foo`→`bar` over 4 heterogeneous signatures, slots preserved | 210 B / 12 ln | 405 B / 15 ln | 48% |
 | 15-pat-sweep | `P`/`T` preserve 4 ascribed patterns+types while `E`→`E.wrapping_add(1)` | 149 B / 9 ln | 331 B / 12 ln | 55% |
+| 16-symbol-sweep | `Old`→`New` rewrites 5 qualified `crate::old_api` sites, bare/other distractors untouched | 179 B / 10 ln | 425 B / 14 ln | 58% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Single-ident edits (09, 10) are size-parity — there the payoff is not bytes

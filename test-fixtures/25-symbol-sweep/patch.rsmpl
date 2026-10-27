@@ -1,0 +1,10 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=sweep_symbols
+# scope=file
+# allow=many
+# fallback=syntax
+# symbol Old=crate::old_api
+# symbol New=crate::new_api
+# expr E
+- Old(E)
++ New(E)

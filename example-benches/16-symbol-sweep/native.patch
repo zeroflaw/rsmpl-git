@@ -1,0 +1,14 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,5 +2,5 @@
+-    let a = crate::old_api(1);
+-    let b = crate::old_api(x + 1);
+-    let c = crate::old_api(foo(y));
+-    let d = crate::old_api(4);
+-    let e = crate::old_api(z);
++    let a = crate::new_api(1);
++    let b = crate::new_api(x + 1);
++    let c = crate::new_api(foo(y));
++    let d = crate::new_api(4);
++    let e = crate::new_api(z);
