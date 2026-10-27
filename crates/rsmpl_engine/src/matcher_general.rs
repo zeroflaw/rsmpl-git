@@ -20,6 +20,7 @@
 //! Unknown shapes never guess: the candidate is rejected and ordinary
 //! match-count validation reports the outcome.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use syn::spanned::Spanned;
@@ -576,7 +577,11 @@ fn rewrite_nested_general(
     };
     collector.visit_expr(&expr);
     let mut cands = collector.exprs;
-    cands.sort_by_key(|(_, n)| (n.start, n.end));
+    // Longest-first on shared start (T143): left-nested `a + 1 + 1`
+    // parses as `(a + 1) + 1` with inner/outer sharing a start byte;
+    // shortest-first accepted the inner and the outer tripped the
+    // partial-overlap guard. Longest-first restores outermost-wins.
+    cands.sort_by_key(|(_, n)| (n.start, Reverse(n.end)));
     // Nested fragments are sub-expressions: strip one trailing `;` so a
     // `;`-terminated file-level pattern never injects semicolons
     // mid-expression. File-level `had_semi` handling is untouched.
@@ -730,7 +735,12 @@ pub fn apply_general_hunk(
         types: Vec::new(),
     };
     collector.visit_file(parsed);
-    collector.exprs.sort_by_key(|(_, n)| (n.start, n.end));
+    // T143: exprs sort longest-first on shared start so left-nested
+    // `(a + 1) + 1`-shaped spans see the outer first (outermost-wins);
+    // stmts/types have no shared-start nesting, keep source order.
+    collector
+        .exprs
+        .sort_by_key(|(_, n)| (n.start, Reverse(n.end)));
     collector.types.sort_by_key(|(_, n)| (n.start, n.end));
     collector.stmts.sort_by_key(|(_, n)| (n.start, n.end));
 
@@ -1165,6 +1175,28 @@ mod tests {
         );
         assert!(out.contains("let w = b.wrapping_add(1);"), "got: {out}");
         assert!(!out.contains(";;"), "doubled semicolon: {out}");
+    }
+
+    #[test]
+    fn unparenthesized_left_nesting_rewrites_outer_only() {
+        // T143: `a + 1 + 1` parses as `(a + 1) + 1` with inner/outer
+        // sharing a start byte; shortest-first ordering accepted the
+        // inner and the outer tripped the partial-overlap guard.
+        // Longest-first restores outermost-wins: one hunk, outer only.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=bump\n# lang=rust\n# allow=many\n# expr E\n- E + 1\n+ E + 2\n";
+        let src = "fn a() {\n    let v = a + 1 + 1;\n    let _ = v;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let v = a + 1 + 2;"), "got: {out}");
+    }
+
+    #[test]
+    fn unparenthesized_left_nesting_repeat_folds() {
+        // T143: `# repeat` on the flat form folds like the parenthesized
+        // form (`(a + 2) + 2` equivalent without parens).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=bump\n# lang=rust\n# repeat\n# allow=many\n# expr E\n- E + 1\n+ E + 2\n";
+        let src = "fn a() {\n    let v = a + 1 + 1;\n    let _ = v;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let v = a + 2 + 2;"), "got: {out}");
     }
 
     #[test]
