@@ -132,7 +132,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 | `RSMPL_RANGE_CONFLICT` | read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target doesn't parse / empty patch — read file, add `diff --git` |
 | `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# repeat` needs a call/general-expr shape + bare spelling; `# symbol` is call-shape-only (C14) |
-| `RSMPL_MATCH_CONFLICT` | `no match found` (+ nearest preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many` |
+| `RSMPL_MATCH_CONFLICT` | `no match found` (+ best-match preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |

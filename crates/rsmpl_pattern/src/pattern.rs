@@ -252,7 +252,34 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         ));
     }
 
-    // T20 `# repeat` folds nested matches in the call/method-call and
+    // T147: a `# symbol` naming the *method ident* of a method call can
+    // never match. Receiver/callee/argument symbols bind full paths and
+    // compare as paths, but the method slot compares bare idents
+    // (`match_receiver_or_method`), so a seeded `crate::…::old` path never
+    // equals the `old` ident — the hunk would fail safe with a bare
+    // `no match found`. Method idents already match exactly as written,
+    // so fail fast instead of burning a match cycle (SPEC 2.6).
+    if let PatternKind::Expr {
+        minus: ExprPatternKind::MethodCall { method, .. },
+        placeholders,
+        ..
+    } = &kind
+    {
+        if let Some(name) = placeholders
+            .iter()
+            .find(|(_, ph)| ph == method)
+            .map(|(name, _)| name)
+        {
+            if table.symbols.contains_key(name) {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "`# symbol {name}` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3)",
+                    ),
+                ));
+            }
+        }
+    }
     // general-expression matchers; on any other shape it would be a
     // silent no-op. T126 extended the fold to `General::Expr`
     // (pure-expression bindings); `let`-statement and type shapes mix
@@ -1520,6 +1547,54 @@ mod tests {
                 }
             ),
             "concrete paren-tuple let should be General::Stmt"
+        );
+    }
+
+    #[test]
+    fn method_ident_symbol_rejected_at_compile() {
+        // T147: a `# symbol` naming the method ident can never match (the
+        // method slot compares bare idents, never seeded paths), so fail
+        // fast instead of a bare match-cycle `no match found`.
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let patch = format!(
+            "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n# symbol old=crate::old_api\n# expr R\n# expr E\n- R.old(E)\n+ R.new(E)\n"
+        );
+        let err = compile(&hunk_of(&patch)).unwrap_err();
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+        assert!(
+            err.render().contains("names the method ident"),
+            "missing needle:\n{}",
+            err.render()
+        );
+        // Negative control: a receiver symbol is the supported C14 shape
+        // and must still compile.
+        let ok = format!(
+            "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n# symbol R=crate::r::R\n# expr E\n- R.old(E)\n+ R.new(E)\n"
+        );
+        assert!(
+            matches!(
+                compile(&hunk_of(&ok)).unwrap().kind,
+                PatternKind::Expr {
+                    minus: ExprPatternKind::MethodCall { .. },
+                    ..
+                }
+            ),
+            "receiver symbols must keep compiling"
+        );
+        // Second negative control: a plain `# expr` metavar in method
+        // position binds any method and must not trip the symbol gate.
+        let ok_meta = format!(
+            "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n# expr M\n# expr E\n- R.M(E)\n+ R.new(E)\n"
+        );
+        assert!(
+            matches!(
+                compile(&hunk_of(&ok_meta)).unwrap().kind,
+                PatternKind::Expr {
+                    minus: ExprPatternKind::MethodCall { .. },
+                    ..
+                }
+            ),
+            "method-position expr metavars must keep compiling"
         );
     }
 

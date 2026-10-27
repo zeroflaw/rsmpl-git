@@ -512,21 +512,39 @@ fn candidate_preview(
             // should preview the real `struct Local`, not the enclosing
             // `fn outer`). Fall back to nearest-any when no same-kind
             // header exists, preserving the old behavior.
-            let want_prefix: Option<String> = match &compiled.kind {
-                PatternKind::Fn { .. } | PatternKind::ImplContext { .. } => Some("fn ".to_string()),
-                PatternKind::ItemRename { kind, .. } => Some(format!("{} ", kind.as_str())),
-                PatternKind::UseRename { .. } => Some("use ".to_string()),
+            // Prefix + optional wanted name for the same-kind tier.
+            // `Fn` and `ItemRename` carry the concrete minus-side name, so
+            // T142 can rank by similarity; `ImplContext`/`UseRename`
+            // headers have no single comparable name and keep the original
+            // distance ranking.
+            let want: Option<(String, Option<String>)> = match &compiled.kind {
+                PatternKind::Fn { minus_name, .. } => {
+                    Some(("fn ".to_string(), Some(minus_name.clone())))
+                }
+                PatternKind::ItemRename {
+                    kind, minus_name, ..
+                } => Some((format!("{} ", kind.as_str()), Some(minus_name.clone()))),
+                PatternKind::ImplContext { .. } => Some(("fn ".to_string(), None)),
+                PatternKind::UseRename { .. } => Some(("use ".to_string(), None)),
                 _ => None,
             };
-            let nearest = match want_prefix {
-                Some(prefix) => {
+            let nearest = match want {
+                Some((prefix, wanted)) => {
                     let same_kind: Vec<(u32, String)> = headers
                         .iter()
                         .filter(|(_, label)| label.starts_with(&prefix))
                         .cloned()
                         .collect();
-                    nearest_header(&same_kind, old_start)
-                        .or_else(|| nearest_header(&headers, old_start))
+                    // T142: rank same-kind headers by name similarity first
+                    // (a typo'd `struct Betta` should preview the real
+                    // `struct Beta`, not the nearer `struct Alpha`), line
+                    // distance breaks ties. No-name shapes keep distance.
+                    match wanted {
+                        Some(name) => nearest_similar(&same_kind, &prefix, &name, old_start)
+                            .or_else(|| nearest_header(&headers, old_start)),
+                        None => nearest_header(&same_kind, old_start)
+                            .or_else(|| nearest_header(&headers, old_start)),
+                    }
                 }
                 None => nearest_header(&headers, old_start),
             };
@@ -651,6 +669,42 @@ fn nearest_header(headers: &[(u32, String)], old_start: u32) -> Option<(u32, Str
         .iter()
         .min_by_key(|(line, _)| line.abs_diff(old_start))
         .map(|(line, label)| (*line, label.clone()))
+}
+
+/// T142: most similar same-kind header to `wanted`, line distance breaking
+/// ties. Candidate names are labels minus the `kind ` prefix. Diagnostic
+/// only — caps and fallback tiers are unchanged.
+fn nearest_similar(
+    headers: &[(u32, String)],
+    prefix: &str,
+    wanted: &str,
+    old_start: u32,
+) -> Option<(u32, String)> {
+    headers
+        .iter()
+        .min_by_key(|(line, label)| {
+            let name = label.strip_prefix(prefix).unwrap_or(label);
+            (edit_distance(wanted, name), line.abs_diff(old_start))
+        })
+        .map(|(line, label)| (*line, label.clone()))
+}
+
+/// Char-level Levenshtein distance (std only, no new dependency).
+/// Preview-sized inputs (idents), so the quadratic table is trivial.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, &ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, &cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j] + usize::from(ca != cb))
+                .min(prev[j + 1] + 1)
+                .min(cur[j] + 1);
+        }
+        prev = cur;
+    }
+    prev[b.len()]
 }
 
 /// First source line at 1-based `line`, trimmed, capped at 200 chars.
@@ -1048,6 +1102,28 @@ mod tests {
         let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
         assert!(err.contains("nearest struct Local at line 2"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_typo_prefers_similar_name_over_nearer() {
+        // T142: a typo'd rename previews the most similar same-kind
+        // header, not the nearest one — the retry needs no file read.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- struct Betta\n+ struct Gamma\n";
+        let src = "struct Alpha;\nstruct Beta;\nfn outer() {}\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("nearest struct Beta at line 2"), "got: {err}");
+    }
+
+    #[test]
+    fn zero_match_similarity_tie_breaks_on_distance() {
+        // T142: equal edit distance falls back to line distance — both
+        // `Zetta` and `Beta` are 1 edit from `Betta`, so the nearer line
+        // (old_start=1) wins.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- struct Betta\n+ struct Gamma\n";
+        let src = "struct Zetta;\nstruct Beta;\n";
+        let err = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap_err();
+        assert!(err.contains("nearest struct Zetta at line 1"), "got: {err}");
     }
 
     #[test]

@@ -2453,7 +2453,7 @@ case where an ordinary hunk cannot express the edit.
 | C11 | `+` side writes attributes the `-` side did not match | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
 | C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). |
-| C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this <shape> hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` (code `RSMPL_PATTERN_CONFLICT`, suggestion `use a call-shape hunk or a concrete path pattern`) |
+ | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this <shape> hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` (code `RSMPL_PATTERN_CONFLICT`, suggestion `use a call-shape hunk or a concrete path pattern`). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line `` (method idents match as written; symbols verify receiver/callee paths). |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -3070,13 +3070,16 @@ exist outside this range; widen the range (or add `# scope=file`) and add
 `# allow=many` if intended`. (Counts saturate: matchers stop counting at 2
 under `# allow=one`, so the many-case never claims an exact number.)
 
-The zero-match `reason` also carries a T67 candidate preview — the nearest
-same-kind item header (`fn foo at line 5: 'fn foo() {}'`), or the nearest
-non-empty source line when the hunk kind has no item headers — so the next
+The zero-match `reason` also carries a T67 candidate preview — the most
+similar same-kind item header (`fn foo at line 5: 'fn foo() {}'`), or the
+nearest non-empty source line when the hunk kind has no item headers — so the next
 attempt often needs no file read. The header walk reaches block-level items
 (fn bodies, closures, method bodies — the same scope matching reaches), and
 same-kind headers win over a nearer enclosing item (a typo'd `struct Lcoal`
-previews the real `struct Local`, not the enclosing `fn`). The preview is a single line of at most
+previews the real `struct Local`, not the enclosing `fn`). Within the
+same-kind set, name similarity (edit distance) ranks before line distance:
+a typo'd `struct Betta` previews the real `struct Beta` one line further
+down, not the nearer `struct Alpha`. The preview is a single line of at most
 200 chars of source (plus a short `kind name at line N` label, whole string
 bounded); `suggestion` is unchanged. An empty file has nothing to preview
 and keeps the bare `no match found` reason.

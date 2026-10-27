@@ -261,6 +261,46 @@ fn zero_match_reason_carries_candidate_preview_text() {
     assert!(stderr.contains("nearest"), "got: {stderr}");
     assert!(stderr.contains("fn foo"), "got: {stderr}");
 }
+
+#[test]
+fn zero_match_typo_previews_similar_name_text() {
+    // T142: a typo'd rename previews the most similar same-kind header
+    // (`Beta`, 1 edit away), not the nearer `Alpha`.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "struct Alpha;\nstruct Beta;\nfn outer() {}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- struct Betta\n+ struct Gamma\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains("nearest struct Beta at line 2"),
+        "got: {stderr}"
+    );
+}
+
+#[test]
+fn method_ident_symbol_fails_fast_text() {
+    // T147: a `# symbol` naming the method ident fails at compile with a
+    // targeted diagnostic, not a bare match-cycle `no match found`.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "struct R;\nimpl R {\n    fn old(&self, x: i32) -> i32 { x }\n}\nfn main() {\n    let r = R;\n    let y = r.old(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -6,3 @@ rule=r\n# allow=many\n# fallback=syntax\n# symbol old=crate::r::R::old\n# expr R\n# expr E\n- R.old(E)\n+ R.new(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("names the method ident"), "got: {stderr}");
+}
 #[test]
 fn symbol_without_fallback_json_envelope() {
     // T24: the gate failure is machine-readable (SPEC D.2).
