@@ -168,3 +168,76 @@ fn example_benches_stay_check_clean() {
         );
     }
 }
+
+#[test]
+fn example_bench_readme_table_matches_recomputed() {
+    // T328: pin committed native.patch freshness + README savings-table
+    // numbers against rot. Lowers each bench hermetically (to a tmpdir,
+    // never rewriting the bench dir) with the same byte/line/pct formula
+    // as example-benches/run.sh, then asserts the stored lowering is
+    // byte-identical and the README carries the exact recomputed row.
+    let root = workspace_root();
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let benches = root.join("example-benches");
+    let mut names: Vec<String> = fs::read_dir(&benches)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert!(!names.is_empty(), "no benches found");
+    let mut seen = 0;
+    for name in names {
+        let dir = benches.join(&name);
+        if !dir.is_dir() {
+            continue;
+        }
+        seen += 1;
+        let tmp = tempfile::tempdir().unwrap();
+        copy_tree(&dir.join("repo"), tmp.path());
+        let st = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let fresh = tmp.path().join("fresh.patch");
+        let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")))
+            .arg("--file")
+            .arg(dir.join("patch.rsmpl"))
+            .arg("--repo")
+            .arg(tmp.path())
+            .arg("--output")
+            .arg(&fresh)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "[{name}] bench patch fails to lower:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let fresh_bytes = fs::read(&fresh).unwrap();
+        let stored = fs::read(dir.join("native.patch")).unwrap();
+        assert!(
+            fresh_bytes == stored,
+            "[{name}] committed native.patch is stale (rebuild with example-benches/run.sh)"
+        );
+        let patch_bytes = fs::read(dir.join("patch.rsmpl")).unwrap();
+        let rb = patch_bytes.len();
+        let rl = patch_bytes.iter().filter(|&&b| b == b'\n').count();
+        let nb = fresh_bytes.len();
+        let nl = fresh_bytes.iter().filter(|&&b| b == b'\n').count();
+        let pct = format!("{:.0}%", (1.0 - rb as f64 / nb as f64) * 100.0);
+        // Bench-name cells carry human suffixes
+        // (`01-rename-calls-many (12 sites, 1 hunk)`), so match the name
+        // and the recomputed numeric cells on the same README line.
+        let want = format!("{rb} B / {rl} ln | {nb} B / {nl} ln | {pct}");
+        let ok = readme
+            .lines()
+            .any(|line| line.contains(&name) && line.contains(&want));
+        assert!(
+            ok,
+            "[{name}] README table row missing or stale, want line containing:\n{name} ... {want}"
+        );
+    }
+    assert!(seen > 0, "no bench dirs found");
+}
