@@ -743,13 +743,18 @@ Multiple metavariables of the same kind may be declared in separate lines:
 # expr Arg
 ```
 
-or in a comma-separated form if supported by the implementation:
+or in a comma-separated form, which declares each name under the same
+kind exactly as separate lines do:
 
 ```text
 # expr Receiver, Arg
 ```
 
-The separate-line form is canonical.
+Whitespace around the commas is ignored and a trailing comma is
+harmless. The separate-line form is canonical. Write `# expr E, F`,
+not `# expr E F` (a space-separated list is a pattern error), and
+note `# symbol` keeps the single-`Name=path` form (Section 9.5) with
+no comma form.
 
 ### 9.5 Symbol directives
 
@@ -1868,7 +1873,11 @@ foo
 bar
 ```
 
-The engine may reject lowercase metavariable names unless explicitly configured.
+Name validation is case-insensitive: any leading letter-or-`_` followed
+by alphanumeric-or-`_` characters is accepted (lowercase included),
+with no rejection path and no configuration knob in v0.1. Uppercase
+stays a style recommendation so patterns read apart from ordinary Rust
+identifiers.
 
 ### 15.3 Declaration examples
 
@@ -2853,7 +2862,16 @@ If a token-tree pattern contains multiple `...` wildcards at the same delimiter 
 
 This mode requires the engine to know macro expansion output and map expanded spans back to source spans.
 
-If the engine cannot provide that mapping, it must fail.
+The reference engine has no such mapping in v0.1 and fails fast with
+`RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits the null
+range/suggestion lines, JSON carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: rename_macro
+file: src/lib.rs
+reason: `# macro=expanded` requires build integration (macro expansion span mapping), unavailable in v0.1
+```
 
 ---
 
