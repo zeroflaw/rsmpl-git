@@ -3275,6 +3275,8 @@ reason: cannot read patch file change.rsmpl: No such file or directory (os error
 
  Null fields are omitted from text output (no `rule:`/`range:`/`suggestion:` lines above); the JSON envelope carries explicit `rule: null` / `range: null` / `suggestion: null`.
 
+An unwritable `--output` target reports `reason: cannot write <path>: <os error>` with `file:` echoing the `--output` path, and aborts before checking or applying (`--output` is written before `--check` runs, Section D.2.3).
+
 Patch `target_path` values that are absolute or escape the worktree
 root fail here too (see 27.6) — before any file is read. Differing
 `diff --git a/old b/new` paths (a file rename, Section 6) fail as a

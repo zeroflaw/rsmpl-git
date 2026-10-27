@@ -314,3 +314,61 @@ fn unknown_root_and_kind_fail_fast_text_and_json() {
         );
     }
 }
+
+#[test]
+fn unwritable_output_fails_io_conflict_without_applying() {
+    // T268 (SPEC 25.8/D.2): an `--output` path that cannot be created
+    // fails with `RSMPL_IO_CONFLICT` before anything is checked or
+    // applied. The parent here is a regular file, so auto-create fails
+    // deterministically (even as root — no permission tricks).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+    write(dir.path(), "blocker", "not a dir\n");
+    let out_arg = dir.path().join("blocker").join("out.patch");
+    let out_arg = out_arg.to_str().unwrap();
+    // Apply mode (no `--check`): must abort before touching the worktree.
+    let out = run_stdin(dir.path(), rename_patch(), &["--output", out_arg]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("cannot write"), "got: {stderr}");
+    assert!(stderr.contains(out_arg), "got: {stderr}");
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+        "failed --output must not apply"
+    );
+    // JSON mode: the same failure as a stdout-only envelope.
+    let json = run_stdin(
+        dir.path(),
+        rename_patch(),
+        &["--format", "json", "--output", out_arg],
+    );
+    assert_eq!(json.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&json.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_IO_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(v["error"]["file"], serde_json::json!(out_arg), "got: {v}");
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cannot write"),
+        "got: {v}"
+    );
+    for key in ["rule", "range", "suggestion"] {
+        assert!(
+            v["error"][key].is_null(),
+            "IO envelope {key} must be null, got: {v}"
+        );
+    }
+}
