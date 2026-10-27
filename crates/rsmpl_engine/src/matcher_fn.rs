@@ -183,6 +183,13 @@ fn extract_fn_block(text: &str) -> String {
     for (idx, line) in lines.iter().enumerate() {
         let t = line.trim();
         let t = t.strip_prefix("#[").unwrap_or(t);
+        // T185: `unsafe trait T {` / `unsafe impl … {` headers open method
+        // context but are never the fn pattern — yet they start with the
+        // fn-like `unsafe ` prefix. Skip block headers before testing.
+        let u = t.strip_prefix("unsafe ").unwrap_or(t);
+        if u.starts_with("impl ") || u.starts_with("trait ") {
+            continue;
+        }
         if t.starts_with("fn ")
             || t.starts_with("pub ")
             || t.starts_with("async ")
@@ -1583,6 +1590,26 @@ mod tests {
         let src = "trait T {\n    fn foo();\n}\n";
         let out = apply(patch, src).unwrap();
         assert_eq!(out, "trait T {\n    fn bar();\n}\n", "got: {out}");
+    }
+
+    #[test]
+    fn renames_unsafe_trait_declaration() {
+        // T185: `unsafe trait` headers start with the fn-like `unsafe `
+        // prefix, so the block scan must skip them (previously failed
+        // with "must contain `fn` keyword").
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=x\n# lang=rust\n  unsafe trait T {\n      ...\n-     fn foo();\n+     fn bar();\n      ...\n  }\n";
+        let src = "unsafe trait T {\n    fn foo();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out, "unsafe trait T {\n    fn bar();\n}\n", "got: {out}");
+    }
+
+    #[test]
+    fn renames_inside_unsafe_impl() {
+        // T185: same `unsafe `-prefix hole on the impl half.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,3 +3,3 @@ rule=x\n# lang=rust\n  unsafe impl U for S {\n      ...\n-     fn m(...) {\n+     fn n(...) {\n          ...\n      }\n  }\n";
+        let src = "trait U { fn m(x: i32) -> i32; }\nstruct S;\nunsafe impl U for S {\n    fn m(x: i32) -> i32 { x }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("fn n(x: i32) -> i32 { x }"), "got: {out}");
     }
 
     #[test]

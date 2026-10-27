@@ -259,6 +259,52 @@ fn trait_declaration_rename_applies() {
 }
 
 #[test]
+fn unsafe_trait_rename_applies() {
+    // T185: `unsafe trait` headers route like plain `trait` ones (the
+    // fn-block scan skips block headers despite the `unsafe ` prefix).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "unsafe trait T {\n    fn foo();\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=t\n# lang=rust\n  unsafe trait T {\n      ...\n-     fn foo();\n+     fn bar();\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "unsafe trait T {\n    fn bar();\n}\n"
+    );
+}
+
+#[test]
+fn unsafe_impl_rename_applies() {
+    // T185: same block-header skip on the impl half.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "trait U { fn m(x: i32) -> i32; }\nstruct S;\nunsafe impl U for S {\n    fn m(x: i32) -> i32 { x }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,3 @@ rule=t\n# lang=rust\n  unsafe impl U for S {\n      ...\n-     fn m(...) {\n+     fn n(...) {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        read(dir.path(), "src/lib.rs").contains("fn n(x: i32) -> i32 { x }"),
+        "got: {}",
+        read(dir.path(), "src/lib.rs")
+    );
+}
+
+#[test]
 fn trait_plus_pub_fails_fast() {
     // T182: trait methods never carry visibility — a `+` side writing
     // `pub` fails with the repair needle, not a reparse error.
