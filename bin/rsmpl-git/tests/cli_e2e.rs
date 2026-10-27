@@ -1760,3 +1760,27 @@ fn json_empty_lowering_without_check_reports_clean() {
     let text = read(dir.path(), "src/lib.rs");
     assert_eq!(text, "fn foo() {}\n", "got: {text}");
 }
+
+#[test]
+fn nested_semantic_overlap_suggests_separate_runs() {
+    // T152: nested semantic-semantic edits (method call inside a `let`
+    // statement) fail safe with a kind-neutral diagnostic — no
+    // ordinary-hunk guess, separate-runs repair pointer.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn f(v: S) {\n    let a = v.old_method(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=m2c\n# expr Receiver\n# expr Arg\n- Receiver.old_method(Arg)\n+ new_function(Receiver, Arg)\n\ndiff --git src/lib.rs\n@@ -2,1 @@ rule=letrw\n# stmt S\n# expr E\n- let a = E;\n+ let c = E;\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(!out.status.success(), "overlap must fail");
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("GIT_HUNK_CONFLICT"), "got: {err}");
+    assert!(
+        err.contains("overlapping edits cannot be merged"),
+        "got: {err}"
+    );
+    assert!(!err.contains("ordinary hunk"), "got: {err}");
+    assert!(err.contains("separate runs"), "got: {err}");
+}

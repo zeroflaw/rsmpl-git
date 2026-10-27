@@ -882,10 +882,12 @@ fn check_overlaps(edits: &[TextEdit], path: &str) -> Result<(), StructuredError>
             if a.overlaps(b) {
                 return Err(StructuredError::new(
                     ErrorCode::GitHunkConflict,
-                    "overlapping edits cannot be merged (ordinary hunk overlaps a semantic range?)",
+                    "overlapping edits cannot be merged",
                 )
                 .with_file(path)
-                .with_suggestion("make the ranges disjoint or combine into one hunk kind"));
+                .with_suggestion(
+                    "apply the overlapping rewrites in separate runs, or make the ranges disjoint",
+                ));
             }
         }
     }
