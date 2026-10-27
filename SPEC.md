@@ -1704,6 +1704,24 @@ Rules:
 - `impl Old` renames the self-type ident and the trait-side path's last segment. It matches `impl Old`, `impl<T> Old<T>`, `impl Trait for Old`, and `impl Old for Foo`, rewriting only the `Old` spans while preserving generics, qualifiers, and the other side. Rationale: in valid Rust one name cannot be both a type and a trait in the same scope (type-namespace collision), so the bare pair is unambiguous; matching stays syntactic (Section 19). Generic (`impl Old<T> for Foo`), qualified (`impl crate::Old for Foo`), and negative (`impl !Old for Foo`) trait paths match on the last segment only.
 - Matching reuses the function scope modes (`scope=contained/anchor/overlap/exact`, anchor on the ident line), attribute policies (`# attrs=...`), and `allow`/`optional` count validation. File-level, inline-`mod`-level, and block-level items are collected: the syntactic walk reaches items nested in fn bodies, closures, and method bodies, so a local `struct` renames like a top-level one (a top-level and a block-level same-named item need `# allow=many`, like any multi-match). Items inside macro bodies are not matched (Section 21). Each match emits one ident-span edit, so overlapping-match rules are trivially satisfied.
 
+#### Use-site follow-ups
+
+An item rename rewrites the definition header only — one ident-span edit
+per match. Type annotations, value-position paths, struct literals, enum
+variants, and `use` imports keep the old name while the hunk applies
+cleanly, so a full rename composes follow-up hunks (all probe-verified):
+
+| Site | Follow-up hunk |
+|---|---|
+| `x: Old`, `-> Old` | `- Old` / `+ New` with `# root=type` + `# allow=many` |
+| unit value `Old` | `- Old` / `+ New` with `# root=expr` |
+| `Old { a: 1 }` | `- Old { a: E }` / `+ New { a: E }` (`# expr E`) |
+| `E::V(..)` | call-shape `- E::V(A)` / `+ E::W(A)` (`# expr A`) |
+| `use …::Old` | use-path prefix `- use crate::Old` / `+ use crate::New` (`# allow=many`, Section 14.9) |
+
+A bare `- Old` / `+ New` pair with no `# root=` never routes (ambiguous
+shape, Section 13.4) — always force the context explicitly.
+
 > **v0.1 implementation note:** `const fn` shapes keep routing to the function classifier (the keyword in name position falls through); `impl!(...)` macro shapes keep routing to the macro classifier (a `!` after the kind falls through). Item-rename hunks reject `# returns=none` (function-only). `auto trait` headers and raw-identifier edge cases beyond `` `r#name` `` are not supported; use an ordinary hunk.
 
 ### 14.9 Use-path prefix renames

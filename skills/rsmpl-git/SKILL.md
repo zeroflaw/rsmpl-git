@@ -87,9 +87,9 @@ marker; hunks with other directives omit it (SPEC 7.1).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
   `const`/`static`/`mod`/`union`/`impl`), one ident edit (SPEC 14.8).
   File, inline-mod, and block-level (fn bodies) items all match.
-  A bare `impl Old` / `impl New` pair renames both the self-ty and the
-  trait-side path (`impl Old for Foo` → `impl New for Foo`); add
-  `# allow=many` when several headers match.
+  A bare `impl Old`/`impl New` pair renames self-ty + trait-side path; add
+  `# allow=many` when several match; definition only — follow up
+  type/value/literal/variant/use sites per the SPEC 14.8 table.
 - Move: cut `- I` (`# item I` + `# bind=N`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)
