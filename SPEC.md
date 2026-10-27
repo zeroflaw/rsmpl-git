@@ -1415,6 +1415,14 @@ file: src/lib.rs
 reason: `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable)
 ```
 
+Impl/trait-context header values are advisory, not filters: the engine
+checks the header first (impl: the block's self type or trait path
+mentions a header token; trait: the header names the trait ident), but
+on mismatch it falls back to range-overlap gating — any `impl` (resp.
+`trait`) block overlapping the old range is accepted and the inner fn
+match decides. To target one block, scope the range to that block;
+to sweep every block, use `# scope=file` with `@@ -1,1 @@`.
+
 ---
 
 ## 14. Function Item Matching
