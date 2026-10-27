@@ -756,6 +756,21 @@ fn json_envelope_on_missing_patch_file() {
         .expect("failure stdout must be a JSON envelope");
     assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
     assert!(v["error"]["file"].is_string(), "got: {v}");
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cannot read patch file"),
+        "reason must name the unreadable patch, got: {v}"
+    );
+    // T266 pin: text mode omits null fields; the JSON envelope carries
+    // them explicitly (SPEC 25.8).
+    for key in ["rule", "range", "suggestion"] {
+        assert!(
+            v["error"][key].is_null(),
+            "IO envelope {key} must be null, got: {v}"
+        );
+    }
 }
 
 // --- T33 output budget (D.2.1): --diff-max-lines + files[] ---

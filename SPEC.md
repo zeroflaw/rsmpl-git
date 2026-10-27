@@ -3273,6 +3273,8 @@ file: change.rsmpl
 reason: cannot read patch file change.rsmpl: No such file or directory (os error 2)
 ```
 
+ Null fields are omitted from text output (no `rule:`/`range:`/`suggestion:` lines above); the JSON envelope carries explicit `rule: null` / `range: null` / `suggestion: null`.
+
 Patch `target_path` values that are absolute or escape the worktree
 root fail here too (see 27.6) — before any file is read. Differing
 `diff --git a/old b/new` paths (a file rename, Section 6) fail as a
@@ -4274,7 +4276,7 @@ prints one JSON object to stdout:
 - Flag-usage errors (unknown flag, bad value) are enveloped too: with
   `--format json` they print the same stdout-only `RSMPL_IO_CONFLICT`
   envelope (reason = clap's one-line error, suggestion = run
-  `` `rsmpl-git --help` ``) and exit 2. Text mode keeps clap's stderr
+  `rsmpl-git --help` for usage) and exit 2. Text mode keeps clap's stderr
   error. (No-input is not an error: bare stdin is the default, D.1.)
   One caveat: a missing `--format` value cannot be detected as a json
   request, so it always takes the text path.
