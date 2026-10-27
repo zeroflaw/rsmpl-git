@@ -289,6 +289,20 @@ pub fn classify_call_pattern(
             lit_strs,
         ));
     }
+    // Reference-wrapped calls (`&E.join("")`, `&dir.path()`): the leading
+    // `&` is a general-expression reference wrapper, not part of a call
+    // receiver — routing it as a method call would verbatim-compare the
+    // `&`-carrying receiver and never match (SPEC 18.5). Bypass to `Raw`
+    // so the general matcher handles it structurally (T252).
+    if sub.trim_start().starts_with('&') {
+        return Ok((
+            ExprPatternKind::Raw {
+                text: normalize_trailing_commas(&unmask_literal_spans(&sub, &sentinels)),
+            },
+            maps,
+            lit_strs,
+        ));
+    }
     // Macro invocation `name!(...)`.
     if let Some(bang) = sub.find('!') {
         let before = sub[..bang].trim();
@@ -457,6 +471,24 @@ mod tests {
         let (kind, _, _) = classify_call_pattern("foo(E)", &table()).unwrap();
         assert!(matches!(kind, ExprPatternKind::Call { .. }));
         let (kind, _, _) = classify_call_pattern("Receiver.old_method(Arg)", &table()).unwrap();
+        assert!(matches!(kind, ExprPatternKind::MethodCall { .. }));
+    }
+
+    #[test]
+    fn amp_led_patterns_bypass_call_router() {
+        // T252: `&E.join("")` must not classify as a method call with a
+        // composite `&E` receiver (verbatim-compare, never matches); the
+        // `Raw` shape lets `pattern.rs` try the general-expression gate,
+        // which handles the reference wrapper structurally.
+        for text in ["&E.join(\"\")", "&dir.path()", "&foo(E)"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(
+                matches!(kind, ExprPatternKind::Raw { .. }),
+                "{text:?} got: {kind:?}"
+            );
+        }
+        // Genuine calls without a `&` wrapper are untouched.
+        let (kind, _, _) = classify_call_pattern("E.join(\"\")", &table()).unwrap();
         assert!(matches!(kind, ExprPatternKind::MethodCall { .. }));
     }
 

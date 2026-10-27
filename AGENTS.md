@@ -82,7 +82,8 @@ is declared (SPEC 15.4):
 ```
 
 Method-call rewrite — same directives; one bare metavar binds the whole
-receiver chain (`E.to_string()`); composite receivers never match (SPEC 18.5):
+receiver chain (`E.to_string()`); composite receivers never match — except a
+leading `&`, which routes to general-expr matching (`- &E.path()` / `+ E.path()`, SPEC 18.5):
 
 ```diff
 @@ -5,5 @@ rule=method_to_function

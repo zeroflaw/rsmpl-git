@@ -2485,7 +2485,7 @@ Example:
 ```
 
 If a metavariable is used in a `+` pattern without being bound or imported via `# use`, the hunk fails.
-The receiver slot is all-or-nothing: a bare declared metavariable binds the whole receiver text, including chains (`- E.to_string()` binds `"a".trim()`), while a composite receiver pattern is compared verbatim (`- R.trim().to_string()` never matches a different site) — match the inner call first, or bind the whole receiver with one metavariable.
+The receiver slot is all-or-nothing: a bare declared metavariable binds the whole receiver text, including chains (`- E.to_string()` binds `"a".trim()`), while a composite receiver pattern is compared verbatim (`- R.trim().to_string()` never matches a different site) — match the inner call first, or bind the whole receiver with one metavariable. A leading `&` is not part of the receiver at all: a `&`-led pattern (`- &E.join("")`, `- &dir.path()`) bypasses call routing and matches structurally as a general reference expression (Section 18.1 v0.1 note) — the reference wrapper never forces verbatim comparison.
 
 ### 18.6 v0.1 general-matcher coverage table (fail-fast reference)
 
@@ -2534,7 +2534,10 @@ as a `let(...)` call (likewise `let [E, x]` and `let x = foo(E)`).
 `let (E, x) = E;` at gate C8 (embedded metavariables), not with a bogus
 `no match found` from the call matcher. Callees containing whitespace or
 a statement keyword (`if`/`match`/`return`/...) likewise fall through to
-the general matcher. A call shape must additionally consume the whole
+the general matcher, as does any `&`-led pattern (`&E.join("")`,
+`&dir.path()`): the leading `&` is a reference wrapper, never a call
+receiver, so these match structurally as general expressions (Section
+18.5) with or without `# root=expr`. A call shape must additionally consume the whole
 pattern (balanced parens, then only whitespace or a lone `;`): `foo(E) + 1`
 and `E.foo() + 1` route to the general matcher rather than a `foo(E)` /
 `E.foo()` call prefix, while `foo(E);` keeps call routing.

@@ -16,7 +16,7 @@ fn json_apply_mutates_worktree() {
     // leaving the worktree untouched.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\n",
     );
@@ -44,7 +44,7 @@ fn json_check_still_applies_nothing() {
     // verifies only.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\n",
     );
@@ -71,7 +71,7 @@ fn json_empty_lowering_without_check_reports_clean() {
     // git in any mode — JSON non-check reports clean with empty
     // `files`/`diff` and `"check": false`.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let noop = "diff --git src/lib.rs\n@@ -1,1 @@ rule=noop\n# lang=rust\n# optional\n- fn missing_xyz(...) {\n+ fn renamed_xyz(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), noop, &["--format", "json"]);
     assert!(
@@ -95,7 +95,7 @@ fn nested_semantic_overlap_suggests_separate_runs() {
     // ordinary-hunk guess, separate-runs repair pointer.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn f(v: S) {\n    let a = v.old_method(1);\n}\n",
     );
@@ -119,7 +119,7 @@ fn mirrored_attrs_preserve_target_indent() {
     // `let` indent survives (no one-space diff-prefix artifact leak).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n",
     );
@@ -143,7 +143,7 @@ fn strip_with_mirrored_minus_drops_attrs() {
     // dropped at rewrite instead of failing with "or use `# attrs=strip`".
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n",
     );
@@ -164,7 +164,7 @@ fn explicit_doc_comment_mirror_applies_end_to_end() {
     // `--check` previews the rename, `--output` saves the full diff.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "/// Doc comment.\nfn foo() {}\n",
     );
@@ -198,7 +198,7 @@ fn item_slash_doc_and_block_doc_mirrors_apply_end_to_end() {
     // end; multi-line block docs fail safe with the needle (JSON pin).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "/// Doc.\nstruct Old {\n    x: i32,\n}\n",
     );
@@ -214,7 +214,7 @@ fn item_slash_doc_and_block_doc_mirrors_apply_end_to_end() {
     assert!(text.contains("/// Doc."), "got: {text:?}");
 
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/block.rs",
         "/** Block doc. */\nfn foo() {}\n",
     );
@@ -227,7 +227,7 @@ fn item_slash_doc_and_block_doc_mirrors_apply_end_to_end() {
     );
 
     // Multi-line block docs fail safe with the targeted needle.
-    write(&dir.path().join(""), "src/multi.rs", "fn foo() {}\n");
+    write(dir.path(), "src/multi.rs", "fn foo() {}\n");
     let multi = "diff --git src/multi.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- /** Multi\n- line. */\n- fn foo(...) {\n+ /** Multi\n+ line. */\n+ fn bar(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), multi, &["--format", "json"]);
     assert!(!out.status.success(), "must fail");

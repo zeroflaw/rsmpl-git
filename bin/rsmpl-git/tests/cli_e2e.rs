@@ -10,7 +10,7 @@ use common::*;
 fn inline_fn_rename_applies() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -31,7 +31,7 @@ fn minimal_file_section_header_applies() {
     // may be omitted, new side = copy of old (ignored for RSmPL hunks).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -51,7 +51,7 @@ fn lang_directive_optional_applies() {
     // T69: hunks that already carry other directives omit `# lang=rust`.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -73,7 +73,7 @@ fn single_path_and_range_elision_applies() {
     // recipe (single path ≡ a/X b/X; elided new side defaults to old).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -96,7 +96,7 @@ fn diet_extreme_call_rewrite_applies() {
     // call-rewrite hunk an agent can emit.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -116,7 +116,7 @@ fn diet_extreme_call_rewrite_applies() {
 fn single_range_ordinary_hunk_rejected() {
     // T64: new-side elision is RSmPL-only; ordinary hunks need both ranges.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "foo\n");
+    write(dir.path(), "src/lib.rs", "foo\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 @@\n-foo\n+bar\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(!out.status.success(), "expected failure");
@@ -131,7 +131,7 @@ fn single_range_ordinary_hunk_rejected() {
 fn check_prints_diff_and_does_not_modify() {
     let dir = init_repo();
     let before = "fn a() {\n    foo(1);\n    foo(2);\n}\n";
-    write(&dir.path().join(""), "src/lib.rs", before);
+    write(dir.path(), "src/lib.rs", before);
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, patch).unwrap();
@@ -165,7 +165,7 @@ fn check_prints_diff_and_does_not_modify() {
 #[test]
 fn no_match_exits_two_with_structured_error() {
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# expr E\n- foo(E)\n+ bar(E)\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -178,7 +178,7 @@ fn symbol_without_fallback_is_symbol_conflict() {
     // fast with a repair pointer instead of silently matching syntactically.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    crate::foo(1);\n}\n",
     );
@@ -196,7 +196,7 @@ fn zero_match_reason_carries_candidate_preview_text() {
     // retry often needs no file read.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {}\nfn b() {}\nfn foo() {}\n",
     );
@@ -216,7 +216,7 @@ fn zero_match_typo_previews_similar_name_text() {
     // (`Beta`, 1 edit away), not the nearer `Alpha`.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "struct Alpha;\nstruct Beta;\nfn outer() {}\n",
     );
@@ -238,7 +238,7 @@ fn method_ident_symbol_fails_fast_text() {
     // targeted diagnostic, not a bare match-cycle `no match found`.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "struct R;\nimpl R {\n    fn old(&self, x: i32) -> i32 { x }\n}\nfn main() {\n    let r = R;\n    let y = r.old(1);\n}\n",
     );
@@ -255,7 +255,7 @@ fn turbofish_call_rewrite_applies_text() {
     // T145: `id::<T>(E)` rewrites a generic call structurally.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn id<T>(x: T) -> T { x }\nfn main() {\n    let a = id::<u8>(1u8);\n}\n",
     );
@@ -270,7 +270,7 @@ fn symbol_without_fallback_json_envelope() {
     // T24: the gate failure is machine-readable (SPEC D.2).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    crate::foo(1);\n}\n",
     );
@@ -302,11 +302,11 @@ fn json_report_arrays_follow_document_order() {
     // cuts first: old code reported [r_cut, r_rename, r_paste].
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/z.rs",
         "fn keep() {}\nfn helper() {}\n",
     );
-    write(&dir.path().join(""), "src/a.rs", "fn a() {}\n");
+    write(dir.path(), "src/a.rs", "fn a() {}\n");
     let patch = "diff --git a/src/z.rs b/src/z.rs\n@@ -1,1 +1,1 @@ rule=r_rename\n# lang=rust\n- fn keep(...) {\n+ fn keep2(...) {\n      ...\n  }\n@@ -2,1 +2,1 @@ rule=r_cut\n# lang=rust\n# item I\n# bind=H\n- I\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1,0 +1,0 @@ rule=r_paste\n# lang=rust\n# use=H\n+ H\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
     assert!(
@@ -337,7 +337,7 @@ fn symbol_fallback_matches_full_path() {
     // identically-spelled callees rewrite (SPEC 19.3).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    crate::foo(1);\n    crate::foo(2);\n}\n",
     );
@@ -357,7 +357,7 @@ fn symbol_fallback_matches_full_path() {
 fn empty_patch_fails_text() {
     // T59: zero file sections is an authoring typo, not a no-op.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let out = run_stdin(dir.path(), "", &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -369,7 +369,7 @@ fn symbol_fallback_rejects_bare_path() {
     // `# symbol Old=crate::foo`, so the hunk reports no match (SPEC 19.3).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\n",
     );
@@ -386,7 +386,7 @@ fn symbol_in_general_shape_is_pattern_conflict() {
     // with symbols fails at compile even with `# fallback=syntax` set.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
     );
@@ -405,7 +405,7 @@ fn symbol_in_general_shape_is_pattern_conflict() {
 fn empty_patch_fails_json_envelope() {
     // T59: same failure in machine mode carries the JSON envelope.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let out = run_stdin(dir.path(), "", &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -422,7 +422,7 @@ fn symbol_in_macro_shape_is_pattern_conflict() {
     // token-tree matching is verbatim-only and never resolves symbols.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    m!(1);\n}\n",
     );
@@ -442,7 +442,7 @@ fn differing_diff_git_paths_fail_fast_text_and_json() {
     // T29: differing a/b paths are a file rename, rejected fail-fast
     // (SPEC 6/25.2) instead of silently writing to the b-side.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/old.rs", "fn a() {}\n");
+    write(dir.path(), "src/old.rs", "fn a() {}\n");
     let patch = "diff --git a/src/old.rs b/src/new.rs\n@@ -1,1 +1,1 @@\n-fn a() {}\n+fn a() {}\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -466,7 +466,7 @@ fn unknown_directive_fails_fast_text_and_json() {
     // T113: silent no-op directives fail fast (SPEC 2.6) — text keeps the
     // stderr diagnostic, JSON carries the envelope on stdout (exit 2 both).
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# foo=bar\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -490,7 +490,7 @@ fn item_rename_prefix_difference_fails_fast_text_and_json() {
     // never silent vis changes — text keeps the stderr diagnostic, JSON
     // carries the envelope on stdout (exit 2 both).
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "pub struct Old;\n");
+    write(dir.path(), "src/lib.rs", "pub struct Old;\n");
     let patch =
         "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ struct New\n";
     let out = run_stdin(dir.path(), patch, &[]);
@@ -520,7 +520,7 @@ fn item_rename_prefix_difference_fails_fast_text_and_json() {
 fn json_report_carries_rules_and_diff() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\n",
     );
@@ -559,7 +559,7 @@ fn json_report_carries_per_match_spans() {
     // without re-reading the file. `spans.len() == matches` always.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\nfn b() {\n    foo(2);\n}\n",
     );
@@ -579,7 +579,7 @@ fn json_report_carries_per_match_spans() {
 #[test]
 fn json_envelope_on_match_failure() {
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# expr E\n- foo(E)\n+ bar(E)\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
@@ -617,7 +617,7 @@ fn json_envelope_zero_match_unique_elsewhere_hints_scope_file() {
     // the JSON envelope must offer the zero-discovery `# scope=file` retry.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {}\nfn b() {}\nfn foo() {}\n",
     );
@@ -642,7 +642,7 @@ fn json_envelope_zero_match_unique_elsewhere_hints_scope_file() {
 #[test]
 fn json_envelope_on_range_failure_names_file_read() {
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -90,8 +90,8 @@ rule=r\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
@@ -666,7 +666,7 @@ fn json_match_failure_suggestion_carries_scope_file_hint() {
     // T62: the whole-file retry hint composes with the file-read pointer.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {}\nfn b() {}\nfn foo() {}\n",
     );
@@ -717,7 +717,7 @@ fn two_call_patch() -> &'static str {
 fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -761,7 +761,7 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
 #[test]
 fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# optional\n# expr E\n- foo(E)\n+ bar(E)\n";
     let out = run_stdin(
         dir.path(),
@@ -787,7 +787,7 @@ fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
 fn json_diff_max_lines_truncates_but_stats_stay_exact() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -843,7 +843,7 @@ fn json_diff_max_lines_truncates_but_stats_stay_exact() {
 fn json_default_report_carries_files_and_untruncated() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -888,7 +888,7 @@ fn json_default_report_carries_files_and_untruncated() {
 fn text_check_diff_max_lines_truncates_with_marker() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -920,7 +920,7 @@ fn text_check_diff_max_lines_truncates_with_marker() {
 fn text_check_diff_max_lines_zero_omits_with_stats_marker() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -956,7 +956,7 @@ fn text_check_diff_max_lines_zero_omits_with_stats_marker() {
 fn output_file_stays_full_when_report_truncated() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -1016,7 +1016,7 @@ fn output_creates_missing_parent_dirs() {
     // parents are created, the saved diff is full, and the repo is applied.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -1042,7 +1042,7 @@ fn output_creates_missing_parent_dirs() {
 fn text_lowering_is_zero_context_but_stays_check_clean() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -1076,7 +1076,7 @@ fn text_lowering_is_zero_context_but_stays_check_clean() {
 fn zero_context_applies_for_real() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -1097,7 +1097,7 @@ fn zero_context_applies_for_real() {
 fn zero_context_output_file_is_git_apply_clean() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -1150,7 +1150,7 @@ fn zero_context_output_file_is_git_apply_clean() {
 fn json_lowering_is_zero_context_stats_stay_exact() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n    foo(2);\n}\n",
     );
@@ -1195,7 +1195,7 @@ fn context_flag_is_gone() {
     // mode since T26, pinned in `usage_envelope_e2e.rs`).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\n",
     );
@@ -1222,7 +1222,7 @@ fn text_apply_summary_matches_json_files() {
     // none in both modes (`(no changes)` vs `files: []`).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -1230,7 +1230,7 @@ fn text_apply_summary_matches_json_files() {
     // JSON --check on a clone: pin `files[].path` without applying.
     let dir_json = init_repo();
     write(
-        &dir_json.path().join(""),
+        dir_json.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -1264,7 +1264,7 @@ fn text_apply_summary_matches_json_files() {
     // Zero-change case: both modes agree on empty.
     let noop = "diff --git src/lib.rs\n@@ -1,1 @@ rule=noop\n# lang=rust\n# optional\n- fn missing_xyz(...) {\n+ fn renamed_xyz(...) {\n      ...\n  }\n";
     let dir_noop = init_repo();
-    write(&dir_noop.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir_noop.path(), "src/lib.rs", "fn foo() {}\n");
     let json_noop = run_stdin(dir_noop.path(), noop, &["--format", "json", "--check"]);
     assert!(
         json_noop.status.success(),
@@ -1275,7 +1275,7 @@ fn text_apply_summary_matches_json_files() {
         serde_json::from_str(&String::from_utf8_lossy(&json_noop.stdout)).unwrap();
     assert_eq!(v2["files"].as_array().unwrap().len(), 0, "got: {v2}");
     let dir_noop2 = init_repo();
-    write(&dir_noop2.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir_noop2.path(), "src/lib.rs", "fn foo() {}\n");
     let text_noop = run_stdin(dir_noop2.path(), noop, &["--check"]);
     assert!(
         text_noop.status.success(),
@@ -1293,7 +1293,7 @@ fn scope_file_dummy_range_applies() {
     // fails with `RSMPL_MATCH_CONFLICT`.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn foo() {}\n",
     );
@@ -1325,7 +1325,7 @@ fn absolute_target_path_rejected() {
     // T94: absolute patch targets would discard `--repo` under
     // `Path::join` — fail fast with `RSMPL_IO_CONFLICT` instead.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let patch = "diff --git /tmp/evil.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -1349,7 +1349,7 @@ fn traversal_target_path_rejected() {
     // T94: `..` segments escaping the worktree fail the same way;
     // a non-escaping `sub/../` prefix stays legal (lexical check).
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let patch = "diff --git ../evil.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -1402,7 +1402,7 @@ fn output_path_is_cwd_relative_not_repo_joined() {
     // T114: `--output` resolves against the caller cwd, never `--repo`.
     let repo = init_repo();
     write(
-        &repo.path().join(""),
+        repo.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1);\n}\n",
     );
@@ -1456,7 +1456,7 @@ fn repeat_folds_nested_match_json_report() {
     // counts the single outermost edit.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    let v = Box::new(Box::new(x));\n}\n",
     );
@@ -1482,7 +1482,7 @@ fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
     // One wrong content line still fails with GIT_HUNK_CONFLICT.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\n",
     );
@@ -1507,7 +1507,7 @@ fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
 fn repeat_with_bind_rejected_json_envelope() {
     // T20: `# repeat` on a capture hunk fails fast with PATTERN conflict.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=cut\n# repeat\n# item I\n# bind=H\n- I\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
@@ -1526,7 +1526,7 @@ fn trailing_comma_where_rename_applies() {
     // spelling; the clause is preserved on a pure rename.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn f<T>(x: T) -> T\nwhere\n    T: Clone,\n{\n    x\n}\n",
     );
@@ -1554,7 +1554,7 @@ fn trailing_comma_params_json_spans() {
     // T224 params half via JSON: one match, original-source spans.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn f(\n    x: i32,\n    y: i32,\n) -> i32 {\n    x + y\n}\n",
     );

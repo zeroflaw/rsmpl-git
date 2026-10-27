@@ -13,7 +13,7 @@ fn ellipsis_replay_applies_byte_exact() {
     // arg list; empty remainders swallow the comma; `# repeat` folds.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1, 2, 3);\n    foo(1);\n    foo(foo(1));\n}\n",
     );
@@ -42,7 +42,7 @@ fn ellipsis_plus_without_minus_fails_fast_json() {
     // (was a silent arg-list duplication).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1, 2);\n}\n",
     );
@@ -60,7 +60,7 @@ fn ellipsis_leading_backtrack_applies() {
     // backtracking (was a first-fit-only `no match found`).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn a() {\n    foo(1, 2, 3);\n}\n",
     );

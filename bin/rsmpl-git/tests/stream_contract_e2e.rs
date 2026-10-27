@@ -25,7 +25,7 @@ fn text_apply_is_stdout_quiet() {
     // line goes to stderr and exit 0 is the signal.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -53,7 +53,7 @@ fn text_check_diff_on_stdout_check_on_stderr() {
     // human `check:` signal on stderr.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -80,7 +80,7 @@ fn json_check_has_no_stderr_check_line() {
     // payload is the machine signal; no redundant stderr `check:` line.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -109,7 +109,7 @@ fn failing_check_still_writes_output() {
     // have already succeeded.
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -154,7 +154,7 @@ fn empty_lowering_writes_no_output_file() {
     // D.2.3 (T86): an empty lowering writes no `--output` file —
     // no changes means no file, not a 0-byte artifact.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let saved = dir.path().join("empty.patch");
     let out = run_stdin(
         dir.path(),
@@ -186,7 +186,7 @@ fn empty_text_check_prints_no_changes() {
     // D.2.3 (T76): text `--check` on an empty lowering prints
     // `(no changes)` to stdout and exits clean without touching git.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let out = run_stdin(dir.path(), noop_patch(), &["--check"]);
     assert!(
         out.status.success(),
@@ -203,7 +203,7 @@ fn json_failure_is_stdout_only() {
     // no redundant stderr `error:` line (symmetry with the silenced
     // success `check:` line). `warning:`-only stderr stays allowed.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let out = run_stdin(dir.path(), "", &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -226,7 +226,7 @@ fn text_failure_keeps_stderr_code() {
     // D.2.3 (T89 contrast): text-mode failures keep the human stderr
     // diagnostic with the structured code.
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let out = run_stdin(dir.path(), "", &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -238,7 +238,7 @@ fn unknown_header_tag_fails_fast_text_and_json() {
     // T107 (SPEC 2.6/8.3): dead header tags fail fast. Text keeps the
     // stderr diagnostic; JSON carries the stdout-only envelope (exit 2).
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x id=y\n# lang=rust\n- fn a(...) {\n+ fn b(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -262,7 +262,7 @@ fn unknown_root_and_kind_fail_fast_text_and_json() {
     // never-binding metavar kinds fail fast. Text keeps the stderr
     // diagnostic; JSON carries the stdout-only envelope (exit 2).
     let dir = init_repo();
-    write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
     for (patch, needle) in [
         (
             "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# root=bogus\n- foo\n+ bar\n",

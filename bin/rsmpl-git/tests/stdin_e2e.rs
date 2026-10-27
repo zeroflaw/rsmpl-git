@@ -11,7 +11,7 @@ use common::*;
 fn stdin_patch_applies() {
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -30,7 +30,7 @@ fn stdin_default_applies_without_input_flags() {
     // T129: no `--file` means stdin (Unix filter behavior).
     let dir = init_repo();
     write(
-        &dir.path().join(""),
+        dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
@@ -51,7 +51,7 @@ fn stdin_default_empty_is_parse_conflict_text_and_json() {
     // the envelope on stdout (exit 2 both).
     for json in [false, true] {
         let dir = init_repo();
-        write(&dir.path().join(""), "src/lib.rs", "fn a() {}\n");
+        write(dir.path(), "src/lib.rs", "fn a() {}\n");
         let extra: &[&str] = if json { &["--format", "json"] } else { &[] };
         let out = run_stdin(dir.path(), "", extra);
         assert_eq!(out.status.code(), Some(2));
