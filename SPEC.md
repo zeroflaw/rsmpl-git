@@ -3295,13 +3295,42 @@ or any kind mismatch, identical-name, or `auto trait` header — all Section
 14.8, which lists the engine-verbatim reasons,
 and any call/method-call hunk whose `+` side holds more `...` tokens
 than the `-` side has argument ellipses to replay (verbatim reason +
-suggestion, Section 16.3).
+suggestion, Section 16.3),
+any `# mode=tokens` hunk outside a macro token-tree pattern, or any
+hunk whose `+` side names an unbound metavariable (both fenced below).
 
 ```text
 RSMPL_PATTERN_CONFLICT
 reason: unknown directive `#foo=bar`: # foo=bar
 suggestion: check SPEC 9.3 for the supported directive list
 ```
+
+Any `# mode=tokens` hunk that is not a macro token-tree pattern is
+rejected (only that shape supports token matching in v0.1), as is any
+hunk whose `+` side uses a metavariable bound nowhere in `-`/context
+(no silent unbound invention). Engine-verbatim (both exit 2; both
+carry `rule:`/`file:`; text omits null `range:`/`suggestion:` lines,
+JSON carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: x
+file: a.rs
+reason: `# mode=tokens` is only supported for macro token-tree patterns in v0.1
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: y
+file: a.rs
+reason: metavariable(s) used in `+` pattern without binding: F
+suggestion: bind them in `-`/context or declare `# use=`
+```
+
+In the second fence `F` is the offending-name list (`, `-joined when
+several); the text `suggestion:` line is present only there (null
+suggestion omitted in the first fence, explicit `suggestion: null` in
+JSON for the first, `range: null` in both).
 
 Directive-parse failures carry no `rule:`/`file:`/`range:` lines (null
 Directive-parse failures are not uniform (all exit 2). A bare unknown
