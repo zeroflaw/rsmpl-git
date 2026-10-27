@@ -81,7 +81,7 @@ pub fn run_raw(args: &[&str]) -> std::process::Output {
     // `bin/rsmpl-git/.history/`. Clap-usage failures exit before any
     // history write, so the extra `--repo` is harmless there. Skip
     // injection when the caller already passes `--repo`.
-    if args.iter().any(|a| *a == "--repo") {
+    if args.contains(&"--repo") {
         return Command::new(binary()).args(args).output().unwrap();
     }
     let dir = tempfile::tempdir().unwrap();
