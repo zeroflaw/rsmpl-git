@@ -74,11 +74,19 @@ impl GitSource {
 
         // Untracked files never appear in `git diff`; emit them as
         // new-file ordinary sections so the patch covers all pending
-        // changes (agents create new files constantly).
-        let mut untracked = untracked_files(&self.repo).map_err(|e| SourceError::Git {
-            repo: self.repo.display().to_string(),
-            inner: e,
-        })?;
+        // changes (agents create new files constantly). Pending worktree
+        // scope only (T392): `git diff --cached` and `git diff [rev]`
+        // never show untracked files, so staged/rev conversions must not
+        // embed them either (they leaked into both, misrepresenting
+        // index/history scope).
+        let mut untracked = if self.rev.is_none() && !self.staged {
+            untracked_files(&self.repo).map_err(|e| SourceError::Git {
+                repo: self.repo.display().to_string(),
+                inner: e,
+            })?
+        } else {
+            Vec::new()
+        };
         untracked.sort();
         // `.history/` is the `applyrs` audit log (SPEC D.1): tool
         // output, never a lowering input. Old worktrees (whose

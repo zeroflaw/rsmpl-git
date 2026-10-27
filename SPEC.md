@@ -5751,7 +5751,10 @@ what changed. Minimal surface, same philosophy as `applyrs`:
 Collection: unstaged worktree-vs-index plus untracked files (emitted
 as new-file ordinary sections, since `git diff` never shows them;
 untracked symlinks read as their link-target string, never followed,
-with `new file mode 120000`); `--repo` may be a subdirectory — reads
+with `new file mode 120000`); untracked embedding is pending-worktree
+scope only — `--staged` and `[rev]` conversions exclude untracked
+files, exactly like the native `git diff --cached` / `git diff [rev]`
+forms they mirror (T392). `--repo` may be a subdirectory — reads
 resolve to the worktree top level while output paths stay
 repo-root-relative (check/apply run against the root, T390).
 empty files emit headers only (no hunk, exactly real git's shape);

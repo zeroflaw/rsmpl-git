@@ -236,6 +236,72 @@ fn staged_flag_isolates_index() {
     assert!(!unstaged_patch.contains("a.rs"), "got: {unstaged_patch}");
 }
 
+// T392: untracked files are pending-worktree scope only — `git diff
+// --cached` never shows them, so neither must `diffrs --staged` (they
+// leaked into staged conversions, misrepresenting the index).
+#[test]
+fn staged_scope_excludes_untracked_files() {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn a() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "u.txt", "untracked body\n");
+
+    // Nothing staged: index is clean, so the conversion is empty even
+    // though an untracked file is present.
+    let staged = run(dir.path(), &["--staged"]);
+    assert_eq!(staged.status.code(), Some(0));
+    assert!(staged.stdout.is_empty(), "got: {:?}", staged.stdout);
+    let stderr = String::from_utf8_lossy(&staged.stderr).to_string();
+    assert!(stderr.contains("(no changes)"), "got: {stderr}");
+    let staged_json = run(dir.path(), &["--staged", "--format", "json"]);
+    assert_eq!(staged_json.status.code(), Some(0));
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&staged_json.stdout)).unwrap();
+    assert_eq!(v["files"], serde_json::json!([]), "got: {v}");
+
+    // With a staged tracked edit, `--staged` carries it but still not
+    // the untracked file; pending (no flags) still embeds both.
+    write(dir.path(), "a.rs", "fn a() {}\n// staged\n");
+    git(dir.path(), &["add", "a.rs"]);
+    let staged = run(dir.path(), &["--staged"]);
+    assert_eq!(staged.status.code(), Some(0));
+    let staged_patch = String::from_utf8_lossy(&staged.stdout).to_string();
+    assert!(staged_patch.contains("a.rs"), "got: {staged_patch}");
+    assert!(!staged_patch.contains("u.txt"), "got: {staged_patch}");
+    let pending = run(dir.path(), &[]);
+    assert_eq!(pending.status.code(), Some(0));
+    let pending_patch = String::from_utf8_lossy(&pending.stdout).to_string();
+    assert!(pending_patch.contains("u.txt"), "got: {pending_patch}");
+}
+
+// T392: same gate for history scope — `git diff [rev]` never shows
+// untracked files, so neither must `diffrs [rev]` (worktree state
+// polluted history conversions).
+#[test]
+fn rev_scope_excludes_untracked_files() {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn a() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "u.txt", "untracked body\n");
+
+    // Zero tracked delta vs HEAD: the conversion is empty even though
+    // an untracked file is present.
+    let out = run(dir.path(), &["HEAD"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty(), "got: {:?}", out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("(no changes)"), "got: {stderr}");
+
+    // With a tracked worktree edit, the rev conversion carries it but
+    // still not the untracked file.
+    write(dir.path(), "a.rs", "fn a() {}\n// worktree\n");
+    let out = run(dir.path(), &["HEAD"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("+// worktree"), "got: {patch}");
+    assert!(!patch.contains("u.txt"), "got: {patch}");
+}
+
 #[test]
 fn rev_argument_covers_history() {
     let dir = init_repo();
