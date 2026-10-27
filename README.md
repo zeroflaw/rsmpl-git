@@ -1,6 +1,6 @@
 # rsmpl-git
 
-> Hackathon prototype — an experiment in agentic, token-efficient refactoring.
+> Built for the Meta Global AI Developer Hackathon — an experiment in agentic, token-efficient refactoring.
 
 Instead of agents manually deleting and adding large sections of code, `rsmpl-git`
 provides an understandable semantic patching language for human and machine:
