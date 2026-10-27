@@ -1752,10 +1752,24 @@ Rules:
   optional leading `::`, all normalized away). Anything else in the
   pattern — braces, globs, `as`, `!`, `...`, `$Meta`, backticks, or a
   declared-metavariable segment — is a pattern error; targets may freely
-  contain groups/globs/`as` tails, which are preserved.
+  contain groups/globs/`as` tails, which are preserved — including members
+  sitting directly inside a group at the matched position (see below).
 - Matching is segment-wise on the target's leading path segments: minus
   `crate::old` matches `crate::old::Thing` but never `crate::old2::Thing`
   (never a string prefix). Identical minus/plus prefixes are a pattern error.
+- Group members at the matched position rewrite too: the walk descends
+  into `{...}` (at any depth, including a root group) and matches each
+  member from the member start, so `use crate::{old, other as o}` becomes
+  `use crate::{new, other as o}` and `use crate::{old::Thing, other}`
+  becomes `use crate::{new::Thing, other}` (`as` renames keep their alias;
+  only the leading ident span is replaced). The member replacement is the
+  plus suffix aligned to the matched minus suffix, which requires the
+  leading segments to be literally shared — otherwise the member is
+  skipped, never guessed: a divergent plus prefix skips grouped members
+  (non-grouped sites still rewrite), a shrinking plus (empty replacement
+  text) skips, and `crate::{x::old}` never matches minus `crate::old`
+  (members match from member start only — no suffix overreach). Genuinely
+  ambiguous member shapes are ordinary-hunk territory.
 - Matching reuses the item scope modes (`scope=contained/anchor/overlap/
   exact`, anchor on the prefix-start line), attribute policies
   (`# attrs=...`), and `allow`/`optional` count validation. A file with

@@ -1,10 +1,12 @@
-//! `use`-path prefix renames (SPEC 14.9, T19a).
+//! `use`-path prefix renames (SPEC 14.9, T19a; group members T183).
 //!
 //! A minus/plus prefix pair (`use crate::old` / `use crate::new`) rewrites
-//! the leading-segment span of every matching `use` item. The target's tail
-//! (final name, groups, globs, `as` renames) sits outside the replaced span
-//! and is preserved byte-for-byte, exactly like the ident-span fast path of
-//! item renames. Visibility, attributes, and formatting are likewise
+//! the leading-segment span of every matching `use` item — including
+//! members sitting directly inside a `{...}` group at the matched position
+//! (`use crate::{old, other}` rewrites the `old` member span). The target's
+//! tail (final name, groups, globs, `as` renames) sits outside the replaced
+//! span and is preserved byte-for-byte, exactly like the ident-span fast
+//! path of item renames. Visibility, attributes, and formatting are likewise
 //! preserved (attribute policies mirror item renames).
 //!
 //! Only file- and inline-`mod`-level `use` items are collected; `use`
@@ -19,40 +21,114 @@ use crate::edits::TextEdit;
 use crate::lines::LineIndex;
 use crate::matcher_item::{check_attrs, span_bytes};
 
-/// One prefix-match candidate: the byte span of the matched leading
-/// segments plus line spans for scope filtering.
-struct UseCandidate {
-    start_line: u32,
-    end_line: u32,
-    anchor_line: u32,
-    attr_start_line: u32,
-    attrs: Vec<syn::Attribute>,
+/// One recorded prefix match: the span to replace, its replacement text
+/// (the plus suffix aligned to the matched minus suffix), and the anchor
+/// line (match start) for scope filtering.
+struct UseEdit {
+    first: proc_macro2::Span,
+    last: proc_macro2::Span,
+    replacement: String,
 }
 
-/// Leading plain segments of a `use` tree with their spans, descending
-/// through nested `Path` nodes. Stops at (and excludes) `Group`/`Glob`
-/// tails; includes a trailing `Name`/`Rename` ident as the final segment.
-fn leading_segments(tree: &syn::UseTree, out: &mut Vec<(String, proc_macro2::Span)>) {
+/// Recursive prefix walk (T183). `consumed` counts the minus segments
+/// matched along the current path; `start` carries the match-start span
+/// plus the consumed count when it started (`None` until the first segment
+/// matches — groups reset it so member matches stay contiguous and never
+/// span braces).
+///
+/// `Path` descends on minus-head equality and records when minus is fully
+/// consumed (the remaining subtree is the preserved tail). `Group` recurses
+/// into each member with the current suffix — this is what reaches members
+/// at the matched position (`crate::{old, other}`) as well as root groups
+/// (`use {crate::old, x}`). `Name`/`Rename` record on exact full
+/// consumption (a rename keeps `as o`: only the leading ident is replaced).
+/// `Glob` records nothing (a glob tail after full consumption was already
+/// recorded by its parent `Path`).
+fn walk_use_tree(
+    tree: &syn::UseTree,
+    minus: &[String],
+    plus: &[String],
+    consumed: usize,
+    start: Option<(proc_macro2::Span, usize)>,
+    out: &mut Vec<UseEdit>,
+) {
     match tree {
         syn::UseTree::Path(p) => {
-            out.push((p.ident.to_string(), p.ident.span()));
-            leading_segments(&p.tree, out);
+            if consumed < minus.len() && p.ident == minus[consumed] {
+                let st = start.or(Some((p.ident.span(), consumed)));
+                if consumed + 1 == minus.len() {
+                    record_match(st, p.ident.span(), minus, plus, out);
+                } else {
+                    walk_use_tree(&p.tree, minus, plus, consumed + 1, st, out);
+                }
+            }
         }
-        syn::UseTree::Name(n) => out.push((n.ident.to_string(), n.ident.span())),
-        syn::UseTree::Rename(r) => out.push((r.ident.to_string(), r.ident.span())),
-        syn::UseTree::Glob(_) | syn::UseTree::Group(_) => {}
+        syn::UseTree::Name(n) => {
+            if consumed < minus.len() && consumed + 1 == minus.len() && n.ident == minus[consumed] {
+                record_match(
+                    start.or(Some((n.ident.span(), consumed))),
+                    n.ident.span(),
+                    minus,
+                    plus,
+                    out,
+                );
+            }
+        }
+        syn::UseTree::Rename(r) => {
+            if consumed < minus.len() && consumed + 1 == minus.len() && r.ident == minus[consumed] {
+                record_match(
+                    start.or(Some((r.ident.span(), consumed))),
+                    r.ident.span(),
+                    minus,
+                    plus,
+                    out,
+                );
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+        syn::UseTree::Group(g) => {
+            for member in &g.items {
+                walk_use_tree(member, minus, plus, consumed, None, out);
+            }
+        }
     }
 }
 
-/// Scope filtering (SPEC 17.3). `anchor` uses the prefix-start line as the
-/// first concrete non-ellipsis token; other modes use the item span.
-fn in_scope(c: &UseCandidate, scope: Scope, old_start: u32, old_len: u32) -> bool {
+/// Record a full minus consumption. The rewritten span covers `minus[k..]`
+/// (k = consumed when the match started), so the replacement must cover the
+/// same suffix of plus — which requires the leading k segments to be
+/// literally shared (`plus[..k] == minus[..k]`). Otherwise the member is
+/// skipped, never guessed: divergent prefixes and shrinking replacements
+/// (`plus.len() <= k`, empty text) stay fail-safe for an ordinary hunk.
+fn record_match(
+    start: Option<(proc_macro2::Span, usize)>,
+    last: proc_macro2::Span,
+    minus: &[String],
+    plus: &[String],
+    out: &mut Vec<UseEdit>,
+) {
+    let Some((first, k)) = start else { return };
+    if plus.len() <= k || plus[..k] != minus[..k] {
+        return;
+    }
+    out.push(UseEdit {
+        first,
+        last,
+        replacement: plus[k..].join("::"),
+    });
+}
+
+/// Scope filtering (SPEC 17.3) applied per rewritten span. `anchor` uses the
+/// match-start line as the first concrete non-ellipsis token.
+fn in_scope(edit: &UseEdit, scope: Scope, old_start: u32, old_len: u32) -> bool {
+    let start_line = edit.first.start().line as u32;
+    let end_line = edit.last.end().line as u32;
     let end = old_start + old_len.saturating_sub(1);
     match scope {
-        Scope::Contained => c.start_line >= old_start && c.end_line <= end.max(old_start),
-        Scope::Anchor => c.anchor_line >= old_start && c.anchor_line <= end.max(old_start),
-        Scope::Overlap => c.start_line <= end.max(old_start) && c.end_line >= old_start,
-        Scope::Exact => old_len > 0 && c.start_line == old_start && c.end_line == end,
+        Scope::Contained => start_line >= old_start && end_line <= end.max(old_start),
+        Scope::Anchor => start_line >= old_start && start_line <= end.max(old_start),
+        Scope::Overlap => start_line <= end.max(old_start) && end_line >= old_start,
+        Scope::Exact => old_len > 0 && start_line == old_start && end_line == end,
         Scope::File => true,
     }
 }
@@ -87,55 +163,60 @@ pub fn apply_use_rename_hunk(
         }
     };
     let rule = hunk.rule_name();
-    // Re-walk: collect candidate segment spans alongside line info.
-    let mut cands: Vec<(UseCandidate, Vec<(String, proc_macro2::Span)>)> = Vec::new();
-    collect_with_segs(&parsed.items, &mut cands);
+    // Re-walk: collect use items, then match each tree recursively (T183
+    // reaches group members at the matched position).
+    let plus: Vec<String> = plus_path.split("::").map(str::to_string).collect();
+    let mut items = Vec::new();
+    collect_use_items(&parsed.items, &mut items);
 
     let old_start = hunk.header.old_start;
     let old_len = hunk.header.old_len;
     let mut matched = 0;
-    for (c, segs) in &cands {
-        if segs.len() < minus_segs.len() {
+    for v in &items {
+        let mut found: Vec<UseEdit> = Vec::new();
+        walk_use_tree(v.tree, &minus_segs, &plus, 0, None, &mut found);
+        if found.is_empty() {
             continue;
         }
-        if !segs
-            .iter()
-            .take(minus_segs.len())
-            .map(|(s, _)| s)
-            .eq(minus_segs.iter())
-        {
-            continue;
+        // Attribute policies are per item and checked only for items with
+        // edits: unrelated items must never trip `# attrs=absent`.
+        check_attrs(v.attrs, hunk.attrs_policy(), &[], &rule, "")?;
+        let mut item_edits = 0;
+        for e in &found {
+            if !in_scope(e, hunk.scope(), old_start, old_len) {
+                continue;
+            }
+            let (a, b) = span_bytes(original, index, e.first)
+                .and_then(|(a, _)| span_bytes(original, index, e.last).map(|(_, b)| (a, b)))
+                .ok_or_else(|| range_err(&rule, e.first.start().line as u32))?;
+            if a >= b {
+                return Err(StructuredError::new(
+                    ErrorCode::MatchConflict,
+                    "use prefix span is empty (file changed during matching?)",
+                )
+                .with_rule(&rule));
+            }
+            edits.push(TextEdit::new(a, b, e.replacement.clone()));
+            item_edits += 1;
+            matched += 1;
+            if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
+                break; // count validation reports the error
+            }
         }
-        if !in_scope(c, hunk.scope(), old_start, old_len) {
-            continue;
-        }
-        check_attrs(&c.attrs, hunk.attrs_policy(), &[], &rule, "")?;
-        let first_span = segs[0].1;
-        let last_span = segs[minus_segs.len() - 1].1;
-        let (a, b) = span_bytes(original, index, first_span)
-            .and_then(|(a, _)| span_bytes(original, index, last_span).map(|(_, b)| (a, b)))
-            .ok_or_else(|| range_err(&rule, first_span.start().line as u32))?;
-        if a >= b {
-            return Err(StructuredError::new(
-                ErrorCode::MatchConflict,
-                "use prefix span is empty (file changed during matching?)",
-            )
-            .with_rule(&rule));
-        }
-        edits.push(TextEdit::new(a, b, plus_path.clone()));
-        // `# attrs=strip`: delete attribute lines above the item.
-        if hunk.attrs_policy() == AttrsPolicy::Strip && !c.attrs.is_empty() {
+        // `# attrs=strip`: delete attribute lines above the item once per
+        // item (not once per member edit — duplicate identical edits would
+        // trip the overlap check).
+        if item_edits > 0 && hunk.attrs_policy() == AttrsPolicy::Strip && !v.attrs.is_empty() {
             let start = index
-                .line_start(c.attr_start_line)
-                .ok_or_else(|| range_err(&rule, c.attr_start_line))?;
+                .line_start(v.attr_start_line)
+                .ok_or_else(|| range_err(&rule, v.attr_start_line))?;
             let end = index
-                .line_start(c.anchor_line)
-                .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                .line_start(v.anchor_line)
+                .ok_or_else(|| range_err(&rule, v.anchor_line))?;
             if end > start {
                 edits.push(TextEdit::new(start, end, String::new()));
             }
         }
-        matched += 1;
         if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
             break; // count validation reports the error
         }
@@ -143,35 +224,31 @@ pub fn apply_use_rename_hunk(
     Ok(matched)
 }
 
-/// Collect `use` items with their leading-segment spans.
-fn collect_with_segs(
-    items: &[syn::Item],
-    out: &mut Vec<(UseCandidate, Vec<(String, proc_macro2::Span)>)>,
-) {
+/// One collected `use` item: its tree plus the attribute/line info the
+/// match and strip steps need.
+struct UseItemView<'a> {
+    tree: &'a syn::UseTree,
+    attrs: &'a [syn::Attribute],
+    anchor_line: u32,
+    attr_start_line: u32,
+}
+
+/// Collect file- and inline-`mod`-level `use` items.
+fn collect_use_items<'a>(items: &'a [syn::Item], out: &mut Vec<UseItemView<'a>>) {
     for it in items {
         match it {
             syn::Item::Use(u) => {
-                let mut segs = Vec::new();
-                leading_segments(&u.tree, &mut segs);
-                if segs.is_empty() {
-                    continue;
-                }
                 let item_span = it.span();
-                let first = segs[0].1;
-                out.push((
-                    UseCandidate {
-                        start_line: item_span.start().line as u32,
-                        end_line: item_span.end().line as u32,
-                        anchor_line: first.start().line as u32,
-                        attr_start_line: item_span.start().line as u32,
-                        attrs: u.attrs.clone(),
-                    },
-                    segs,
-                ));
+                out.push(UseItemView {
+                    tree: &u.tree,
+                    attrs: &u.attrs,
+                    anchor_line: u.use_token.span.start().line as u32,
+                    attr_start_line: item_span.start().line as u32,
+                });
             }
             syn::Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
-                    collect_with_segs(inner, out);
+                    collect_use_items(inner, out);
                 }
             }
             _ => {}
@@ -236,6 +313,78 @@ mod tests {
         assert!(out.contains("use crate::new::{A, B};"), "got: {out}");
         assert!(out.contains("use crate::new::*;"), "got: {out}");
         assert!(out.contains("use crate::new::Thing as T;"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrites_group_member_at_matched_position() {
+        // T183: a member sitting directly inside `{...}` at the matched
+        // position rewrites; siblings (incl. `as` renames) are preserved.
+        let patch = use_patch_in(
+            "@@ -1,3 @@",
+            "use crate::old",
+            "use crate::new",
+            "# allow=many\n",
+        );
+        let src = "use crate::{old, other as o};\nuse crate::old::Thing;\nfn m() {}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("use crate::{new, other as o};"), "got: {out}");
+        assert!(out.contains("use crate::new::Thing;"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrites_group_member_with_tail() {
+        // T183: `old::Deep` inside a group rewrites the `old` span only.
+        let patch = use_patch_in(
+            "@@ -1,1 @@",
+            "use crate::old",
+            "use crate::new",
+            "# allow=many\n",
+        );
+        let src = "use crate::{old::Deep, other};\n";
+        let out = apply(&patch, src).unwrap();
+        assert_eq!(out, "use crate::{new::Deep, other};\n", "got: {out}");
+    }
+
+    #[test]
+    fn group_member_suffix_never_overreaches() {
+        // T183: `x::old` is not the `crate::old` prefix — members match from
+        // member start only, so this fails safe instead of corrupting.
+        let patch = use_patch_in("@@ -1,1 @@", "use crate::old", "use crate::new", "");
+        let src = "use crate::{x::old};\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn root_group_members_match() {
+        // T183: a group at the root matches the full minus path per member.
+        let patch = use_patch_in(
+            "@@ -1,1 @@",
+            "use crate::old",
+            "use crate::new",
+            "# allow=many\n",
+        );
+        let src = "use {crate::old, x};\n";
+        let out = apply(&patch, src).unwrap();
+        assert_eq!(out, "use {crate::new, x};\n", "got: {out}");
+    }
+
+    #[test]
+    fn divergent_and_shrinking_prefix_skip_group_members() {
+        // T183: the member replacement is the plus suffix aligned to the
+        // matched minus suffix, which requires the leading segments to be
+        // literally shared — otherwise the member is skipped, never guessed.
+        // (Non-grouped sites still rewrite with the full plus path.)
+        let grouped = "use crate::{old::T};\n";
+        let divergent = use_patch_in("@@ -1,1 @@", "use crate::old", "use changed::new", "");
+        let err = apply(&divergent, grouped).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        let shrinking = use_patch_in("@@ -1,1 @@", "use crate::old", "use new", "");
+        let err = apply(&shrinking, grouped).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Non-grouped sites still rewrite with the full plus path.
+        let out = apply(&divergent, "use crate::old::U;\n").unwrap();
+        assert_eq!(out, "use changed::new::U;\n", "got: {out}");
     }
 
     #[test]
