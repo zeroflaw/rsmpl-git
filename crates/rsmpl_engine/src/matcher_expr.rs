@@ -348,6 +348,29 @@ pub fn substitute_plus(
     out
 }
 
+/// Substitute into a call-shape plus pattern, protecting backtick
+/// literals (SPEC 15.4): mask → `substitute_plus` → unmask, mirroring
+/// `substitute_general_plus`. Sentinels are ident-shaped and never equal
+/// a declared name, so substitution cannot touch them; the restored
+/// literal then emits verbatim. All call/method-call plus sites
+/// (normal, `# repeat` fold, nested fold) must use this, never raw
+/// `substitute_plus` on backticked text.
+pub fn substitute_call_plus(
+    plus_raw: &str,
+    bindings: &HashMap<String, String>,
+    ellipses: &[String],
+    sigiled: bool,
+) -> String {
+    let (masked, sentinels) = match rsmpl_pattern::mask_literal_spans(plus_raw) {
+        Ok(v) => v,
+        // Unbalanced backticks are rejected at parse time; fall back to
+        // raw substitution rather than failing the whole rewrite here.
+        Err(_) => return substitute_plus(plus_raw, bindings, ellipses, sigiled),
+    };
+    let out = substitute_plus(&masked, bindings, ellipses, sigiled);
+    rsmpl_pattern::unmask_literal_spans(&out, &sentinels)
+}
+
 fn replace_ellipsis_tokens(text: &str, replacements: &[String]) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
@@ -588,7 +611,7 @@ pub fn apply_expr_hunk(
         // is skipped: it splices the original slice and would discard
         // folded bindings.
         let replacement = if hunk.repeats() {
-            substitute_plus(plus_raw, &bindings, &remainders, compiled.table.sigiled)
+            substitute_call_plus(plus_raw, &bindings, &remainders, compiled.table.sigiled)
         } else {
             build_replacement(
                 minus,
@@ -680,7 +703,7 @@ fn build_replacement(
     if let Some(fast) = try_callee_only_rewrite(minus, plus_raw, cand, source, reverse_map) {
         fast
     } else {
-        substitute_plus(plus_raw, bindings, remainders, sigiled)
+        substitute_call_plus(plus_raw, bindings, remainders, sigiled)
     }
 }
 
@@ -790,7 +813,8 @@ fn rewrite_nested(
         )?;
         // Nested folds always substitute: the callee-only fast path
         // would splice the unfolded slice and discard folded bindings.
-        let replacement = substitute_plus(plus_raw, &bindings, &remainders, compiled.table.sigiled);
+        let replacement =
+            substitute_call_plus(plus_raw, &bindings, &remainders, compiled.table.sigiled);
         edits.push(TextEdit::new(cand.start, cand.end, replacement));
         accepted.push((cand.start, cand.end));
     }

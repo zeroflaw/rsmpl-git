@@ -16,7 +16,7 @@ use rsmpl_pattern::{ArgPat, CompiledPattern, ExprPatternKind, PatternKind};
 
 use crate::edits::{fragments_equal, TextEdit};
 use crate::lines::LineIndex;
-use crate::matcher_expr::substitute_plus;
+use crate::matcher_expr::substitute_call_plus;
 
 struct MacroCandidate {
     start: usize,
@@ -219,17 +219,27 @@ pub fn apply_macro_hunk(
     };
 
     let token_tree = hunk.macro_mode() == rsmpl_patch::MacroMode::TokenTree;
-    let (minus_name_pat, minus_args_pat) = split_invocation(&minus_raw).ok_or_else(|| {
-        StructuredError::new(
-            ErrorCode::PatternConflict,
-            format!("v0.1 macro patterns must have `NAME!(...)` shape, got `{minus_raw}`"),
-        )
-        .with_rule(&rule)
-    })?;
+    // T162: backtick literals (SPEC 15.4) mask like the call path, so a
+    // literal `` `E` `` classifies as `Concrete("E")`, never a bind.
+    // Sentinels are ident-shaped, so `split_invocation` positions are
+    // unchanged; names/args unmask after classification.
+    let (masked_minus, minus_sentinels) =
+        rsmpl_pattern::mask_literal_spans(&minus_raw).unwrap_or((minus_raw.clone(), Vec::new()));
+    let (minus_name_pat, minus_args_pat) =
+        split_invocation(masked_minus.trim()).ok_or_else(|| {
+            StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!("v0.1 macro patterns must have `NAME!(...)` shape, got `{minus_raw}`"),
+            )
+            .with_rule(&rule)
+        })?;
+    let minus_name_pat = rsmpl_pattern::unmask_literal_spans(&minus_name_pat, &minus_sentinels);
     // The plus side may be macro-shaped (`new_name!(...)`) or a plain
     // expression (macro -> function migration like `assert_eq!(E, E)` to
     // `assert_equal_once(E)`).
-    let plus_invocation = split_invocation(plus_raw.trim());
+    let (masked_plus, plus_sentinels) = rsmpl_pattern::mask_literal_spans(plus_raw.trim())
+        .unwrap_or((plus_raw.trim().to_string(), Vec::new()));
+    let plus_invocation = split_invocation(masked_plus.trim());
     let (plus_name_pat, plus_args_pat) = match &plus_invocation {
         Some((n, a)) => (n.clone(), a.clone()),
         None => (String::new(), String::new()),
@@ -247,8 +257,17 @@ pub fn apply_macro_hunk(
     let reverse_map = reverse_map_of(compiled);
     // Classify minus args with the shared arg classifier. The pattern text at
     // this point still holds `__RSMPL_` placeholders (from the pattern
-    // crate substitution); map them back to declared names.
-    let minus_args = rsmpl_pattern_args(&minus_args_pat, &reverse_map);
+    // crate substitution); map them back to declared names. Literal
+    // sentinels surface as `Concrete(sentinel)` and unmask to the literal.
+    let minus_args = rsmpl_pattern_args(&minus_args_pat, &reverse_map)
+        .into_iter()
+        .map(|a| match a {
+            ArgPat::Concrete(c) => {
+                ArgPat::Concrete(rsmpl_pattern::unmask_literal_spans(&c, &minus_sentinels))
+            }
+            other => other,
+        })
+        .collect::<Vec<_>>();
 
     let mut collector = MacroCollector {
         original,
@@ -300,40 +319,42 @@ pub fn apply_macro_hunk(
         } else if !match_macro_args(&minus_args, &cand.body_args, &reverse_map, &mut bindings) {
             continue;
         }
-        // Build replacement.
+        // Build replacement. Names resolve per-candidate (metavar binds
+        // or literal text); masked plus sentinels unmask after resolve so
+        // backticked names emit verbatim.
+        let resolve_plus = || {
+            rsmpl_pattern::unmask_literal_spans(
+                &resolve_name(&plus_name_pat, &bindings),
+                &plus_sentinels,
+            )
+        };
+        let plus_name_lit = rsmpl_pattern::unmask_literal_spans(&plus_name_pat, &plus_sentinels);
         let replacement = if token_tree
             || (plus_args_pat.trim() == minus_args_pat.trim()
-                && plus_name_pat == minus_name_pat
+                && plus_name_lit == minus_name_pat
                 && reverse_map.is_empty())
         {
             // Pure path rename with identical body: splice path only.
             let slice = original.get(cand.start..cand.end).unwrap_or("");
             let bang_off = slice.find('!').unwrap_or(0);
-            format!(
-                "{}{}",
-                resolve_name(&plus_name_pat, &bindings),
-                &slice[bang_off..]
-            )
+            format!("{}{}", resolve_plus(), &slice[bang_off..])
         } else if plus_args_pat.trim() == "..." || minus_args_pat.trim() == "..." {
             let slice = original.get(cand.start..cand.end).unwrap_or("");
             let bang_off = slice.find('!').unwrap_or(0);
-            format!(
-                "{}{}",
-                resolve_name(&plus_name_pat, &bindings),
-                &slice[bang_off..]
-            )
+            format!("{}{}", resolve_plus(), &slice[bang_off..])
         } else if plus_invocation.is_some() {
-            let new_args = substitute_plus(
+            let new_args = substitute_call_plus(
                 &plus_args_pat,
                 &bindings,
                 std::slice::from_ref(&cand.body_text),
                 compiled.table.sigiled,
             );
-            format!("{}!({})", resolve_name(&plus_name_pat, &bindings), new_args)
+            let new_args = rsmpl_pattern::unmask_literal_spans(&new_args, &plus_sentinels);
+            format!("{}!({})", resolve_plus(), new_args)
         } else {
             // Plus side is not macro-shaped (e.g. macro -> function call):
             // substitute into the whole plus text.
-            substitute_plus(
+            substitute_call_plus(
                 plus_raw.trim(),
                 &bindings,
                 std::slice::from_ref(&cand.body_text),

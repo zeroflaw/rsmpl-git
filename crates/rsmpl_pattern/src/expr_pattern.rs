@@ -9,7 +9,7 @@ use rsmpl_patch::{ErrorCode, StructuredError};
 use std::collections::HashMap;
 
 use crate::metavar::MetavarTable;
-use crate::quote_utils::strip_literal_quotes;
+use crate::quote_utils::{mask_literal_spans, unmask_literal_spans};
 
 /// An argument slot in a call-like pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,21 +265,25 @@ fn is_call_trailer(rest: &str) -> bool {
     t.is_empty() || t == ";"
 }
 
-/// High-level classify used by `pattern.rs`.
+/// High-level classify used by `pattern.rs`. Backtick literals (SPEC 15.4)
+/// are masked — not stripped — so a literal `` `E` `` never becomes a
+/// placeholder: sentinel args classify as `Concrete(literal)` and
+/// callee/receiver/method sentinels unmask to literal text (exact match,
+/// never bind). Plain `E` still classifies as `Meta`.
 pub fn classify_call_pattern(
     minus_raw: &str,
     table: &MetavarTable,
 ) -> Result<(ExprPatternKind, PlaceholderMaps, Vec<String>), StructuredError> {
-    let (stripped, literals) = strip_literal_quotes(minus_raw)?;
-    let lit_strs: Vec<String> = literals.into_iter().map(|l| l.literal).collect();
-    let (sub, maps) = ExprPattern::placeholder_expr(&stripped, table);
+    let (masked, sentinels) = mask_literal_spans(minus_raw)?;
+    let lit_strs: Vec<String> = sentinels.iter().map(|(_, lit)| lit.clone()).collect();
+    let (sub, maps) = ExprPattern::placeholder_expr(&masked, table);
     // `let`-led patterns are statements, not calls: bypass call/method
     // routing so `let (E, x) = ...` reaches the `let` gate (SPEC 18.6)
     // instead of classifying as a `let(...)` call.
-    if is_let_led(&stripped) {
+    if is_let_led(&unmask_literal_spans(&masked, &sentinels)) {
         return Ok((
             ExprPatternKind::Raw {
-                text: normalize_trailing_commas(&sub),
+                text: normalize_trailing_commas(&unmask_literal_spans(&sub, &sentinels)),
             },
             maps,
             lit_strs,
@@ -292,7 +296,7 @@ pub fn classify_call_pattern(
             let body_ellipsis = sub.contains("__RSMPL_ELLIPSIS");
             return Ok((
                 ExprPatternKind::Macro {
-                    name: before.to_string(),
+                    name: unmask_literal_spans(before, &sentinels),
                     body_ellipsis,
                 },
                 maps,
@@ -315,11 +319,14 @@ pub fn classify_call_pattern(
                     let recv_ok = !recv.is_empty() && !recv.contains('=') && !recv.contains(';');
                     let method_ok = !method.is_empty() && !method.contains(char::is_whitespace);
                     if recv_ok && method_ok {
-                        let args = classify_args(&sub[open + 1..close], table);
+                        let args = classify_args(&sub[open + 1..close], table)
+                            .into_iter()
+                            .map(|a| restore_arg(a, &sentinels))
+                            .collect();
                         return Ok((
                             ExprPatternKind::MethodCall {
-                                receiver: recv,
-                                method,
+                                receiver: unmask_literal_spans(recv.trim(), &sentinels),
+                                method: unmask_literal_spans(method.trim(), &sentinels),
                                 args,
                             },
                             maps,
@@ -339,20 +346,48 @@ pub fn classify_call_pattern(
         if let Some(close) = balanced_close(&sub, paren) {
             if is_call_trailer(&sub[close + 1..]) {
                 let callee = sub[..paren].trim().to_string();
-                if !callee.contains(char::is_whitespace) && !is_statement_keyword(&callee) {
-                    let args = classify_args(&sub[paren + 1..close], table);
-                    return Ok((ExprPatternKind::Call { callee, args }, maps, lit_strs));
+                let callee_unmasked = unmask_literal_spans(callee.trim(), &sentinels);
+                if !callee_unmasked.contains(char::is_whitespace)
+                    && !is_statement_keyword(&callee_unmasked)
+                {
+                    let args = classify_args(&sub[paren + 1..close], table)
+                        .into_iter()
+                        .map(|a| restore_arg(a, &sentinels))
+                        .collect();
+                    return Ok((
+                        ExprPatternKind::Call {
+                            callee: callee_unmasked,
+                            args,
+                        },
+                        maps,
+                        lit_strs,
+                    ));
                 }
             }
         }
     }
     Ok((
         ExprPatternKind::Raw {
-            text: normalize_trailing_commas(&sub),
+            text: normalize_trailing_commas(&unmask_literal_spans(&sub, &sentinels)),
         },
         maps,
         lit_strs,
     ))
+}
+
+/// Restore backtick-literal sentinels after classification: a bare
+/// sentinel arg is the literal itself (`Concrete`); sentinels embedded in
+/// larger concrete text unmask in place. Plain `Meta` placeholders pass
+/// through untouched.
+fn restore_arg(arg: ArgPat, sentinels: &[(String, String)]) -> ArgPat {
+    match arg {
+        ArgPat::Meta(ph) => match sentinels.iter().find(|(s, _)| *s == ph) {
+            Some((_, lit)) => ArgPat::Concrete(lit.clone()),
+            None => ArgPat::Meta(ph),
+        },
+        ArgPat::Concrete(c) => ArgPat::Concrete(unmask_literal_spans(&c, sentinels)),
+        ArgPat::Ellipsis => ArgPat::Ellipsis,
+    }
 }
 
 #[cfg(test)]
@@ -454,5 +489,42 @@ mod tests {
                 "{text:?} got: {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn backtick_literals_stay_concrete_on_call_shapes() {
+        // T162: `` `E` `` with E declared must classify as Concrete, not
+        // Meta — masking (not stripping) preserves the literal.
+        let (kind, _, _) = classify_call_pattern("foo(`E`)", &table()).unwrap();
+        let ExprPatternKind::Call { callee, args } = kind else {
+            panic!("foo(`E`) got a non-call shape");
+        };
+        assert_eq!(callee, "foo");
+        assert_eq!(args, vec![ArgPat::Concrete("E".to_string())]);
+        // Undeclared backtick names are likewise concrete.
+        let (kind, _, _) = classify_call_pattern("foo(`Q`)", &table()).unwrap();
+        let ExprPatternKind::Call { args, .. } = kind else {
+            panic!("foo(`Q`) got a non-call shape");
+        };
+        assert_eq!(args, vec![ArgPat::Concrete("Q".to_string())]);
+        // A backticked callee is a concrete callee, never a bind.
+        let (kind, _, _) = classify_call_pattern("`foo`(E)", &table()).unwrap();
+        let ExprPatternKind::Call { callee, args } = kind else {
+            panic!("`foo`(E) got a non-call shape");
+        };
+        assert_eq!(callee, "foo");
+        assert_eq!(args, vec![ArgPat::Meta("__RSMPL_E".to_string())]);
+        // Plain `foo(E)` still binds.
+        let (kind, _, _) = classify_call_pattern("foo(E)", &table()).unwrap();
+        let ExprPatternKind::Call { args, .. } = kind else {
+            panic!("foo(E) got a non-call shape");
+        };
+        assert_eq!(args, vec![ArgPat::Meta("__RSMPL_E".to_string())]);
+        // Method-call literal args stay concrete too.
+        let (kind, _, _) = classify_call_pattern("Receiver.old_method(`Arg`)", &table()).unwrap();
+        let ExprPatternKind::MethodCall { args, .. } = kind else {
+            panic!("method literal got a non-method shape");
+        };
+        assert_eq!(args, vec![ArgPat::Concrete("Arg".to_string())]);
     }
 }
