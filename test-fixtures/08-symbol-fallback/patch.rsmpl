@@ -1,7 +1,7 @@
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,4 +1,4 @@ rule=rename_symbol_calls
+@@ -1,5 +1,5 @@ rule=rename_symbol_calls
 # lang=rust
 # allow=many
 # fallback=syntax

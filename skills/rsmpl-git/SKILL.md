@@ -78,6 +78,12 @@ marker; hunks with other directives omit it (SPEC 7.1).
   hunks reject `# repeat` — emit one ordered hunk per nesting level.
 - Method-call rewrite: bind the receiver explicitly
   (`Receiver.old_method(Arg)` → `new_function(Receiver, Arg)`, SPEC 18.5).
+- Symbol rewrite: `- Old(...)` / `+ New(...)` with `# allow=many`,
+  `# fallback=syntax` (required in v0.1 — a bare `# symbol` hunk fails),
+  `# symbol Old=crate::old_api` + `# symbol New=crate::new_api`.
+  v0.1 matches the full path exactly (bare `old_api(...)` does not match
+  `crate::old_api`); for plain renames prefer `- crate::old_api(E)` /
+  `+ crate::new_api(E)` — identical matching, fewer directives (SPEC 19).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
   `const`/`static`/`mod`/`union`/`impl`), one ident edit (SPEC 14.8).
   File, inline-mod, and block-level (fn bodies) items all match.
@@ -125,7 +131,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 |---|---|
 | `RSMPL_RANGE_CONFLICT` | read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target doesn't parse / empty patch — read file, add `diff --git` |
-| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# repeat` needs a call/general-expr shape + bare spelling |
+| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# repeat` needs a call/general-expr shape + bare spelling; `# symbol` is call-shape-only (C14) |
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ nearest preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |

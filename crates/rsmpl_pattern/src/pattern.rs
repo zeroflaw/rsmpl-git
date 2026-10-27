@@ -213,6 +213,44 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             "`# returns=none` requires a function-item pattern".to_string(),
         ));
     }
+    // C14 (T24): `# symbol` is call-shape-only in v0.1. Call-callee,
+    // call-argument, and method-receiver symbols match by exact full-path
+    // text through seeded bindings (SPEC 19.3); every other shape either
+    // ignores the constraint or mis-substitutes (general-expr/let/type
+    // shapes bind anything and emit the raw name, macro names match
+    // loosely), so fail fast instead of corrupting (SPEC 2.6).
+    if !table.symbols.is_empty()
+        && !matches!(
+            kind,
+            PatternKind::Expr {
+                minus: ExprPatternKind::Call { .. } | ExprPatternKind::MethodCall { .. },
+                ..
+            }
+        )
+    {
+        let label = match &kind {
+            PatternKind::General { shape, .. } => match shape {
+                GeneralShape::Stmt => "general `let`-statement",
+                GeneralShape::Expr => "general-expression",
+                GeneralShape::Type => "general-type",
+            },
+            PatternKind::Fn { .. } => "function-item",
+            PatternKind::ImplContext { .. } => "impl-context",
+            PatternKind::Macro { .. } => "macro",
+            PatternKind::ItemRename { .. } => "item-rename",
+            PatternKind::UseRename { .. } => "use-path",
+            PatternKind::ItemCapture { .. } => "item-capture",
+            PatternKind::Insertion { .. } => "insertion",
+            PatternKind::Expr { .. } => "expression",
+            PatternKind::Raw { .. } => "expression",
+        };
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!(
+                "`# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern",
+            ),
+        ));
+    }
 
     // T20 `# repeat` folds nested matches in the call/method-call and
     // general-expression matchers; on any other shape it would be a
@@ -1292,7 +1330,7 @@ mod tests {
 
     #[test]
     fn general_coverage_diagnostics_are_pinned() {
-        // SPEC 18.6 compile-time rows (C1-C9): each unsupported shape must
+        // SPEC 18.6 compile-time rows (C1-C10): each unsupported shape must
         // fail with the exact table diagnostic, so the table cannot drift
         // from the code without a test failing.
         let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
@@ -1357,8 +1395,16 @@ mod tests {
                 ),
                 "`# returns=none` requires a function-item pattern",
             ),
+            // C14: `# symbol` in a general shape (call-shape-only even
+            // with `# fallback=syntax`, where the constraint is unenforceable).
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n"
+                ),
+                "`# symbol` is only supported in call shapes in v0.1",
+            ),
         ];
-        assert_eq!(cases.len(), 9, "SPEC 18.6 lists C1-C9 compile-time rows");
+        assert_eq!(cases.len(), 10, "SPEC 18.6 lists C1-C10 compile-time rows");
         for (patch, want) in cases {
             let err = compile(&hunk_of(&patch)).unwrap_err();
             let rendered = err.render();

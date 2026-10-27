@@ -757,13 +757,14 @@ Example:
 ```diff
 @@ -80,20 @@ rule=rename_symbol
 # allow=many
+# fallback=syntax
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
 - Old(...)
 + New(...)
 ```
 
-The engine must verify that `Old` resolves to `crate::old_api` before rewriting it.
+The engine must verify that `Old` resolves to `crate::old_api` before rewriting it. In v0.1 there is no semantic environment, so every symbol hunk needs `# fallback=syntax` (exact full-path text match, Section 19.3); without it the hunk fails with `RSMPL_SYMBOL_CONFLICT`.
 
 ### 9.6 Directive parsing
 
@@ -2446,7 +2447,8 @@ authoring instead of iterating against `--check`.
 | C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
 | C11 | `+` side writes attributes the `-` side did not match | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
 | C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
-| C13 | `# symbol` declared without `# fallback=syntax` (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Both matchers emit this spelling. |
+| C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). |
+| C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this <shape> hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` (code `RSMPL_PATTERN_CONFLICT`, suggestion `use a call-shape hunk or a concrete path pattern`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -2505,6 +2507,7 @@ This declares `Old` as a semantic symbol metavariable.
 ```diff
 @@ -80,20 @@ rule=rename_symbol_calls
 # allow=many
+# fallback=syntax
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
 - Old(...)
@@ -2513,7 +2516,7 @@ This declares `Old` as a semantic symbol metavariable.
 
 The engine must:
 
-1. find calls whose callee resolves to `crate::old_api`;
+1. find calls whose callee path text equals `crate::old_api` exactly (v0.1 syntactic fallback compares full paths; true resolution is future work);
 2. rewrite them to `crate::new_api`;
 3. avoid changing unrelated identifiers with the same spelling.
 
@@ -2537,9 +2540,9 @@ Fallback directive:
 # fallback=syntax
 ```
 
-If `fallback=syntax` is set, the engine may use syntactic matching when semantic resolution is unavailable. This is less safe and should be discouraged for important refactors.
+In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
 
-> **v0.1 implementation note:** syntactic fallback compares only the last path segment of the symbol (e.g. `crate::old_api` matches any callee whose final segment is `old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment.
+> **v0.1 implementation note:** syntactic fallback compares the full path text exactly (e.g. `crate::old_api` matches only callees spelled `crate::old_api` — not bare `old_api`, not `other::old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment. No resolver integration (rust-analyzer / cargo metadata) is planned for v0.1; revisit only with a dogfood case where exact-path matching blocks a real rename.
 
 ---
 
@@ -3329,11 +3332,18 @@ unless path abstraction is needed.
 
 ### 28.6 Use semantic symbols for real renames
 
-For cross-scope rename safety:
+For cross-scope rename safety (copy-pasteable; v0.1 matches the full path
+exactly, so prefer concrete paths — Section 19.3):
 
 ```diff
+diff --git src/lib.rs
+@@ -5,2 @@ rule=rename_symbol
+# allow=many
+# fallback=syntax
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
+- Old(...)
++ New(...)
 ```
 
 ### 28.7 Use cut/paste for moves
@@ -3447,6 +3457,7 @@ diff --git src/service.rs
 diff --git src/lib.rs
 @@ -80,20 @@ rule=rename_symbol_calls
 # allow=many
+# fallback=syntax
 # symbol Old=crate::old_api
 # symbol New=crate::new_api
 - Old(...)

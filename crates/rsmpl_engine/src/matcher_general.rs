@@ -1343,19 +1343,29 @@ mod tests {
                 reason: "replacement attributes differ from matched attributes",
                 suggestion: ATTR_SUGGESTION,
             },
-            // C13: `# symbol` without `# fallback=syntax` (general-matcher gate).
+            // C13: `# symbol` without `# fallback=syntax` (call-matcher gate; general shapes never reach it — C14 rejects them at compile).
             Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# expr E\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n",
-                file: "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
+                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# symbol Old=crate::old_api\n# expr E\n- Old(E)\n+ crate::new_api(E)\n",
+                file: "fn a() {\n    crate::old_api(1);\n}\n",
                 code: "RSMPL_SYMBOL_CONFLICT",
                 reason: "symbol `Old` could not be resolved (no semantic environment in v0.1)",
                 suggestion: Some("add `# fallback=syntax` to allow syntactic matching"),
             },
+            // C14: `# symbol` in a general shape fails even with fallback
+            // (call-shape-only, SPEC 18.6) — single symbol keeps the pin
+            // deterministic regardless of gate iteration order.
+            Row {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n",
+                file: "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
+                code: "RSMPL_PATTERN_CONFLICT",
+                reason: "only supported in call shapes",
+                suggestion: Some("use a call-shape hunk or a concrete path pattern"),
+            },
         ];
         assert_eq!(
             rows.len(),
-            12,
-            "SPEC 18.6 lists R1,R2,R4,R5 + C10-C13 runtime rows (R3 closed by T144)"
+            13,
+            "SPEC 18.6 lists R1,R2,R4,R5 + C10-C14 runtime rows (R3 closed by T144)"
         );
         for row in rows {
             let patch = format!("{head}{}", row.patch);

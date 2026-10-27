@@ -224,6 +224,23 @@ fn no_match_exits_two_with_structured_error() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
 }
+#[test]
+fn symbol_without_fallback_is_symbol_conflict() {
+    // T24: v0.1 has no semantic environment — a bare `# symbol` hunk fails
+    // fast with a repair pointer instead of silently matching syntactically.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    crate::foo(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# expr E\n- Old(E)\n+ New(E)\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_SYMBOL_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("fallback=syntax"), "got: {stderr}");
+}
 
 #[test]
 fn zero_match_reason_carries_candidate_preview_text() {
@@ -243,6 +260,33 @@ fn zero_match_reason_carries_candidate_preview_text() {
     assert!(stderr.contains("no match found"), "got: {stderr}");
     assert!(stderr.contains("nearest"), "got: {stderr}");
     assert!(stderr.contains("fn foo"), "got: {stderr}");
+}
+#[test]
+fn symbol_without_fallback_json_envelope() {
+    // T24: the gate failure is machine-readable (SPEC D.2).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    crate::foo(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# expr E\n- Old(E)\n+ New(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_SYMBOL_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(v["error"]["rule"], serde_json::json!("r"), "got: {v}");
+    assert_eq!(
+        v["error"]["file"],
+        serde_json::json!("src/lib.rs"),
+        "got: {v}"
+    );
 }
 
 #[test]
@@ -283,6 +327,27 @@ fn json_report_arrays_follow_document_order() {
         .collect();
     assert_eq!(files, vec!["src/z.rs", "src/a.rs"]);
 }
+#[test]
+fn symbol_fallback_matches_full_path() {
+    // T24: v0.1 `# fallback=syntax` is exact full-path text equality —
+    // identically-spelled callees rewrite (SPEC 19.3).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    crate::foo(1);\n    crate::foo(2);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# allow=many\n# fallback=syntax\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# expr E\n- Old(E)\n+ New(E)\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(text.contains("crate::bar(1);"), "got: {text}");
+    assert!(text.contains("crate::bar(2);"), "got: {text}");
+}
 
 #[test]
 fn empty_patch_fails_text() {
@@ -293,6 +358,43 @@ fn empty_patch_fails_text() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+}
+#[test]
+fn symbol_fallback_rejects_bare_path() {
+    // T24: exactness negative — a bare `foo(1)` call site does not match
+    // `# symbol Old=crate::foo`, so the hunk reports no match (SPEC 19.3).
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# fallback=syntax\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# expr E\n- Old(E)\n+ New(E)\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_MATCH_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("no match found"), "got: {stderr}");
+}
+#[test]
+fn symbol_in_general_shape_is_pattern_conflict() {
+    // T24/C14: `# symbol` is call-shape-only — a general-expression hunk
+    // with symbols fails at compile even with `# fallback=syntax` set.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains("only supported in call shapes"),
+        "got: {stderr}"
+    );
 }
 
 #[test]
@@ -308,6 +410,26 @@ fn empty_patch_fails_json_envelope() {
     assert_eq!(
         v["error"]["code"],
         serde_json::json!("RSMPL_PARSE_CONFLICT")
+    );
+}
+#[test]
+fn symbol_in_macro_shape_is_pattern_conflict() {
+    // T24/C14: macro names with `# symbol` fail at compile — v0.1
+    // token-tree matching is verbatim-only and never resolves symbols.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    m!(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# lang=rust\n# fallback=syntax\n# symbol Old=crate::m\n# symbol New=crate::n\n- Old!(1)\n+ New!(1)\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains("only supported in call shapes"),
+        "got: {stderr}"
     );
 }
 

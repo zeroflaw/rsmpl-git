@@ -675,8 +675,10 @@ fn build_reverse_map(compiled: &CompiledPattern) -> HashMap<String, String> {
 
 /// Match the callee path pattern against target segments. A declared
 /// metavariable binds the whole path text; a symbol name additionally requires
-/// the target's last segment to equal the symbol path's last segment
-/// (syntactic fallback approximation, SPEC 19.3).
+/// full-path text equality with the seeded symbol path (exact syntactic
+/// fallback, SPEC 19.3): symbols are pre-bound to their declared path, so
+/// only identically-spelled callees match — the last-segment gate below is
+/// subsumed by that equality check.
 fn match_callee(
     callee: &str,
     target_segments: &[String],
