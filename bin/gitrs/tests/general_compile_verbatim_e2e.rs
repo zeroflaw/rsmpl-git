@@ -1,0 +1,182 @@
+//! T306: engine-verbatim general-shape compile-time reasons (SPEC 18.6 C1–C12).
+//!
+//! SPEC 18.6 C-table already carries the exact strings, but nothing pins
+//! the text/JSON envelopes end to end. C13/C14/C15 are pinned elsewhere
+//! (symbol_shape, inert_directive). Each test below asserts both
+//! envelopes plus an untouched worktree. All failures are
+//! `RSMPL_PATTERN_CONFLICT` with `rule:` + `file:` lines; text omits the
+//! null `range:`/`suggestion:` lines (C11/C12 carry a set `suggestion:`),
+//! JSON carries explicit nulls.
+
+mod common;
+use common::*;
+
+const BASE: &str = "fn f() {\n let x = 1;\n}\n";
+const ATTR_SUGGESTION: &str = "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`";
+
+fn check(patch: &str, reason: &str, want_suggestion: bool) {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", BASE);
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains(reason), "got: {stderr}");
+    assert!(stderr.contains("rule: r"), "got: {stderr}");
+    assert!(stderr.contains("file: a.rs"), "got: {stderr}");
+    assert_eq!(
+        stderr.contains("suggestion:"),
+        want_suggestion,
+        "got: {stderr}"
+    );
+    if want_suggestion {
+        assert!(stderr.contains(ATTR_SUGGESTION), "got: {stderr}");
+    }
+    let got = read(dir.path(), "a.rs");
+    assert_eq!(got, BASE, "worktree must be untouched");
+
+    let dir = init_repo();
+    write(dir.path(), "a.rs", BASE);
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PATTERN_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(v["error"]["reason"], serde_json::json!(reason), "got: {v}");
+    assert_eq!(v["error"]["rule"], serde_json::json!("r"), "got: {v}");
+    assert_eq!(v["error"]["file"], serde_json::json!("a.rs"), "got: {v}");
+    assert!(v["error"]["range"].is_null(), "got: {v}");
+    if want_suggestion {
+        assert_eq!(
+            v["error"]["suggestion"],
+            serde_json::json!(ATTR_SUGGESTION),
+            "got: {v}"
+        );
+    } else {
+        assert!(v["error"]["suggestion"].is_null(), "got: {v}");
+    }
+    let got = read(dir.path(), "a.rs");
+    assert_eq!(got, BASE, "worktree must be untouched");
+}
+
+#[test]
+fn c1_ellipsis_in_general_shape() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n- E + ...\n+ E + 1\n",
+        "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
+        false,
+    );
+}
+
+#[test]
+fn c2_let_else_in_minus() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# pat P\n- let P = foo() else { return; };\n+ let P = foo();\n",
+        "v1 general patterns do not support `let-else` statements",
+        false,
+    );
+}
+
+#[test]
+fn c3_root_stmt_mismatch() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# root=stmt\n# expr E\n- foo(E)\n+ bar(E)\n",
+        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+        false,
+    );
+}
+
+#[test]
+fn c4_root_expr_mismatch() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# root=expr\n- let x = 1;\n+ let y = 1;\n",
+        "`# root=expr` requires a Rust expression pattern",
+        false,
+    );
+}
+
+#[test]
+fn c5_root_type_mismatch() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# root=type\n# expr E\n- foo(E)\n+ bar(E)\n",
+        "`# root=type` requires a Rust type pattern",
+        false,
+    );
+}
+
+#[test]
+fn c6_empty_plus_expression() {
+    check(
+        "diff --git a.rs\n@@ -2,1 @@ rule=r\n# expr E\n- E + 1\n",
+        "v1 expression deletion (empty `+` side) is only supported for `...;` statement shapes; match a `let` statement or write an explicit replacement",
+        false,
+    );
+}
+
+#[test]
+fn c7_empty_plus_type() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# type T\n- Vec<T>\n",
+        "v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type",
+        false,
+    );
+}
+
+#[test]
+fn c8_embedded_let_metavariable() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n- let (E, x) = foo();\n+ let (E, y) = foo();\n",
+        "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
+        false,
+    );
+}
+
+#[test]
+fn c9_returns_none_on_non_function() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# returns=none\n# expr E\n- foo(E)\n+ bar(E)\n",
+        "`# returns=none` requires a function-item pattern",
+        false,
+    );
+}
+
+#[test]
+fn c10_leading_attrs_on_non_let() {
+    check(
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n- #[inline]\n- E + 1\n+ E + 2\n",
+        "leading attributes are only supported on `let` statement patterns in v1",
+        false,
+    );
+}
+
+#[test]
+fn c11_plus_writes_unmatched_attrs() {
+    check(
+        "diff --git a.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n",
+        "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
+        true,
+    );
+}
+
+#[test]
+fn c12_attrs_differ() {
+    check(
+        "diff --git a.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[must_use]\n+ fn bar(...) {\n      ...\n  }\n",
+        "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
+        true,
+    );
+}
