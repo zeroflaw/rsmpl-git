@@ -692,7 +692,7 @@ hunks that already carry other directives omit it.
 | `# optional` | Zero matches are allowed. |
 | `# optional=true` | Equivalent to `# optional`. |
 | `# optional=false` | Zero matches are an error. Default. |
-| `# repeat` | Re-apply the same rewrite inside captured bindings, bottom-up: one hunk folds nested matches (Section 17.8). Call/method-call shapes in v0.1; `...` bodies are opaque. |
+| `# repeat` | Re-apply the same rewrite inside captured bindings, bottom-up: one hunk folds nested matches (Section 17.8). Call/method-call and general-expression shapes in v0.1; `...` bodies are opaque. |
 | `# scope=contained` | Matched AST node must be fully inside the old range. Default. |
 | `# scope=anchor` | First concrete non-ellipsis token must be inside the old range. |
 | `# scope=overlap` | Matched AST node may overlap the old range. |
@@ -2329,10 +2329,14 @@ Rules:
 - The per-rule match count is the outermost accepted sites (one edit
   each); nested folds ride the outer edit and are visible in the diff.
   `allow`/`optional` validation is unchanged.
-- In v0.1, only call/method-call shapes accept `# repeat`; any other
-  shape (function, item, general-expr/type, macro, insertion, deletion,
-  capture) is rejected with `RSMPL_PATTERN_CONFLICT` (Sections 9.6,
-  24.4). Extending repeat to other shapes is future work.
+- In v0.1, only call/method-call and general-expression shapes accept
+  `# repeat`; any other shape (function, item, `let`-statement, type,
+  macro, insertion, deletion, capture) is rejected with
+  `RSMPL_PATTERN_CONFLICT` (Sections 9.6, 24.4). `let`/type shapes mix
+  patterns, types, and initializers in one binding set, so folding an
+  expression rule inside a bound pattern or type would be surprising;
+  macro shapes stay verbatim-only by design (Section 21). Extending
+  repeat to other shapes is future work.
 
 ---
 
@@ -2953,7 +2957,7 @@ Reject if:
 4. a scalar `# bind` hunk matches more than one AST object or is combined with `# allow=many`;
 5. a rewrite would produce duplicate or invalid syntax;
 6. a move would remove a required node and fail to insert it.
-7. a `# repeat` hunk is not a call/method-call rewrite, is combined with `# bind=`/`# use=`, or has an empty minus/plus side.
+7. a `# repeat` hunk is not a call/method-call/general-expression rewrite, is combined with `# bind=`/`# use=`, or has an empty minus/plus side.
 
 ### 24.5 Ordinary Git validation
 
@@ -3017,7 +3021,7 @@ than `item/expr/stmt/type` (no silent heuristic fallthrough, Section 13.4),
 any `# identifier/# path/# lifetime/# field` metavariable declaration
 (no kind-specific binding in v0.1, Section 15.1), any `# repeat=<value>`
 (write bare `# repeat`, Section 17.8), any `# repeat` on a
-non-call/method-call shape, on a capture hunk, or with an empty
+non-call/non-general-expression shape, on a capture hunk, or with an empty
 minus/plus side (no silent no-op repeat, Sections 17.8, 24.4), any
 item-rename hunk whose minus/plus `pub…` / `unsafe` / `mut` prefixes
 differ (rename-only, no silent vis change — reason carries

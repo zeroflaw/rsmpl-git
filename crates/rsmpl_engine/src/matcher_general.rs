@@ -505,6 +505,131 @@ fn substitute_general_plus(
     Ok(out)
 }
 
+/// Backstop for `# repeat` nesting (T126: same bound as the call-matcher
+/// fold — bindings are strict sub-slices of the matched candidate, so
+/// structural descent terminates on its own; this only guards
+/// pathological spans).
+const MAX_GENERAL_REPEAT_DEPTH: usize = 64;
+
+/// T126 `# repeat`: rewrite every non-symbol binding with the same
+/// general-expression rule (bottom-up fold). Symbol seeds are pre-bound
+/// paths, not matchable fragments, so they are skipped — like the
+/// call-matcher fold in `matcher_expr`.
+fn fold_general_bindings(
+    bindings: &mut HashMap<String, String>,
+    compiled: &CompiledPattern,
+    pat_expr: &syn::Expr,
+    plus_raw: &str,
+    reverse: &HashMap<String, String>,
+    depth: usize,
+    rule: &str,
+) -> Result<(), StructuredError> {
+    if depth > MAX_GENERAL_REPEAT_DEPTH {
+        return Err(StructuredError::new(
+            ErrorCode::MatchConflict,
+            "repeat nesting exceeds 64 levels (pathological nesting?)",
+        )
+        .with_rule(rule)
+        .with_suggestion("remove `# repeat` or simplify the nesting"));
+    }
+    // Snapshot names: rewriting mutates the map.
+    let names: Vec<String> = bindings.keys().cloned().collect();
+    for name in names {
+        if compiled.table.symbols.contains_key(&name) {
+            continue;
+        }
+        if let Some(current) = bindings.get(&name).cloned() {
+            let rewritten = rewrite_nested_general(
+                &current, compiled, pat_expr, plus_raw, reverse, depth, rule,
+            )?;
+            bindings.insert(name, rewritten);
+        }
+    }
+    Ok(())
+}
+
+/// Re-apply the same general-expression rule inside one binding fragment:
+/// collect sub-expressions over the fragment, rewrite outermost-first with
+/// recursive descent into sub-bindings, and splice the result. The produced
+/// output is never re-scanned, so self-reproducing rules apply exactly one
+/// level and terminate by construction. Unparseable fragments are kept
+/// verbatim (conservative, like the call-matcher fold).
+fn rewrite_nested_general(
+    text: &str,
+    compiled: &CompiledPattern,
+    pat_expr: &syn::Expr,
+    plus_raw: &str,
+    reverse: &HashMap<String, String>,
+    depth: usize,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let expr: syn::Expr = match syn::parse_str(text) {
+        Ok(e) => e,
+        Err(_) => return Ok(text.to_string()),
+    };
+    let index = LineIndex::new(text);
+    let mut collector = Collector {
+        index: &index,
+        stmts: Vec::new(),
+        exprs: Vec::new(),
+        types: Vec::new(),
+    };
+    collector.visit_expr(&expr);
+    let mut cands = collector.exprs;
+    cands.sort_by_key(|(_, n)| (n.start, n.end));
+    // Nested fragments are sub-expressions: strip one trailing `;` so a
+    // `;`-terminated file-level pattern never injects semicolons
+    // mid-expression. File-level `had_semi` handling is untouched.
+    let trimmed = plus_raw.trim_end();
+    let nested_plus = trimmed.strip_suffix(';').unwrap_or(trimmed);
+    let mut accepted: Vec<(usize, usize)> = Vec::new();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    for (tgt, node) in &cands {
+        // Outermost-wins, like the file-level pass (SPEC 17.6).
+        if accepted
+            .iter()
+            .any(|&(s, e)| s <= node.start && node.end <= e)
+        {
+            continue;
+        }
+        let mut cx = MatchCx {
+            original: text,
+            index: &index,
+            reverse: reverse.clone(),
+            bindings: HashMap::new(),
+        };
+        if !match_expr(pat_expr, tgt, &mut cx) {
+            continue;
+        }
+        for &(s, e) in &accepted {
+            if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
+                return Err(StructuredError::new(
+                    ErrorCode::MatchConflict,
+                    "partially overlapping matches cannot be merged",
+                )
+                .with_rule(rule));
+            }
+        }
+        fold_general_bindings(
+            &mut cx.bindings,
+            compiled,
+            pat_expr,
+            plus_raw,
+            reverse,
+            depth + 1,
+            rule,
+        )?;
+        let replacement =
+            substitute_general_plus(nested_plus, &cx.bindings, compiled.table.sigiled)?;
+        edits.push(TextEdit::new(node.start, node.end, replacement));
+        accepted.push((node.start, node.end));
+    }
+    if edits.is_empty() {
+        return Ok(text.to_string());
+    }
+    crate::edits::apply_edits(text, edits)
+}
+
 /// Apply a generalized Stmt/Expr/Type hunk. Returns the match count.
 pub fn apply_general_hunk(
     parsed: &syn::File,
@@ -766,6 +891,20 @@ pub fn apply_general_hunk(
                 if !match_expr(&pat_expr, tgt, &mut cx) {
                     continue;
                 }
+                // T126 `# repeat`: fold nested matches by rewriting each
+                // bound fragment with the same rule before substitution
+                // (bottom-up, like the call-matcher fold).
+                if hunk.repeats() {
+                    fold_general_bindings(
+                        &mut cx.bindings,
+                        compiled,
+                        &pat_expr,
+                        &plus_raw,
+                        &reverse,
+                        0,
+                        &rule,
+                    )?;
+                }
                 if deleting {
                     // Only `...;` statement shapes reach here (compile-gated).
                     edits.push(delete_lines(
@@ -778,10 +917,22 @@ pub fn apply_general_hunk(
                 } else {
                     let mut replacement =
                         substitute_general_plus(&plus_raw, &cx.bindings, compiled.table.sigiled)?;
-                    if had_semi && !replacement.trim_end().ends_with(';') {
-                        replacement.push(';');
+                    let mut end = node.end;
+                    if had_semi {
+                        // The candidate span excludes the statement's `;`:
+                        // consume the original semicolon (mod whitespace) so
+                        // the replacement ends with exactly one `;`
+                        // (dogfood: `E + 1;` rewrites gave `;;`).
+                        let rest = &original[node.end..];
+                        let ws = rest.len() - rest.trim_start().len();
+                        if rest.get(ws..).is_some_and(|t| t.starts_with(';')) {
+                            end = node.end + ws + 1;
+                        }
+                        if !replacement.trim_end().ends_with(';') {
+                            replacement.push(';');
+                        }
                     }
-                    edits.push(TextEdit::new(node.start, node.end, replacement));
+                    edits.push(TextEdit::new(node.start, end, replacement));
                 }
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
@@ -957,6 +1108,63 @@ mod tests {
             out.contains("bar(1);") && out.contains("bar(2);"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn repeat_folds_nested_binary() {
+        // T126: `# repeat` folds the nested match into the outer edit for
+        // general-expression shapes. Without repeat this hunk would yield
+        // `(a + 1) + 2`; the fold rewrites the `E = (a + 1)` binding first.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=bump\n# lang=rust\n# repeat\n# allow=many\n# expr E\n- E + 1\n+ E + 2\n";
+        let src = "fn a() {\n    let v = (a + 1) + 1;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("(a + 2) + 2;"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_without_nesting_is_single_rewrite() {
+        // T126: no nesting means the fold is a no-op over the bindings.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=bump\n# lang=rust\n# repeat\n# expr E\n- E + 1\n+ E + 2\n";
+        let src = "fn a() {\n    let v = a + 1;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let v = a + 2;"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_many_folds_each_site() {
+        // T126: `allow=many` sites each fold their own nesting.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,2 +2,2 @@ rule=bump\n# lang=rust\n# repeat\n# allow=many\n# expr E\n- E + 1\n+ E + 2\n";
+        let src = "fn a() {\n    let x = (a + 1) + 1;\n    let y = b + 1;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let x = (a + 2) + 2;"), "got: {out}");
+        assert!(out.contains("let y = b + 2;"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_self_reproducing_terminates() {
+        // T126: the produced output is never re-scanned, so
+        // `E + 1` -> `(E + 1) + 1` applies exactly one level.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=dup\n# lang=rust\n# repeat\n# expr E\n- E + 1\n+ (E + 1) + 1\n";
+        let src = "fn a() {\n    let v = a + 1;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("let v = (a + 1) + 1;"), "got: {out}");
+    }
+
+    #[test]
+    fn semi_terminated_expr_keeps_single_semicolon() {
+        // T126 dogfood: `;`-terminated expression patterns doubled the
+        // semicolon (`E + 1;` gave `...;;`) because the candidate span
+        // excludes the statement's `;` while `had_semi` appended another.
+        // The edit now consumes the original `;`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,2 +2,2 @@ rule=bump\n# lang=rust\n# repeat\n# allow=many\n# expr E\n- E + 1;\n+ E.wrapping_add(1);\n";
+        let src = "fn a() {\n    let v = (a + 1) + 1;\n    let w = b + 1;\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(
+            out.contains("let v = (a.wrapping_add(1)).wrapping_add(1);"),
+            "got: {out}"
+        );
+        assert!(out.contains("let w = b.wrapping_add(1);"), "got: {out}");
+        assert!(!out.contains(";;"), "doubled semicolon: {out}");
     }
 
     #[test]

@@ -40,7 +40,7 @@ marker; hunks with other directives omit it (SPEC 7.1).
 | Directive | Meaning |
 |---|---|
 | `# allow=many` | many matches may rewrite (default `one`) |
-| `# repeat` | fold nested same-rule matches bottom-up (call shapes; name args with `# expr`, `...` bodies stay verbatim) |
+| `# repeat` | fold nested same-rule matches bottom-up (call + general-expr shapes; name args with `# expr`, `...` bodies stay verbatim) |
 | `# optional` | zero matches OK (default: error) |
 | `# scope=file` | whole-file search; dummy `@@ -1,1 @@`, no discovery |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable |
@@ -73,7 +73,9 @@ marker; hunks with other directives omit it (SPEC 7.1).
   generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
   preserved, bodies never rewritten (SPEC 14.7).
 - Call rewrite: add `# repeat` to fold nested same-rule matches in one
-  hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8).
+  hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8). General-expression
+  rewrites (`E + 1` → `E + 2`) fold the same way; `let`/type/macro
+  hunks reject `# repeat` — emit one ordered hunk per nesting level.
 - Method-call rewrite: bind the receiver explicitly
   (`Receiver.old_method(Arg)` → `new_function(Receiver, Arg)`, SPEC 18.5).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
@@ -123,7 +125,7 @@ rsmpl-git --file change.rsmpl                       # apply for real
 |---|---|
 | `RSMPL_RANGE_CONFLICT` | read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target doesn't parse / empty patch — read file, add `diff --git` |
-| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# repeat` needs a call shape + bare spelling |
+| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# repeat` needs a call/general-expr shape + bare spelling |
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ nearest preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# scope=file` + `@@ -1,1 @@`; too many — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` — fix order/names |

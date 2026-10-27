@@ -39,7 +39,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 |---|---|
 | `# lang=rust` | optional: marker for directive-free hunks; omit when other `#` lines present (SPEC 7.1) |
 | `# allow=many` | many matches may rewrite (default `one`) |
-| `# repeat` | fold nested same-rule matches bottom-up: `Box::new(Box::new(x))` → `x` in one call-rewrite hunk (SPEC 17.8; call shapes only, `...` bodies opaque) |
+| `# repeat` | fold nested same-rule matches bottom-up: `Box::new(Box::new(x))` → `x` in one call-rewrite hunk (SPEC 17.8; call + general-expr shapes, `...` bodies opaque) |
 | `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3) |
 | `# optional` | zero matches OK (default: error) |
 | `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable (SPEC 15) |
@@ -66,7 +66,8 @@ vis/generics/bodies preserved (SPEC 14.8):
 
 Call rewrite — needs `# allow=many` for multiple sites, `# optional` to
 tolerate zero (SPEC 17). Add `# repeat` to fold nested same-rule matches
-(`Box::new(Box::new(x))` → `x`, SPEC 17.8). Metavars bind once, repeats must match
+(`Box::new(Box::new(x))` → `x`, SPEC 17.8; general-expr shapes fold too,
+`let`/type/macro hunks reject it). Metavars bind once, repeats must match
 structurally (SPEC 15.7, SPEC 17.7); literal `E` needs backticks when `E`
 is declared (SPEC 15.4):
 
@@ -145,7 +146,7 @@ itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
 |---|---|
 | `RSMPL_RANGE_CONFLICT` | range exceeds file — read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target file doesn't parse as Rust — read the file; empty patch — provide a `diff --git` section (empty input is rejected, not a no-op); differing `diff --git a/old b/new` paths are a file rename — `git mv` first, then one section per path (SPEC 6) |
-| `RSMPL_PATTERN_CONFLICT` | pattern doesn't parse — check SPEC 18.6 table; unknown directive (`# foo`, `# edition`, `# format_scope`) is rejected, check SPEC 9.3; unknown header tag (anything but `rule=`) is rejected, check SPEC 8.3; unknown `# root=` (only `item/expr/stmt/type`) is rejected, check SPEC 13.4; `# identifier/# path/# lifetime/# field` is rejected, check SPEC 15.1; `# repeat` needs a call shape + bare spelling, check SPEC 17.8; item vis-prefix mismatch (`prefixes differ`) is rejected, check SPEC 14.8; `auto trait` headers rejected, check SPEC 14.8 |
+| `RSMPL_PATTERN_CONFLICT` | pattern doesn't parse — check SPEC 18.6 table; unknown directive (`# foo`, `# edition`, `# format_scope`) is rejected, check SPEC 9.3; unknown header tag (anything but `rule=`) is rejected, check SPEC 8.3; unknown `# root=` (only `item/expr/stmt/type`) is rejected, check SPEC 13.4; `# identifier/# path/# lifetime/# field` is rejected, check SPEC 15.1; `# repeat` needs a call/general-expr shape + bare spelling, check SPEC 17.8; item vis-prefix mismatch (`prefixes differ`) is rejected, check SPEC 14.8; `auto trait` headers rejected, check SPEC 14.8 |
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ nearest-candidate preview in `reason`) — read the file, then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@`; too many matches — add `# allow=many` |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without earlier `# bind=Name` — fix order/names |

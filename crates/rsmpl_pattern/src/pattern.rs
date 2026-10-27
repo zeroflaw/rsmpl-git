@@ -214,20 +214,45 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         ));
     }
 
-    // T20 `# repeat` folds nested matches in the call/method-call
-    // matchers only; on any other shape it would be a silent no-op.
+    // T20 `# repeat` folds nested matches in the call/method-call and
+    // general-expression matchers; on any other shape it would be a
+    // silent no-op. T126 extended the fold to `General::Expr`
+    // (pure-expression bindings); `let`-statement and type shapes mix
+    // patterns/types/initializers in one binding set, so folding an
+    // expression rule inside a bound *pattern* or *type* would be
+    // surprising — ordered hunks stay the path there.
     if hunk.repeats() {
-        let call_shape = matches!(
+        let repeat_shape = matches!(
             kind,
             PatternKind::Expr {
                 minus: ExprPatternKind::Call { .. } | ExprPatternKind::MethodCall { .. },
                 ..
+            } | PatternKind::General {
+                shape: GeneralShape::Expr,
+                ..
             }
         );
-        if !call_shape {
+        if !repeat_shape {
+            let reason = match &kind {
+                PatternKind::General {
+                    shape: GeneralShape::Stmt,
+                    ..
+                } => {
+                    "`# repeat` is not supported on `let`-statement patterns in v1 (folding an expression rule inside a bound pattern or type would be surprising); emit one ordered hunk per nesting level"
+                }
+                PatternKind::General {
+                    shape: GeneralShape::Type,
+                    ..
+                } => {
+                    "`# repeat` is not supported on type patterns in v1; emit one ordered hunk per nesting level"
+                }
+                _ => {
+                    "`# repeat` requires a call/method-call or general-expression rewrite pattern (other shapes are future work)"
+                }
+            };
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
-                "`# repeat` requires a call/method-call rewrite pattern (other shapes are future work)".to_string(),
+                reason.to_string(),
             ));
         }
     }
@@ -1431,30 +1456,54 @@ mod tests {
 
     #[test]
     fn repeat_non_call_shape_rejected() {
-        // T20: `# repeat` is a call/method-call feature; on any other
-        // shape it would be a silent no-op, so it fails fast (SPEC 2.6,
-        // 17.8, 24.4). Call shapes still compile. Pairs differ so the
-        // shape needle fires (not an earlier same-name error).
-        for (minus, plus) in [
-            ("struct Old", "struct New"),
-            ("let x = E;", "let y = E;"),
-            ("E + 1", "E + 2"),
-            ("mac!(E)", "mac2!(E)"),
+        // T20: `# repeat` is a call/method-call feature; T126 extended it
+        // to general-expression shapes. On any other shape it would be a
+        // silent no-op, so it fails fast (SPEC 2.6, 17.8, 24.4). Pairs
+        // differ so the shape needle fires (not an earlier same-name error).
+        for (minus, plus, needle) in [
+            (
+                "struct Old",
+                "struct New",
+                "`# repeat` requires a call/method-call or general-expression",
+            ),
+            (
+                "let x = E;",
+                "let y = E;",
+                "`# repeat` is not supported on `let`-statement patterns in v1",
+            ),
+            (
+                "mac!(E)",
+                "mac2!(E)",
+                "`# repeat` requires a call/method-call or general-expression",
+            ),
         ] {
             let patch = format!(
                 "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# repeat\n# expr E\n- {minus}\n+ {plus}\n"
             );
             // `mac!(E)` routes to the macro matcher; the rest are item /
-            // general shapes. All must reject `# repeat`.
+            // general shapes. All must reject `# repeat` with a
+            // shape-specific needle.
             let err = compile(&hunk_of(&patch)).unwrap_err();
             assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
             assert!(
-                err.render()
-                    .contains("`# repeat` requires a call/method-call"),
-                "missing needle for {minus:?}: {}",
+                err.render().contains(needle),
+                "missing needle {needle:?} for {minus:?}: {}",
                 err.render()
             );
         }
+        // Type shape rejects with its own needle (needs a `# type`
+        // declaration to reach the repeat gate).
+        let ty = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# repeat\n# type T\n- Vec<T>\n+ Box<T>\n",
+        );
+        let err = compile(&ty).unwrap_err();
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+        assert!(
+            err.render()
+                .contains("`# repeat` is not supported on type patterns in v1"),
+            "missing type needle: {}",
+            err.render()
+        );
         // Function shape (shared context lines, like `compiles_fn_rename`).
         let h = hunk_of(
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# repeat\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n",
@@ -1463,7 +1512,7 @@ mod tests {
         assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
         assert!(
             err.render()
-                .contains("`# repeat` requires a call/method-call"),
+                .contains("`# repeat` requires a call/method-call or general-expression"),
             "missing fn needle: {}",
             err.render()
         );
@@ -1471,5 +1520,10 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# repeat\n# expr E\n- foo(E)\n+ bar(E)\n",
         );
         assert!(compile(&ok).is_ok());
+        // T126: general-expression shapes accept `# repeat`.
+        let ok_expr = hunk_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# repeat\n# expr E\n- E + 1\n+ E + 2\n",
+        );
+        assert!(compile(&ok_expr).is_ok());
     }
 }
