@@ -211,8 +211,24 @@ fn parse_diff_git_header(line: &str) -> Option<(String, String)> {
 /// at a `/dev/null` create/delete half, else fail (error as before).
 pub fn split_git_paths(rest: &str) -> Option<Vec<String>> {
     let parts = split_paths(rest)?;
-    if parts.len() <= 2 {
+    if parts.len() == 1 {
         return Some(parts);
+    }
+    if parts.len() == 2 {
+        // T381: a two-part split is only a two-path header when it wears
+        // git's `a/`/`b/` (or `/dev/null`) uniform. Otherwise the whole
+        // remainder is one single-path (SPEC 6) file with a space —
+        // previously misread as a rename of the first word into the
+        // second (wrong-file hazard: `diff --git my file.rs` targeted
+        // `file.rs`). Bare two-word remainders that are not git-shaped
+        // (e.g. `diff --git foo bar`) are likewise one path — real git
+        // always emits the `a/`/`b/` uniform for pairs.
+        let old_git = parts[0].starts_with("a/") || is_dev_null(&parts[0]);
+        let new_git = parts[1].starts_with("b/") || is_dev_null(&parts[1]);
+        if old_git && new_git {
+            return Some(parts);
+        }
+        return Some(vec![rest.to_string()]);
     }
     if let Some(i) = parts.iter().position(|p| p.starts_with("b/")) {
         if i > 0 && parts[..i].join(" ").starts_with("a/") {
@@ -229,7 +245,51 @@ pub fn split_git_paths(rest: &str) -> Option<Vec<String>> {
     if is_dev_null(&parts[0]) {
         return Some(vec![parts[0].clone(), parts[1..].join(" ")]);
     }
-    None
+    // T382: the T381 rule generalized — a multi-part remainder with no
+    // git-shaped part at all (no `a/`/`b/` uniform, no `/dev/null` half)
+    // is one single path with spaces (SPEC 6). Anything claiming a git
+    // shape but malformed (e.g. `diff --git a/x y z`) still fails fast.
+    if parts
+        .iter()
+        .any(|p| p.starts_with("a/") || p.starts_with("b/") || is_dev_null(p))
+    {
+        return None;
+    }
+    Some(vec![rest.to_string()])
+}
+
+/// Collapse a `diff --git a/P b/P` header line to the single-path
+/// `diff --git P` spelling (SPEC 6 equivalence, T381) when `P` re-parses
+/// as the same target; renames, `/dev/null` halves, quoted headers, and
+/// paths whose single form would re-parse differently keep the two-path
+/// spelling (e.g. a file literally named `a/x b/y`, or `a/b` where the
+/// single form's `a/` prefix would strip to a different file).
+/// Non-header lines pass through unchanged.
+pub fn collapse_git_header(line: &str) -> String {
+    let Some(rest) = line.strip_prefix("diff --git ") else {
+        return line.to_string();
+    };
+    if rest.contains('"') || rest.contains('\'') {
+        return line.to_string();
+    }
+    let parts = match split_git_paths(rest) {
+        Some(p) if p.len() == 2 => p,
+        _ => return line.to_string(),
+    };
+    if is_dev_null(&parts[0]) || is_dev_null(&parts[1]) {
+        return line.to_string();
+    }
+    let old = strip_ab_prefix(&parts[0]);
+    if old != strip_ab_prefix(&parts[1]) || is_dev_null(&old) {
+        return line.to_string();
+    }
+    // Round-trip guard: the single form must parse back to the same
+    // file (same split, non-rename, same target).
+    let single = format!("diff --git {old}");
+    match parse_diff_git_header(&single) {
+        Some((o, n)) if o == n && target_path(&n, &o) == old => single,
+        _ => line.to_string(),
+    }
 }
 
 fn is_dev_null(p: &str) -> bool {
@@ -1392,6 +1452,78 @@ mod tests {
         assert_eq!(p.files[0].target_path, "other file.txt");
         // Garbage with no valid split still fails fast.
         assert!(parse_diff_git_header("diff --git a/x y z").is_none());
+    }
+
+    #[test]
+    fn single_path_with_space_parses_as_one_path() {
+        // T381: `diff --git my file.rs` is the single-path (SPEC 6)
+        // spelling of one file with a space — not a rename of `my`
+        // into `file.rs` (wrong-file hazard: the old split targeted
+        // `file.rs`). Bare two-word remainders that are not git-shaped
+        // (e.g. `diff --git foo bar`) are likewise one path.
+        let p = parse_patch(
+            "diff --git my file.rs\n--- a/my file.rs\n+++ b/my file.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+        )
+        .unwrap();
+        assert_eq!(p.files[0].target_path, "my file.rs");
+        assert!(!p.files[0].is_rename());
+        let (old, new) = parse_diff_git_header("diff --git foo bar").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("foo bar", "foo bar"));
+        // Genuinely git-shaped pairs still split in two.
+        let (old, new) = parse_diff_git_header("diff --git a/x b/y").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("a/x", "b/y"));
+    }
+
+    #[test]
+    fn multi_word_single_path_without_git_shape_parses() {
+        // T382: the T381 rule generalized — three or more words with no
+        // git-shaped part (`a/`/`b/`/`/dev/null`) are one single path.
+        // Anything claiming a git shape but malformed still fails fast.
+        let (old, new) = parse_diff_git_header("diff --git my weird file.rs").unwrap();
+        assert_eq!(old.as_str(), "my weird file.rs");
+        assert_eq!(new.as_str(), "my weird file.rs");
+        assert!(parse_diff_git_header("diff --git a/x y z").is_none());
+        assert!(parse_diff_git_header("diff --git x b/y z").is_none());
+    }
+
+    #[test]
+    fn collapse_git_header_keeps_only_round_trippable_singles() {
+        // T381: `a/P b/P` collapses to `diff --git P` only when `P`
+        // re-parses as the same file.
+        assert_eq!(
+            collapse_git_header("diff --git a/f.rs b/f.rs"),
+            "diff --git f.rs"
+        );
+        assert_eq!(
+            collapse_git_header("diff --git a/my file.rs b/my file.rs"),
+            "diff --git my file.rs"
+        );
+        // Renames, creates/deletes, quotes, and already-single or
+        // non-header lines pass through.
+        assert_eq!(
+            collapse_git_header("diff --git a/old.rs b/new.rs"),
+            "diff --git a/old.rs b/new.rs"
+        );
+        assert_eq!(
+            collapse_git_header("diff --git /dev/null b/new.rs"),
+            "diff --git /dev/null b/new.rs"
+        );
+        assert_eq!(
+            collapse_git_header("diff --git \"a/q f.rs\" \"b/q f.rs\""),
+            "diff --git \"a/q f.rs\" \"b/q f.rs\""
+        );
+        assert_eq!(collapse_git_header("diff --git f.rs"), "diff --git f.rs");
+        assert_eq!(collapse_git_header("--- a/f.rs"), "--- a/f.rs");
+        // A file literally named `a/x b/y` would re-parse as a rename;
+        // a file named `a/b` would strip to `b` — both keep two-path.
+        assert_eq!(
+            collapse_git_header("diff --git a/a/x b/y b/a/x b/y"),
+            "diff --git a/a/x b/y b/a/x b/y"
+        );
+        assert_eq!(
+            collapse_git_header("diff --git a/a/b b/a/b"),
+            "diff --git a/a/b b/a/b"
+        );
     }
 
     #[test]

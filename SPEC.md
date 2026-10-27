@@ -371,6 +371,9 @@ sections and rewrite old-side content. `/dev/null` halves stay the create/delete
 Paths may be quoted; unquoted paths may contain spaces (real git never
 quotes spaces) — the header splits at the first `b/`-led part, or at a
 `/dev/null` half, else it fails to parse (T379).
+A two-part remainder that wears neither git's `a/`/`b/` uniform nor a
+`/dev/null` half is one single path with a space (SPEC 6 single-path form,
+T381) — never a rename of the first word into the second.
 Repeated sections for one path are allowed and share original coordinates (Section 10): every `-old,len` cites the pre-patch file, never rebased by earlier sections or hunks.
 
 Example:
@@ -5762,6 +5765,11 @@ output, never lowering inputs). Git's trailing
 headers admit only `rule=` tags, Section 8.3; `git apply` likewise
 ignores them), as are `index <sha>…` lines (optional file metadata
 that `applyrs` parses but the lowering never reproduces — T374).
+Two-path `diff --git a/P b/P` headers collapse to single-path
+`diff --git P` (SPEC 6 equivalence, T381 — 6 + len(P) bytes saved per
+section); renames, `/dev/null` halves, and quoted headers keep
+two-path, and `---`/`+++` markers stay (bare `git apply` rejects
+stripped markers).
 
 Inference v1 is pure: a file section whose every pair shares one
 shape is fully replaced by one semantic hunk (this preserves

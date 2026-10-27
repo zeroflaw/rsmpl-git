@@ -302,7 +302,10 @@ fn try_item_rename(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let mut hunk = format!("diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# scope=file\n");
+    let mut hunk = format!(
+        "{header}\n@@ -1,1 @@ rule={rule}\n# scope=file\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+    );
     if old_kind == "fn" {
         // Plain top-level fns only: the canonical `fn Old(...)`
         // pattern matches nothing else (SPEC 14.1), and generics /
@@ -451,7 +454,8 @@ fn try_fn_slot_sweep(
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
     let mut hunk = format!(
-        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n"
+        "{header}\n@@ -1,1 @@ rule={rule}\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
     );
     if all_indented {
         hunk.push_str(&format!(
@@ -575,7 +579,8 @@ fn try_method_to_fn_sweep(
     let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
     let mut hunk = format!(
-        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n"
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
     );
     let mut vars = Vec::new();
     for i in 0..arity {
@@ -691,7 +696,8 @@ fn try_method_to_method_sweep(
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
     let mut hunk = format!(
-        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n"
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
     );
     let mut vars = Vec::new();
     for i in 0..arity {
@@ -799,7 +805,8 @@ fn try_ref_method_strip_sweep(
     let (method, args) = (method?, args?);
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
     let mut hunk = format!(
-        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n"
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
     );
     hunk.push_str(&format!(
         "- &Receiver.{method}({})\n+ Receiver\n",
@@ -966,7 +973,8 @@ fn try_use_prefix_sweep(
         &format!("use_{}_to_{}", old_prefix[k - 1], new_prefix[k - 1]),
     );
     let mut hunk = format!(
-        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n"
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
     );
     hunk.push_str(&format!(
         "- use {}\n+ use {}\n",
@@ -1073,7 +1081,8 @@ fn try_call_sweep(
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     let mut hunk = format!(
-        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n"
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
     );
     let mut vars = Vec::new();
     for i in 0..arity {
@@ -1230,7 +1239,8 @@ mod tests {
         let raw = "diff --git a/my file.rs b/my file.rs\n--- a/my file.rs\n+++ b/my file.rs\n@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n";
         let out = infer_semantic(&[raw.to_string()]).expect("must compress");
         validated(&out);
-        assert!(out.contains("diff --git a/my file.rs b/my file.rs"), "got: {out}");
+        assert!(out.contains("diff --git my file.rs\n"), "got: {out}");
+        assert!(!out.contains("diff --git a/"), "got: {out}");
         assert!(out.contains("- fn foo(...) {"), "got: {out}");
     }
 

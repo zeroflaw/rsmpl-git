@@ -104,7 +104,8 @@ fn unstaged_edit_round_trips_through_applyrs() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("diff --git a/src/lib.rs b/src/lib.rs"));
+    assert!(patch.contains("diff --git src/lib.rs"));
+    assert!(!patch.contains("diff --git a/"));
     assert!(patch.contains("+fn bar() {}"));
 
     // Back to the pre-change tree: the captured patch must check clean.
@@ -128,7 +129,8 @@ fn untracked_new_file_round_trips_through_applyrs() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("diff --git a/src/new.rs b/src/new.rs"));
+    assert!(patch.contains("diff --git src/new.rs"));
+    assert!(!patch.contains("diff --git a/"));
     assert!(patch.contains("new file mode"));
     assert!(patch.contains("+fn brand_new() {}"));
 
@@ -165,6 +167,8 @@ fn index_lines_are_stripped_from_passthrough() {
         "got: {patch}"
     );
     assert!(patch.contains("--- a/src/lib.rs"), "got: {patch}");
+    assert!(patch.contains("diff --git src/lib.rs\n"), "got: {patch}");
+    assert!(!patch.contains("diff --git a/"), "got: {patch}");
 
     // Back to the pre-change tree: the captured patch must check clean.
     git(dir.path(), &["stash", "-q"]);
@@ -807,10 +811,7 @@ fn history_dir_untracked_is_skipped_with_warning() {
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        patch.contains("diff --git a/new.txt b/new.txt"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("diff --git new.txt"), "got: {patch}");
     assert!(!patch.contains(".history"), "history embedded: {patch}");
     assert!(stderr.contains("warning: .history/"), "got: {stderr}");
 
@@ -843,10 +844,7 @@ fn untracked_symlink_converts_as_120000_and_round_trips() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        patch.contains("diff --git a/link.txt b/link.txt"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("diff --git link.txt"), "got: {patch}");
     assert!(patch.contains("new file mode 120000"), "got: {patch}");
     assert!(patch.contains("+real.txt"), "got: {patch}");
 
@@ -880,15 +878,9 @@ fn dangling_untracked_symlink_converts() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        patch.contains("diff --git a/dangle.txt b/dangle.txt"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("diff --git dangle.txt"), "got: {patch}");
     assert!(patch.contains("+missing-target"), "got: {patch}");
-    assert!(
-        patch.contains("diff --git a/dirlink b/dirlink"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("diff --git dirlink"), "got: {patch}");
 }
 
 // T363: an N-site use-path prefix rename (`use <parent>::Old::<tail>`
@@ -976,10 +968,7 @@ fn empty_untracked_converts_to_headers_only_and_checks_clean() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        patch.contains("diff --git a/empty.txt b/empty.txt"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("diff --git empty.txt"), "got: {patch}");
     assert!(patch.contains("new file mode 100644"), "got: {patch}");
     assert!(
         !patch.contains("@@"),
@@ -1095,7 +1084,7 @@ fn untracked_binary_is_stripped_with_warning() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("diff --git a/a.txt b/a.txt"), "got: {patch}");
+    assert!(patch.contains("diff --git a.txt"), "got: {patch}");
     assert!(!patch.contains("new.bin"), "binary embedded: {patch}");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("new.bin"), "got: {stderr}");
@@ -1128,10 +1117,49 @@ fn space_path_converts_and_round_trips() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        patch.contains("diff --git a/my file.txt b/my file.txt"),
-        "got: {patch}"
+    assert!(patch.contains("diff --git my file.txt"), "got: {patch}");
+    assert!(!patch.contains("diff --git a/"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
     );
+}
+
+#[test]
+fn space_path_rs_rename_uses_single_header_and_round_trips() {
+    // T381: a space-path `.rs` rename-shaped edit compresses (the T380
+    // shape) with a single-path header and round-trips through applyrs
+    // — the single form resolves to the whole path, not the last word.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "my file.rs",
+        "fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n    1\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "my file.rs",
+        "fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n    1\n}\n",
+    );
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git my file.rs\n"), "got: {patch}");
+    assert!(!patch.contains("diff --git a/"), "got: {patch}");
+    assert!(patch.contains("- fn foo(...) {"), "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);
@@ -1210,7 +1238,8 @@ fn tracked_binary_modify_alongside_text_strips_with_warning() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("diff --git a/a.rs b/a.rs"), "got: {patch}");
+    assert!(patch.contains("diff --git a.rs"), "got: {patch}");
+    assert!(!patch.contains("diff --git a/"), "got: {patch}");
     assert!(!patch.contains("img.bin"), "binary embedded: {patch}");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("img.bin"), "got: {stderr}");
@@ -1335,10 +1364,7 @@ fn live_symlink_retarget_round_trips() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        patch.contains("diff --git a/link.txt b/link.txt"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("diff --git link.txt"), "got: {patch}");
     assert!(!patch.contains("file mode"), "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);

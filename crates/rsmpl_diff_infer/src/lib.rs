@@ -63,12 +63,16 @@ pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
     // present in native diffs) lines are left alone. `index <sha>…`
     // lines go too (T374): `applyrs` parses them as optional file
     // metadata and the lowering never reproduces them, so they are
-    // pure overhead in ordinary passthrough. Mode lines (`new/deleted
-    // file mode`, `old/new mode`) stay — they feed the create/delete
-    // flags and the mode splice.
+    // pure overhead in ordinary passthrough. Two-path `diff --git a/P
+    // b/P` headers collapse to single-path `diff --git P` (SPEC 6
+    // equivalence, T381 — 6 + len(P) bytes saved per section; renames
+    // and quoted headers keep two-path, `---`/`+++` markers stay for
+    // bare-`git apply` compat). Mode lines (`new/deleted file mode`,
+    // `old/new mode`) stay — they feed the create/delete flags and the
+    // mode splice.
     let kept: Vec<String> = kept
         .iter()
-        .map(|s| strip_index_lines(&strip_hunk_titles(s)))
+        .map(|s| collapse_git_headers(&strip_index_lines(&strip_hunk_titles(s))))
         .collect();
     let passthrough = kept.join("");
     rsmpl_patch::parse_patch(&passthrough)
@@ -216,13 +220,29 @@ fn strip_index_lines(section: &str) -> String {
     out
 }
 
+/// Collapse the section's `diff --git` header to single-path (T381).
+/// Only the header line is rewritten (`---`/`+++` markers stay);
+/// rename, `/dev/null`, and quoted headers pass through via
+/// `rsmpl_patch::collapse_git_header`.
+fn collapse_git_headers(section: &str) -> String {
+    let mut out = String::new();
+    for line in section.lines() {
+        if line.starts_with("diff --git ") {
+            out.push_str(&rsmpl_patch::collapse_git_header(line));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const TEXT_SECTION: &str = "diff --git a/f.rs b/f.rs\nindex 1..2 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
-    const TEXT_STRIPPED: &str =
-        "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
+    const TEXT_STRIPPED: &str = "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
     const BINARY_SECTION: &str = "diff --git a/img.bin b/img.bin\nindex 1..2 100644\nBinary files a/img.bin and b/img.bin differ\n";
 
     #[test]
@@ -300,5 +320,35 @@ mod tests {
         );
         assert!(out.rsmpl.contains("+fn n() {}\n"), "got: {}", out.rsmpl);
         rsmpl_patch::parse_patch(&out.rsmpl).expect("stripped patch must parse");
+    }
+
+    #[test]
+    fn section_headers_collapse_to_single_path() {
+        // T381: two-path `diff --git a/P b/P` headers collapse to
+        // single-path `diff --git P` (SPEC 6); `---`/`+++` markers
+        // stay (bare `git apply` needs them), renames and creates
+        // keep their two-path shape.
+        let out = infer_rsmpl(TEXT_SECTION).unwrap();
+        assert!(
+            out.rsmpl.contains("diff --git f.rs\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(!out.rsmpl.contains("diff --git a/"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("--- a/f.rs\n"), "got: {}", out.rsmpl);
+        let rename = "diff --git a/old.rs b/new.rs\nsimilarity index 89%\nrename from old.rs\nrename to new.rs\n--- a/old.rs\n+++ b/new.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n";
+        let out = infer_rsmpl(rename).unwrap();
+        assert!(
+            out.rsmpl.contains("diff --git a/old.rs b/new.rs\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        let create = "diff --git /dev/null b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\n@@ -0,0 +1,1 @@\n+n\n";
+        let out = infer_rsmpl(create).unwrap();
+        assert!(
+            out.rsmpl.contains("diff --git /dev/null b/new.rs\n"),
+            "got: {}",
+            out.rsmpl
+        );
     }
 }
