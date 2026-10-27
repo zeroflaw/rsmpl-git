@@ -5,6 +5,7 @@
 //! 17.6). Rewrites preserve formatting by reusing original source slices for
 //! captured metavariables.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use syn::spanned::Spanned;
@@ -571,8 +572,9 @@ pub fn apply_expr_hunk(
     collector.visit_file(parsed);
     let mut cands = collector.out;
     // Preorder (outer first) + source order: syn Visit is already preorder,
-    // but sort defensively by byte offset.
-    cands.sort_by_key(|c| (c.start, c.end));
+    // but sort defensively by byte offset, longest-first on a shared start
+    // (T167: receiver nesting shares the start; mirrors T143).
+    cands.sort_by_key(|c| (c.start, Reverse(c.end)));
 
     let reverse_map: HashMap<String, String> = build_reverse_map(compiled);
 
@@ -794,7 +796,8 @@ fn rewrite_nested(
     };
     collector.visit_expr(&expr);
     let mut cands = collector.out;
-    cands.sort_by_key(|c| (c.start, c.end));
+    // Longest-first on a shared start (T167, same as the file-level pass).
+    cands.sort_by_key(|c| (c.start, Reverse(c.end)));
     let mut accepted: Vec<(usize, usize)> = Vec::new();
     let mut edits: Vec<TextEdit> = Vec::new();
     for cand in &cands {
@@ -1179,6 +1182,25 @@ mod tests {
         let src = "fn a() {\n    client.old_method(x);\n}\n";
         let out = apply(patch, src).unwrap();
         assert!(out.contains("new_function(client, x);"));
+    }
+
+    #[test]
+    fn method_receiver_nesting_outer_wins() {
+        // T167: receiver nesting shares the candidate start offset, so
+        // longest-first order accepts the outer match (mirrors T143).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=m\n# lang=rust\n# allow=many\n# expr R\n- R.to_string()\n+ R.to_owned()\n";
+        let src = "fn a() {\n    let s = x.to_string().to_string();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("x.to_string().to_owned()"), "got: {out}");
+    }
+
+    #[test]
+    fn method_receiver_nesting_repeat_folds() {
+        // T167: `# repeat` folds receiver nesting bottom-up.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=m\n# lang=rust\n# repeat\n# allow=many\n# expr R\n- R.to_string()\n+ R.to_owned()\n";
+        let src = "fn a() {\n    let s = x.to_string().to_string();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("x.to_owned().to_owned()"), "got: {out}");
     }
 
     #[test]
