@@ -745,3 +745,70 @@ fn history_dir_untracked_is_skipped_with_warning() {
         String::from_utf8_lossy(&checked.stderr)
     );
 }
+
+// T354: an untracked symlink converts as a 120000 new-file section
+// carrying the link-target string (never followed), and round-trips
+// through `applyrs --check`. Unix-only: `std::os::unix::fs::symlink`.
+#[cfg(unix)]
+#[test]
+fn untracked_symlink_converts_as_120000_and_round_trips() {
+    let dir = init_repo();
+    write(dir.path(), "real.txt", "real\n");
+    commit_all(dir.path());
+    std::os::unix::fs::symlink("real.txt", dir.path().join("link.txt")).unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        patch.contains("diff --git a/link.txt b/link.txt"),
+        "got: {patch}"
+    );
+    assert!(patch.contains("new file mode 120000"), "got: {patch}");
+    assert!(patch.contains("+real.txt"), "got: {patch}");
+
+    std::fs::remove_file(dir.path().join("link.txt")).unwrap();
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+// T354: a dangling untracked symlink (target missing) converts instead
+// of failing with `SourceError` (exit 2) — `read_link` never follows.
+// A link-to-dir shares the same `read_link` path (EISDIR avoided).
+#[cfg(unix)]
+#[test]
+fn dangling_untracked_symlink_converts() {
+    let dir = init_repo();
+    write(dir.path(), "base.txt", "base\n");
+    commit_all(dir.path());
+    std::os::unix::fs::symlink("missing-target", dir.path().join("dangle.txt")).unwrap();
+    std::os::unix::fs::symlink(".", dir.path().join("dirlink")).unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        patch.contains("diff --git a/dangle.txt b/dangle.txt"),
+        "got: {patch}"
+    );
+    assert!(patch.contains("+missing-target"), "got: {patch}");
+    assert!(
+        patch.contains("diff --git a/dirlink b/dirlink"),
+        "got: {patch}"
+    );
+}

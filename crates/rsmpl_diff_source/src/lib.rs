@@ -90,11 +90,29 @@ impl GitSource {
             untracked.into_iter().partition(|p| !is_history_path(p));
         let skipped_history = !skipped.is_empty();
         for path in &untracked {
-            let content =
-                std::fs::read(self.repo.join(path)).map_err(|e| SourceError::Untracked {
-                    path: path.clone(),
-                    inner: e.to_string(),
-                })?;
+            let abs = self.repo.join(path);
+            // Read the link itself, never follow it (T354, mirrors the
+            // T353 applyrs read side): a dangling symlink would fail
+            // `std::fs::read` with `SourceError` (exit 2) and a
+            // link-to-dir with EISDIR; `read_link` serves both.
+            let (content, symlink) = match std::fs::symlink_metadata(&abs) {
+                Ok(md) if md.file_type().is_symlink() => match std::fs::read_link(&abs) {
+                    Ok(target) => (target.to_string_lossy().into_owned().into_bytes(), true),
+                    Err(e) => {
+                        return Err(SourceError::Untracked {
+                            path: path.clone(),
+                            inner: e.to_string(),
+                        });
+                    }
+                },
+                _ => (
+                    std::fs::read(&abs).map_err(|e| SourceError::Untracked {
+                        path: path.clone(),
+                        inner: e.to_string(),
+                    })?,
+                    false,
+                ),
+            };
             // Binary untracked files are skipped here; the infer stage
             // strips binary hunks with a warning, and raw bytes cannot
             // ride a UTF-8 patch.
@@ -102,7 +120,7 @@ impl GitSource {
                 continue;
             }
             let text = String::from_utf8_lossy(&content);
-            raw.push_str(&new_file_section(path, &text));
+            raw.push_str(&new_file_section(path, &text, symlink));
         }
 
         let mut files = files_in_diff(&raw);
@@ -150,9 +168,12 @@ fn is_history_path(path: &str) -> bool {
 }
 
 /// A new-file ordinary section for untracked `path` with `content`.
-fn new_file_section(path: &str, content: &str) -> String {
+/// Symlinks emit `new file mode 120000` with the link-target string
+/// as content (exactly what `git diff` shows for a staged symlink).
+fn new_file_section(path: &str, content: &str, symlink: bool) -> String {
+    let mode = if symlink { "120000" } else { "100644" };
     let mut section = format!(
-        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+        "diff --git a/{path} b/{path}\nnew file mode {mode}\n--- /dev/null\n+++ b/{path}\n"
     );
     let line_count = content.lines().count();
     section.push_str(&format!("@@ -0,0 +1,{line_count} @@\n"));
@@ -204,7 +225,7 @@ mod tests {
 
     #[test]
     fn new_file_section_shape() {
-        let section = new_file_section("src/new.rs", "fn n() {}\n");
+        let section = new_file_section("src/new.rs", "fn n() {}\n", false);
         assert!(section.starts_with("diff --git a/src/new.rs b/src/new.rs\n"));
         assert!(section.contains("new file mode 100644\n"));
         assert!(section.contains("--- /dev/null\n"));
@@ -213,8 +234,18 @@ mod tests {
     }
 
     #[test]
+    fn new_file_section_symlink_mode() {
+        // Link-target strings carry no trailing newline, so the
+        // section reproduces git's exact shape (`+target` + marker).
+        let section = new_file_section("link.txt", "real.txt", true);
+        assert!(section.contains("new file mode 120000\n"));
+        assert!(section.contains("+real.txt\n"));
+        assert!(section.contains("\\ No newline at end of file\n"));
+    }
+
+    #[test]
     fn new_file_section_marks_missing_trailing_newline() {
-        let section = new_file_section("x.txt", "no-newline");
+        let section = new_file_section("x.txt", "no-newline", false);
         assert!(section.contains("\\ No newline at end of file\n"));
     }
 

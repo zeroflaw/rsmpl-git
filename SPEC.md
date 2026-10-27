@@ -5698,7 +5698,9 @@ what changed. Minimal surface, same philosophy as `applyrs`:
 `[rev]` forwarded to `git diff [rev]` (e.g. `HEAD~1` for history).
 
 Collection: unstaged worktree-vs-index plus untracked files (emitted
-as new-file ordinary sections, since `git diff` never shows them);
+as new-file ordinary sections, since `git diff` never shows them;
+untracked symlinks read as their link-target string, never followed,
+with `new file mode 120000`);
 `--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
 same mechanism. `git diff` runs with `--no-color --no-ext-diff
 --no-renames --unified=0`: rename detection stays off because RSmPL-Git v0.1
