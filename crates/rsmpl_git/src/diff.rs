@@ -34,22 +34,25 @@ pub fn unified_diff_for_file_with_context(
 
 /// Build a `diff --git` section for a newly created file.
 ///
-/// Emits `new file mode 100644` + `--- /dev/null` headers so the lowered
-/// patch applies with a bare `git apply` (SPEC 27.6). Callers must only
-/// use this when the target did not exist before the patch; an
+/// Emits `new file mode {mode}` + `--- /dev/null` headers so the
+/// lowered patch applies with a bare `git apply` (SPEC 27.6).
+/// Callers pass the input section's declared mode (`100644`
+/// default; `120000` for symlink creates — T355); only use this
+/// when the target did not exist before the patch; an
 /// existing-but-empty file keeps the ordinary `--- a/…` headers.
 /// Returns `None` when `new` is empty (no changes, nothing to create).
 pub fn unified_diff_for_new_file_with_context(
     path: &str,
     new: &str,
     context: usize,
+    mode: &str,
 ) -> Option<String> {
     if new.is_empty() {
         return None;
     }
     let mut out = String::new();
     out.push_str(&format!("diff --git a/{path} b/{path}\n"));
-    out.push_str("new file mode 100644\n");
+    out.push_str(&format!("new file mode {mode}\n"));
     out.push_str("--- /dev/null\n");
     out.push_str(&format!("+++ b/{path}\n"));
     let diff = similar::TextDiff::from_lines("", new);
@@ -219,7 +222,8 @@ mod tests {
     fn new_file_section_uses_dev_null_headers() {
         // T98/T125: created files lower with `new file mode` so a bare
         // `git apply` creates them (plain `--- a/…` fails instead).
-        let d = unified_diff_for_new_file_with_context("src/new.rs", "use x;\n", 3).unwrap();
+        let d =
+            unified_diff_for_new_file_with_context("src/new.rs", "use x;\n", 3, "100644").unwrap();
         assert!(d.contains("new file mode"), "got: {d}");
         assert!(d.contains("--- /dev/null"), "got: {d}");
         assert!(d.contains("+++ b/src/new.rs"), "got: {d}");
@@ -229,7 +233,7 @@ mod tests {
 
     #[test]
     fn new_file_empty_returns_none() {
-        assert!(unified_diff_for_new_file_with_context("x", "", 3).is_none());
+        assert!(unified_diff_for_new_file_with_context("x", "", 3, "100644").is_none());
     }
 
     #[test]
@@ -256,6 +260,18 @@ mod tests {
         // deletes lower as 120000 (100644 fails `wrong type`).
         let d = unified_diff_for_deleted_file_with_context("link", "target\n", 0, true).unwrap();
         assert!(d.contains("deleted file mode 120000"), "got: {d}");
+        assert!(!d.contains("100644"), "got: {d}");
+    }
+
+    #[test]
+    fn new_symlink_section_uses_120000_and_no_newline_marker() {
+        // T355: symlink creates lower as 120000 with the link-target
+        // string (no trailing newline), matching `git diff` for a
+        // staged symlink (T354).
+        let d = unified_diff_for_new_file_with_context("link", "real.txt", 0, "120000").unwrap();
+        assert!(d.contains("new file mode 120000"), "got: {d}");
+        assert!(d.contains("+real.txt"), "got: {d}");
+        assert!(d.contains("No newline at end of file"), "got: {d}");
         assert!(!d.contains("100644"), "got: {d}");
     }
 }

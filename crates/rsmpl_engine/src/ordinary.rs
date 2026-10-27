@@ -135,6 +135,15 @@ pub fn ordinary_hunk_edits(
         }
         i += 1;
     }
+    // `\ No newline at end of file` on the new side (T355): a trailing
+    // marker after insertions means the new content ends without `\n`
+    // (symlink targets are newline-free link strings). The `+` arm
+    // above always appends `\n`, so strip the one it added. Pending
+    // content here implies the hunk tail is insertions (context lines
+    // flush), so the marker annotates new-side content.
+    if body.last().is_some_and(|bl| bl.prefix == '\\') && pending_insert.ends_with('\n') {
+        pending_insert.pop();
+    }
     flush(
         &mut edits,
         &mut del_start,
@@ -178,5 +187,32 @@ mod tests {
         );
         let idx = LineIndex::new(src);
         assert!(ordinary_hunk_edits(&idx, src, &h).is_err());
+    }
+
+    #[test]
+    fn preserves_missing_trailing_newline_on_create() {
+        // T355: symlink creates are newline-free link strings; the
+        // `\ No newline` marker must survive instead of gaining `\n`.
+        let src = "";
+        let h = ordinary_of(
+            "diff --git a/link b/link\n--- /dev/null\n+++ b/link\n@@ -0,0 +1,1 @@\n+real.txt\n\\ No newline at end of file\n",
+        );
+        let idx = LineIndex::new(src);
+        let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
+        let out = crate::edits::apply_edits(src, edits).unwrap();
+        assert_eq!(out, "real.txt");
+    }
+
+    #[test]
+    fn preserves_missing_trailing_newline_on_retarget() {
+        // T355: retargeting a symlink must not append `\n` to the target.
+        let src = "real.txt";
+        let h = ordinary_of(
+            "diff --git a/link b/link\n--- a/link\n+++ b/link\n@@ -1,1 +1,1 @@\n-real.txt\n\\ No newline at end of file\n+other.txt\n\\ No newline at end of file\n",
+        );
+        let idx = LineIndex::new(src);
+        let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
+        let out = crate::edits::apply_edits(src, edits).unwrap();
+        assert_eq!(out, "other.txt");
     }
 }

@@ -269,7 +269,21 @@ fn run() -> Result<(), CliError> {
         // removes them instead of truncating (T350); an ordinary
         // all-minus hunk truncates and keeps the file.
         let section = if is_new.contains(rel) {
-            rsmpl_git::unified_diff_for_new_file_with_context(rel, new, 0)
+            // Honor the author's declared `new file mode` (T355):
+            // `diffrs` emits `120000` for symlink creates; anything
+            // else (or absent) stays the `100644` default.
+            let mode = patch
+                .files
+                .iter()
+                .find(|s| s.target_path == *rel)
+                .and_then(|s| {
+                    s.metadata
+                        .iter()
+                        .find_map(|m| m.strip_prefix("new file mode "))
+                })
+                .filter(|m| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit()))
+                .unwrap_or("100644");
+            rsmpl_git::unified_diff_for_new_file_with_context(rel, new, 0, mode)
         } else if patch
             .files
             .iter()

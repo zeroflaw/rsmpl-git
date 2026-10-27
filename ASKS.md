@@ -23,3 +23,9 @@ Promote to TASKS.md when they earn it; keep this list short.
   exceeds the shell's inline-arg limit (`Argument list too long` via
   `--patch "$(…)"`) — large patches must go through `--file`
   (already the documented path). Not filed — no tool change.
+- Ordinary-hunk authoring sharp edge (T355 dogfood): a wrong
+  `-old,len`/`+new,len` count fails as `GIT_HUNK_CONFLICT`
+  (content mismatch) rather than flagging the header/body length
+  inconsistency. A count-vs-body validation with a precise error
+  would save authoring rounds. Not filed — needs a weigh-up
+  against parser minimality.

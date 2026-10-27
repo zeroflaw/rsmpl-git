@@ -4579,7 +4579,10 @@ all `warning:` lines live (see D.2.3). Created files lower with
 diff applies with a bare `git apply`; deleted files mirror it with
 `deleted file mode 100644` + `+++ /dev/null` headers (T350) —
 `120000` when the target is a symlink, whose content reads as its
-target string, never followed (T353).
+target string, never followed (T353). Creates honor the input
+section's declared `new file mode` (`100644` default, `120000` for
+symlink creates); ordinary hunks preserve a missing trailing
+newline instead of appending one (T355).
 `--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
 local artifact, not repo content. File renames are not a containment

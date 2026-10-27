@@ -17,6 +17,8 @@ use std::os::unix::fs::symlink;
 
 const LINK_TO_DIR_PATCH: &str = "diff --git gone\n--- a/gone\n+++ /dev/null\n@@ -1,1 +1,0 @@\n-real\n\\ No newline at end of file\n";
 const LINK_TO_FILE_PATCH: &str = "diff --git alias.rs\n--- a/alias.rs\n+++ /dev/null\n@@ -1,1 +1,0 @@\n-real.rs\n\\ No newline at end of file\n";
+const LINK_CREATE_PATCH: &str = "diff --git fresh\nnew file mode 120000\n--- /dev/null\n+++ b/fresh\n@@ -0,0 +1,1 @@\n+real\n\\ No newline at end of file\n";
+const LINK_RETARGET_PATCH: &str = "diff --git gone\n--- a/gone\n+++ b/gone\n@@ -1,1 +1,1 @@\n-real\n\\ No newline at end of file\n+other\n\\ No newline at end of file\n";
 
 #[test]
 fn symlink_to_dir_delete_checks_clean_with_120000_mode() {
@@ -64,4 +66,39 @@ fn symlink_delete_apply_removes_link_keeps_target() {
     );
     assert!(std::fs::symlink_metadata(dir.path().join("gone")).is_err());
     assert!(dir.path().join("real").is_dir());
+}
+
+#[test]
+fn symlink_create_real_apply_materializes_link() {
+    // T355: a `120000` create must lower as `120000` with exact target
+    // bytes — `--check` alone masked the 100644 downgrade.
+    let dir = init_repo();
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    let out = run_stdin(dir.path(), LINK_CREATE_PATCH, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let target = std::fs::read_link(dir.path().join("fresh")).expect("fresh must be a symlink");
+    assert_eq!(target.to_string_lossy(), "real");
+}
+
+#[test]
+fn symlink_retarget_real_apply_keeps_exact_target() {
+    // T355: retargeting must not append `\n` (was `'other\n'`, dangling).
+    let dir = init_repo();
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::fs::create_dir(dir.path().join("other")).unwrap();
+    symlink("real", dir.path().join("gone")).unwrap();
+    let out = run_stdin(dir.path(), LINK_RETARGET_PATCH, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let target = std::fs::read_link(dir.path().join("gone")).expect("gone must stay a symlink");
+    assert_eq!(target.to_string_lossy(), "other");
 }
