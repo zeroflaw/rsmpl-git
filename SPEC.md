@@ -1611,6 +1611,7 @@ Supported attribute policies are:
 | `# attrs=strip` | Match like `preserve`, but do not copy attributes to the replacement. This must be rejected unless the replacement target can legally omit the attributes. |
 
 `# attrs=strip` is intentionally explicit because accidentally deleting documentation or attributes is high-risk.
+Non-default `# attrs=` on call/method-call/macro shapes is rejected outright (the matchers never read the policy; envelopes live on the enclosing statement) — remove the line.
 
 Doc-comment mirrors (`///`, `//!`, and single-line `/** ... */`) normalize to `#[doc = "..."]` on any pattern path that accepts mirrored attributes; multi-line block docs cannot be mirrored — use an ordinary hunk.
 
@@ -2479,6 +2480,7 @@ case where an ordinary hunk cannot express the edit.
 | C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this <shape> hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` (code `RSMPL_PATTERN_CONFLICT`, suggestion `use a call-shape hunk or a concrete path pattern`). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line `` (method idents match as written; symbols verify receiver/callee paths). |
+| C15 | inert directives: lone `# fallback=syntax` (no `# symbol`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing — remove the line`` and `` `# attrs=` is ignored on call/macro shapes — remove the line`` (code `RSMPL_PATTERN_CONFLICT`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -2571,6 +2573,7 @@ Fallback directive:
 ```
 
 In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
+A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic in v0.1).
 
 > **v0.1 implementation note:** syntactic fallback compares the full path text exactly (e.g. `crate::old_api` matches only callees spelled `crate::old_api` — not bare `old_api`, not `other::old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment. No resolver integration (rust-analyzer / cargo metadata) is planned for v0.1; revisit only with a dogfood case where exact-path matching blocks a real rename.
 

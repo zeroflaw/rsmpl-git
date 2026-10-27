@@ -4,7 +4,7 @@
 //! on the minus text (fn/item/call/macro/insert). The engine performs the
 //! actual target matching; this module validates shape and extracts bindings.
 
-use rsmpl_patch::{Directive, ErrorCode, MetavarKind, RsmplHunk, StructuredError};
+use rsmpl_patch::{AttrsPolicy, Directive, ErrorCode, MetavarKind, RsmplHunk, StructuredError};
 use std::collections::HashSet;
 
 use crate::expr_pattern::{classify_call_pattern, ExprPattern, ExprPatternKind, PlaceholderMaps};
@@ -302,6 +302,42 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                 ));
             }
         }
+    }
+    // T169: lone `# fallback=syntax` (zero `# symbol` declarations) is a
+    // silent no-op on every shape — the engine symbol loop iterates zero
+    // times, so the directive constrains nothing. Fail fast (SPEC 2.6).
+    if table.symbols.is_empty()
+        && hunk
+            .directives
+            .iter()
+            .any(|d| matches!(d, Directive::FallbackSyntax(true)))
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "`# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)".to_string(),
+        ));
+    }
+    // T169: non-default `# attrs=` on call/method-call/macro shapes is
+    // never read — `matcher_expr`/`matcher_macro` ignore the policy
+    // (envelopes live on the enclosing statement, outside the rewritten
+    // span). Fail fast instead of implying a constraint (SPEC 2.6).
+    // Explicit `# attrs=preserve` stays allowed: it is indistinguishable
+    // from the default and harmless.
+    if hunk.attrs_policy() != AttrsPolicy::Preserve
+        && matches!(
+            kind,
+            PatternKind::Expr {
+                minus: ExprPatternKind::Call { .. }
+                    | ExprPatternKind::MethodCall { .. }
+                    | ExprPatternKind::Macro { .. },
+                ..
+            } | PatternKind::Macro { .. }
+        )
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "`# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)".to_string(),
+        ));
     }
     // general-expression matchers; on any other shape it would be a
     // silent no-op. T126 extended the fold to `General::Expr`
@@ -1708,6 +1744,83 @@ mod tests {
                 }
             ),
             "method-position expr metavars must keep compiling"
+        );
+    }
+
+    #[test]
+    fn inert_directives_fail_fast() {
+        // T169: a lone `# fallback=syntax` (no `# symbol`) and a
+        // non-default `# attrs=` on call/macro shapes are silent no-ops,
+        // so fail fast instead of implying a constraint (SPEC 2.6).
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let cases = [
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n- foo()\n+ bar()\n"
+                ),
+                "`# fallback=syntax` without `# symbol` does nothing",
+            ),
+            (
+                format!(
+                    "{head}@@ -1,2 @@ rule=x\n# lang=rust\n# fallback=syntax\n- fn foo(...) {{\n+ fn bar(...) {{\n      ...\n  }}\n"
+                ),
+                "`# fallback=syntax` without `# symbol` does nothing",
+            ),
+            (
+                format!(
+                    "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# attrs=strip\n- foo()\n+ bar()\n"
+                ),
+                "`# attrs=` is ignored on call/macro shapes",
+            ),
+            (
+                format!(
+                    "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# allow=many\n# attrs=explicit\n# expr R\n# expr E\n- R.old(E)\n+ R.new(E)\n"
+                ),
+                "`# attrs=` is ignored on call/macro shapes",
+            ),
+            (
+                format!(
+                    "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# macro=token_tree\n# attrs=absent\n- M!(...)\n+ N!(...)\n"
+                ),
+                "`# attrs=` is ignored on call/macro shapes",
+            ),
+        ];
+        for (patch, want) in cases {
+            let err = compile(&hunk_of(&patch)).unwrap_err();
+            assert_eq!(
+                err.code,
+                rsmpl_patch::ErrorCode::PatternConflict,
+                "wrong code for {want:?}:\n{}",
+                err.render()
+            );
+            assert!(
+                err.render().contains(want),
+                "missing needle {want:?} in:\n{}",
+                err.render()
+            );
+        }
+        // Negative controls: fallback paired with a symbol, explicit
+        // preserve on a call, and strip on a `let` must keep compiling.
+        let ok_symbol = format!(
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# fallback=syntax\n# symbol Old=crate::old_api\n# expr E\n- Old(E)\n+ New(E)\n"
+        );
+        assert!(
+            compile(&hunk_of(&ok_symbol)).is_ok(),
+            "fallback+symbol must compile"
+        );
+        let ok_preserve = format!(
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# allow=many\n# attrs=preserve\n- foo()\n+ bar()\n"
+        );
+        assert!(
+            compile(&hunk_of(&ok_preserve)).is_ok(),
+            "explicit preserve on a call must compile"
+        );
+        let ok_let = format!(
+            "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# attrs=strip\n# expr E\n- let x = E;\n+ let y = E;\n"
+        );
+        assert!(
+            compile(&hunk_of(&ok_let)).is_ok(),
+            "strip on a let must compile"
         );
     }
 
