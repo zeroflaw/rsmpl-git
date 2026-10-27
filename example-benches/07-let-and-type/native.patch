@@ -1,0 +1,21 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+-fn totals(a: Vec<u32>, b: Vec<u32>) -> u32 {
+-    let count = a.len() as u32;
++fn totals(a: Box<[u32]>, b: Box<[u32]>) -> u32 {
++    let n = a.len() as u32;
+@@ -4 +4 @@
+-    let sum = count + extra;
++    let sum = n + extra;
+@@ -8,3 +8,3 @@
+-fn first(values: Vec<u32>) -> u32 {
+-    let count = values.len() as u32;
+-    count
++fn first(values: Box<[u32]>) -> u32 {
++    let n = values.len() as u32;
++    n
+@@ -13 +13 @@
+-fn wrap(items: Vec<u32>) -> Vec<u32> {
++fn wrap(items: Box<[u32]>) -> Box<[u32]> {

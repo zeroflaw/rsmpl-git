@@ -1,0 +1,14 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,5 +1,5 @@
+-use crate::old::Thing;
+-use crate::old::{A, B};
+-use crate::old::*;
+-use crate::old::Widget as W;
+-pub use crate::old::Reexport;
++use crate::new::Thing;
++use crate::new::{A, B};
++use crate::new::*;
++use crate::new::Widget as W;
++pub use crate::new::Reexport;

@@ -81,6 +81,31 @@ flag-usage errors — bad flags envelop in JSON mode, stay clap text
 otherwise).
 Stream/empty/output contract: SPEC D.2.3.
 
+## Token savings
+
+`example-benches/` (10 benches) compares the agent-authored `patch.rsmpl`
+against the lowered 0-context `native.patch` for the same end state —
+same result, RSmPL input vs full Git spelling. Re-measure any time with
+`./example-benches/run.sh`. (A hand-written native patch with conventional
+context would be larger, so these are lower bounds.)
+
+| bench | rsmpl | native | saved |
+|---|---|---|---|
+| 01-rename-calls-many (12 sites, 1 hunk) | 92 B / 6 ln | 409 B / 21 ln | 78% |
+| 02-move-fn-cross-file (44-line fn, no restate) | 151 B / 10 ln | 1576 B / 97 ln | 90% |
+| 03-scope-file-sweep (9 sites, no discovery) | 110 B / 7 ln | 445 B / 20 ln | 75% |
+| 04-method-to-function (4 sites) | 161 B / 7 ln | 347 B / 15 ln | 54% |
+| 05-use-prefix (5 imports, 1 hunk) | 98 B / 5 ln | 347 B / 14 ln | 72% |
+| 06-repeat-fold (nested `Box::new`, 1 hunk) | 94 B / 7 ln | 209 B / 9 ln | 55% |
+| 07-let-and-type (7 sites, 3 hunks) | 226 B / 17 ln | 593 B / 21 ln | 62% |
+| 08-rename-fn-big-body (54-line body kept) | 122 B / 7 ln | 149 B / 6 ln | 18% |
+| 09-sig-evolution (2 signatures, bodies kept) | 253 B / 14 ln | 251 B / 9 ln | -1% |
+| 10-item-rename (3 bare-pair renames) | 225 B / 15 ln | 210 B / 12 ln | -7% |
+
+Fan-out edits save 50–90%. Single-ident edits are size-parity — the payoff
+there is semantic safety (slot-exact matching, attrs preserved,
+machine-checked match counts) at ~zero token premium.
+
 ## Minimal semantic hunk
 
 ```diff

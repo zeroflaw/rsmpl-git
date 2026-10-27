@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -14 +14 @@
+-    client.old_method(1)
++    new_function(client, 1)
+@@ -18 +18 @@
+-    client.old_method(2)
++    new_function(client, 2)
+@@ -22 +22 @@
+-    client.old_method(3)
++    new_function(client, 3)
+@@ -26 +26 @@
+-    client.old_method(4)
++    new_function(client, 4)

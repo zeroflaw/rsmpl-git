@@ -1,0 +1,15 @@
+diff --git src/lib.rs
+@@ -1,3 @@ rule=rename_struct
+# lang=rust
+- struct Old
++ struct New
+
+@@ -5,4 @@ rule=rename_enum
+# lang=rust
+- enum Shape
++ enum Form
+
+@@ -10,1 @@ rule=rename_const
+# lang=rust
+- const LIMIT
++ const MAX

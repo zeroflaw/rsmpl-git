@@ -1,0 +1,20 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2 +2 @@
+-    legacy(1)
++    modern(1)
+@@ -6,2 +6,2 @@
+-    let base = legacy(2);
+-    base + legacy(3)
++    let base = modern(2);
++    base + modern(3)
+@@ -11 +11 @@
+-    legacy(value) + legacy(4)
++    modern(value) + modern(4)
+@@ -15 +15 @@
+-    legacy(0)
++    modern(0)
+@@ -19 +19 @@
+-    legacy(10) + legacy(20) + legacy(30)
++    modern(10) + modern(20) + modern(30)

@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,54 @@ rule=rename_compute
+# lang=rust
+- fn compute(...) {
++ fn calculate(...) {
+      ...
+  }

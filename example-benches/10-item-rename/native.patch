@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-struct Old {
++struct New {
+@@ -5 +5 @@
+-enum Shape {
++enum Form {
+@@ -10 +10 @@
+-const LIMIT: i32 = 10;
++const MAX: i32 = 10;

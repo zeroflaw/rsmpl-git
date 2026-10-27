@@ -1,0 +1,6 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-fn compute(seed: i64) -> i64 {
++fn calculate(seed: i64) -> i64 {

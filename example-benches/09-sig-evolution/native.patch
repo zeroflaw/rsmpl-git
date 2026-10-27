@@ -1,0 +1,9 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-fn helper(x: i32) -> i32 {
++pub fn helper(x: i32) -> i64 {
+@@ -9 +9 @@
+-fn compute(items: &[i32]) -> i32 {
++async fn compute<T>(items: &[i32]) -> i32 where T: Clone {
