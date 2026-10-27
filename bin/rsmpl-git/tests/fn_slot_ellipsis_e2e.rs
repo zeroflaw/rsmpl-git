@@ -433,3 +433,50 @@ fn trait_returns_none_decl_applies() {
         "trait T {\n    fn build(x: i32);\n}\n"
     );
 }
+
+#[test]
+fn impl_lifetime_receiver_rename_applies() {
+    // T221: `&'a self` used to break the impl-context synth (blind
+    // `str::replace("self", …)` turned it into `& 'a _self_placeholder
+    // : u8`, unparsable as a reference pattern) with the bare
+    // `cannot analyze method signature` needle.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\nimpl S {\n    fn get<'a>(&'a self, x: &'a i32) -> &'a i32 {\n        x\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -2,4 @@ rule=t\n# lang=rust\n  impl S {\n      ...\n-     fn get<'a>(&'a self, x: &'a i32) -> &'a i32 {\n+     fn fetch<'a>(&'a self, x: &'a i32) -> &'a i32 {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "struct S;\nimpl S {\n    fn fetch<'a>(&'a self, x: &'a i32) -> &'a i32 {\n        x\n    }\n}\n"
+    );
+}
+
+#[test]
+fn impl_typed_self_receiver_rename_json() {
+    // T221: `self: Box<Self>` used to break the same synth (`self`
+    // gained a bogus `: u8` after the written type). JSON pin: rename
+    // applies with the typed receiver preserved verbatim.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\nimpl S {\n    fn boxed(self: Box<Self>) -> i32 {\n        1\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -2,4 @@ rule=t\n# lang=rust\n  impl S {\n      ...\n-     fn boxed(self: Box<Self>) -> i32 {\n+     fn unboxed(self: Box<Self>) -> i32 {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+}

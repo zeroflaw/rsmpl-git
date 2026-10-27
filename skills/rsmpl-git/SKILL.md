@@ -77,8 +77,8 @@ marker; hunks with other directives omit it (SPEC 7.1).
   hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8). General-expression
   rewrites (`E + 1` → `E + 2`) fold the same way; `let`/type/macro
   hunks reject `# repeat` — emit one ordered hunk per nesting level.
-- Method-call rewrite: bind the receiver explicitly
-  (`Receiver.old_method(Arg)` → `new_function(Receiver, Arg)`, SPEC 18.5).
+- Method-call rewrite: bind the receiver with one bare metavar, which
+  binds the whole chain (`E.to_string()`); composite receivers never match (SPEC 18.5).
 - Symbol rewrite: `- Old(...)` / `+ New(...)` with `# allow=many`,
   `# fallback=syntax` (required in v0.1 — a bare `# symbol` hunk fails),
   `# symbol Old=crate::old_api` + `# symbol New=crate::new_api`.

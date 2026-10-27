@@ -2483,6 +2483,7 @@ Example:
 ```
 
 If a metavariable is used in a `+` pattern without being bound or imported via `# use`, the hunk fails.
+The receiver slot is all-or-nothing: a bare declared metavariable binds the whole receiver text, including chains (`- E.to_string()` binds `"a".trim()`), while a composite receiver pattern is compared verbatim (`- R.trim().to_string()` never matches a different site) — match the inner call first, or bind the whole receiver with one metavariable.
 
 ### 18.6 v0.1 general-matcher coverage table (fail-fast reference)
 

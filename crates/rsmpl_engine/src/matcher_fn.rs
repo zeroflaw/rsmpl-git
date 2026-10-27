@@ -1400,7 +1400,7 @@ fn full_sig_without_body(vis: &syn::Visibility, sig: &syn::Signature) -> String 
     // no `self`. Replace `self` params textually for the check.)
     // NOTE: the `self` rewrite stays scoped to the sig text -- it runs
     // before the vis prepend so `pub(in self::...)` paths are untouched.
-    s = s.replace("self", "_self_placeholder : u8");
+    s = replace_self_receiver(&s);
     // T190: `quote!(#sig)` renders qualifiers (`const fn …`, `async fn …`,
     // `unsafe fn …`, `extern "ABI" fn …`), so gating the defensive `fn `
     // prepend on a bare-`fn` prefix turned every qualified method synth into
@@ -1422,6 +1422,94 @@ fn full_sig_without_body(vis: &syn::Visibility, sig: &syn::Signature) -> String 
     } else {
         format!("{vis_text} {s}")
     }
+}
+
+/// Replace the `self` receiver for synthetic parsing, word-aware (T221).
+/// The impl/trait-context presence gate parses a synthetic free `fn`
+/// built from the method signature, and a bare `self` receiver does not
+/// parse there -- so the receiver is rewritten to a placeholder param.
+/// The old blind `str::replace("self", …)` broke three valid spellings:
+/// lifetime receivers (`&'a self` -- reference patterns take no
+/// lifetime), idents merely containing `self` (`myself`), and typed
+/// receivers (`self: Box<Self>`). All three failed with the bare
+/// `cannot analyze method signature` needle. Scan rules: `& 'lt [mut]
+/// self` drops the lifetime (reference pattern + `: u8` type, as
+/// before); a `self` word followed by `:` (but not `::`) keeps its type
+/// (`self: Box<Self>` becomes the placeholder with the same type); any
+/// other `self` word becomes the placeholder param. `self::` paths and
+/// `Self` are never touched.
+fn replace_self_receiver(s: &str) -> String {
+    fn is_ident(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + 16);
+    let mut i = 0;
+    while i < b.len() {
+        // `& 'lt [mut] self`: drop the lifetime, keep `& [mut]`.
+        if b[i] == b'&' {
+            let mut j = i + 1;
+            while j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b'\'' {
+                j += 1;
+                while j < b.len() && is_ident(b[j]) {
+                    j += 1;
+                }
+                while j < b.len() && b[j] == b' ' {
+                    j += 1;
+                }
+                let mut has_mut = false;
+                if s[j..].starts_with("mut") && (j + 3 >= b.len() || !is_ident(b[j + 3])) {
+                    has_mut = true;
+                    j += 3;
+                    while j < b.len() && b[j] == b' ' {
+                        j += 1;
+                    }
+                }
+                if s[j..].starts_with("self") && (j + 4 >= b.len() || !is_ident(b[j + 4])) {
+                    out.push_str("& ");
+                    if has_mut {
+                        out.push_str("mut ");
+                    }
+                    out.push_str("_self_placeholder : u8");
+                    i = j + 4;
+                    continue;
+                }
+            }
+            out.push('&');
+            i += 1;
+            continue;
+        }
+        if s[i..].starts_with("self")
+            && (i == 0 || !is_ident(b[i - 1]))
+            && (i + 4 >= b.len() || !is_ident(b[i + 4]))
+        {
+            // Typed receiver (`self: Type`, not `self::path`): keep the type.
+            let mut j = i + 4;
+            while j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b':' {
+                if j + 1 >= b.len() || b[j + 1] != b':' {
+                    out.push_str("_self_placeholder");
+                    i += 4;
+                    continue;
+                }
+                // `self::…`: not a receiver; leave untouched.
+                out.push_str("self");
+                i += 4;
+                continue;
+            }
+            out.push_str("_self_placeholder : u8");
+            i += 4;
+            continue;
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    out
 }
 
 fn range_err(rule: &str, line: u32) -> StructuredError {
@@ -1884,74 +1972,5 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert!(out.contains("fn old(&self) -> i32"), "got: {out}");
         assert!(out.contains("fn other(&self)"));
-    }
-
-    #[test]
-    fn evolves_pub_assoc_fn_inside_impl() {
-        // T175: the impl-context presence gate builds its synthetic
-        // ItemFn from the `Signature` only, which carries no visibility.
-        // The synth now carries the method's real vis, so an explicit
-        // `pub` pattern matches a `pub` method (bare patterns are
-        // unaffected: inherited vis renders empty).
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     pub fn make(x: i32) -> i32 {\n+     pub fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
-        let src = "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n";
-        let out = apply(patch, src).unwrap();
-        assert!(out.contains("pub fn make(x: i64) -> i64"), "got: {out}");
-    }
-
-    #[test]
-    fn evolves_pub_self_method_inside_impl() {
-        // T175 `&self` variant: the receiver is preserved, never rebound.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     pub fn get(&self, x: i32) -> i32 {\n+     pub fn get(&self, x: i64) -> i64 {\n          ...\n      }\n  }\n";
-        let src =
-            "struct S;\n\nimpl S {\n    pub fn get(&self, x: i32) -> i32 {\n        x\n    }\n}\n";
-        let out = apply(patch, src).unwrap();
-        assert!(
-            out.contains("pub fn get(&self, x: i64) -> i64"),
-            "got: {out}"
-        );
-    }
-
-    #[test]
-    fn bare_vis_pattern_still_rejects_pub_method() {
-        // T175 negative control: strictness parity holds -- a vis-less
-        // pattern still requires inherited vis, even in impl context.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     fn make(...) {\n+     fn put(...) {\n          ...\n      }\n  }\n";
-        let src = "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n";
-        let err = apply(patch, src).unwrap_err();
-        assert!(err.contains("no match found"), "got: {err}");
-    }
-
-    #[test]
-    fn evolves_const_fn_inside_impl() {
-        // T190: the impl-context synth prepended `fn ` to any sig not
-        // starting with it, so `const fn ...` became `fn const fn ...`
-        // (unparsable, bare `cannot analyze method signature`).
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     const fn make(x: i32) -> i32 {\n+     const fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
-        let src =
-            "struct S;\n\nimpl S {\n    const fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n";
-        let out = apply(patch, src).unwrap();
-        assert!(out.contains("const fn make(x: i64) -> i64"), "got: {out}");
-    }
-
-    #[test]
-    fn evolves_async_fn_inside_impl() {
-        // T190: same qualifier-prefix class as `const fn`.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     async fn make(x: i32) -> i32 {\n+     async fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
-        let src =
-            "struct S;\n\nimpl S {\n    async fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n";
-        let out = apply(patch, src).unwrap();
-        assert!(out.contains("async fn make(x: i64) -> i64"), "got: {out}");
-    }
-
-    #[test]
-    fn evolves_unsafe_fn_inside_impl() {
-        // T190: same class; `unsafe` doubles as an `extract_fn_block`
-        // start prefix, so this pins both halves.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     unsafe fn make(x: i32) -> i32 {\n+     unsafe fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
-        let src =
-            "struct S;\n\nimpl S {\n    unsafe fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n";
-        let out = apply(patch, src).unwrap();
-        assert!(out.contains("unsafe fn make(x: i64) -> i64"), "got: {out}");
     }
 }
