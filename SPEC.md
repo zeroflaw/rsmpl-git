@@ -2932,6 +2932,18 @@ If zero matches are found, the hunk fails unless `# optional` is set.
 
 If more than one match is found, the hunk fails unless `# allow=many` is set.
 
+The two flags are independent: `# optional` suppresses only the
+zero-match failure, never the too-many failure. An `# optional` hunk
+that finds two matches still fails with the verbatim too-many fence
+(`RSMPL_MATCH_CONFLICT`, `reason: expected one match, found 2`,
+``suggestion: add `# allow=many` if multiple rewrites are intended``;
+rule + file + `old_range`, exit 2, text + JSON — Section 25.4). An
+`# optional` hunk that finds zero matches succeeds with an empty
+lowering: the JSON report carries `matches: 0` with `spans: []` and an
+empty `diff` (text mode prints `(no changes)`; `check: true`). Combined
+`# optional` + `# allow=many` therefore means zero-or-more (each flag
+covers its own side).
+
 ### 17.6 Overlapping matches and `allow=many`
 
 When `# allow=many` is set, matching is performed as a single top-down, source-order, non-overlapping pass.
