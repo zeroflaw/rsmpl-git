@@ -170,7 +170,7 @@ fn minus_fn_pattern(
         .collect::<Vec<_>>()
         .join("\n");
     let block = match &compiled.kind {
-        PatternKind::ImplContext { .. } => extract_fn_block(&full),
+        PatternKind::ImplContext { .. } => extract_fn_block(&full, &[vis.clone(), qual.clone()].concat()),
         _ => full,
     };
     rsmpl_pattern::parse_fn_pattern(&block, &vis, &qual, &gen, &wh, hunk.returns_none())
@@ -185,7 +185,7 @@ fn minus_fn_pattern(
 /// terminates at zero nesting (parens + brackets + braces) and before any
 /// `{` opens, so `[u8; N]` lengths and fn-pointer params never cut the block
 /// short, and mixed bodies still reach the T160 parser gate.
-fn extract_fn_block(text: &str) -> String {
+fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut start = None;
     for (idx, line) in lines.iter().enumerate() {
@@ -198,7 +198,10 @@ fn extract_fn_block(text: &str) -> String {
         if u.starts_with("impl ") || u.starts_with("trait ") {
             continue;
         }
-        if t.starts_with("fn ")
+        // T337: leading slot metavars (`V Q fn ...`) are fn-like when declared.
+        let head = t.split(|c: char| c.is_whitespace() || c == '(').find(|s| !s.is_empty()).unwrap_or("");
+        if (slot_leads.iter().any(|m| m == head) && t.contains("fn "))
+            || t.starts_with("fn ")
             || t.starts_with("pub ")
             || t.starts_with("async ")
             || t.starts_with("unsafe ")
@@ -1264,7 +1267,7 @@ pub fn apply_impl_context_hunk(
             .collect::<Vec<_>>()
             .join("\n");
         let plus_pat = rsmpl_pattern::parse_fn_pattern(
-            &extract_fn_block(&full_plus_all),
+            &extract_fn_block(&full_plus_all, &[pvis.clone(), pqual.clone()].concat()),
             &pvis,
             &pqual,
             &pgen,
