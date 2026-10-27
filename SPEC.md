@@ -700,7 +700,7 @@ hunks that already carry other directives omit it.
 | `# scope=file` | Search the whole file; the `@@` old range is a dummy (canonical `@@ -1,1 @@`) and range-bounds validation is skipped. Insertion anchors ignore scope. |
 | `# bind=Name` | Capture exactly one rewritten or removed AST object under a cross-hunk name. Scalar only in this version. |
 | `# use=Name` | Use a previously captured scalar object. |
-| `# attrs=preserve` | Ignore attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement. Default. |
+| `# attrs=preserve` | Ignore unwritten attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement. Default. Explicitly written attributes constrain the match (exact match, other sites skipped); the plus side must mirror the minus side. |
 | `# attrs=absent` | Require no attached attributes or doc comments. |
 | `# attrs=explicit` | Only attributes written in the pattern participate; unwritten attached attributes cause the match to fail. |
 | `# attrs=strip` | Match like `preserve`, but do not copy attributes to the replacement when stripping is valid. |
@@ -1577,18 +1577,19 @@ To require a specific attribute, write it explicitly:
   }
 ```
 
-To bind and preserve arbitrary attributes explicitly:
+To bind and preserve arbitrary attributes explicitly, write nothing:
+under the default `# attrs=preserve` an unwritten pattern already keeps
+each site's own attributes. v0.1 has no attribute-list abstraction —
+`# attributes A` is rejected with `RSMPL_PATTERN_CONFLICT` (write the
+`#[...]` lines literally on both sides to constrain them, or omit
+them).
 
-```diff
-@@ -10,8 @@ rule=rename_attributed_foo
-# attributes A
-- A
-- fn foo(...) {
-+ A
-+ fn bar(...) {
-      ...
-  }
-```
+Written attributes constrain the match even under the default preserve
+policy: a minus side naming `#[inline]` matches only sites carrying
+exactly those attributes (other sites are skipped, like any slot
+mismatch). The plus side must mirror the minus side exactly; a plus
+side that adds, drops, or changes attributes is a pattern error
+(mirror the `#[...]` lines, or use `# attrs=strip`).
 
 To require that no attributes or doc comments are attached, use:
 
@@ -1605,7 +1606,7 @@ Supported attribute policies are:
 
 | Directive | Meaning |
 |---|---|
-| `# attrs=preserve` | Default. Ignore attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement for any AST node kind that supports attributes. |
+| `# attrs=preserve` | Default. Ignore unwritten attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement for any AST node kind that supports attributes. Explicitly written attributes constrain the match (exact match, other sites skipped) and the plus side must mirror the minus side. |
 | `# attrs=absent` | Require no attached attributes or doc comments. |
 | `# attrs=explicit` | Only attributes written in the pattern participate. Unwritten attached attributes cause the match to fail. |
 | `# attrs=strip` | Match like `preserve`, but do not copy attributes to the replacement. This must be rejected unless the replacement target can legally omit the attributes. |
@@ -1781,17 +1782,20 @@ Implemented in v0.1 (fail fast on anything else):
 | `visibility` | visibility marker such as absent, `pub`, `pub(crate)` |
 | `qualifier` | one function qualifier |
 | `qualifier_list` | zero or more function qualifiers |
-| `attributes` | zero or more attributes or doc-comment-derived `#[doc = ...]` attributes (structural) |
 | `block` | block expression or function body (structural) |
 | `macro` | macro path/name |
 | `token_tree` | macro token tree or token sequence |
 
 Rejected in v0.1 with `RSMPL_PATTERN_CONFLICT`: `identifier`, `path`,
-`lifetime`, `field`. These parse as declarations but have no kind-specific
-engine binding — an agent authoring `# lifetime L` pays tokens for a
-lifetime match that can never happen (Section 2.6). `stmt`, `attributes`,
-`block`, `macro`, and `token_tree` are accepted as structural placeholders
-(kind unchecked), not as distinct kind-checked binders.
+`lifetime`, `field`, `attributes`. These parse as declarations but have
+no kind-specific engine binding — an agent authoring `# lifetime L`
+pays tokens for a lifetime match that can never happen (Section 2.6).
+`# attributes A` is rejected the same way: v0.1 has no attribute-list
+abstraction, so write the `#[...]` lines literally on both sides to
+constrain them, or omit them (attributes are preserved by default,
+Section 14.6). `stmt`, `block`, `macro`, and `token_tree` are accepted
+as structural placeholders (kind unchecked), not as distinct
+kind-checked binders.
 
 ### 15.2 Naming
 
@@ -3648,7 +3652,6 @@ metavariable_kind   ::= "symbol"
                       | "visibility"
                       | "qualifier"
                       | "qualifier_list"
-                      | "attributes"
                       | "block"
                       | "macro"
                       | "token_tree"

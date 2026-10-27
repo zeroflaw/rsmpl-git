@@ -166,6 +166,23 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         }
     }
 
+    // T165: `# attributes A` declares an attribute-list abstraction no
+    // matcher binds (`MetaVarKind::Attributes` parses but every spelling
+    // misroutes with a confusing error). v0.1 has no such abstraction —
+    // fail fast with the repair instead of misrouting (SPEC 2.6).
+    if let Some((_, name)) = table
+        .declared
+        .iter()
+        .find(|(k, _)| matches!(k, MetavarKind::Attributes))
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!(
+                "`# attributes {name}` is not supported in v0.1 (attribute lists cannot be abstracted; write the `#[...]` lines literally on both sides to constrain them, or omit them — attributes are preserved by default, SPEC 14.6)"
+            ),
+        ));
+    }
+
     let minus_raw = full_minus_text(hunk);
     let plus_raw = full_plus_text(hunk);
     let context_raw = hunk.context_text();
@@ -1691,6 +1708,35 @@ mod tests {
                 }
             ),
             "method-position expr metavars must keep compiling"
+        );
+    }
+
+    #[test]
+    fn attributes_kind_rejected_at_compile() {
+        // T165: `# attributes A` declares an attribute-list abstraction no
+        // matcher binds, so fail fast with the repair instead of
+        // misrouting (own-line `- A` missed the fn keyword; same-line
+        // `- A fn foo` fell through to the general matcher).
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let patch = format!(
+            "{head}@@ -1,2 @@ rule=x\n# lang=rust\n# attributes A\n- A\n- fn foo(...) {{\n+ A\n+ fn bar(...) {{\n      ...\n  }}\n"
+        );
+        let err = compile(&hunk_of(&patch)).unwrap_err();
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+        assert!(
+            err.render()
+                .contains("attribute lists cannot be abstracted"),
+            "missing needle:\n{}",
+            err.render()
+        );
+        // Negative control: the literal-mirror spelling the needle points
+        // at must keep compiling to a function pattern.
+        let ok = format!(
+            "{head}@@ -1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {{\n+ #[inline]\n+ fn bar(...) {{\n      ...\n  }}\n"
+        );
+        assert!(
+            matches!(compile(&hunk_of(&ok)).unwrap().kind, PatternKind::Fn { .. }),
+            "literal attribute mirrors must keep compiling"
         );
     }
 

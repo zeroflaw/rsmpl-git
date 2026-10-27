@@ -114,17 +114,7 @@ fn check_attrs(
             Ok(())
         }
         AttrsPolicy::Explicit => {
-            let want: Vec<String> = pattern_attrs
-                .iter()
-                .map(|a| a.split_whitespace().collect::<String>())
-                .collect();
-            let have: Vec<String> = c
-                .item
-                .attrs
-                .iter()
-                .map(|a| quote::quote!(#a).to_string().split_whitespace().collect())
-                .collect();
-            if want != have {
+            if !attrs_equal(pattern_attrs, &c.item.attrs) {
                 return Err(StructuredError::new(
                     ErrorCode::MatchConflict,
                     "attached attributes do not match explicitly written pattern attributes",
@@ -137,6 +127,19 @@ fn check_attrs(
         }
         AttrsPolicy::Strip => Ok(()), // eligibility like preserve; stripped at rewrite
     }
+}
+
+/// Strip-all attribute comparison shared by the Explicit arm and the
+/// Preserve site filter: pattern text (token-joined at parse) vs
+/// `quote!`-rendered target attributes. Whitespace-insensitive so
+/// `///`/`#[doc]` mirrors (normalized at parse) compare equal.
+fn attrs_equal(pattern_attrs: &[String], item_attrs: &[syn::Attribute]) -> bool {
+    let want: Vec<String> = pattern_attrs.iter().map(|a| norm_slot(a)).collect();
+    let have: Vec<String> = item_attrs
+        .iter()
+        .map(|a| norm_slot(&quote::quote!(#a).to_string()))
+        .collect();
+    want == have
 }
 
 /// Reconstruct the `FnPattern` for the minus side (also validates it parses).
@@ -810,6 +813,40 @@ pub fn apply_fn_hunk(
         .with_rule(&rule));
     }
 
+    // Attribute mirror gates (same contract as the general-Stmt matcher:
+    // plus-side attribute text must mirror the minus side, never invent
+    // or drop — silently ignoring written attributes would violate SPEC
+    // 2.6). The plus side is otherwise dead text: `plan_sig_edits`
+    // preserves the original envelope and never reads plus attrs.
+    if !plus_pat.attrs_written.is_empty() && minus_pat.attrs_written.is_empty() {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
+        )
+        .with_rule(&rule)
+        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+    }
+    if hunk.attrs_policy() != AttrsPolicy::Strip
+        && !minus_pat.attrs_written.is_empty()
+        && minus_pat
+            .attrs_written
+            .iter()
+            .map(|a| norm_slot(a))
+            .collect::<Vec<_>>()
+            != plus_pat
+                .attrs_written
+                .iter()
+                .map(|a| norm_slot(a))
+                .collect::<Vec<_>>()
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
+        )
+        .with_rule(&rule)
+        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+    }
+
     let old_start = hunk.header.old_start;
     let old_len = hunk.header.old_len;
     let mut matched = 0;
@@ -834,13 +871,23 @@ pub fn apply_fn_hunk(
         if !minus_matches_strict(&minus_pat, &c.item.vis, &c.item.sig, original, index) {
             continue;
         }
-        check_attrs(
-            &c,
-            hunk.attrs_policy(),
-            &minus_pat.attrs_written,
-            &rule,
-            file,
-        )?;
+        // Written attributes constrain even under the default preserve
+        // policy (SPEC 14.6): a site lacking them is a non-match like any
+        // other slot mismatch, so skip it — count validation (plus the
+        // T62 whole-file hint) keeps typos fail-safe.
+        if hunk.attrs_policy() == AttrsPolicy::Preserve && !minus_pat.attrs_written.is_empty() {
+            if !attrs_equal(&minus_pat.attrs_written, &c.item.attrs) {
+                continue;
+            }
+        } else {
+            check_attrs(
+                &c,
+                hunk.attrs_policy(),
+                &minus_pat.attrs_written,
+                &rule,
+                file,
+            )?;
+        }
         if hunk.returns_none() && !matches!(c.item.sig.output, syn::ReturnType::Default) {
             continue;
         }
@@ -1127,6 +1174,36 @@ pub fn apply_impl_context_hunk(
             )
             .with_rule(&rule));
         }
+        // Attribute mirror gates (same contract as `apply_fn_hunk`: the
+        // plus side must mirror the minus side, never invent or drop).
+        if !plus_pat.attrs_written.is_empty() && minus_pat.attrs_written.is_empty() {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
+            )
+            .with_rule(&rule)
+            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+        }
+        if hunk.attrs_policy() != AttrsPolicy::Strip
+            && !minus_pat.attrs_written.is_empty()
+            && minus_pat
+                .attrs_written
+                .iter()
+                .map(|a| norm_slot(a))
+                .collect::<Vec<_>>()
+                != plus_pat
+                    .attrs_written
+                    .iter()
+                    .map(|a| norm_slot(a))
+                    .collect::<Vec<_>>()
+        {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
+            )
+            .with_rule(&rule)
+            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+        }
         let minus_name = pattern_name(&minus_pat.name);
         let plus_name = pattern_name(&plus_pat.name);
         for item in &imp.items {
@@ -1168,6 +1245,14 @@ pub fn apply_impl_context_hunk(
                 continue;
             }
             if !minus_matches_strict(&minus_pat, &m.vis, &m.sig, original, index) {
+                continue;
+            }
+            // Written attributes constrain under default preserve, like
+            // free functions (site-level filter, not an error).
+            if hunk.attrs_policy() == AttrsPolicy::Preserve
+                && !minus_pat.attrs_written.is_empty()
+                && !attrs_equal(&minus_pat.attrs_written, &m.attrs)
+            {
                 continue;
             }
             if hunk.returns_none() && !matches!(m.sig.output, syn::ReturnType::Default) {
@@ -1308,6 +1393,48 @@ mod tests {
         // Wrong doc text still fails instead of silently matching.
         let wrong = patch.replace("- /// Doc comment.", "- /// Other text.");
         assert!(apply(&wrong, "/// Doc comment.\nfn foo() {}\n").is_err());
+    }
+
+    #[test]
+    fn attrs_preserve_written_constrains_site() {
+        // T165: explicitly written attributes constrain even under the
+        // default preserve policy — other sites are skipped like any slot
+        // mismatch (count validation keeps typos fail-safe).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
+        let out = apply(patch, "#[inline]\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "#[inline]\nfn bar() {}\n", "got: {out:?}");
+        // Wrong attribute: site skipped → no match → error, not a silent
+        // rename of the wrong item.
+        let err = apply(patch, "#[other]\nfn foo() {}\n").unwrap_err();
+        assert!(err.contains("no match found"), "got: {err}");
+    }
+
+    #[test]
+    fn attrs_preserve_written_filters_many() {
+        // T165: with `allow=many` over mixed targets only the attributed
+        // site rewrites; the bare `fn foo` is skipped, not renamed.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n- #[inline]\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
+        let src = "#[inline]\nfn foo() {}\nfn foo() {}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out, "#[inline]\nfn bar() {}\nfn foo() {}\n", "got: {out:?}");
+    }
+
+    #[test]
+    fn attrs_mirror_gates_fail_fast() {
+        // T165: the plus side must mirror the minus side — inventing or
+        // changing attributes is a pattern error, never a silent drop.
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
+        let err = apply(add, "fn foo() {}\n").unwrap_err();
+        assert!(
+            err.contains("replacement writes attributes the pattern did not match"),
+            "got: {err}"
+        );
+        let diff = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[other]\n+ fn bar(...) {\n      ...\n  }\n";
+        let err = apply(diff, "#[inline]\nfn foo() {}\n").unwrap_err();
+        assert!(
+            err.contains("replacement attributes differ from matched attributes"),
+            "got: {err}"
+        );
     }
 
     #[test]
