@@ -1,0 +1,11 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2 +2 @@
+-    let v = ((x + 0) + 0) + 0;
++    let v = ((x));
+@@ -7,2 +7,2 @@
+-    let w = (y + 0) + 0;
+-    w + 0
++    let w = (y);
++    w

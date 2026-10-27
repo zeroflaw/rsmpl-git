@@ -88,7 +88,7 @@ Stream/empty/output contract: SPEC D.2.3.
 
 ## Token savings
 
-`example-benches/` (10 benches) compares the agent-authored `patch.rsmpl`
+`example-benches/` (11 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
 same result, RSmPL input vs full Git spelling. Re-measure any time with
 `./example-benches/run.sh`. (A hand-written native patch with conventional
@@ -106,6 +106,7 @@ context would be larger, so these are lower bounds.)
 | 08-rename-fn-big-body (54-line body kept) | 122 B / 7 ln | 149 B / 6 ln | 18% |
 | 09-sig-evolution (2 signatures, bodies kept) | 253 B / 14 ln | 251 B / 9 ln | -1% |
 | 10-item-rename (3 bare-pair renames) | 225 B / 15 ln | 210 B / 12 ln | -7% |
+| 11-repeat-general-expr (nested `E + 0`, 1 hunk) | 109 B / 8 ln | 213 B / 11 ln | 49% |
 
 Fan-out edits save 50–90%. Single-ident edits are size-parity — the payoff
 there is semantic safety (slot-exact matching, attrs preserved,
