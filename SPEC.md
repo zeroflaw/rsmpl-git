@@ -3297,19 +3297,51 @@ reason: no match found
 suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`
 ```
 
+The fence above is the empty-file case: with no source lines there is
+nothing to preview and no elsewhere match to retry, so both lines stay
+bare.
+
 When the engine can prove the range (not the pattern) is wrong, it appends
 a zero-discovery retry (T62 probe: the same matcher re-run whole-file,
-count-only). Exactly one match elsewhere appends `— exactly one match
-exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`;
-several matches elsewhere append `— multiple matches
-exist outside this range; widen the range (or add `# scope=file`) and add
-`# allow=many` if intended`. (Counts saturate: matchers stop counting at 2
-under `# allow=one`, so the many-case never claims an exact number.)
+count-only) to the `suggestion:` line, after ` — `; the `reason:` line
+keeps only the preview form documented below. Exactly one match elsewhere
+appends `— exactly one match exists elsewhere in the file; retry with
+`# scope=file` + `@@ -1,1 @@``; several matches elsewhere append
+`— multiple matches exist outside this range; widen the range (or add
+`# scope=file`) and add `# allow=many` if intended`. (Counts saturate:
+matchers stop counting at 2 under `# allow=one`, so the many-case never
+claims an exact number.)
 
-The zero-match `reason` also carries a T67 candidate preview — the most
-similar same-kind item header (`fn foo at line 5: 'fn foo() {}'`), or the
-nearest non-empty source line when the hunk kind has no item headers — so the next
-attempt often needs no file read. The header walk reaches block-level items
+Engine-verbatim (exit 2; `suggestion:` carries the base text plus the
+appended tail):
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: rename_calls
+file: src/lib.rs
+old_range: 2..3
+reason: no match found — nearest source at line 2: 'let x = 1;'
+suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional` — exactly one match exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`
+```
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: rename_calls
+file: src/lib.rs
+old_range: 2..3
+reason: no match found — nearest source at line 2: 'let x = 1;'
+suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional` — multiple matches exist outside this range; widen the range (or add `# scope=file`) and add `# allow=many` if intended
+```
+
+(JSON mode carries the same `reason`/`suggestion` strings in its
+`{version, error: {...}}` envelope with `rule:`/`file:` set and `range:`
+echoing the hunk range, Section D.2.)
+
+The zero-match `reason` also carries a T67 candidate preview, appended
+after ` — `: the most similar same-kind item header (`nearest fn foo at
+line 5: 'fn foo() {}'`), or the nearest non-empty source line
+(`nearest source at line 1: 'fn f() {}'`) when the hunk kind has no item
+headers — so the next attempt often needs no file read. The header walk reaches block-level items
 (fn bodies, closures, method bodies — the same scope matching reaches), and
 same-kind headers win over a nearer enclosing item (a typo'd `struct Lcoal`
 previews the real `struct Local`, not the enclosing `fn`). Within the
@@ -3319,6 +3351,29 @@ down, not the nearer `struct Alpha`. The preview is a single line of at most
 200 chars of source (plus a short `kind name at line N` label, whole string
 bounded); `suggestion` is unchanged. An empty file has nothing to preview
 and keeps the bare `no match found` reason. If the preview shows a
+
+Engine-verbatim (exit 2):
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: rename_fn
+file: src/lib.rs
+old_range: 1..3
+reason: no match found — nearest fn bar at line 2: 'fn bar() {}'
+suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`
+```
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: rename_calls
+file: src/lib.rs
+old_range: 1..2
+reason: no match found — nearest source at line 1: 'fn f() {}'
+suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`
+```
+
+(JSON mode carries the same strings with `rule:`/`file:` set and `range:`
+echoing the hunk range; nulls only where a line is absent — never here.)
 `let-else` target, a block / `if` / `match` / loop / closure expression,
 a `P @` subpattern, or a macro type, the shape itself is outside v0.1
 scope (Section 18.6 rows R1 / R2 / R4 / R5) — rewrite it with an
