@@ -301,6 +301,22 @@ fn method_ident_symbol_fails_fast_text() {
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("names the method ident"), "got: {stderr}");
 }
+
+#[test]
+fn turbofish_call_rewrite_applies_text() {
+    // T145: `id::<T>(E)` rewrites a generic call structurally.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn id<T>(x: T) -> T { x }\nfn main() {\n    let a = id::<u8>(1u8);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# allow=many\n# type T\n# expr E\n- id::<T>(E)\n+ id2::<T>(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert_eq!(out.status.code(), Some(0), "got: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("id2::<u8>(1u8)"), "got: {stdout}");
+}
 #[test]
 fn symbol_without_fallback_json_envelope() {
     // T24: the gate failure is machine-readable (SPEC D.2).

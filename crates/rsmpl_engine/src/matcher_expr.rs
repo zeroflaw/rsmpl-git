@@ -26,6 +26,10 @@ struct Candidate<'a> {
     end_line: u32,
     callee_segments: Vec<String>,
     arg_texts: Vec<String>,
+    /// Source-sliced generic args per callee segment (T145 structural
+    /// path); empty vec for segments without turbofish. Method calls
+    /// leave this empty (their turbofish is T144's domain).
+    callee_arg_texts: Vec<Vec<String>>,
     receiver_text: Option<String>,
     method_text: Option<String>,
     is_method: bool,
@@ -57,6 +61,28 @@ fn path_segments(path: &syn::Path) -> Vec<String> {
     path.segments.iter().map(|s| s.ident.to_string()).collect()
 }
 
+/// Source-sliced generic args per path segment (parallel to
+/// `path_segments`); segments without `::<>` contribute an empty vec.
+/// Real call targets always use the `::<>` form (a bare `id<T>(...)`
+/// never parses as a call), so no colon2 marker is recorded.
+fn callee_generic_args(collector: &Collector<'_, '_>, func: &syn::Expr) -> Vec<Vec<String>> {
+    let syn::Expr::Path(p) = func else {
+        return Vec::new();
+    };
+    p.path
+        .segments
+        .iter()
+        .map(|seg| match &seg.arguments {
+            syn::PathArguments::AngleBracketed(a) => a
+                .args
+                .iter()
+                .map(|arg| collector.slice_opt(arg.span()))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 fn expr_path_segments(func: &syn::Expr) -> Option<Vec<String>> {
     if let syn::Expr::Path(p) = func {
         Some(path_segments(&p.path))
@@ -81,6 +107,7 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                             end_line: node.span().end().line as u32,
                             callee_segments: segs,
                             arg_texts: args,
+                            callee_arg_texts: callee_generic_args(self, &call.func),
                             receiver_text: None,
                             method_text: None,
                             is_method: false,
@@ -104,6 +131,7 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                         end_line: node.span().end().line as u32,
                         callee_segments: vec![m.method.to_string()],
                         arg_texts: args,
+                        callee_arg_texts: Vec::new(),
                         receiver_text: Some(self.slice_opt(m.receiver.span())),
                         method_text: Some(m.method.to_string()),
                         is_method: true,
@@ -505,7 +533,7 @@ fn match_candidate(
     let ok = match minus {
         ExprPatternKind::Call { callee, args } => {
             !cand.is_method
-                && match_callee(callee, &cand.callee_segments, compiled, &mut bindings)
+                && match_callee(callee, cand, compiled, &mut bindings)
                 && match_args(args, &cand.arg_texts, reverse_map, &mut bindings)
         }
         ExprPatternKind::MethodCall {
@@ -681,11 +709,19 @@ fn build_reverse_map(compiled: &CompiledPattern) -> HashMap<String, String> {
 /// subsumed by that equality check.
 fn match_callee(
     callee: &str,
-    target_segments: &[String],
+    cand: &Candidate<'_>,
     compiled: &CompiledPattern,
     bindings: &mut HashMap<String, String>,
 ) -> bool {
     let reverse_map = build_reverse_map(compiled);
+    // T145: a pattern callee carrying `<...>` takes the structural path
+    // (the ident-only text comparison below could never match it — the
+    // target segments drop generic args, so `id::<T>` always failed).
+    // Callees without `<` keep the exact historical behavior.
+    if callee.contains('<') {
+        return match_callee_turbofish(callee, cand, &reverse_map, bindings);
+    }
+    let target_segments = &cand.callee_segments;
     // Placeholder-generated names look like `__RSMPL_E`; map back via the
     // declared-name table. Anything still shaped like a placeholder with no
     // entry is treated as concrete (shouldn't happen).
@@ -715,6 +751,124 @@ fn match_callee(
     // Concrete (possibly with `...` wildcards).
     let pat_segments: Vec<String> = callee.split("::").map(|s| s.to_string()).collect();
     match_path_segments(&pat_segments, target_segments)
+}
+
+/// T145: structural function-call turbofish comparison (mirror of T144's
+/// `MethodCall` arm). The pattern callee parses as a `syn::Path`
+/// (placeholders are ordinary idents post-substitution); target segments
+/// pair with their source-sliced generic args from collection.
+fn match_callee_turbofish(
+    pat_callee: &str,
+    cand: &Candidate<'_>,
+    reverse_map: &HashMap<String, String>,
+    bindings: &mut HashMap<String, String>,
+) -> bool {
+    let pat_path: syn::Path = match syn::parse_str(pat_callee) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    if pat_path.leading_colon.is_some() {
+        return false;
+    }
+    if pat_path.segments.len() != cand.callee_segments.len() {
+        return false;
+    }
+    for ((pat_seg, tgt_ident), tgt_args) in pat_path
+        .segments
+        .iter()
+        .zip(cand.callee_segments.iter())
+        .zip(cand.callee_arg_texts.iter())
+    {
+        if pat_seg.ident == "..." {
+            return false;
+        }
+        if let Some(orig) = reverse_map.get(&pat_seg.ident.to_string()) {
+            let prev_ok = match bindings.get(orig) {
+                Some(prev) => prev == tgt_ident,
+                None => {
+                    bindings.insert(orig.clone(), tgt_ident.clone());
+                    true
+                }
+            };
+            if !prev_ok {
+                return false;
+            }
+            // T144 bare-placeholder parity: no-arg pattern skips the
+            // args check; `P::<T>` compares structurally.
+            if matches!(pat_seg.arguments, syn::PathArguments::None) {
+                continue;
+            }
+        } else {
+            if pat_seg.ident != *tgt_ident {
+                return false;
+            }
+            if matches!(pat_seg.arguments, syn::PathArguments::None) && tgt_args.is_empty() {
+                continue;
+            }
+        }
+        let syn::PathArguments::AngleBracketed(pat_bracketed) = &pat_seg.arguments else {
+            return false;
+        };
+        // A bare `id<T>` pattern never matches a real `id::<u8>` call
+        // (it never did — a non-turbofish call site cannot exist).
+        if pat_bracketed.colon2_token.is_none() {
+            return false;
+        }
+        if pat_bracketed.args.len() != tgt_args.len() {
+            return false;
+        }
+        for (pat_arg, tgt_text) in pat_bracketed.args.iter().zip(tgt_args.iter()) {
+            if !match_callee_generic_arg(pat_arg, tgt_text, reverse_map, bindings) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// One generic argument of a pattern turbofish against target source
+/// text: single-placeholder types bind; lifetimes wildcard; everything
+/// else (concrete types, consts) compares token-normalized.
+fn match_callee_generic_arg(
+    pat_arg: &syn::GenericArgument,
+    tgt_text: &str,
+    reverse_map: &HashMap<String, String>,
+    bindings: &mut HashMap<String, String>,
+) -> bool {
+    if let Some(orig) = single_placeholder_arg_type(pat_arg, reverse_map) {
+        return match bindings.get(&orig) {
+            Some(prev) => fragments_equal(prev, tgt_text),
+            None => {
+                bindings.insert(orig, tgt_text.to_string());
+                true
+            }
+        };
+    }
+    if let syn::GenericArgument::Lifetime(_) = pat_arg {
+        if syn::parse_str::<syn::Lifetime>(tgt_text).is_ok() {
+            return true;
+        }
+    }
+    fragments_equal(&quote::quote!(#pat_arg).to_string(), tgt_text)
+}
+
+/// Declared name if `arg` is a single-placeholder type (`T` for `# type T`).
+fn single_placeholder_arg_type(
+    arg: &syn::GenericArgument,
+    reverse_map: &HashMap<String, String>,
+) -> Option<String> {
+    let syn::GenericArgument::Type(syn::Type::Path(tp)) = arg else {
+        return None;
+    };
+    if tp.qself.is_some()
+        || tp.path.segments.len() != 1
+        || !matches!(tp.path.segments[0].arguments, syn::PathArguments::None)
+    {
+        return None;
+    }
+    reverse_map
+        .get(&tp.path.segments[0].ident.to_string())
+        .cloned()
 }
 
 fn match_receiver_or_method(
@@ -879,6 +1033,56 @@ mod tests {
     fn no_match_without_optional_fails() {
         let src = "fn a() {}\n";
         assert!(apply(CALL_PATCH, src).is_err());
+    }
+
+    #[test]
+    fn turbofish_placeholder_binds_type() {
+        // T145: `id::<T>(E)` rewrites `id::<u8>(1u8)` binding `T` to the
+        // target source text (the dogfood evidence case).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 @@ rule=x\n# lang=rust\n# allow=many\n# type T\n# expr E\n- id::<T>(E)\n+ id2::<T>(E)\n";
+        let src = "fn id<T>(x: T) -> T { x }\nfn a() {\n    let a = id::<u8>(1u8);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("id2::<u8>(1u8);"), "got: {out}");
+    }
+
+    #[test]
+    fn turbofish_concrete_matches_and_mismatch_fails() {
+        // T145: concrete turbofish args compare token-normalized.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo::<u8>(E)\n+ bar::<u8>(E)\n";
+        let src = "fn a() {\n    let a = foo::<u8>(1u8);\n    let b = foo::<u16>(1u16);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar::<u8>(1u8);"), "got: {out}");
+        assert!(out.contains("foo::<u16>(1u16);"), "must not rewrite: {out}");
+    }
+
+    #[test]
+    fn turbofish_const_arg_compares_rendered() {
+        // T145 REVIEW: const generic args compare token-normalized, not
+        // structurally — concrete `3` matches, undeclared `N` fails safe.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo::<3>(E)\n+ bar::<3>(E)\n";
+        let src = "fn a() {\n    let a = foo::<3>(x);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar::<3>(x);"), "got: {out}");
+        let miss = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo::<N>(E)\n+ bar::<N>(E)\n";
+        assert!(apply(miss, src).is_err());
+    }
+
+    #[test]
+    fn turbofish_bare_angle_brackets_fail_safe() {
+        // T145: a bare `id<T>` pattern (no `::`) never matches a real
+        // `id::<u8>` call — it never did; now documented fail-safe.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# type T\n# expr E\n- id<T>(E)\n+ id2<T>(E)\n";
+        let src = "fn a() {\n    let a = id::<u8>(1u8);\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
+    fn turbofish_placeholder_segment_binds() {
+        // T145: `P::<T>` binds the segment ident and the type arg.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n# expr P\n# type T\n# expr E\n- P::<T>(E)\n+ wrap2::<T>(E)\n";
+        let src = "fn a() {\n    let a = wrap::<u8>(1u8);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("wrap2::<u8>(1u8);"), "got: {out}");
     }
 
     #[test]
