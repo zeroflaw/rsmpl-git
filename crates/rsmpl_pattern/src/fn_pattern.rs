@@ -440,6 +440,21 @@ pub fn parse_fn_pattern(
         return Err(fail("unbalanced parameter list in fn pattern".to_string()));
     }
     let params_joined = params_inner.join(" ");
+    // T160: `...` must stand alone in a parameter list. The old
+    // `any(...)" rule skipped matching wholesale for mixed shapes like
+    // `(..., c: T)`, so metavars were never bound yet textually "used" —
+    // the plus side then emitted them verbatim (silent corruption) or
+    // the written suffix was silently never verified. Lone commas are
+    // tolerated (`(...)` ≡ `(...,)`); anything else mixed with `...`
+    // fails fast.
+    if params_inner.iter().any(|t| t == "...")
+        && params_inner.iter().any(|t| t != "..." && t != ",")
+    {
+        return Err(fail(
+            "`...` in a function parameter list must stand alone: write `(...)` to match any parameters or fully-concrete parameters (SPEC 14.7)"
+                .to_string(),
+        ));
+    }
     let params_ellipsis = params_inner.iter().any(|t| t == "...");
     let params_text = if params_joined.trim().is_empty() {
         None
@@ -517,6 +532,15 @@ pub fn parse_fn_pattern(
         }
         if depth != 0 {
             return Err(fail("unbalanced body block in fn pattern".to_string()));
+        }
+        // T160: `...` must stand alone in a body block too. The old
+        // `any(...)" rule let mixed shapes like `{ ..., foo(); }`
+        // through the must-be-`...` gates, silently preserving the body
+        // without ever verifying the written statements.
+        if inner.iter().any(|t| t == "...") && inner.iter().any(|t| t != "...") {
+            return Err(fail(
+                "function pattern bodies must be exactly `...` in v0.1 (body evolution is not supported; the original body is always preserved)".to_string(),
+            ));
         }
         body_ellipsis = inner.iter().any(|t| t == "...");
     } else if i < toks.len() && toks[i] == ";" {
@@ -712,6 +736,42 @@ mod tests {
         assert_eq!(doc_comment_to_attr("/** Unclosed."), None);
         assert_eq!(doc_comment_to_attr("/* plain */"), None);
         assert_eq!(doc_comment_to_attr("/* plain"), None);
+    }
+
+    #[test]
+    fn mixed_param_ellipsis_fails_fast() {
+        // T160: `...` mixed with other param tokens never matched
+        // structurally (any-rule skipped the whole list) yet kept the
+        // plus side "bound", leaking raw metavars into the output.
+        for shape in [
+            "fn foo(..., c: T) { ... }",
+            "fn foo(T, ..., c: i32) { ... }",
+            "fn foo(c: i32, ...) { ... }",
+        ] {
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("must stand alone"), "unexpected: {err}");
+        }
+        // Pure shapes still parse: lone `...`, comma variant, empty,
+        // and fully concrete.
+        assert!(parse("fn foo(...) { ... }").params_ellipsis);
+        assert!(parse("fn foo(...,) { ... }").params_ellipsis);
+        assert!(!parse("fn foo() { ... }").params_ellipsis);
+        assert!(!parse("fn foo(a: i32, b: i32) { ... }").params_ellipsis);
+    }
+
+    #[test]
+    fn mixed_body_ellipsis_fails_fast() {
+        // T160: `{ ..., foo(); }` slipped through the must-be-`...`
+        // gates (any-rule) and the written statements were silently
+        // never verified; bodies are always preserved.
+        let err = parse_fn_pattern("fn foo(...) { ..., foo(); }", &[], &[], &[], &[], false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly `...`"), "unexpected: {err}");
+        assert!(parse("fn foo(...) { ... }").body_ellipsis);
+        assert!(parse("fn foo(...) {...}").body_ellipsis);
     }
 
     #[test]
