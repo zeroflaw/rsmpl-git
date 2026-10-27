@@ -2045,6 +2045,68 @@ The following form is invalid because the quoted token is incomplete and the raw
 r#`type`
 ~~~
 
+Engine-verbatim quoting rejections (all exit 2, worktree untouched).
+Parse-time triple — directive-parse stage, before any `rule:`/`file:`
+is attached (text carries no `rule:`/`file:`/`range:`/`suggestion:`
+lines; JSON carries explicit `rule: null` / `file: null` /
+`range: null` / `suggestion: null`):
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: invalid raw-identifier quoting `r#` + backtick in pattern ` Result<T, r#`type`>` (use `` `r#...` ``)
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: invalid raw-identifier quoting in directive `# expr r#`E``
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+reason: unbalanced backtick quoting in pattern ` Result<T, `E>`
+```
+
+`{text}` is the full body-line text after the diff prefix is stripped
+(leading space kept — `- Result<…>` reports `` ` Result<…>` ``);
+`{line}` is the raw `#` directive line. The raw-split pattern reason
+always carries the `(use `` `r#...` ``)` tail; the directive variant
+has no tail.
+
+Later-stage quad — pattern-parse stage, carries `rule:`/`file:`
+(text omits null `range:`/`suggestion:` lines, JSON explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: x
+file: src/lib.rs
+reason: empty backtick quote ```` in pattern
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: x
+file: src/lib.rs
+reason: backtick quote must hold a single token, got `foo bar`
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: x
+file: src/lib.rs
+reason: invalid raw identifier in backtick quote `r#123`
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: x
+file: src/lib.rs
+reason: invalid literal token in backtick quote `123`
+```
+
+`{inner}` is only the offending `` `…` `` token, never the full
+pattern. All seven carry a null suggestion (omitted from text,
+explicit `suggestion: null` in JSON).
+
 Unquoted `r#type` remains valid Rust pattern text and matches a literal raw identifier named `type`; it is not interpreted as a metavariable because `r#type` is not a valid metavariable name. Use `` `r#type` `` when the author wants the literal-token intent to be explicit or when the raw identifier appears in a position where the implementation might otherwise apply metavariable-name normalization.
 
 Raw-identifier matching is token-preserving by default. A pattern token written as `r#type` or `` `r#type` `` matches a source token spelled `r#type`, not an ordinary keyword token `type`. Semantic symbol matching may still resolve both through Rust name resolution when a `# symbol` directive is used; literal-token matching does not perform that normalization.
@@ -3212,7 +3274,7 @@ Reject if:
 2. a `# lang=` directive names a language other than `rust`;
 3. directive syntax is invalid;
 4. metavariable declarations are malformed;
-5. literal-token quoting is malformed, including invalid raw-identifier quoting such as `` r#`type` `` instead of `` `r#type` ``;
+5. literal-token quoting is malformed (engine-verbatim reasons + envelopes in Section 15.4);
 6. the target file cannot be determined;
 7. the old-side range is invalid for the original source file state.
 
@@ -3330,7 +3392,10 @@ and any call/method-call hunk whose `+` side holds more `...` tokens
 than the `-` side has argument ellipses to replay (verbatim reason +
 suggestion, Section 16.3),
 any `# mode=tokens` hunk outside a macro token-tree pattern, or any
-hunk whose `+` side names an unbound metavariable (both fenced below).
+hunk whose `+` side names an unbound metavariable (both fenced below),
+or any malformed literal-token quote — `r#`` split (pattern or
+directive), unbalanced backticks, empty/multi-token/invalid-raw/
+invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 
 ```text
 RSMPL_PATTERN_CONFLICT
