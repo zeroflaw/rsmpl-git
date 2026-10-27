@@ -2531,8 +2531,12 @@ case where an ordinary hunk cannot express the edit.
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
-— so in practice C6 fires for every empty-`+` expression hunk. Delete a
-`let` statement instead (whole lines), or write an explicit replacement.
+— so C6 fires only for empty-`+` general-expression shapes. A minus-only
+call-shape hunk deletes the matched call expression instead (Section 18.2):
+a statement site keeps its `;` (`foo();` → `;`), while a nested deletion
+that would produce invalid syntax fails at rewritten-file reparse
+validation (Section 24.2). Delete a `let` statement instead (whole
+lines), or write an explicit replacement.
 
 Routing note: `let`-led patterns always reach the `let` gate — a
 `let`-keyword callee guard stops the call router claiming `let (E, x)`
