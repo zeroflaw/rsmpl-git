@@ -190,6 +190,28 @@ fn fn_qualifiers(item: &syn::ItemFn) -> impl Iterator<Item = String> {
     v.into_iter()
 }
 
+/// Normalize a leading doc-comment line (`/// text`, `//! text`) to its
+/// canonical attribute form (`#[doc = " text"]`) so whitespace-insensitive
+/// attribute comparison meets `quote!`-rendered targets (T155).
+///
+/// Returns `None` for non-doc lines — including `////...`, which is an
+/// ordinary comment, never a doc attribute. The body is kept verbatim
+/// (leading space included: `/// X` maps to `" X"`, matching `syn`), with
+/// `\` and `"` escaped so the canonical form stays well-formed.
+pub(crate) fn doc_comment_to_attr(trimmed_line: &str) -> Option<String> {
+    let body = if let Some(rest) = trimmed_line.strip_prefix("///") {
+        // `////` or more is an ordinary comment, never a doc attribute.
+        if rest.starts_with('/') {
+            return None;
+        }
+        rest
+    } else {
+        trimmed_line.strip_prefix("//!")?
+    };
+    let escaped = body.replace('\\', "\\\\").replace('"', "\\\"");
+    Some(format!("#[doc = \"{escaped}\"]"))
+}
+
 /// Parse a single function pattern string like
 /// `pub async fn foo<T>(...) -> T where T: Clone { ... }`.
 ///
@@ -205,13 +227,29 @@ pub fn parse_fn_pattern(
     returns_none: bool,
 ) -> Result<FnPattern, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg);
-    let toks = tokenize_pattern(text);
+    // Leading doc-comment lines (`/// text`, `//! text`): peel at the string
+    // level — the whitespace tokenizer below cannot preserve a doc line's
+    // trailing text — and normalize to `#[doc = "..."]` (T155).
+    let mut attrs_written = Vec::new();
+    let all_lines: Vec<&str> = text.lines().collect();
+    let mut peeled = 0;
+    while peeled < all_lines.len() {
+        match doc_comment_to_attr(all_lines[peeled].trim()) {
+            Some(attr) => {
+                attrs_written.push(attr);
+                peeled += 1;
+            }
+            None => break,
+        }
+    }
+    let toks = tokenize_pattern(&all_lines[peeled..].join("\n"));
     let mut i = 0;
 
     // Optional attributes on their own lines: `#[...]` or doc `///`.
     // Note: the tokenizer emits `#` and `[` as separate tokens, so an
     // attribute opens with the two-token pair `#` + `[`, never `"#["`.
-    let mut attrs_written = Vec::new();
+    // (`///`/`//!` lines are already peeled above; the token arms below
+    // stay as fallback for bare markers with no trailing text.)
     while i < toks.len()
         && ((toks[i] == "#" && toks.get(i + 1).is_some_and(|n| n == "["))
             || toks[i] == "///"
@@ -597,8 +635,39 @@ mod tests {
         assert_eq!(p.attrs_written.len(), 1, "got: {:?}", p.attrs_written);
         let p2 = parse("#[inline]\n#[must_use]\nfn foo(...) { ... }");
         assert_eq!(p2.attrs_written.len(), 2, "got: {:?}", p2.attrs_written);
-        // Residual (not T153): `/// text` doc lines with trailing text are
-        // not consumed as attributes — mirroring doc comments in fn patterns
-        // stays unsupported (use `# attrs=preserve`, the default).
+        // T155: `/// text` doc lines peel at the string level into
+        // `#[doc = " text"]`, so doc-comment mirroring parses like any
+        // other explicit attribute.
+        let p3 = parse("/// Doc comment.\nfn foo(...) { ... }");
+        assert_eq!(p3.attrs_written.len(), 1, "got: {:?}", p3.attrs_written);
+        let p4 = parse("//! Inner doc.\nfn foo(...) { ... }");
+        assert_eq!(p4.attrs_written.len(), 1, "got: {:?}", p4.attrs_written);
+    }
+
+    #[test]
+    fn doc_comment_to_attr_cases() {
+        // Leading space kept verbatim (`/// X` is `" X"`, matching `syn`).
+        assert_eq!(
+            doc_comment_to_attr("/// Doc."),
+            Some("#[doc = \" Doc.\"]".to_string())
+        );
+        assert_eq!(
+            doc_comment_to_attr("//! Inner."),
+            Some("#[doc = \" Inner.\"]".to_string())
+        );
+        // No space, no problem.
+        assert_eq!(
+            doc_comment_to_attr("///Doc."),
+            Some("#[doc = \"Doc.\"]".to_string())
+        );
+        // `////` is an ordinary comment, never a doc attribute.
+        assert_eq!(doc_comment_to_attr("//// Not doc."), None);
+        assert_eq!(doc_comment_to_attr("// ordinary"), None);
+        // Quotes and backslashes escape so the canonical form stays
+        // well-formed.
+        assert_eq!(
+            doc_comment_to_attr("/// Say \"hi\" \\ bye."),
+            Some("#[doc = \" Say \\\"hi\\\" \\\\ bye.\"]".to_string())
+        );
     }
 }

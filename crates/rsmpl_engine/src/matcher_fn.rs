@@ -1299,6 +1299,18 @@ mod tests {
     }
 
     #[test]
+    fn attrs_explicit_doc_comment_mirror_applies() {
+        // T155: `///` doc lines normalize to `#[doc = "..."]`, so explicit
+        // doc-comment mirroring parses and compares like `#[...]` attrs.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n# attrs=explicit\n- /// Doc comment.\n- fn foo(...) {\n+ /// Doc comment.\n+ fn bar(...) {\n      ...\n  }\n";
+        let out = apply(patch, "/// Doc comment.\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "/// Doc comment.\nfn bar() {}\n", "got: {out:?}");
+        // Wrong doc text still fails instead of silently matching.
+        let wrong = patch.replace("- /// Doc comment.", "- /// Other text.");
+        assert!(apply(&wrong, "/// Doc comment.\nfn foo() {}\n").is_err());
+    }
+
+    #[test]
     fn optional_no_match_ok() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# optional\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
         let out = apply(patch, "fn a() {}\n").unwrap();

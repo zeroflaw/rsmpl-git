@@ -1830,3 +1830,37 @@ fn strip_with_mirrored_minus_drops_attrs() {
     let text = read(dir.path(), "src/lib.rs");
     assert_eq!(text, "fn f() {\n    let y = 1;\n}\n", "got: {text:?}");
 }
+
+#[test]
+fn explicit_doc_comment_mirror_applies_end_to_end() {
+    // T155: `///` doc lines mirror like `#[...]` attrs end to end —
+    // `--check` previews the rename, `--output` saves the full diff.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "/// Doc comment.\nfn foo() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=r\n# attrs=explicit\n- /// Doc comment.\n- fn foo(...) {\n+ /// Doc comment.\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved_path = dir.path().join("full.patch");
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--output", saved_path.to_str().unwrap()],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved = fs::read_to_string(&saved_path).unwrap();
+    assert!(saved.contains("+fn bar() {}"), "got: {saved}");
+    let text = read(dir.path(), "src/lib.rs");
+    assert_eq!(text, "/// Doc comment.\nfn bar() {}\n", "got: {text:?}");
+}

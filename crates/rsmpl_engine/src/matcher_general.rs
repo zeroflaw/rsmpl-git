@@ -1217,6 +1217,22 @@ mod tests {
     }
 
     #[test]
+    fn explicit_doc_comment_mirror_applies() {
+        // T155: `///` doc lines normalize to `#[doc = "..."]` in
+        // `split_leading_attrs`, so explicit doc-comment mirroring on `let`
+        // compares like `#[...]` attrs and the original envelope survives.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=explicit\n# stmt S\n# expr E\n- /// Doc.\n- let x = E;\n+ /// Doc.\n+ let y = E;\n";
+        let out = apply(patch, "fn f() {\n    /// Doc.\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out, "fn f() {\n    /// Doc.\n    let y = 1;\n}\n",
+            "got: {out:?}"
+        );
+        // Wrong doc text still fails instead of silently matching.
+        let wrong = patch.replace("- /// Doc.", "- /// Other.");
+        assert!(apply(&wrong, "fn f() {\n    /// Doc.\n    let x = 1;\n}\n").is_err());
+    }
+
+    #[test]
     fn let_pattern_is_strict_about_annotations() {
         // `let x = E;` must not match `let x: i32 = 1;`.
         let src = "fn a() {\n    let x: i32 = 1;\n}\n";

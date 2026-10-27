@@ -866,33 +866,38 @@ fn embedded_pat_err() -> StructuredError {
     )
 }
 
-/// Split leading `#[...]` attribute lines (possibly multi-line) from pattern
-/// text; returns (attrs, rest).
+/// Split leading attribute lines (`#[...]`, possibly multi-line, and
+/// `///`/`//!` doc-comment lines normalized to `#[doc = "..."]`) from
+/// pattern text; returns (attrs, rest).
 fn split_leading_attrs(text: &str) -> (Vec<String>, String) {
     let lines: Vec<&str> = text.lines().collect();
     let mut attrs = Vec::new();
     let mut idx = 0;
     while idx < lines.len() {
-        if !lines[idx].trim_start().starts_with("#[") {
-            break;
-        }
-        let mut depth = 0i32;
-        let start = idx;
-        while idx < lines.len() {
-            for c in lines[idx].chars() {
-                if c == '[' {
-                    depth += 1;
-                } else if c == ']' {
-                    depth -= 1;
+        if lines[idx].trim_start().starts_with("#[") {
+            let mut depth = 0i32;
+            let start = idx;
+            while idx < lines.len() {
+                for c in lines[idx].chars() {
+                    if c == '[' {
+                        depth += 1;
+                    } else if c == ']' {
+                        depth -= 1;
+                    }
+                }
+                idx += 1;
+                if depth <= 0 {
+                    break;
                 }
             }
-            idx += 1;
-            if depth <= 0 {
+            attrs.extend(lines[start..idx].iter().map(ToString::to_string));
+            if depth > 0 {
                 break;
             }
-        }
-        attrs.extend(lines[start..idx].iter().map(ToString::to_string));
-        if depth > 0 {
+        } else if let Some(attr) = crate::fn_pattern::doc_comment_to_attr(lines[idx].trim()) {
+            attrs.push(attr);
+            idx += 1;
+        } else {
             break;
         }
     }
@@ -1108,6 +1113,27 @@ mod tests {
         );
         let c = compile(&h).unwrap();
         assert!(matches!(c.kind, PatternKind::Fn { .. }));
+    }
+
+    #[test]
+    fn split_leading_attrs_peels_doc_lines() {
+        // T155: `///`/`//!` peel alongside `#[...]` and normalize to the
+        // `#[doc = "..."]` canonical form; peeling stops at the first
+        // non-attribute line.
+        let (attrs, rest) = split_leading_attrs("/// Doc.\n#[inline]\n//! Inner.\nfn foo() {}");
+        assert_eq!(
+            attrs,
+            vec![
+                "#[doc = \" Doc.\"]".to_string(),
+                "#[inline]".to_string(),
+                "#[doc = \" Inner.\"]".to_string(),
+            ],
+            "got: {attrs:?}"
+        );
+        assert_eq!(rest, "fn foo() {}");
+        let (none, same) = split_leading_attrs("//// Not doc.\nfn foo() {}");
+        assert!(none.is_empty(), "got: {none:?}");
+        assert_eq!(same, "//// Not doc.\nfn foo() {}");
     }
 
     #[test]
