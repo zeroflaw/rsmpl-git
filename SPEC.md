@@ -1936,6 +1936,28 @@ Section 14.6). `stmt`, `block`, `macro`, and `token_tree` are accepted
 as structural placeholders (kind unchecked), not as distinct
 kind-checked binders.
 
+Engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the
+null `range:`/`suggestion:` lines, JSON carries explicit `range: null` /
+`suggestion: null`). The first four kinds share one template (`<kind>`
+and `<Name>` are the offending spelling, backticked as a whole — here
+`# identifier I`):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: a.rs
+reason: `# identifier I` is not supported in v0.1 (see SPEC 15.1 for the implemented kinds)
+```
+
+`# attributes A` has its own reason (`A` is the offending name):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: a.rs
+reason: `# attributes A` is not supported in v0.1 (attribute lists cannot be abstracted; write the `#[...]` lines literally on both sides to constrain them, or omit them — attributes are preserved by default, SPEC 14.6)
+```
+
 ### 15.2 Naming
 
 Metavariable names should be uppercase or UpperCamelCase to distinguish them from ordinary Rust identifiers.
@@ -3282,8 +3304,9 @@ The RSmPL pattern failed to parse. Unknown directives (`# foo`,
 than `rule=` (no silent dead tags — verbatim reason + envelope, Section 8.3),
 any `# root=` value other than `item/expr/stmt/type` (no silent heuristic
 fallthrough — verbatim reason + envelope, Section 13.4),
-any `# identifier/# path/# lifetime/# field` metavariable declaration
-(no kind-specific binding in v0.1, Section 15.1), any `# repeat=<value>`
+any `# identifier/# path/# lifetime/# field/# attributes`
+metavariable declaration (no kind-specific binding in v0.1 — verbatim
+reasons in Section 15.1), any `# repeat=<value>`
 (write bare `# repeat`, Section 17.8), any bad value for a known
 directive key (verbatim reasons in Section 9.6), any `# repeat` on a
 non-call/non-general-expression shape, on a capture hunk, or with an empty
