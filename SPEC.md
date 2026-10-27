@@ -5756,7 +5756,8 @@ audit files are skipped the same way (one `warning:`; they are tool
 output, never lowering inputs). Git's trailing
 `@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL
 headers admit only `rule=` tags, Section 8.3; `git apply` likewise
-ignores them).
+ignores them), as are `index <sha>…` lines (optional file metadata
+that `applyrs` parses but the lowering never reproduces — T374).
 
 Inference v1 is pure: a file section whose every pair shares one
 shape is fully replaced by one semantic hunk (this preserves

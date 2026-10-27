@@ -10,7 +10,9 @@
 //! call rewrites (same callee/arity delta → one `# allow=many`
 //! hunk) into semantic hunks,
 //! whole-file first, then per balanced hunk (T349); the rest stays ordinary. Binary file sections are stripped (a patch is
-//! UTF-8; `applyrs` cannot read binary worktree files) and the
+//! UTF-8; `applyrs` cannot read binary worktree files), `index` lines
+//! are dropped (optional metadata the lowering never reproduces —
+//! T374), and the
 //! remainder is validated by parsing it as RSmPL-Git, so every
 //! `diffrs` output is applyrs-consumable by construction. A failed
 //! semantic candidate falls back to the ordinary passthrough —
@@ -47,8 +49,16 @@ pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
     // (SPEC 8.3), so ordinary titles must go — exactly like `git
     // apply`, which ignores them. Two-sided (native) headers are
     // truncated after the closing `@@`; one-sided (semantic, never
-    // present in native diffs) lines are left alone.
-    let kept: Vec<String> = kept.iter().map(|s| strip_hunk_titles(s)).collect();
+    // present in native diffs) lines are left alone. `index <sha>…`
+    // lines go too (T374): `applyrs` parses them as optional file
+    // metadata and the lowering never reproduces them, so they are
+    // pure overhead in ordinary passthrough. Mode lines (`new/deleted
+    // file mode`, `old/new mode`) stay — they feed the create/delete
+    // flags and the mode splice.
+    let kept: Vec<String> = kept
+        .iter()
+        .map(|s| strip_index_lines(&strip_hunk_titles(s)))
+        .collect();
     let passthrough = kept.join("");
     rsmpl_patch::parse_patch(&passthrough)
         .map_err(|e| InferError::Unparseable(describe_parse_error(&e)))?;
@@ -176,17 +186,36 @@ fn strip_hunk_titles(section: &str) -> String {
     out
 }
 
+/// Drop git's per-file `index <sha>..<sha> <mode>` lines (T374):
+/// optional file metadata for `applyrs` (parsed, never lowered), so
+/// ordinary passthrough stays valid without them. Only the `index `
+/// prefix matches — `new/deleted file mode` and `old/new mode` lines
+/// are load-bearing and never touched.
+fn strip_index_lines(section: &str) -> String {
+    let mut out = String::new();
+    for line in section.lines() {
+        if line.starts_with("index ") {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const TEXT_SECTION: &str = "diff --git a/f.rs b/f.rs\nindex 1..2 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
+    const TEXT_STRIPPED: &str =
+        "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
     const BINARY_SECTION: &str = "diff --git a/img.bin b/img.bin\nindex 1..2 100644\nBinary files a/img.bin and b/img.bin differ\n";
 
     #[test]
     fn text_only_passes_through_validated() {
         let out = infer_rsmpl(TEXT_SECTION).unwrap();
-        assert_eq!(out.rsmpl, TEXT_SECTION);
+        assert_eq!(out.rsmpl, TEXT_STRIPPED);
         assert!(out.stripped_binary.is_empty());
     }
 
@@ -194,7 +223,7 @@ mod tests {
     fn binary_section_is_stripped_and_named() {
         let raw = format!("{TEXT_SECTION}{BINARY_SECTION}");
         let out = infer_rsmpl(&raw).unwrap();
-        assert_eq!(out.rsmpl, TEXT_SECTION);
+        assert_eq!(out.rsmpl, TEXT_STRIPPED);
         assert_eq!(out.stripped_binary, vec!["img.bin"]);
     }
 
@@ -223,5 +252,22 @@ mod tests {
         );
         assert!(!out.rsmpl.contains("fn foo() {\n fn"), "got: {}", out.rsmpl);
         assert!(out.rsmpl.contains("-    1\n+    2\n"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("index "), "got: {}", out.rsmpl);
+    }
+
+    #[test]
+    fn index_lines_are_stripped_mode_lines_kept() {
+        // T374: `index …` is optional metadata (parsed, never lowered)
+        // so it goes; `new file mode` feeds the create flag and stays.
+        let raw = "diff --git a/new.rs b/new.rs\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/new.rs\n@@ -0,0 +1,1 @@\n+fn n() {}\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("index "), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("new file mode 100644\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(out.rsmpl.contains("+fn n() {}\n"), "got: {}", out.rsmpl);
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("stripped patch must parse");
     }
 }

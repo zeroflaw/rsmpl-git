@@ -145,6 +145,61 @@ fn untracked_new_file_round_trips_through_applyrs() {
 }
 
 #[test]
+fn index_lines_are_stripped_from_passthrough() {
+    // T374: `index <sha>…` is optional metadata (parsed, never
+    // lowered), so diffrs drops it from ordinary passthrough. The
+    // index-less patch still checks clean via applyrs and via bare
+    // `git apply --check --unidiff-zero` (agents may pipe it to git
+    // directly, not just applyrs).
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "src/lib.rs", "fn foo() {}\nfn bar() {}\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !patch.lines().any(|l| l.starts_with("index ")),
+        "got: {patch}"
+    );
+    assert!(patch.contains("--- a/src/lib.rs"), "got: {patch}");
+
+    // Back to the pre-change tree: the captured patch must check clean.
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    // Bare git accepts the index-less ordinary patch too.
+    let mut child = std::process::Command::new("git")
+        .args(["apply", "--check", "--unidiff-zero"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    let git_out = child.wait_with_output().unwrap();
+    assert!(
+        git_out.status.success(),
+        "git apply --check failed: {}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+}
+
+#[test]
 fn empty_repo_reports_no_changes() {
     let dir = init_repo();
     let out = run(dir.path(), &[]);
