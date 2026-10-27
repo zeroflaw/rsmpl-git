@@ -5777,10 +5777,16 @@ on collision).
   verbatim so `&d.join("repo")`-style sites can never over-match) →
   one `# allow=many` general-expr hunk (`# expr Receiver` only).
   Trailing `;`/`,` tolerated.
+- Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
+  (leading `pub…`/`::`, trailing `;` normalized away) sharing one
+  two-or-more-segment prefix with a common parent and one renamed
+  last segment, with per-site textually identical non-empty tails
+  (plain/grouped/glob/`as` tails may mix) → one `# allow=many` hunk
+  (`- use <parent>::Old` / `+ use <parent>::New`, no metavars).
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
-  `&`-receiver sites, paths, macro interiors) stays
-  ordinary-hunk passthrough.
+  `&`-receiver sites, single-segment use prefixes, paths, macro
+  interiors) stays ordinary-hunk passthrough.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —

@@ -1,5 +1,6 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
-//! method-to-fn, method-to-method, and &-receiver strip fan-outs.
+//! method-to-fn, method-to-method, &-receiver strip, and use-path
+//! prefix fan-outs.
 //!
 //! Pure detectors over a binary-stripped native diff. Whole-file
 //! first: a section whose every pair shares one shape is fully
@@ -104,8 +105,8 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
         return Some(slot);
     }
     // N >= 2 method-to-function fan-outs (T345), method-to-method
-    // renames (T347), and `&`-receiver strips (T359); fall through to
-    // the bare-call sweep otherwise.
+    // renames (T347), `&`-receiver strips (T359), and use-path prefix
+    // renames (T363); fall through to the bare-call sweep otherwise.
     if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(m2f);
     }
@@ -114,6 +115,9 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     }
     if let Some(strip) = try_ref_method_strip_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(strip);
+    }
+    if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, &path, used_rules) {
+        return Some(uses);
     }
     if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(sweep);
@@ -198,6 +202,8 @@ fn compress_section_per_hunk(
                 try_ref_method_strip_sweep(&minuses, &pluses, path, used_rules)
             {
                 Some(strip)
+            } else if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, path, used_rules) {
+                Some(uses)
             } else {
                 try_call_sweep(&minuses, &pluses, path, used_rules)
             }
@@ -857,6 +863,132 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
         return 0;
     }
     haystack.match_indices(needle).count()
+}
+
+/// N-site (N ≥ 2) use-path prefix rename fan-out (T363, SPEC 14.9):
+/// every pair parses as `use <P_old>::<tail>` → `use <P_new>::<tail>`
+/// with per-site textually identical non-empty tails and one shared
+/// parent + one shared renamed last segment (the tight "one segment
+/// renamed" formulation — the direct analog of the call sweep's
+/// callee-only delta). Leading `pub…`/`::` and trailing `;` are
+/// normalized away (the engine ignores them, so mixed `use`/`pub use`
+/// sites share one hunk, probe-verified); tails may be heterogeneous
+/// across sites (plain, grouped, glob, `as` — the engine preserves
+/// them). Emits one `# allow=many` + `# scope=file` hunk
+/// (`- use P_old` / `+ use P_new`, no metavars). Single-segment
+/// shared prefixes (`use crate`), unequal prefix lengths, divergent
+/// parents/tails, and lone pairs stay ordinary passthrough.
+fn try_use_prefix_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() < 2 {
+        return None;
+    }
+    let mut minus_paths: Vec<Vec<String>> = Vec::new();
+    let mut plus_paths: Vec<Vec<String>> = Vec::new();
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        minus_paths.push(parse_use_path(m)?);
+        plus_paths.push(parse_use_path(p)?);
+    }
+    let old_prefix = common_prefix(&minus_paths);
+    let new_prefix = common_prefix(&plus_paths);
+    // Tight formulation: equal lengths, at least two segments (a lone
+    // `use crate` matches too broadly to infer from N lines of
+    // evidence), shared parent, renamed last segment.
+    if old_prefix.len() != new_prefix.len() || old_prefix.len() < 2 {
+        return None;
+    }
+    let k = old_prefix.len();
+    if old_prefix[..k - 1] != new_prefix[..k - 1] {
+        return None;
+    }
+    if old_prefix[k - 1] == new_prefix[k - 1] {
+        return None;
+    }
+    for (m, p) in minus_paths.iter().zip(plus_paths.iter()) {
+        if m.len() <= k || p.len() <= k {
+            return None;
+        }
+        if m[k..] != p[k..] {
+            return None;
+        }
+    }
+    let rule = unique_rule(
+        used_rules,
+        &format!("use_{}_to_{}", old_prefix[k - 1], new_prefix[k - 1]),
+    );
+    let mut hunk = format!(
+        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n"
+    );
+    hunk.push_str(&format!(
+        "- use {}\n+ use {}\n",
+        old_prefix.join("::"),
+        new_prefix.join("::")
+    ));
+    Some(hunk)
+}
+
+/// Parse one diff line as a `use` path: strip one trailing `;`,
+/// leading visibility, the `use` keyword, and one leading `::`; split
+/// the rest on `::`. The emitted pattern is the bare common prefix,
+/// which is what the engine requires (SPEC 14.9 rejects braces, globs,
+/// and `as` in the pattern — those may only appear in tails, where
+/// per-site equality keeps them verbatim).
+fn parse_use_path(line: &str) -> Option<Vec<String>> {
+    let mut text = line.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = text.strip_suffix(';') {
+        text = stripped.trim_end();
+    }
+    // Leading visibility (`pub`, `pub(…)`) is normalized away — the
+    // pattern carries none and the engine matches both sides.
+    if let Some(rest) = text.strip_prefix("pub") {
+        if rest.is_empty() || rest.starts_with([' ', '\t']) {
+            text = rest.trim_start();
+        } else if rest.starts_with('(') {
+            let end = rest.find(')')?;
+            let after = &rest[end + 1..];
+            if after.is_empty() || !after.starts_with([' ', '\t']) {
+                return None;
+            }
+            text = after.trim_start();
+        } else {
+            return None;
+        }
+    }
+    let mut text = text.strip_prefix("use")?;
+    // `use` must be the keyword, not an ident prefix (`useful::x`).
+    if text.is_empty() || !text.starts_with([' ', '\t']) {
+        return None;
+    }
+    text = text.trim_start();
+    // Tolerate one leading `::` (`use ::crate::old::Thing`).
+    if let Some(rest) = text.strip_prefix("::") {
+        text = rest.trim_start();
+    }
+    if text.is_empty() {
+        return None;
+    }
+    let segs: Vec<String> = text.split("::").map(|s| s.trim().to_string()).collect();
+    if segs.iter().any(|s| s.is_empty()) {
+        return None;
+    }
+    Some(segs)
+}
+
+/// Longest common leading segments across all paths.
+fn common_prefix(paths: &[Vec<String>]) -> Vec<String> {
+    let mut out = paths.first().cloned().unwrap_or_default();
+    for p in paths.iter().skip(1) {
+        let n = out.iter().zip(p.iter()).take_while(|(a, b)| a == b).count();
+        out.truncate(n);
+    }
+    out
 }
 
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:
@@ -1559,5 +1691,141 @@ mod tests {
             "@@ -1,3 +1,3 @@\n fn m() {\n-    &a.join(\"\");\n+    a;\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_basic_compresses() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use crate::old::Thing;\n- use crate::old::Other;\n+ use crate::new::Thing;\n+ use crate::new::Other;\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("rule=use_old_to_new"), "got: {out}");
+        assert!(out.contains("- use crate::old\n"), "got: {out}");
+        assert!(out.contains("+ use crate::new\n"), "got: {out}");
+        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn use_prefix_sweep_heterogeneous_tails_compress() {
+        // Plain, grouped, glob, `as`, and `pub use` tails share one
+        // hunk — the engine preserves tails verbatim (SPEC 14.9).
+        let raw = section(
+            "f.rs",
+            "@@ -1,6 +1,6 @@\n- use crate::old::Thing;\n- use crate::old::{A, B};\n- use crate::old::*;\n- use crate::old::Widget as W;\n- pub use crate::old::Reexport;\n+ use crate::new::Thing;\n+ use crate::new::{A, B};\n+ use crate::new::*;\n+ use crate::new::Widget as W;\n+ pub use crate::new::Reexport;\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("rule=use_old_to_new"), "got: {out}");
+        assert!(out.contains("- use crate::old\n"), "got: {out}");
+        assert!(out.contains("+ use crate::new\n"), "got: {out}");
+        assert!(!out.contains('{'), "pattern must stay bare, got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn use_prefix_sweep_pub_normalized() {
+        // Leading `pub`/`pub(…)` is normalized away — mixed vis sites
+        // share one hunk.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n- use crate::old::A;\n- pub use crate::old::B;\n- pub(crate) use crate::old::C;\n+ use crate::new::A;\n+ pub use crate::new::B;\n+ pub(crate) use crate::new::C;\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("rule=use_old_to_new"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn use_prefix_sweep_leading_colons_tolerated() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use ::crate::old::A;\n- use ::crate::old::B;\n+ use ::crate::new::A;\n+ use ::crate::new::B;\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("- use crate::old\n"), "got: {out}");
+        assert!(out.contains("+ use crate::new\n"), "got: {out}");
+    }
+
+    #[test]
+    fn use_prefix_sweep_single_site_stays_passthrough() {
+        // A lone pair costs more as a semantic hunk than ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n- use crate::old::Thing;\n+ use crate::new::Thing;\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_single_segment_stays_passthrough() {
+        // `use foo` matches too broadly to infer from N lines of
+        // evidence — v1 needs a two-or-more-segment prefix.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use foo::A;\n- use foo::B;\n+ use bar::A;\n+ use bar::B;\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_parent_mismatch_stays_passthrough() {
+        // Shared last segment under divergent parents is not a tight
+        // rename delta.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use crate::old::A;\n- use crate::old::B;\n+ use other::old::A;\n+ use other::old::B;\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_divergent_tail_stays_passthrough() {
+        // Prefix-only changes keep per-site tails byte-equal.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use crate::old::A;\n- use crate::old::B;\n+ use crate::new::A;\n+ use crate::new::C;\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_vis_only_stays_passthrough() {
+        // No ident delta — equal prefixes with equal tails.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use crate::x::A;\n- use crate::x::B;\n+ pub use crate::x::A;\n+ pub use crate::x::B;\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_non_use_stays_passthrough() {
+        // `useful::x` is an ident prefix, not the `use` keyword; bare
+        // calls never parse as use paths.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use crate::old::A;\n- useful::x;\n+ use crate::new::A;\n+ useful::y;\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn use_prefix_sweep_spaced_separators_normalized() {
+        // Spaces around `::` are trimmed per segment; the emitted
+        // pattern is the canonical `::`-joined prefix.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n- use crate :: old :: A;\n- use crate :: old :: B;\n+ use crate::new::A;\n+ use crate::new::B;\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("- use crate::old\n"), "got: {out}");
+        assert!(out.contains("+ use crate::new\n"), "got: {out}");
     }
 }

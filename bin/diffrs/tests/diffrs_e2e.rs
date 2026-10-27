@@ -812,3 +812,70 @@ fn dangling_untracked_symlink_converts() {
         "got: {patch}"
     );
 }
+
+// T363: an N-site use-path prefix rename (`use <parent>::Old::<tail>`
+// → `use <parent>::New::<tail>` with heterogeneous tails) compresses
+// to one `# allow=many` hunk; `matches == N` guards sweep over-match
+// (T361) and a real apply byte-compares against the expected tree.
+#[test]
+fn use_prefix_sweep_compresses_to_one_hunk() {
+    let dir = init_repo();
+    let base = "use crate::old::Thing;\nuse crate::old::{A, B};\nuse crate::old::*;\nuse crate::old::Widget as W;\npub use crate::old::Reexport;\n";
+    let rewritten = base.replace("crate::old", "crate::new");
+    write(dir.path(), "src/lib.rs", base);
+    commit_all(dir.path());
+    write(dir.path(), "src/lib.rs", &rewritten);
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("rule=use_old_to_new"), "got: {patch}");
+    assert!(patch.contains("- use crate::old\n"), "got: {patch}");
+    assert!(patch.contains("+ use crate::new\n"), "got: {patch}");
+    assert_eq!(
+        patch.matches("@@ -1,1 @@").count(),
+        1,
+        "one hunk for five imports, got: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--check")
+        .arg("--format")
+        .arg("json")
+        .arg("--diff-max-lines")
+        .arg("0")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(5), "got: {v}");
+
+    // Real-apply byte-compare (T361): `--check` is blind to sweep
+    // over-match, so apply for real and compare bytes.
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let text = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert_eq!(text, rewritten, "applied tree differs");
+}
