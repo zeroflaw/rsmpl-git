@@ -1187,14 +1187,14 @@ diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,4 +1,5 @@
+@@ -1,3 +1,4 @@
  mod old;
 +mod new;
 
  fn main() {}
 ```
 
-An RSmPL-Git engine should apply ordinary hunks using standard unified-diff semantics or delegate them to a Git-compatible patch applier, with one deliberate divergence: the header counts need not equal the body line counts. The engine positions by `old_start` and verifies every context (` `) and removal (`-`) line byte-for-byte against the original file; an arithmetic mismatch between the header counts and the body (` `+`-` vs ` `+`+`) alone never fails. `old_len` still bounds the file (`old_start-1+old_len` must fit, else `RSMPL_RANGE_CONFLICT`); `new_len` is fully ignored. A content mismatch (wrong `old_start` or wrong line text) fails with `GIT_HUNK_CONFLICT`. Exact line counting is not required — correct `old_start` plus correct body content suffices.
+An RSmPL-Git engine applies ordinary hunks using standard unified-diff semantics or delegates them to a Git-compatible patch applier. Header counts must agree with the body (validated at parse, below): old-side lines (` ` + `-`) equal `-old,len` and new-side lines (` ` + `+`) equal `+new,len`; `\ No newline` markers are neither side. The engine positions by `old_start` and verifies every context (` `) and removal (`-`) line byte-for-byte against the original file. `old_len` still bounds the file (`old_start-1+old_len` must fit, else `RSMPL_RANGE_CONFLICT`); a content mismatch (wrong `old_start` or wrong line text) fails with `GIT_HUNK_CONFLICT`. RSmPL hunks are exempt from count validation: counts are search ranges there and bodies are patterns (Section 10.4).
 
 Ordinary hunks may appear before, between, or after RSmPL hunks.
 
@@ -4010,6 +4010,34 @@ All three carry the bare reason only (null `rule:`/`file:`/`range:`/
 `{line}` echoes the offending line verbatim.
 
 Fourth, an empty patch (zero file sections):
+
+An indented hunk header (T365) is rejected fail-fast: a header with
+leading whitespace is a valid unified-diff context line, so without
+this gate it would land in file metadata and lower to an empty no-op:
+
+```text
+RSMPL_PARSE_CONFLICT
+file: src/lib.rs
+old_range: line 4
+reason: hunk header with leading whitespace (headers must start at column 0):  @@ -1,1 +1,1 @@
+suggestion: remove the leading whitespace so the header starts at column 0
+```
+
+An ordinary hunk whose header counts disagree with the body (T367) is
+rejected fail-fast: old-side lines (` ` + `-`) must equal `-old,len`
+and new-side lines (` ` + `+`) must equal `+new,len` (`\ No newline`
+markers are neither side; RSmPL hunks are exempt, Section 10.4):
+
+```text
+RSMPL_PARSE_CONFLICT
+file: src/lib.rs
+old_range: line 4
+reason: ordinary hunk body has 3 old-side and 3 new-side lines but header claims -1,5 +1,3: @@ -1,5 +1,3 @@
+suggestion: fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines)
+```
+
+Both carry file + header-line range + suggestion (no `rule:` line
+unless the hunk header carries one; JSON explicit throughout).
 
 ```text
 RSMPL_PARSE_CONFLICT

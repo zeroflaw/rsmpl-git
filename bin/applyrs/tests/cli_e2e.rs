@@ -1575,26 +1575,60 @@ fn repeat_folds_nested_match_json_report() {
 }
 
 #[test]
-fn ordinary_hunk_counts_are_advisory_content_is_load_bearing() {
-    // T134: header counts need not equal body counts; content is the gate.
-    // Body is 2 context + 1 removal (+ 1 addition); header claims 1,4/1,99
-    // (both fit in the 5-line file but match no body arithmetic). Applies.
-    // One wrong content line still fails with GIT_HUNK_CONFLICT.
+fn ordinary_hunk_count_mismatch_rejected() {
+    // T367 (reverses T134): ordinary hunk headers must agree with the
+    // body. Counts are validated at parse, so a miscounted header fails
+    // fast with RSMPL_PARSE_CONFLICT instead of surfacing downstream as
+    // a misleading GIT_HUNK_CONFLICT. Body is 2 context + 1 removal
+    // (+ 1 addition); header claims 1,4/1,99.
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
         "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\n",
     );
-    let lenient =
+    let mismatched =
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,99 @@\n fn a() {}\n-fn b() {}\n+fn b2() {}\n fn c() {}\n";
-    let out = run_stdin(dir.path(), lenient, &["--check"]);
-    assert!(
-        out.status.success(),
-        "lenient counts should pass, stderr: {}",
+    let out = run_stdin(dir.path(), mismatched, &["--check"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Same file, same (correct) counts, but one wrong content line.
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(
+        stderr.contains(
+            "ordinary hunk body has 3 old-side and 3 new-side lines but header claims -1,4 +1,99"
+        ),
+        "got: {stderr}"
+    );
+    assert!(
+        stderr.contains("old_range: line 4"),
+        "range is the hunk-header line number, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("suggestion: fix the header counts"),
+        "got: {stderr}"
+    );
+    let out = run_stdin(dir.path(), mismatched, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PARSE_CONFLICT")
+    );
+    assert_eq!(v["error"]["file"], serde_json::json!("src/lib.rs"));
+    assert_eq!(v["error"]["range"], serde_json::json!("line 4"));
+    assert!(
+        v["error"]["suggestion"].is_string(),
+        "suggestion must be present, got: {v}"
+    );
+    // Same file, correct counts, but one wrong content line: still
+    // GIT_HUNK_CONFLICT with the engine-verbatim reason.
     let wrong_content =
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-WRONG\n+fn b2() {}\n fn c() {}\n";
     let out = run_stdin(dir.path(), wrong_content, &["--check"]);

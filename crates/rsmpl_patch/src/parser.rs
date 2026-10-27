@@ -88,7 +88,8 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
             let section = current.as_mut().ok_or_else(|| {
                 StructuredError::new(ErrorCode::ParseConflict, "hunk header outside file section")
             })?;
-            let (hunk, next) = parse_hunk(&lines, idx)?;
+            let target = section.target_path.clone();
+            let (hunk, next) = parse_hunk(&lines, idx, &target)?;
             section.hunks.push(hunk);
             idx = next;
             continue;
@@ -149,6 +150,23 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
         // Stray line inside file section but outside hunk: be lenient and
         // record as metadata (e.g. `diff --git` extensions).
         if let Some(sec) = current.as_mut() {
+            // T365: a hunk header with leading whitespace is a valid
+            // unified-diff context line, so without this gate it lands
+            // here as metadata and the section lowers to an empty no-op
+            // (exit 0, `check: true`). Headers must start at column 0.
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("@@") && parse_hunk_header(trimmed).is_ok() {
+                return Err(StructuredError::new(
+                    ErrorCode::ParseConflict,
+                    format!(
+                        "hunk header with leading whitespace (headers must start at column 0): {line}"
+                    ),
+                )
+                .with_file(sec.target_path.clone())
+                .with_range(format!("line {}", idx + 1))
+                .with_suggestion("remove the leading whitespace so the header starts at column 0")
+                .into());
+            }
             sec.metadata.push(line.to_string());
             idx += 1;
             continue;
@@ -259,7 +277,7 @@ fn target_path(new_path: &str, old_path: &str) -> String {
     strip_ab_prefix(new_path)
 }
 
-fn parse_hunk(lines: &[&str], at: usize) -> Result<(Hunk, usize)> {
+fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
     let header_line = lines[at];
     let header = parse_hunk_header(header_line).map_err(|e: StructuredError| {
         ParseError::Structured(e.with_range(format!("line {}", at + 1)))
@@ -331,6 +349,37 @@ fn parse_hunk(lines: &[&str], at: usize) -> Result<(Hunk, usize)> {
             .into());
         }
         let (body, next) = parse_body_lines(lines, idx, false)?;
+        // T367: ordinary hunk headers must agree with the body: old-side
+        // lines (` ` + `-`) equal `-old,len`, new-side lines (` ` + `+`)
+        // equal `+new,len` (`\ No newline` markers are neither side).
+        // The engine applies from the body alone, so a miscounted header
+        // used to surface downstream as a misleading `GIT_HUNK_CONFLICT`.
+        // RSmPL hunks are exempt (counts are search ranges there, bodies
+        // are patterns, SPEC 10.4).
+        let old_count = body
+            .iter()
+            .filter(|b| b.prefix == ' ' || b.prefix == '-')
+            .count() as u32;
+        let new_count = body
+            .iter()
+            .filter(|b| b.prefix == ' ' || b.prefix == '+')
+            .count() as u32;
+        if old_count != header.old_len || new_count != header.new_len {
+            let mut err = StructuredError::new(
+                ErrorCode::ParseConflict,
+                format!(
+                    "ordinary hunk body has {old_count} old-side and {new_count} new-side lines but header claims -{},{} +{},{}: {}",
+                    header.old_start, header.old_len, header.new_start, header.new_len, lines[at]
+                ),
+            )
+            .with_file(file)
+            .with_range(format!("line {}", at + 1))
+            .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines)");
+            if let Some(rule) = &header.rule {
+                err = err.with_rule(rule.clone());
+            }
+            return Err(err.into());
+        }
         Ok((
             Hunk::Ordinary(OrdinaryHunk {
                 header,
@@ -1031,7 +1080,7 @@ mod tests {
 
     #[test]
     fn parses_ordinary_hunk() {
-        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,5 @@\n mod old;\n+mod new;\n\n fn main() {}\n";
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n mod old;\n+mod new;\n\n fn main() {}\n";
         let p = parse_patch(text).unwrap();
         assert_eq!(p.files.len(), 1);
         assert_eq!(p.files[0].target_path, "src/lib.rs");
@@ -1262,7 +1311,7 @@ mod tests {
 
     #[test]
     fn empty_line_between_body_lines_is_context() {
-        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@\n a\n\n b\n";
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n a\n\n b\n";
         let p = parse_patch(text).unwrap();
         match &p.files[0].hunks[0] {
             Hunk::Ordinary(oh) => {
@@ -1368,5 +1417,96 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(d.len(), 5);
+    }
+
+    #[test]
+    fn indented_hunk_header_rejected() {
+        // T365: a hunk header with leading whitespace is a valid
+        // unified-diff context line; without this gate it lands in
+        // metadata and the section lowers to an empty no-op (exit 0).
+        // Headers must start at column 0.
+        for indented in [
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n @@ -1,1 +1,1 @@\n-foo\n+bar\n",
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n\t@@ -1,1 +1,1 @@\n-foo\n+bar\n",
+        ] {
+            let err = parse_patch(indented).unwrap_err();
+            let ParseError::Structured(s) = &err else {
+                panic!("expected structured PARSE_CONFLICT, got: {err}");
+            };
+            assert_eq!(s.code, ErrorCode::ParseConflict);
+            assert!(
+                s.message.contains("leading whitespace"),
+                "got: {}",
+                s.message
+            );
+            assert_eq!(s.file.as_deref(), Some("src/lib.rs"));
+            assert_eq!(s.range.as_deref(), Some("line 4"));
+        }
+    }
+
+    #[test]
+    fn indented_header_inside_body_stays_context() {
+        // Guard against overreach: an indented `@@` line inside a hunk
+        // body is a context line (git semantics), not an error.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n @@ -9,9 +9,9 @@\n real\n";
+        let p = parse_patch(text).unwrap();
+        match &p.files[0].hunks[0] {
+            Hunk::Ordinary(oh) => {
+                assert_eq!(oh.lines.len(), 2);
+                assert_eq!(oh.lines[0].text, "@@ -9,9 +9,9 @@");
+            }
+            _ => panic!("expected ordinary"),
+        }
+    }
+
+    #[test]
+    fn ordinary_hunk_count_mismatch_rejected() {
+        // T367: ordinary header counts must agree with the body
+        // (old-side = ` ` + `-`, new-side = ` ` + `+`; `\ No newline`
+        // markers are neither side).
+        let old_short = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,3 @@\n a\n-b\n+c\n a\n";
+        let err = parse_patch(old_short).unwrap_err();
+        let ParseError::Structured(s) = &err else {
+            panic!("expected structured PARSE_CONFLICT, got: {err}");
+        };
+        assert_eq!(s.code, ErrorCode::ParseConflict);
+        assert!(
+            s.message.contains(
+                "ordinary hunk body has 3 old-side and 3 new-side lines but header claims -1,5 +1,3"
+            ),
+            "got: {}",
+            s.message
+        );
+        assert_eq!(s.file.as_deref(), Some("src/lib.rs"));
+        assert_eq!(s.range.as_deref(), Some("line 4"));
+        assert!(s
+            .suggestion
+            .as_deref()
+            .unwrap()
+            .contains("fix the header counts"));
+        // New-side-only mismatch.
+        let new_short = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,9 @@\n a\n-b\n+c\n a\n";
+        let err = parse_patch(new_short).unwrap_err();
+        let ParseError::Structured(s) = &err else {
+            panic!("expected structured PARSE_CONFLICT, got: {err}");
+        };
+        assert_eq!(s.code, ErrorCode::ParseConflict);
+        assert!(
+            s.message.contains("header claims -1,3 +1,9"),
+            "got: {}",
+            s.message
+        );
+        // `\ No newline` markers are neither side: exact counts pass.
+        let marker_ok = "diff --git a/link b/link\n--- /dev/null\n+++ b/link\n@@ -0,0 +1,1 @@\n+real.txt\n\\ No newline at end of file\n";
+        parse_patch(marker_ok).unwrap();
+    }
+
+    #[test]
+    fn rsmpl_hunk_counts_not_validated() {
+        // SPEC 10.4: RSmPL counts are search ranges, bodies are patterns;
+        // no correspondence is required.
+        let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,99 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+        let p = parse_patch(text).unwrap();
+        assert!(p.files[0].hunks[0].is_rsmpl());
     }
 }

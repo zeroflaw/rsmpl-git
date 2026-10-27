@@ -157,7 +157,7 @@ pub fn ordinary_hunk_edits(
 mod tests {
     use super::*;
     use rsmpl_patch::parse_patch;
-    use rsmpl_patch::Hunk;
+    use rsmpl_patch::{BodyLine, Hunk, HunkHeader};
 
     fn ordinary_of(patch: &str) -> OrdinaryHunk {
         let p = parse_patch(patch).unwrap();
@@ -171,7 +171,7 @@ mod tests {
     fn applies_simple_hunk() {
         let src = "mod old;\n\nfn main() {}\n";
         let h = ordinary_of(
-            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,5 @@\n mod old;\n+mod new;\n\n fn main() {}\n",
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n mod old;\n+mod new;\n\n fn main() {}\n",
         );
         let idx = LineIndex::new(src);
         let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
@@ -183,7 +183,7 @@ mod tests {
     fn rejects_context_mismatch() {
         let src = "mod other;\n\nfn main() {}\n";
         let h = ordinary_of(
-            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,5 @@\n mod old;\n+mod new;\n\n fn main() {}\n",
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n mod old;\n+mod new;\n\n fn main() {}\n",
         );
         let idx = LineIndex::new(src);
         assert!(ordinary_hunk_edits(&idx, src, &h).is_err());
@@ -214,5 +214,70 @@ mod tests {
         let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
         let out = crate::edits::apply_edits(src, edits).unwrap();
         assert_eq!(out, "other.txt");
+    }
+
+    #[test]
+    fn context_line_beyond_eof_reason() {
+        // T367: truthful ordinary headers always fit the file (Pass 0
+        // range check), so the beyond-EOF arms are unreachable via the
+        // CLI parser; pin the engine-verbatim reasons here with a
+        // hand-built hunk that skips parse-time count validation.
+        let h = OrdinaryHunk {
+            header: HunkHeader {
+                old_start: 1,
+                old_len: 1,
+                new_start: 1,
+                new_len: 2,
+                new_elided: false,
+                rule: None,
+                raw_tail: String::new(),
+            },
+            lines: vec![
+                BodyLine {
+                    prefix: ' ',
+                    text: "fn main() {}".to_string(),
+                },
+                BodyLine {
+                    prefix: ' ',
+                    text: "EXTRA-CTX".to_string(),
+                },
+            ],
+        };
+        let src = "fn main() {}\n";
+        let idx = LineIndex::new(src);
+        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        assert_eq!(err.code, ErrorCode::GitHunkConflict);
+        assert_eq!(err.message, "context line beyond EOF (line 2)");
+    }
+
+    #[test]
+    fn removal_beyond_eof_reason() {
+        // Same T367 note as above: engine-level pin.
+        let h = OrdinaryHunk {
+            header: HunkHeader {
+                old_start: 1,
+                old_len: 1,
+                new_start: 1,
+                new_len: 0,
+                new_elided: false,
+                rule: None,
+                raw_tail: String::new(),
+            },
+            lines: vec![
+                BodyLine {
+                    prefix: '-',
+                    text: "fn main() {}".to_string(),
+                },
+                BodyLine {
+                    prefix: '-',
+                    text: "EXTRA-DEL".to_string(),
+                },
+            ],
+        };
+        let src = "fn main() {}\n";
+        let idx = LineIndex::new(src);
+        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        assert_eq!(err.code, ErrorCode::GitHunkConflict);
+        assert_eq!(err.message, "removal beyond EOF (line 2)");
     }
 }

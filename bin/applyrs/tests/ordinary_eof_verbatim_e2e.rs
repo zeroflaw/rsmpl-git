@@ -1,11 +1,14 @@
-//! T291: engine-verbatim ordinary-hunk EOF / mismatch reasons and the
+//! T291: engine-verbatim ordinary-hunk mismatch reasons and the
 //! degenerate-empty-pattern Raw rejection (SPEC 25.7, SPEC 25.3).
 //!
-//! All four reasons below are pinned verbatim (text mode on stderr,
+//! The two reasons below are pinned verbatim (text mode on stderr,
 //! explicit nulls in the JSON envelope). The worktree stays untouched
-//! in every case. The `bad range` / `invalid diff prefix` / `target
-//! file not found in tree` arms carry no pins: they are unreachable
-//! via the CLI (SPEC 25.7 documents them as defensive-only).
+//! in every case. The beyond-EOF arms moved to engine unit tests in
+//! ordinary.rs: T367 count validation plus the Pass 0 range check make
+//! them unreachable via the CLI parser. The `bad range` / `invalid
+//! diff prefix` / `target file not found in tree` arms carry no pins:
+//! they are unreachable via the CLI (SPEC 25.7 documents them as
+//! defensive-only).
 
 mod common;
 use common::*;
@@ -25,66 +28,6 @@ fn check_json(patch: &str, file: &str, content: &str) -> serde_json::Value {
     let got = read(dir.path(), file);
     assert_eq!(got, content, "worktree must be untouched");
     v
-}
-
-#[test]
-fn context_line_beyond_eof_verbatim() {
-    let patch = "diff --git a.rs\n@@ -1,1 +1,2 @@\n fn main() {}\n EXTRA-CTX\n";
-    let reason = "context line beyond EOF (line 2)";
-    let content = "fn main() {}\n";
-    let dir = init_repo();
-    write(dir.path(), "a.rs", content);
-    let out = run_stdin(dir.path(), patch, &["--check"]);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(stderr.contains("GIT_HUNK_CONFLICT"), "got: {stderr}");
-    assert!(stderr.contains(reason), "got: {stderr}");
-    assert!(stderr.contains("old_range: 1..2"), "got: {stderr}");
-    assert!(!stderr.contains("suggestion:"), "got: {stderr}");
-    let got = read(dir.path(), "a.rs");
-    assert_eq!(got, content);
-    let v = check_json(patch, "a.rs", content);
-    assert_eq!(v["error"]["code"], serde_json::json!("GIT_HUNK_CONFLICT"));
-    assert_eq!(v["error"]["rule"], serde_json::json!(""));
-    assert_eq!(v["error"]["file"], serde_json::json!("a.rs"));
-    assert_eq!(v["error"]["range"], serde_json::json!("1..2"));
-    assert_eq!(v["error"]["reason"], serde_json::json!(reason));
-    assert!(v["error"]["suggestion"].is_null(), "got: {v}");
-}
-
-#[test]
-fn removal_beyond_eof_verbatim() {
-    let patch = "diff --git a.rs\n@@ -1,1 +1,0 @@\n-fn main() {}\n-EXTRA-DEL\n";
-    let reason = "removal beyond EOF (line 2)";
-    let content = "fn main() {}\n";
-    let dir = init_repo();
-    write(dir.path(), "a.rs", content);
-    let out = run_stdin(dir.path(), patch, &["--check"]);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(stderr.contains("GIT_HUNK_CONFLICT"), "got: {stderr}");
-    assert!(stderr.contains(reason), "got: {stderr}");
-    assert!(stderr.contains("old_range: 1..2"), "got: {stderr}");
-    assert!(!stderr.contains("suggestion:"), "got: {stderr}");
-    let got = read(dir.path(), "a.rs");
-    assert_eq!(got, content);
-    let v = check_json(patch, "a.rs", content);
-    assert_eq!(v["error"]["code"], serde_json::json!("GIT_HUNK_CONFLICT"));
-    assert_eq!(v["error"]["rule"], serde_json::json!(""));
-    assert_eq!(v["error"]["file"], serde_json::json!("a.rs"));
-    assert_eq!(v["error"]["range"], serde_json::json!("1..2"));
-    assert_eq!(v["error"]["reason"], serde_json::json!(reason));
-    assert!(v["error"]["suggestion"].is_null(), "got: {v}");
 }
 
 #[test]

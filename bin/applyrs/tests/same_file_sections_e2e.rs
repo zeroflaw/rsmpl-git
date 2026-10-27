@@ -94,7 +94,7 @@ fn rebased_second_section_fails_content_conflict() {
 fn second_section_oob_is_range_conflict_text() {
     let dir = init_repo();
     write(dir.path(), "f.txt", "l01\nl02\nl03\n");
-    let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n-l01\n+L01\n\ndiff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -90,2 +90,2 @@\n-xxx\n+yyy\n";
+    let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n-l01\n+L01\n\ndiff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -90,2 +90,2 @@\n-xxx\n-zzz\n+yyy\n+www\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert_eq!(
         out.status.code(),
@@ -116,7 +116,7 @@ fn second_section_oob_is_range_conflict_text() {
 fn second_section_oob_is_range_conflict_json() {
     let dir = init_repo();
     write(dir.path(), "f.txt", "l01\nl02\nl03\n");
-    let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n-l01\n+L01\n\ndiff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -90,2 +90,2 @@\n-xxx\n+yyy\n";
+    let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n-l01\n+L01\n\ndiff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -90,2 +90,2 @@\n-xxx\n-zzz\n+yyy\n+www\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(
         out.status.code(),
