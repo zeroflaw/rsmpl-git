@@ -5716,11 +5716,22 @@ on collision).
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain
   top-level `fn` (no `pub`/`async`/generics/return-type/where —
-  those need explicit slots v1 does not emit) compresses to
-  `- fn Old(...)` / `+ New(...)` with `# lang=rust`; other kinds
-  (`struct`/`enum`/`trait`/`type`/`mod`/`union`/`const`/`static`,
-  vis echoed) compress to bare `- kind Old` / `+ kind New` pairs.
-  `impl` and indented (method/block-level) lines are excluded.
+  those need explicit slots the single-rename arm does not emit)
+  compresses to `- fn Old(...)` / `+ New(...)` with `# lang=rust`;
+  other kinds (`struct`/`enum`/`trait`/`type`/`mod`/`union`/`const`/
+  `static`, vis echoed) compress to bare `- kind Old` /
+  `+ kind New` pairs. Single indented (method/block-level) and
+  single generic-fn lines are excluded (no token win as a slot hunk).
+- Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
+  `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
+  differing in exactly the fn ident (per-site vis/qual/generics/
+  params/return/where byte-equal, heterogeneous across sites, one
+  shared `Old`→`New` delta). Uniformly column-0 sites emit the
+  free-fn sweep (`- V Q fn Old G (...) W {` /
+  `+ V Q fn New G (...) W {`); uniformly indented sites emit the
+  `impl Svc` advisory-context sweep (T323: header names no block,
+  all blocks rewrite). Mixed indent or divergent deltas stay
+  passthrough.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →

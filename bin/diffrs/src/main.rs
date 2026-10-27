@@ -13,9 +13,9 @@
 //! diffrs --format json
 //! ```
 //!
-//! v1 compresses fn/item renames and N-site call sweeps into
-//! semantic hunks (SPEC D.4) and passes everything else through as
-//! ordinary hunks. The output always parses as RSmPL-Git and
+//! v1 compresses fn/item renames, N-site slot-sweep renames, and
+//! N-site call sweeps into semantic hunks (SPEC D.4) and passes
+//! everything else through as ordinary hunks. The output always parses as RSmPL-Git and
 //! round-trips through `applyrs --check` against the pre-change tree.
 
 use std::path::PathBuf;

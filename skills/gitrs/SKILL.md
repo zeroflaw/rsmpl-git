@@ -123,7 +123,7 @@ gitrs apply --file change.rsmpl                       # apply for real
   (no input flags means stdin; `--file -` is the explicit alias; `--patch`
   passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
   Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v1
-  renames/call-sweeps compressed; see README diff section, SPEC D.4).
+  renames/slot/call-sweeps compressed; see README diff section, SPEC D.4).
 
 ## Errors: code → fix (SPEC 25)
 

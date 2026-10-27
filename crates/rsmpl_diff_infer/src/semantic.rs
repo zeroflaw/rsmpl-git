@@ -1,4 +1,4 @@
-//! v1 semantic inference: fn/item rename + call-sweep fan-out.
+//! v1 semantic inference: fn/item rename + slot-sweep + call-sweep fan-out.
 //!
 //! Pure detectors over a binary-stripped native diff. Per-file
 //! all-or-nothing: a file section is either fully replaced by
@@ -85,8 +85,14 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     }
     if minuses.len() == 1 {
         // Single pair: fn/item rename only (a lone call rewrite has
-        // no token win over the ordinary hunk).
+        // no token win over the ordinary hunk; a lone heterogeneous
+        // fn header likewise costs more as a slot hunk than ordinary).
         return try_item_rename(minuses[0], pluses[0], &path, used_rules);
+    }
+    // N >= 2 heterogeneous fn/method renames compress to one slot
+    // sweep (T344); fall through to the call sweep otherwise.
+    if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, used_rules) {
+        return Some(slot);
     }
     try_call_sweep(&minuses, &pluses, &path, used_rules)
 }
@@ -210,6 +216,140 @@ fn contains_word(haystack: &str, word: &str) -> bool {
     haystack
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|w| w == word)
+}
+
+/// N-site (N ≥ 2) heterogeneous fn/method rename with a
+/// callee-only delta: every pair is a single-line `{`-terminated
+/// fn header differing in exactly the fn ident (vis/qual/generics/
+/// params/return/where byte-equal per site, heterogeneous across
+/// sites). Column-0 sites emit the free-fn slot sweep (T329 shape);
+/// uniformly indented sites emit the `impl Svc` advisory-context
+/// sweep (T337 shape); mixed indent stays passthrough.
+fn try_fn_slot_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() < 2 {
+        return None;
+    }
+    let mut old_name: Option<String> = None;
+    let mut new_name: Option<String> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (o, n) = fn_rename_pair(m, p)?;
+        if old_name.as_ref().is_some_and(|c| *c != o) {
+            return None;
+        }
+        if new_name.as_ref().is_some_and(|c| *c != n) {
+            return None;
+        }
+        old_name = Some(o);
+        new_name = Some(n);
+    }
+    let (old_name, new_name) = (old_name?, new_name?);
+    if old_name == new_name {
+        return None;
+    }
+    let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
+    let all_col0 = minuses
+        .iter()
+        .all(|m| !m.is_empty() && !m.starts_with([' ', '\t']));
+    if !all_indented && !all_col0 {
+        return None;
+    }
+    let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
+    let plus_col0 = pluses
+        .iter()
+        .all(|p| !p.is_empty() && !p.starts_with([' ', '\t']));
+    if all_indented != plus_indented || all_col0 != plus_col0 {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
+    let mut hunk = format!(
+        "diff --git a/{path} b/{path}\n@@ -1,1 @@ rule={rule}\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n"
+    );
+    if all_indented {
+        hunk.push_str(&format!(
+            "  impl Svc {{\n      ...\n-     V Q fn {old_name} G (...) W {{\n+     V Q fn {new_name} G (...) W {{\n          ...\n      }}\n  }}\n"
+        ));
+    } else {
+        hunk.push_str(&format!(
+            "- V Q fn {old_name} G (...) W {{\n+ V Q fn {new_name} G (...) W {{\n      ...\n  }}\n"
+        ));
+    }
+    Some(hunk)
+}
+
+/// A `-`/`+` line pair as a rename-only fn header: both trimmed
+/// lines end with `{`, both parse as fn-shaped (`ItemFn` or
+/// `ImplItemFn`), and they differ in exactly the fn ident.
+fn fn_rename_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
+    let o = old_line.trim();
+    let p = new_line.trim();
+    if o.is_empty() || p.is_empty() {
+        return None;
+    }
+    if !o.ends_with('{') || !p.ends_with('{') {
+        return None;
+    }
+    if !is_fn_shaped(o) || !is_fn_shaped(p) {
+        return None;
+    }
+    let (o_pre, o_ident, o_suf) = split_fn_ident(o)?;
+    let (p_pre, p_ident, p_suf) = split_fn_ident(p)?;
+    if o_pre != p_pre || o_suf != p_suf {
+        return None;
+    }
+    if o_ident == p_ident || o_ident.is_empty() || p_ident.is_empty() {
+        return None;
+    }
+    if o_suf.is_empty() {
+        return None;
+    }
+    let tail = o_suf.trim_start();
+    if !(tail.starts_with('(') || tail.starts_with('<')) {
+        return None;
+    }
+    Some((o_ident, p_ident))
+}
+
+fn is_fn_shaped(trimmed: &str) -> bool {
+    let probe = format!("{trimmed} }}");
+    syn::parse_str::<syn::ItemFn>(&probe).is_ok()
+        || syn::parse_str::<syn::ImplItemFn>(&probe).is_ok()
+}
+
+/// Split `... fn Ident<...>(...)` into (prefix-before-ident, ident,
+/// suffix-after-ident). The `fn` keyword must be word-bounded.
+fn split_fn_ident(text: &str) -> Option<(String, String, String)> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if bytes[i..i + 2] == *b"fn"
+            && (i == 0 || !is_ident_char(bytes[i - 1] as char))
+            && (i + 2 < bytes.len() && bytes[i + 2].is_ascii_whitespace())
+        {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let start = j;
+            let len = ident_len(&text[j..])?;
+            let end = start + len;
+            return Some((
+                text[..start].to_string(),
+                text[start..end].to_string(),
+                text[end..].to_string(),
+            ));
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_ident_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphanumeric()
 }
 
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:
@@ -516,6 +656,77 @@ mod tests {
         let raw = section(
             "f.rs",
             "new file mode 100644\n--- /dev/null\n+++ b/f.rs\n@@ -0,0 +1,1 @@\n+fn n() {}\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn free_slot_sweep_heterogeneous_compresses() {
+        // Heterogeneous vis/qual across sites, rename-only per site.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-async fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n+async fn bar(x: i32) -> i32 {\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("# visibility V\n"), "got: {out}");
+        assert!(out.contains("# qualifier_list Q\n"), "got: {out}");
+        assert!(out.contains("- V Q fn foo G (...) W {\n"), "got: {out}");
+        assert!(out.contains("+ V Q fn bar G (...) W {\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(
+            !out.contains("impl Svc"),
+            "free sweep needs no impl wrapper, got: {out}"
+        );
+    }
+
+    #[test]
+    fn method_slot_sweep_compresses_with_impl_wrapper() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n impl T {\n-    fn foo(&self) {\n-    pub fn foo(&self) {\n+    fn bar(&self) {\n+    pub fn bar(&self) {\n     }\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("impl Svc {\n"), "got: {out}");
+        assert!(out.contains("-     V Q fn foo G (...) W {\n"), "got: {out}");
+        assert!(out.contains("+     V Q fn bar G (...) W {\n"), "got: {out}");
+    }
+
+    #[test]
+    fn mixed_indent_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn foo(x: i32) {\n-    fn foo(&self) {\n+fn bar(x: i32) {\n+    fn bar(&self) {\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn divergent_renames_stay_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn foo(x: i32) {\n-fn foo(y: i32) {\n+fn bar(x: i32) {\n+fn baz(y: i32) {\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn param_edit_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn foo(x: i32) {\n-fn foo(y: i32) {\n+fn bar(x: u32) {\n+fn bar(y: i32) {\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn generic_single_stays_passthrough() {
+        // N >= 2 only: a lone heterogeneous header costs more as a
+        // slot hunk than as an ordinary hunk.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn foo<T>(x: T) {\n+fn bar<T>(x: T) {\n     1\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
