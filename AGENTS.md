@@ -137,7 +137,7 @@ Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 `{version, rules, files, diff, diff_truncated, diff_lines, diff_shown, check}` (SPEC D.2);
 `version` is the report schema (currently `1`); `check` is boolean (`true` =
 `--check` ran clean, `false` = skipped); each `rules` entry carries per-match
-`spans` (`[[start,end], …]`, original-source 1-based lines, `spans.len() == matches`);
+`spans` (`[[start,end], …]`, original-source 1-based lines, one per emitted edit — `len == matches` except evolution delete+insert pairs);
 JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes
 the full diff before `--check` runs but nothing when the lowering is empty;

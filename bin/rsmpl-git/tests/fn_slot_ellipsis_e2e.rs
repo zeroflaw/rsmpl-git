@@ -322,3 +322,48 @@ fn trait_plus_pub_fails_fast() {
     );
     assert_eq!(read(dir.path(), "src/lib.rs"), before, "worktree untouched");
 }
+
+#[test]
+fn impl_const_fn_return_evolution_applies() {
+    // T190: qualified methods share the impl-context slot planner --
+    // `const fn` return evolution applies byte-exact.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\n\nimpl S {\n    const fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,5 @@ rule=t\n# lang=rust\n  impl S {\n      ...\n-     const fn make(x: i32) -> i32 {\n+     const fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "must apply: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "struct S;\n\nimpl S {\n    const fn make(x: i64) -> i64 {\n        x + 1\n    }\n}\n"
+    );
+}
+
+#[test]
+fn impl_async_fn_evolution_json_report() {
+    // T190: JSON report pin -- `async fn` evolution carries matches/spans.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S;\n\nimpl S {\n    async fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -3,5 @@ rule=t\n# lang=rust\n  impl S {\n      ...\n-     async fn make(x: i32) -> i32 {\n+     async fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "must check clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("\"matches\":1"), "got: {stdout}");
+    assert!(stdout.contains("\"spans\":[[4,4],[4,4]]"), "got: {stdout}");
+    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+}

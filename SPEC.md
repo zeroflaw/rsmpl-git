@@ -4089,11 +4089,13 @@ prints one JSON object to stdout:
 
 - `rules` is the per-rule match report (text mode prints only one-line
   `applied`/`check` summaries; agents needing match counts use JSON).
-  Each entry carries `spans`: one original-source 1-based inclusive
-  `[start, end]` line range per match in application order, so
-  `spans.len() == matches` always holds and agents can verify what matched
-  without re-reading the file. Insertions report the anchor as `[L, L]`;
-  an empty match set (optional no-match) reports `[]`.
+  Each entry carries `spans`: original-source 1-based inclusive
+  `[start, end]` line ranges in application order, one per emitted edit, so
+  agents can verify what matched without re-reading the file.
+  Ident/call/cut/paste rewrites emit one edit per match
+  (`spans.len() == matches`); signature-evolution replacements emit one
+  span per edit (delete+insert pairs). Insertions report the anchor as
+  `[L, L]`; an empty match set (optional no-match) reports `[]`.
 - `files` lists per-file `{path, added, removed}` line stats computed from
   the full old/new contents, so counts stay exact even when `diff` is
   truncated or omitted (see D.2.1). Empty when no changes. `files[].path`

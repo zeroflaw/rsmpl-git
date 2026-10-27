@@ -39,8 +39,10 @@ pub struct RuleReport {
     pub file: String,
     pub matches: usize,
     /// Original-source 1-based inclusive `[start, end]` line spans, one per
-    /// match in application order. Insertions report `[anchor, anchor]`.
-    /// `spans.len() == matches` always holds (empty when no match).
+    /// emitted edit in application order. Ident/call/cut/paste rewrites emit
+    /// one edit per match (`spans.len() == matches` holds there, empty when
+    /// no match); signature-evolution replacements emit one span per edit
+    /// (delete+insert pairs). Insertions report `[anchor, anchor]`.
     pub spans: Vec<(u32, u32)>,
 }
 

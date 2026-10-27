@@ -1401,7 +1401,19 @@ fn full_sig_without_body(vis: &syn::Visibility, sig: &syn::Signature) -> String 
     // NOTE: the `self` rewrite stays scoped to the sig text -- it runs
     // before the vis prepend so `pub(in self::...)` paths are untouched.
     s = s.replace("self", "_self_placeholder : u8");
-    if !s.trim_start().starts_with("fn ") {
+    // T190: `quote!(#sig)` renders qualifiers (`const fn …`, `async fn …`,
+    // `unsafe fn …`, `extern "ABI" fn …`), so gating the defensive `fn `
+    // prepend on a bare-`fn` prefix turned every qualified method synth into
+    // `fn const fn …` (unparsable → bare `cannot analyze method signature`).
+    // Accept the qualifier prefixes; the prepend stays for whatever
+    // non-`fn` rendering needed it.
+    let t = s.trim_start();
+    if !t.starts_with("fn ")
+        && !t.starts_with("const ")
+        && !t.starts_with("async ")
+        && !t.starts_with("unsafe ")
+        && !t.starts_with("extern ")
+    {
         s = format!("fn {s}");
     }
     let vis_text = quote::quote!(#vis).to_string();
@@ -1908,5 +1920,38 @@ mod tests {
         let src = "struct S;\n\nimpl S {\n    pub fn make(x: i32) -> i32 {\n        x\n    }\n}\n";
         let err = apply(patch, src).unwrap_err();
         assert!(err.contains("no match found"), "got: {err}");
+    }
+
+    #[test]
+    fn evolves_const_fn_inside_impl() {
+        // T190: the impl-context synth prepended `fn ` to any sig not
+        // starting with it, so `const fn ...` became `fn const fn ...`
+        // (unparsable, bare `cannot analyze method signature`).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     const fn make(x: i32) -> i32 {\n+     const fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+        let src =
+            "struct S;\n\nimpl S {\n    const fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("const fn make(x: i64) -> i64"), "got: {out}");
+    }
+
+    #[test]
+    fn evolves_async_fn_inside_impl() {
+        // T190: same qualifier-prefix class as `const fn`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     async fn make(x: i32) -> i32 {\n+     async fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+        let src =
+            "struct S;\n\nimpl S {\n    async fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("async fn make(x: i64) -> i64"), "got: {out}");
+    }
+
+    #[test]
+    fn evolves_unsafe_fn_inside_impl() {
+        // T190: same class; `unsafe` doubles as an `extract_fn_block`
+        // start prefix, so this pins both halves.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@ rule=x\n# lang=rust\n  impl S {\n      ...\n-     unsafe fn make(x: i32) -> i32 {\n+     unsafe fn make(x: i64) -> i64 {\n          ...\n      }\n  }\n";
+        let src =
+            "struct S;\n\nimpl S {\n    unsafe fn make(x: i32) -> i32 {\n        x + 1\n    }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("unsafe fn make(x: i64) -> i64"), "got: {out}");
     }
 }
