@@ -565,4 +565,22 @@ mod tests {
         assert_eq!(callee, "foo");
         assert_eq!(args, vec![ArgPat::Ellipsis]);
     }
+    #[test]
+    fn method_turbofish_stays_method_call() {
+        // T176: `Receiver.collect::<T>()` must classify as `MethodCall`
+        // (method text keeps the turbofish) so the engine's structural
+        // `match_method_turbofish` arm sees it — never `Raw`.
+        let (kind, _, _) = classify_call_pattern("Receiver.collect::<T>()", &table()).unwrap();
+        let ExprPatternKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } = kind
+        else {
+            panic!("turbofish method got a non-method shape");
+        };
+        assert_eq!(receiver, "__RSMPL_Receiver");
+        assert!(method.contains('<'), "turbofish lost: {method}");
+        assert!(args.is_empty());
+    }
 }
