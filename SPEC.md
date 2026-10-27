@@ -5786,11 +5786,14 @@ History-per-commit regression recipe (T346): `checkout c` +
 `diffrs c~1` converts commit `c` (worktree `== c` makes the rev
 diff exactly that commit); the root commit has no parent, so it
 converts against the empty tree (`git hash-object -t tree
-/dev/null`). Round-trip each capture with `checkout c~1` (an empty
-dir for root) + `applyrs --file change.rsmpl --check`. The curated
-selection in `bin/diffrs/tests/history_e2e.rs` is the pinned
-generator: every entry must convert and check clean with its
-pinned semantic-hunk count — failing conversions become pins
+/dev/null`). Round-trip each capture by materializing the parent
+with `git archive c~1 | tar -x -C <tmp>` (an empty dir for root)
++ `applyrs --file change.rsmpl --check` (T356 isolation — no
+second checkout, so the `applyrs` `.history/` audit write lands in
+the throwaway pre-image instead of polluting the diffrs worktree).
+The curated selection in `bin/diffrs/tests/history_e2e.rs` is the
+pinned generator: every entry must convert and check clean with
+its pinned semantic-hunk count — failing conversions become pins
 there.
 
 Empty changes print empty stdout + `(no changes)` on stderr (never

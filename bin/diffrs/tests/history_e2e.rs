@@ -3,19 +3,23 @@
 //! Converts a curated selection of this repository's own commits
 //! with the real `diffrs` binary (the T346 recipe: `checkout c` +
 //! `diffrs c~1`, empty-tree rev for the root) and round-trips each
-//! captured patch through the sibling `applyrs --check` against the
-//! pre-change tree. A failing conversion fails this test — that is
-//! the pin mechanism: reproduce with the recipe, then extend the
-//! table.
+//! captured patch through the sibling `applyrs --check` against an
+//! isolated pre-change tree. A failing conversion fails this test —
+//! that is the pin mechanism: reproduce with the recipe, then extend
+//! the table.
 //!
 //! The table pins exact semantic-hunk counts, so both inference
 //! improvements (more compression) and regressions (conversion
 //! failures, lost compression) show up here. Harness notes: one
-//! scratch `git worktree` under a `TempDir` (the real checkout is
-//! never touched); skips — never hard errors — outside a checkout,
-//! when `worktree add` fails, or when a curated commit is absent
-//! (shallow clones); `applyrs` always runs via `--file` because the
-//! large selections exceed the shell inline-arg limit.
+//! scratch `git worktree` under a `TempDir` for the `diffrs` side
+//! (the real checkout is never touched); the `applyrs --check` side
+//! materializes the parent via `git archive c~1 | tar -x -C <tmp>`
+//! (T356 isolation — no second checkout, no `.history/` pollution in
+//! the diffrs worktree); root checks against an empty dir; skips —
+//! never hard errors — outside a checkout, when `worktree add`
+//! fails, or when a curated commit is absent (shallow clones);
+//! `applyrs` always runs via `--file` because the large selections
+//! exceed the shell inline-arg limit.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -141,7 +145,44 @@ fn toplevel() -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
 }
 
-fn check_case(wt: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
+/// Materialize `parent` (`c~1`) into `dest` via
+/// `git -C <top> archive <parent>` piped to `tar -x -C <dest>`
+/// (no shell). Returns true on success; preserves symlinks and mode
+/// bits exactly as tracked. Caller creates `dest`.
+fn materialize_parent(top: &Path, parent: &str, dest: &Path) -> bool {
+    let archive = Command::new("git")
+        .arg("-C")
+        .arg(top)
+        .args(["archive", parent])
+        .output();
+    let archive = match archive {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return false,
+    };
+    let mut tar = match Command::new("tar")
+        .arg("-x")
+        .arg("-C")
+        .arg(dest)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    use std::io::Write;
+    let wrote = tar
+        .stdin
+        .as_mut()
+        .map(|s| s.write_all(&archive).is_ok())
+        .unwrap_or(false);
+    if !wrote {
+        let _ = tar.kill();
+        return false;
+    }
+    matches!(tar.wait(), Ok(st) if st.success())
+}
+
+fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
     let short = &case.commit[..7];
     if !git_ok(wt, &["checkout", "-qf", case.commit]) {
         failures.push(format!("{short}: checkout failed"));
@@ -181,18 +222,25 @@ fn check_case(wt: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
     if case.expect_sem > 0 && !patch.contains("rule=rename_") {
         failures.push(format!("{short}: expected rename compression, got none"));
     }
-    // Pre-change tree: the parent commit, or an empty dir for root
-    // (creation hunks check against empty).
+    // Pre-change tree in isolation (T356): the parent commit
+    // materialized via `git archive parent | tar -x -C <tmp>`, or an
+    // empty dir for root (creation hunks check against empty). The
+    // shared diffrs worktree is never re-checked-out here, so the
+    // `applyrs --check` `.history/` audit write lands in the throwaway
+    // pre-image instead of polluting the next `diffrs` conversion.
     let empty = tempfile::tempdir().unwrap();
+    let staged = tempfile::tempdir().unwrap();
     let pre: &Path = if case.root {
         empty.path()
     } else {
-        if !git_ok(wt, &["checkout", "-qf", &format!("{}~1", case.commit)]) {
-            failures.push(format!("{short}: parent checkout failed"));
+        let parent = format!("{}~1", case.commit);
+        if !materialize_parent(top, &parent, staged.path()) {
+            failures.push(format!("{short}: git archive {parent} failed"));
             return;
         }
-        wt
+        staged.path()
     };
+
     let checked = Command::new(sibling_applyrs())
         .arg("--file")
         .arg(&patch_path)
@@ -242,7 +290,7 @@ fn history_selection_converts_and_round_trips() {
     }
     let mut failures: Vec<String> = Vec::new();
     for case in &present {
-        check_case(&wt, tmp.path(), case, &mut failures);
+        check_case(&wt, &top, tmp.path(), case, &mut failures);
     }
     // Cleanup before asserting: no stranded worktree on the green
     // path (a panic leaves stale metadata; `git worktree prune`
