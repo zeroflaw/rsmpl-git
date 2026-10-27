@@ -1768,6 +1768,14 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 
 Trailing commas are ignored when comparing parameter lists and `where` predicates: a rustfmt-canonical multi-line target (`x: i32,`, `T: Clone,`) matches the single-line pattern spelling (`x: i32`, `T: Clone`), and a comma-only slot difference never emits an edit — the target text is preserved.
 
+ The four slot/body misuses above fail fast with `RSMPL_PATTERN_CONFLICT`, engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout):
+ ```text
+ `...` is not supported as a return type in v0.1: omit `->` to match any return type or write a concrete type (SPEC 14.7)
+ `...` is not supported in generic parameter lists in v0.1: write concrete `<T>` or abstract with `# generic_params G` + `fn foo G (...)` (SPEC 14.7)
+ `...` is not supported in where clauses in v0.1: write concrete predicates or abstract with `# where_clause W` + `... W ...` (SPEC 14.7)
+ v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)
+ ```
+
 Example (add visibility, generics, and a return type in one hunk, params and body preserved):
 
 ```diff
@@ -1847,7 +1855,10 @@ Rules:
   item rename minus and plus names are identical (`Old`); write the new name on the `+` side
   `unsafe` is only legal on `trait`/`impl` headers, not `struct` (write the bare `<struct> <Name>` form)
   `impl` blocks take no visibility (write the bare `impl <Name>` form)
+  concrete item shape after `<struct> <name>` is not supported in v1 (write the bare `<struct> <Name>` form; visibility, generics and bodies are preserved)
+  missing item name after `struct` (write a bare `<kind> <Name>` pattern)
   ```
+  (`<kind>` in the first reason echoes the lowercased kind — probed `struct` + `enum`; the kind in the second echoes the written kind.)
 - `impl Old` renames the self-type ident and the trait-side path's last segment. It matches `impl Old`, `impl<T> Old<T>`, `impl Trait for Old`, and `impl Old for Foo`, rewriting only the `Old` spans while preserving generics, qualifiers, and the other side. Rationale: in valid Rust one name cannot be both a type and a trait in the same scope (type-namespace collision), so the bare pair is unambiguous; matching stays syntactic (Section 19). Generic (`impl Old<T> for Foo`), qualified (`impl crate::Old for Foo`), and negative (`impl !Old for Foo`) trait paths match on the last segment only.
 - Matching reuses the function scope modes (`scope=contained/anchor/overlap/exact`, anchor on the ident line), attribute policies (`# attrs=...`), and `allow`/`optional` count validation. File-level, inline-`mod`-level, and block-level items are collected: the syntactic walk reaches items nested in fn bodies, closures, and method bodies, so a local `struct` renames like a top-level one (a top-level and a block-level same-named item need `# allow=many`, like any multi-match). Items inside macro bodies are not matched (Section 21). Each match emits one ident-span edit, so overlapping-match rules are trivially satisfied.
 
@@ -1943,6 +1954,31 @@ Rules:
    rule: r
    file: src/lib.rs
    reason: `use!` is a macro invocation, not a `use`-path rename (remove the `!` or use a macro pattern)
+   ```
+  The tail family is engine-verbatim too (same envelope + nulls; `{body}`/`{seg}` echo the offending spelling):
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: mirrored attributes are not supported in `use`-path patterns in v1 (docs are preserved by default; drop the attribute lines or use an ordinary hunk)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: invalid `use` path `crate::old::::bad` (expected `::`-separated identifiers)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: invalid `use` path segment `Old<M>` (expected an identifier)
+   ```
+   ```text
+   RSMPL_PATTERN_CONFLICT
+   rule: r
+   file: src/lib.rs
+   reason: missing path after `use` (write a bare `use <path>` prefix)
    ```
 - Matching is segment-wise on the target's leading path segments: minus
   `crate::old` matches `crate::old::Thing` but never `crate::old2::Thing`
@@ -3477,7 +3513,7 @@ hunk whose `+` side names an unbound metavariable (both fenced below),
 or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
-Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6).
+Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot `...`/body misuse (four engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); and any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9).
 
 ```text
 RSMPL_PATTERN_CONFLICT
