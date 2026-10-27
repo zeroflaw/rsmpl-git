@@ -1576,7 +1576,7 @@ To match a generic function with a where clause:
 
 The `where` clause lives on the `fn` pattern line: `- fn foo<T>(...) where T: Clone {`. A pattern line without `where` requires its absence (like every other slot, Section 14.1) — the multi-line `where`-as-context spelling never constrains the slot. The signature must be terminated by `{` (which may sit on the `fn` line or on a trailing `where` line) or `;`: an unterminated tail swallows the body `...` into the slot text and fails fast with a missing-brace needle.
 
-Engine-verbatim missing-brace rejections (both exit 2; both carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`):
+Engine-verbatim missing-brace rejections (all three exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`):
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -1592,7 +1592,14 @@ file: src/lib.rs
 reason: fn pattern `where` clause is missing its opening `{` (or `;` for declarations): the signature swallowed the body lines — put the brace on the signature line (SPEC 14.5)
 ```
 
-The first reason echoes the swallowed tail text (here the body `...` line); the second fires when the `fn` line carries a `where` clause but no opening brace or `;`.
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: fn pattern `->` return type is missing its opening `{` (or `;` for declarations): the signature swallowed the body lines — put the brace on the signature line (SPEC 14.5)
+```
+
+The first reason echoes the swallowed tail text (here the body `...` line); the second fires when the `fn` line carries a `where` clause but no opening brace or `;`, the third when it carries a `->` return type but no opening brace or `;`.
 
 To abstract over generic parameters and where clauses:
 
@@ -1878,6 +1885,23 @@ Trailing commas are ignored when comparing parameter lists and `where` predicate
  `...` is not supported in where clauses in v0.1: write concrete predicates or abstract with `# where_clause W` + `... W ...` (SPEC 14.7)
  v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)
  ```
+
+ Structural fn-pattern rejections beyond the slot/`...` five fail fast the same way (`RSMPL_PATTERN_CONFLICT`, exit 2, `rule:`/`file:` envelope; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout), engine-verbatim:
+ ```text
+ fn pattern must contain `fn` keyword, got `{text}`
+ fn pattern missing function name
+ fn pattern missing parameter list
+ unbalanced generics in fn pattern
+ unbalanced parameter list in fn pattern
+ unbalanced body block in fn pattern
+ unbalanced attribute in fn pattern
+ unbalanced pub(...) in fn pattern
+ `->` without return type in fn pattern
+ function pattern bodies must be exactly `...` in v0.1 (body evolution is not supported; the original body is always preserved)
+ block comments (`/* ... */`) are not supported in patterns in v1 (mirror doc comments with `#[doc = "..."]` or use an ordinary hunk)
+ ```
+
+ The `got` backtick echoes the full minus pattern text with newlines preserved. `missing function name` needs the degenerate single-line spelling (any body lines supply a name token, and a bare `fn` with body lines routes to the general-`...` C1 fence instead); `missing parameter list` fires when a name or generics are present but no `(` follows. `exactly ...` fires on mixed bodies (`{ ..., x; }`); a wholly missing body fires the `v1 function hunks require ...` fence above instead. Single-line `/** ... */` doc lines normalize to `#[doc = "..."]` (T156); only multi-line or ordinary block comments hit the needle. The unterminated `` `->` return type `` twin lives in Section 14.5.
 
 Example (add visibility, generics, and a return type in one hunk, params and body preserved):
 
@@ -3769,9 +3793,9 @@ body (both fenced in Section 21.3),
 or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
-Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
+Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (three engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons) or structural fn-pattern misuse (eleven engine-verbatim reasons, both Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
-The body list above gains three final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, and the Section 16.5 `+`-path `...` fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
+The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
 
 Two further structural pattern rejections are fenced below: an RSmPL
 hunk with no pattern body lines (rule-only envelope), and a `#`
