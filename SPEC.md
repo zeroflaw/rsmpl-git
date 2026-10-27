@@ -1235,6 +1235,15 @@ Examples:
 
 > **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `trait`-header context plus a function pair is a trait-method rename (`unsafe trait`/`unsafe impl` headers route identically — the fn-block scan skips block headers despite the `unsafe ` prefix) (same slot planner: `;` declarations and default bodies match, bodies/`;` preserved, explicit `pub` never matches — trait methods carry no visibility — and a `+` side writing it fails fast; the header names the trait ident, otherwise the block is accepted only on range overlap like `impl`); `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
+The trait-method visibility gate above fails fast with `RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: trait methods cannot declare visibility: drop `pub` (or `pub(...)`) on the `+` side
+```
+
 If the parse context is ambiguous, the engine may require an explicit directive:
 
 ```text
@@ -1693,7 +1702,42 @@ reason: replacement attributes differ from matched attributes; v1 refuses ambigu
 suggestion: mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`
 ```
 
-The first fires when the `+` side writes attributes the `-` side did not match; the second when both sides write attributes that differ. These are the only 14.x fences with a set suggestion (like the Section 9.6 `repeat`-value entry).
+The first fires when the `+` side writes attributes the `-` side did not match; the second when both sides write attributes that differ. These two are the only 14.x compile-time fences with a set suggestion (like the Section 9.6 `repeat`-value entry); the match-time fence below is the only other 14.x suggestion carrier.
+
+Match-time attribute failures differ from the compile-time merge rejections above: a candidate that carries attributes the active policy forbids fails with `RSMPL_MATCH_CONFLICT` (exit 2; all carry `rule:` + `file:`; text omits the null `old_range:` line and, except where noted, the null `suggestion:` line; JSON carries explicit `range: null` / `suggestion: null`-or-string):
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: r
+file: src/lib.rs
+reason: function has attributes but `# attrs=absent` requires none
+```
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: r
+file: src/lib.rs
+reason: item has attributes but `# attrs=absent` requires none
+```
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: r
+file: src/lib.rs
+reason: statement has attributes but `# attrs=absent` requires none
+```
+
+The `statement` reason echoes the active policy (`absent` or `explicit`); `use` items report with the `item` wording (they route through the item matcher). Contrast with the silent skip: under default `preserve`, a function/item pattern whose written `#[...]` matches no site's envelope skips the candidate (`no match found`), while the general matcher hard-fails instead:
+
+```text
+RSMPL_MATCH_CONFLICT
+rule: r
+file: src/lib.rs
+reason: attached attributes do not match explicitly written pattern attributes
+suggestion: use `# attrs=preserve` (default) to ignore attributes
+```
+
+The suggestion is set on the function/item-`explicit` and general-`preserve` paths; a general-`explicit` (or `absent`) mismatch carries the same reason with a null suggestion.
 
 #### Attribute preservation on rewrite
 
@@ -2559,6 +2603,19 @@ The exact zero-or-more behavior for path ellipsis must be documented by the impl
 > (`+ crate::new(E)`): a `+` path `...` has no absorbed path segments to
 > replay (only argument remainders replay, Section 16.3) and is rejected
 > with `RSMPL_PATTERN_CONFLICT`.
+
+
+Engine-verbatim (exit 2; `rule:` + `file:` + set `suggestion:`; text omits the null `range:` line, JSON carries explicit `range: null`):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: `...` in `+` path has nothing to replay (plus side must be concrete, SPEC 16.5)
+suggestion: write a concrete `+` path (e.g. `+ crate::new(E)`) — path `...` replays nothing, only argument `...` replays
+```
+
+Unlike the Section 16.3 argument-`...` fence (which replays absorbed call args), a path `...` has nothing to replay — the plus path must name every segment concretely.
 
 ---
 
@@ -3684,6 +3741,8 @@ or any malformed literal-token quote — `r#`` split (pattern or
 directive), unbalanced backticks, empty/multi-token/invalid-raw/
 invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (two engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons, Section 14.7); any concrete-shape or missing-name item pattern (two engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9); and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
+
+The body list above gains three final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, and the Section 16.5 `+`-path `...` fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
 
 Two further structural pattern rejections are fenced below: an RSmPL
 hunk with no pattern body lines (rule-only envelope), and a `#`
