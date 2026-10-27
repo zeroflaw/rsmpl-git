@@ -326,7 +326,7 @@ pub fn apply_macro_hunk(
             let new_args = substitute_plus(
                 &plus_args_pat,
                 &bindings,
-                &cand.body_text,
+                std::slice::from_ref(&cand.body_text),
                 compiled.table.sigiled,
             );
             format!("{}!({})", resolve_name(&plus_name_pat, &bindings), new_args)
@@ -336,7 +336,7 @@ pub fn apply_macro_hunk(
             substitute_plus(
                 plus_raw.trim(),
                 &bindings,
-                &cand.body_text,
+                std::slice::from_ref(&cand.body_text),
                 compiled.table.sigiled,
             )
         };

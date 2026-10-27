@@ -618,7 +618,7 @@ fn substitute_general_plus(
     sigiled: bool,
 ) -> Result<String, StructuredError> {
     let (masked, sentinels) = rsmpl_pattern::mask_literal_spans(plus_raw)?;
-    let mut out = substitute_plus(&masked, bindings, "", sigiled);
+    let mut out = substitute_plus(&masked, bindings, &[], sigiled);
     for (sent, lit) in &sentinels {
         out = out.replace(sent, lit);
     }

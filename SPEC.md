@@ -2087,6 +2087,15 @@ It does not match:
 bar(a)
 ```
 
+Each `...` in the `+` side replays, in order, the target args the
+matching `- ...` absorbed: `- foo(E, ...)` / `+ bar(E, ...)` rewrites
+`foo(1, 2, 3)` to `bar(1, 2, 3)`. A `...` that absorbs nothing replays
+empty and swallows one adjacent comma, so the same hunk rewrites
+`foo(1)` to `bar(1)`. Omitting `...` on the `+` side is a deliberate
+arg-drop (`- foo(E, ...)` / `+ bar(E)` rewrites `foo(1, 2)` to
+`bar(1)`). A `...` in `+` with no matching `- ...` is a pattern error:
+there is nothing to replay.
+
 ### 16.4 Body ellipsis
 
 Pattern:
@@ -3030,7 +3039,10 @@ minus/plus side (no silent no-op repeat, Sections 17.8, 24.4), any
 item-rename hunk whose minus/plus `pub…` / `unsafe` / `mut` prefixes
 differ (rename-only, no silent vis change — reason carries
 `prefixes differ`), and any item-rename side with a kind-illegal prefix
-(`unsafe` off `trait`/`impl`, visibility on `impl`), all Section 14.8.
+(`unsafe` off `trait`/`impl`, visibility on `impl`), all Section 14.8,
+and any call/method-call hunk whose `+` side holds more `...` tokens
+than the `-` side has argument ellipses to replay (nothing to replay —
+drop the `+ ...` or add a `- ...`, Section 16.3).
 
 ```text
 RSMPL_PATTERN_CONFLICT

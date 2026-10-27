@@ -33,7 +33,6 @@ struct Candidate<'a> {
     receiver_text: Option<String>,
     method_text: Option<String>,
     is_method: bool,
-    ellipsis_body: String,
     _expr: &'a syn::Expr,
 }
 
@@ -99,7 +98,6 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                     if let Some((start, end)) = self.span_range(node.span()) {
                         let args: Vec<String> =
                             call.args.iter().map(|a| self.slice_opt(a.span())).collect();
-                        let ellipsis_body = inner_text(&self.slice(start, end));
                         self.out.push(Candidate {
                             start,
                             end,
@@ -111,7 +109,6 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                             receiver_text: None,
                             method_text: None,
                             is_method: false,
-                            ellipsis_body,
                             _expr: node,
                         });
                     }
@@ -123,7 +120,6 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                 if let Some((start, end)) = self.span_range(node.span()) {
                     let args: Vec<String> =
                         m.args.iter().map(|a| self.slice_opt(a.span())).collect();
-                    let ellipsis_body = inner_text(&self.slice(start, end));
                     self.out.push(Candidate {
                         start,
                         end,
@@ -135,7 +131,6 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                         receiver_text: Some(self.slice_opt(m.receiver.span())),
                         method_text: Some(m.method.to_string()),
                         is_method: true,
-                        ellipsis_body,
                         _expr: node,
                     });
                 }
@@ -152,16 +147,6 @@ impl<'a, 'b> Collector<'a, 'b> {
             .map(|(s, e)| self.slice(s, e))
             .unwrap_or_default()
     }
-}
-
-/// Text between the outermost parens of a call slice (for `...` reuse).
-fn inner_text(call_slice: &str) -> String {
-    if let (Some(l), Some(r)) = (call_slice.find('('), call_slice.rfind(')')) {
-        if r > l {
-            return call_slice[l + 1..r].to_string();
-        }
-    }
-    String::new()
 }
 
 fn in_scope(start_line: u32, end_line: u32, scope: Scope, old_start: u32, old_len: u32) -> bool {
@@ -219,12 +204,16 @@ fn match_path_segments(pattern: &[String], target: &[String]) -> bool {
 }
 
 /// Match pattern args against target arg texts, filling `bindings`.
+/// Every `...` pushes the target args it absorbs (joined with `", "`,
+/// possibly empty) onto `remainders`, positionally — N minus-`...`
+/// yields N remainders for the plus-side replay.
 /// Returns `false` when this candidate does not match.
 fn match_args(
     pattern: &[ArgPat],
     targets: &[String],
     reverse_map: &HashMap<String, String>,
     bindings: &mut HashMap<String, String>,
+    remainders: &mut Vec<String>,
 ) -> bool {
     if !pattern.contains(&ArgPat::Ellipsis) {
         if pattern.len() != targets.len() {
@@ -244,6 +233,7 @@ fn match_args(
         if pattern[pi] == ArgPat::Ellipsis {
             // If last pattern element, absorb the rest.
             if pi + 1 == pattern.len() {
+                remainders.push(targets[ti..].join(", "));
                 return true;
             }
             // Otherwise skip target args until the next non-ellipsis pattern
@@ -259,6 +249,7 @@ fn match_args(
             }
             match found {
                 Some((k, probe)) => {
+                    remainders.push(targets[ti..k].join(", "));
                     *bindings = probe;
                     ti = k + 1;
                     pi += 2;
@@ -304,14 +295,19 @@ fn match_single_arg(
 }
 
 /// Substitute bound metavariables and `...` into the plus pattern.
+/// Each standalone `...` replays, in order, the target args the matching
+/// `- ...` absorbed (T157: the whole arg list is NOT replayed). An empty
+/// remainder swallows one adjacent comma so `bar(E, ...)` on `foo(1)`
+/// yields `bar(1)`, not `bar(1, )`. Surplus `...` (unreachable after the
+/// plus/minus count gate) replay empty.
 pub fn substitute_plus(
     plus_raw: &str,
     bindings: &HashMap<String, String>,
-    ellipsis_text: &str,
+    ellipses: &[String],
     sigiled: bool,
 ) -> String {
     // Replace standalone `...` first (not part of longer dot runs).
-    let mut out = replace_ellipsis_token(plus_raw, ellipsis_text);
+    let mut out = replace_ellipsis_tokens(plus_raw, ellipses);
     // Longest names first to avoid prefix collisions.
     let mut names: Vec<&String> = bindings.keys().collect();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
@@ -327,16 +323,45 @@ pub fn substitute_plus(
     out
 }
 
-fn replace_ellipsis_token(text: &str, replacement: &str) -> String {
+fn replace_ellipsis_tokens(text: &str, replacements: &[String]) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
     let mut i = 0;
+    let mut n = 0;
     while i < bytes.len() {
         if i + 2 < bytes.len() && &text[i..i + 3] == "..." {
             let before_ok = i == 0 || bytes[i - 1] != b'.';
             let after_ok = i + 3 >= bytes.len() || bytes[i + 3] != b'.';
             if before_ok && after_ok {
-                out.push_str(replacement);
+                let rep = replacements.get(n).map(String::as_str).unwrap_or("");
+                n += 1;
+                if rep.is_empty() {
+                    // Swallow one adjacent comma (preceding preferred) so
+                    // empty replays leave no `, )` / `( ,` artifact.
+                    if let Some(pos) = last_comma_before(&out) {
+                        out.truncate(pos);
+                    } else {
+                        i += 3;
+                        let mut j = i;
+                        while j < bytes.len()
+                            && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n')
+                        {
+                            j += 1;
+                        }
+                        if j < bytes.len() && bytes[j] == b',' {
+                            j += 1;
+                            while j < bytes.len()
+                                && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n')
+                            {
+                                j += 1;
+                            }
+                        }
+                        i = j;
+                        continue;
+                    }
+                } else {
+                    out.push_str(rep);
+                }
                 i += 3;
                 continue;
             }
@@ -345,6 +370,38 @@ fn replace_ellipsis_token(text: &str, replacement: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Byte index of the trailing comma (skipping trailing whitespace) in
+/// `out`, or `None` when the pre-ellipsis text does not end with one.
+fn last_comma_before(out: &str) -> Option<usize> {
+    let bytes = out.as_bytes();
+    let mut j = bytes.len();
+    while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t' || bytes[j - 1] == b'\n') {
+        j -= 1;
+    }
+    (j > 0 && bytes[j - 1] == b',').then_some(j - 1)
+}
+
+/// Count standalone `...` tokens (same definition as the substitution
+/// pass: not part of longer dot runs).
+fn count_ellipsis_tokens(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut count = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 2 < bytes.len() && &text[i..i + 3] == "..." {
+            let before_ok = i == 0 || bytes[i - 1] != b'.';
+            let after_ok = i + 3 >= bytes.len() || bytes[i + 3] != b'.';
+            if before_ok && after_ok {
+                count += 1;
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    count
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -403,6 +460,26 @@ pub fn apply_expr_hunk(
     };
     let rule = hunk.rule_name();
 
+    // T157: a `...` in `+` replays the args the matching `- ...` absorbed,
+    // so more plus-`...` than minus-`...` has nothing to replay (the old
+    // whole-arg-list substitution silently duplicated instead). Fail fast.
+    // Fewer is a deliberate arg-drop. Covers the nested `# repeat` path too
+    // (same minus/plus pair).
+    let minus_ellipses: usize = match minus {
+        ExprPatternKind::Call { args, .. } | ExprPatternKind::MethodCall { args, .. } => {
+            args.iter().filter(|a| **a == ArgPat::Ellipsis).count()
+        }
+        ExprPatternKind::Macro { .. } | ExprPatternKind::Raw { .. } => 0,
+    };
+    if count_ellipsis_tokens(plus_raw) > minus_ellipses {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "`...` in `+` has no matching `- ...` to replay".to_string(),
+        )
+        .with_rule(&rule)
+        .with_suggestion("drop the `+ ...` or add a `- ...` absorbing the replayed args"));
+    }
+
     // Symbol gate (SPEC 19.3): without a semantic environment, fail unless
     // `# fallback=syntax` is set.
     let fallback_syntax = hunk
@@ -452,7 +529,8 @@ pub fn apply_expr_hunk(
         ) {
             continue;
         }
-        let mut bindings = match match_candidate(minus, cand, compiled, &reverse_map) {
+        let (mut bindings, remainders) = match match_candidate(minus, cand, compiled, &reverse_map)
+        {
             Some(b) => b,
             None => continue,
         };
@@ -485,12 +563,7 @@ pub fn apply_expr_hunk(
         // is skipped: it splices the original slice and would discard
         // folded bindings.
         let replacement = if hunk.repeats() {
-            substitute_plus(
-                plus_raw,
-                &bindings,
-                &cand.ellipsis_body,
-                compiled.table.sigiled,
-            )
+            substitute_plus(plus_raw, &bindings, &remainders, compiled.table.sigiled)
         } else {
             build_replacement(
                 minus,
@@ -498,6 +571,7 @@ pub fn apply_expr_hunk(
                 cand,
                 original,
                 &bindings,
+                &remainders,
                 &reverse_map,
                 compiled.table.sigiled,
             )
@@ -518,23 +592,31 @@ pub fn apply_expr_hunk(
 const MAX_REPEAT_DEPTH: usize = 64;
 
 /// Match one call/method-call candidate, returning its bindings
-/// (symbol seeds included). `None` means this candidate does not match.
+/// (symbol seeds included) plus the per-`...` absorbed remainders for
+/// plus-side replay. `None` means this candidate does not match.
 fn match_candidate(
     minus: &ExprPatternKind,
     cand: &Candidate<'_>,
     compiled: &CompiledPattern,
     reverse_map: &HashMap<String, String>,
-) -> Option<HashMap<String, String>> {
+) -> Option<(HashMap<String, String>, Vec<String>)> {
     let mut bindings: HashMap<String, String> = HashMap::new();
     // Seed symbol bindings (symbols are pre-bound to their path).
     for (n, p) in &compiled.table.symbols {
         bindings.insert(n.clone(), p.clone());
     }
+    let mut remainders: Vec<String> = Vec::new();
     let ok = match minus {
         ExprPatternKind::Call { callee, args } => {
             !cand.is_method
                 && match_callee(callee, cand, compiled, &mut bindings)
-                && match_args(args, &cand.arg_texts, reverse_map, &mut bindings)
+                && match_args(
+                    args,
+                    &cand.arg_texts,
+                    reverse_map,
+                    &mut bindings,
+                    &mut remainders,
+                )
         }
         ExprPatternKind::MethodCall {
             receiver,
@@ -543,29 +625,37 @@ fn match_candidate(
         } => {
             cand.is_method
                 && match_receiver_or_method(receiver, method, cand, reverse_map, &mut bindings)
-                && match_args(args, &cand.arg_texts, reverse_map, &mut bindings)
+                && match_args(
+                    args,
+                    &cand.arg_texts,
+                    reverse_map,
+                    &mut bindings,
+                    &mut remainders,
+                )
         }
         ExprPatternKind::Macro { .. } => false, // routed to macro matcher
         ExprPatternKind::Raw { .. } => false,
     };
-    ok.then_some(bindings)
+    ok.then_some((bindings, remainders))
 }
 
 /// Build the replacement text for a matched candidate: the callee-only
 /// fast path when just the callee changed, else full substitution.
+#[allow(clippy::too_many_arguments)]
 fn build_replacement(
     minus: &ExprPatternKind,
     plus_raw: &str,
     cand: &Candidate<'_>,
     source: &str,
     bindings: &HashMap<String, String>,
+    remainders: &[String],
     reverse_map: &HashMap<String, String>,
     sigiled: bool,
 ) -> String {
     if let Some(fast) = try_callee_only_rewrite(minus, plus_raw, cand, source, reverse_map) {
         fast
     } else {
-        substitute_plus(plus_raw, bindings, &cand.ellipsis_body, sigiled)
+        substitute_plus(plus_raw, bindings, remainders, sigiled)
     }
 }
 
@@ -649,7 +739,7 @@ fn rewrite_nested(
         {
             continue;
         }
-        let mut bindings = match match_candidate(minus, cand, compiled, reverse_map) {
+        let (mut bindings, remainders) = match match_candidate(minus, cand, compiled, reverse_map) {
             Some(b) => b,
             None => continue,
         };
@@ -675,12 +765,7 @@ fn rewrite_nested(
         )?;
         // Nested folds always substitute: the callee-only fast path
         // would splice the unfolded slice and discard folded bindings.
-        let replacement = substitute_plus(
-            plus_raw,
-            &bindings,
-            &cand.ellipsis_body,
-            compiled.table.sigiled,
-        );
+        let replacement = substitute_plus(plus_raw, &bindings, &remainders, compiled.table.sigiled);
         edits.push(TextEdit::new(cand.start, cand.end, replacement));
         accepted.push((cand.start, cand.end));
     }
@@ -1175,5 +1260,79 @@ mod tests {
         // Exact with a wider range must fail.
         let wide = mk("exact").replace("@@ -2,1 +2,1 @@", "@@ -1,3 +1,3 @@");
         assert!(apply(&wide, src).is_err());
+    }
+
+    #[test]
+    fn ellipsis_replays_absorbed_remainder_not_whole_list() {
+        // T157: `foo(E, ...)` -> `bar(E, ...)` replays only the absorbed
+        // remainder (`2, 3`), not the whole arg list (was `bar(1, 1, 2, 3)`).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E, ...)\n+ bar(E, ...)\n";
+        let src = "fn a() {\n    foo(1, 2, 3);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1, 2, 3);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_empty_remainder_swallows_comma() {
+        // T157: `bar(E, ...)` on `foo(1)` yields `bar(1)`, not `bar(1, )`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E, ...)\n+ bar(E, ...)\n";
+        let src = "fn a() {\n    foo(1);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1);"), "got: {out}");
+        assert!(!out.contains("bar(1, )"), "comma artifact: {out}");
+        // Leading mirror: `bar(..., E)` on `foo(1)` yields `bar(1)`.
+        let lead = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(..., E)\n+ bar(..., E)\n";
+        let out = apply(lead, src).unwrap();
+        assert!(out.contains("bar(1);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_arg_drop_omits_plus_ellipsis() {
+        // T157: dropping `...` on the plus side is a deliberate arg-drop.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E, ...)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1, 2);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_method_call_replays_remainder() {
+        // T157: the fix rides the shared `match_args` path, so method
+        // calls replay too.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr R\n# expr E\n- R.foo(E, ...)\n+ R.bar(E, ...)\n";
+        let src = "fn a() {\n    r.foo(1, 2);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("r.bar(1, 2);"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_repeat_folds_with_replay() {
+        // T157: `# repeat` + `...` folds instead of duplicating
+        // (was `bar(bar(1, 1), foo(1))`).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# repeat\n# expr E\n- foo(E, ...)\n+ bar(E, ...)\n";
+        let src = "fn a() {\n    foo(foo(1));\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(bar(1));"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_pure_shape_regresses_clean() {
+        // T157: lone `...` still replays the whole body (== remainder).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n- foo(...)\n+ bar(...)\n";
+        let src = "fn a() {\n    foo(1, 2);\n    foo();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(1, 2);"), "got: {out}");
+        assert!(out.contains("bar();"), "got: {out}");
+    }
+
+    #[test]
+    fn ellipsis_plus_without_minus_is_pattern_conflict() {
+        // T157: `+ ...` with no `- ...` has nothing to replay — fail fast
+        // instead of duplicating the arg list (was `bar(1, 2, 1, 2)`).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n# expr F\n- foo(E, F)\n+ bar(E, F, ...)\n";
+        let src = "fn a() {\n    foo(1, 2);\n}\n";
+        let err = apply(patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("no matching `- ...`"), "got: {err}");
     }
 }
