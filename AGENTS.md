@@ -164,6 +164,6 @@ Format: SPEC 9.3 (directives), SPEC 13.4 (parse contexts), SPEC 14.1
 (functions), SPEC 14.8 (other items), SPEC 15 (metavariables), SPEC 16
 (ellipsis), SPEC 17.7 (equality), SPEC 18.6 (reject table), SPEC 19
 (symbols), SPEC 25 (errors), SPEC 26.1 (lowering). CLI: SPEC D.1 (stdin),
-SPEC D.2 (JSON), SPEC D.2.1 (budget), SPEC D.2.2 (context), SPEC D.3
+SPEC D.2 (JSON), SPEC D.2.1 (budget), SPEC D.2.2 (lowering), SPEC D.3
 (ranges).
 Recommended loop: SPEC D.3 (read → author → check → apply).

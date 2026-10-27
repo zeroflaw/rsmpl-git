@@ -3801,7 +3801,6 @@ Possible future extensions:
 - conflict markers for semantic patches;
 - automatic import management;
 - semantic move with path rewriting;
-- stable canonical formatting mode;
 - explicit collection-valued captures and list paste separators;
 - explicit edition support (currently rejected, see Section 9.6):
 
