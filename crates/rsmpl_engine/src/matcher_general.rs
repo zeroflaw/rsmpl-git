@@ -808,7 +808,12 @@ pub fn apply_general_hunk(
         .with_rule(&rule)
         .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
     }
-    if !minus_attrs.is_empty()
+    // `# attrs=strip` skips the mirror gate: mirrored minus attrs are
+    // eligibility-ignored (like the fn/item `check_attrs` Strip arm) and
+    // the Stmt replacement path drops the envelope. The plus-writes-attrs
+    // gate above stays: adding attributes while stripping is ambiguous.
+    if hunk.attrs_policy() != AttrsPolicy::Strip
+        && !minus_attrs.is_empty()
         && norm_ws(&plus_attrs.join("\n")) != norm_ws(&minus_attrs.join("\n"))
     {
         return Err(StructuredError::new(
@@ -1189,6 +1194,26 @@ mod tests {
         // Wrong attribute still fails instead of silently matching.
         let wrong = patch.replace("- #[allow(x)]", "- #[allow(y)]");
         assert!(apply(&wrong, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").is_err());
+    }
+
+    #[test]
+    fn strip_with_mirrored_minus_drops_attrs() {
+        // T154: `# attrs=strip` skips the mirror gate — mirrored minus
+        // attrs are eligibility-ignored and the envelope is dropped at
+        // rewrite, not rejected with a self-contradicting "use strip"
+        // suggestion. Target indent survives like the preserve path.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=strip\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
+        let out = apply(patch, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(out, "fn f() {\n    let y = 1;\n}\n", "got: {out:?}");
+        // Eligibility ignores pattern attrs under strip (fn parity), so an
+        // unattributed target still rewrites.
+        let bare_file = patch.replace("@@ -1,4 +1,4 @@", "@@ -1,3 +1,3 @@");
+        let out2 = apply(&bare_file, "fn f() {\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(out2, "fn f() {\n    let y = 1;\n}\n", "got: {out2:?}");
+        // Writing attributes the minus side omitted stays rejected under
+        // strip: adding attrs while stripping is ambiguous.
+        let plus_only = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=strip\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(x)]\n+ let y = E;\n";
+        assert!(apply(plus_only, "fn f() {\n    let x = 1;\n}\n").is_err());
     }
 
     #[test]
