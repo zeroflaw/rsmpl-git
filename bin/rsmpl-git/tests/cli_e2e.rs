@@ -1135,6 +1135,7 @@ fn output_file_stays_full_when_report_truncated() {
             "1",
             "--output",
             full_patch.to_str().unwrap(),
+            "--check",
         ],
     );
     assert!(
@@ -1165,7 +1166,7 @@ fn output_file_stays_full_when_report_truncated() {
         "saved patch must apply: {}",
         String::from_utf8_lossy(&check.stderr)
     );
-    // JSON mode is report-only (no apply): the repo file is untouched, and
+    // `--check` verifies only (no apply): the repo file is untouched, and
     // the saved full patch is what the agent reviews/applies separately.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(2);"));
 }
@@ -1273,6 +1274,7 @@ fn zero_context_output_file_is_git_apply_clean() {
             "json",
             "--output",
             saved_patch.to_str().unwrap(),
+            "--check",
         ],
     );
     assert!(
@@ -1280,7 +1282,7 @@ fn zero_context_output_file_is_git_apply_clean() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // JSON mode is report-only: the repo is untouched, so the saved
+    // `--check` verifies only: the repo is untouched, so the saved
     // zero-context patch must verify against the pristine tree.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
     let saved = fs::read_to_string(&saved_patch).unwrap();
@@ -1677,4 +1679,84 @@ fn repeat_with_bind_rejected_json_envelope() {
         v["error"]["code"],
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
+}
+
+#[test]
+fn json_apply_mutates_worktree() {
+    // T151: `--format json` without `--check` applies like text mode —
+    // `--format` chooses the report language, never whether the patch
+    // lands. Before the fix this exited 0 with a full report while
+    // leaving the worktree untouched.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let before = read(dir.path(), "src/lib.rs");
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["check"], serde_json::json!(false), "got: {v}");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
+    let after = read(dir.path(), "src/lib.rs");
+    assert_ne!(before, after, "JSON apply must touch the worktree");
+    assert!(after.contains("bar(1)"), "got: {after}");
+    assert!(!after.contains("foo(1)"), "got: {after}");
+}
+
+#[test]
+fn json_check_still_applies_nothing() {
+    // T151 guard: the mirror fix must not over-apply — JSON `--check`
+    // verifies only.
+    let dir = init_repo();
+    write(
+        &dir.path().join(""),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
+    let text = read(dir.path(), "src/lib.rs");
+    assert!(
+        text.contains("foo(1)"),
+        "check must not mutate, got: {text}"
+    );
+}
+
+#[test]
+fn json_empty_lowering_without_check_reports_clean() {
+    // T151 parity: an empty lowering (optional zero-match) never touches
+    // git in any mode — JSON non-check reports clean with empty
+    // `files`/`diff` and `"check": false`.
+    let dir = init_repo();
+    write(&dir.path().join(""), "src/lib.rs", "fn foo() {}\n");
+    let noop = "diff --git src/lib.rs\n@@ -1,1 @@ rule=noop\n# lang=rust\n# optional\n- fn missing_xyz(...) {\n+ fn renamed_xyz(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), noop, &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["check"], serde_json::json!(false), "got: {v}");
+    assert_eq!(v["files"].as_array().unwrap().len(), 0, "got: {v}");
+    assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
+    let text = read(dir.path(), "src/lib.rs");
+    assert_eq!(text, "fn foo() {}\n", "got: {text}");
 }

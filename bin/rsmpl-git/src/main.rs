@@ -263,8 +263,16 @@ fn run() -> Result<(), CliError> {
     }
 
     if cli.format == Format::Json {
-        if cli.check && !lowered.trim().is_empty() {
-            rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
+        if cli.check {
+            // `--check` verifies without touching the worktree; an empty
+            // lowering skips git entirely (SPEC D.2.3).
+            if !lowered.trim().is_empty() {
+                rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
+            }
+        } else if !lowered.trim().is_empty() {
+            // JSON apply mirrors the text apply below: `--format` chooses
+            // the report language, never whether the patch lands (T151).
+            rsmpl_git::apply_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
         }
         let payload = serde_json::json!({
             "version": 1,
