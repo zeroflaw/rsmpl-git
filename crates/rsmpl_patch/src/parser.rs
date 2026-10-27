@@ -105,7 +105,16 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
             || line.starts_with("rename ")
             || line.starts_with("Binary ")
         {
+            // Real git deletions/creations keep same-path `diff --git`
+            // halves and mark the side in `---`/`+++` instead (T350):
+            // mirror the markers into the create/delete flags so they
+            // hold regardless of header spelling.
             if let Some(sec) = current.as_mut() {
+                if line == "+++ /dev/null" || line == "+++ dev/null" {
+                    sec.is_deleted_file = true;
+                } else if line == "--- /dev/null" || line == "--- dev/null" {
+                    sec.is_new_file = true;
+                }
                 sec.metadata.push(line.to_string());
                 idx += 1;
                 continue;
@@ -1048,6 +1057,19 @@ mod tests {
         let deleted =
             parse_patch("diff --git a/src/old.rs /dev/null\n@@ -1,1 +0,0 @@\n-foo\n").unwrap();
         assert!(deleted.files[0].is_deleted_file);
+    }
+
+    #[test]
+    fn same_path_dev_null_markers_set_create_delete_flags() {
+        // T350: real git keeps same-path `diff --git` halves for
+        // deletions/creations and marks the side in `---`/`+++` — the
+        // flags must mirror the markers, not just the header halves.
+        let deleted = parse_patch("diff --git a/src/old.rs b/src/old.rs\ndeleted file mode 100644\n--- a/src/old.rs\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-foo\n").unwrap();
+        assert!(deleted.files[0].is_deleted_file);
+        assert_eq!(deleted.files[0].target_path, "src/old.rs");
+        let created = parse_patch("diff --git a/src/new.rs b/src/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1,1 @@\n+foo\n").unwrap();
+        assert!(created.files[0].is_new_file);
+        assert_eq!(created.files[0].target_path, "src/new.rs");
     }
 
     #[test]

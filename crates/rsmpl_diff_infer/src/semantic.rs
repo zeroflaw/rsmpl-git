@@ -1,14 +1,17 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
 //! method-to-fn and method-to-method fan-outs.
 //!
-//! Pure detectors over a binary-stripped native diff. Per-file
-//! all-or-nothing: a file section is either fully replaced by
-//! semantic hunks or passed through as ordinary hunks (never mixed,
-//! so SPEC 10.6 overlap is impossible by construction). Every
-//! emission uses the `# scope=file` + `@@ -1,1 @@` dummy, so no
-//! original spans are needed. Shapes are probe-verified against
-//! `applyrs --check` (see PLAN.md); anything unrecognized stays
-//! ordinary passthrough.
+//! Pure detectors over a binary-stripped native diff. Whole-file
+//! first: a section whose every pair shares one shape is fully
+//! replaced by one semantic hunk (this preserves cross-hunk sweeps).
+//! Otherwise each balanced native hunk retries the same detectors
+//! independently (T349) and leftovers stay ordinary in original
+//! order — native hunks are pairwise disjoint in original
+//! coordinates, so a compressed hunk never overlaps a leftover hunk
+//! (SPEC 10.6 option-1 merge by construction). Every emission uses
+//! the `# scope=file` + `@@ -1,1 @@` dummy, so no original spans are
+//! needed. Shapes are probe-verified against `applyrs --check` (see
+//! PLAN.md); anything unrecognized stays ordinary passthrough.
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the
@@ -78,17 +81,22 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     if in_hunk && hunk_minus != hunk_plus {
         balanced = false;
     }
-    if !balanced || !saw_hunk {
-        return None;
-    }
-    if minuses.len() != pluses.len() || minuses.is_empty() {
-        return None;
-    }
-    if minuses.len() == 1 {
+    // Whole-section attempt first (preserves cross-hunk sweeps): it
+    // needs every hunk balanced and equal non-zero global counts, so
+    // global order pairing stays sound. Gate failures skip straight
+    // to the per-hunk fallback (T349).
+    let whole = balanced && saw_hunk && minuses.len() == pluses.len() && !minuses.is_empty();
+    if whole && minuses.len() == 1 {
         // Single pair: fn/item rename only (a lone call rewrite has
         // no token win over the ordinary hunk; a lone heterogeneous
         // fn header likewise costs more as a slot hunk than ordinary).
-        return try_item_rename(minuses[0], pluses[0], &path, used_rules);
+        if let Some(rename) = try_item_rename(minuses[0], pluses[0], &path, used_rules) {
+            return Some(rename);
+        }
+        return compress_section_per_hunk(section, &path, used_rules);
+    }
+    if !whole {
+        return compress_section_per_hunk(section, &path, used_rules);
     }
     // N >= 2 heterogeneous fn/method renames compress to one slot
     // sweep (T344); fall through to the call sweep otherwise.
@@ -103,7 +111,115 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     if let Some(m2m) = try_method_to_method_sweep(&minuses, &pluses, &path, used_rules) {
         return Some(m2m);
     }
-    try_call_sweep(&minuses, &pluses, &path, used_rules)
+    if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, used_rules) {
+        return Some(sweep);
+    }
+    // Per-hunk fallback (T349): the whole-section detectors above need
+    // every pair in the file to share one shape, so one doc tweak, one
+    // pure addition, or one divergent pair anywhere vetoes compression
+    // of unrelated sweep runs in other hunks. Retry hunk by hunk with
+    // the same detectors: git hunks of one file are pairwise disjoint
+    // in original coordinates, so a compressed hunk's changed lines
+    // never overlap a leftover hunk's ranges (SPEC 10.6 option-1
+    // merge by construction). Residual best-effort risk, same as the
+    // whole-section path: a sweep pattern can also match unchanged
+    // sites elsewhere — verify with the D.3 round-trip before trusting
+    // a compression.
+    compress_section_per_hunk(section, &path, used_rules)
+}
+
+/// Per-hunk fallback for `compress_section`: compress each balanced
+/// native hunk independently with the same detectors, keep the rest as
+/// ordinary hunks in original order. Returns `None` when no hunk
+/// compressed (caller keeps the ordinary passthrough).
+fn compress_section_per_hunk(
+    section: &str,
+    path: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    // Split the prelude (`diff --git`/`index`/`---`/`+++`) from the
+    // native hunks; a section without hunks has nothing to compress.
+    let mut prelude = String::new();
+    let mut hunks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in section.lines() {
+        if line.starts_with("@@") {
+            if let Some(h) = current.take() {
+                hunks.push(h);
+            }
+            current = Some(String::new());
+        }
+        match current.as_mut() {
+            Some(h) => {
+                h.push_str(line);
+                h.push('\n');
+            }
+            None => {
+                prelude.push_str(line);
+                prelude.push('\n');
+            }
+        }
+    }
+    if let Some(h) = current.take() {
+        hunks.push(h);
+    }
+    if hunks.is_empty() {
+        return None;
+    }
+    let mut out = prelude;
+    let mut compressed_any = false;
+    for hunk in &hunks {
+        let mut minuses: Vec<&str> = Vec::new();
+        let mut pluses: Vec<&str> = Vec::new();
+        for line in hunk.lines().skip(1) {
+            if line.starts_with('-') && !line.starts_with("---") {
+                minuses.push(&line[1..]);
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                pluses.push(&line[1..]);
+            }
+        }
+        let checkpoint = used_rules.len();
+        let semantic = if minuses.len() == pluses.len() && !minuses.is_empty() {
+            if minuses.len() == 1 {
+                try_item_rename(minuses[0], pluses[0], path, used_rules)
+            } else if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, path, used_rules) {
+                Some(slot)
+            } else if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, path, used_rules) {
+                Some(m2f)
+            } else if let Some(m2m) =
+                try_method_to_method_sweep(&minuses, &pluses, path, used_rules)
+            {
+                Some(m2m)
+            } else {
+                try_call_sweep(&minuses, &pluses, path, used_rules)
+            }
+        } else {
+            None
+        };
+        match semantic {
+            Some(full) => {
+                compressed_any = true;
+                // Detectors return a full `diff --git` section; keep
+                // only the hunk body (everything after the header
+                // line) so the reassembled section keeps one header.
+                let body = full.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+                out.push_str(body);
+            }
+            None => {
+                // A failed detector may have reserved a rule name
+                // (`try_item_rename` names before its column-0 and
+                // generics guards); release it so later hunks in the
+                // same file keep tight names.
+                used_rules.truncate(checkpoint);
+                out.push_str(hunk);
+            }
+        }
+    }
+    if compressed_any {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// One-ident-delta item rename: exactly one `-`/`+` line pair, same
@@ -1142,5 +1258,49 @@ mod tests {
         validated(&out);
         assert!(out.contains("rule=calls_foo_to_bar\n"), "got: {out}");
         assert!(out.contains("rule=calls_foo_to_bar_2\n"), "got: {out}");
+    }
+
+    #[test]
+    fn per_hunk_sweep_compresses_beside_ordinary_hunk() {
+        // Mixed file: hunk 1 is a 2-site call sweep, hunk 2 a body
+        // edit. The whole-section detectors stay passthrough; the
+        // per-hunk fallback (T349) compresses hunk 1 and keeps hunk 2
+        // ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n@@ -10,3 +10,3 @@\n fn n() {\n-    1\n+    2\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0)\n"), "got: {out}");
+        assert!(out.contains("@@ -10,3 +10,3 @@\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn per_hunk_unbalanced_hunk_stays_ordinary() {
+        // A pure-addition hunk beside a balanced sweep: the addition
+        // stays ordinary, the sweep still compresses (T349).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n@@ -6,0 +7,2 @@\n+fn added() {}\n+// new\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+fn added() {}\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn per_hunk_mixed_file_without_sweep_stays_passthrough() {
+        // No compressible hunk: `None`, so the caller keeps the
+        // ordinary passthrough (T349).
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    1\n+    2\n }\n@@ -10,3 +10,3 @@\n fn n() {\n-    3\n+    4\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
 }

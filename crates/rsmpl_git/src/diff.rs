@@ -58,6 +58,33 @@ pub fn unified_diff_for_new_file_with_context(
     Some(out)
 }
 
+/// Build a `diff --git` section for a deleted file.
+///
+/// Emits `deleted file mode 100644` + `+++ /dev/null` headers so the
+/// lowered patch removes the file with a bare `git apply` instead of
+/// truncating it to empty (T350). Callers must only use this when the
+/// input section targets `/dev/null` and the engine emptied the
+/// content; an ordinary all-minus hunk truncates the file and keeps
+/// it.
+pub fn unified_diff_for_deleted_file_with_context(
+    path: &str,
+    old: &str,
+    context: usize,
+) -> Option<String> {
+    if old.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    out.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    out.push_str("deleted file mode 100644\n");
+    out.push_str(&format!("--- a/{path}\n"));
+    out.push_str("+++ /dev/null\n");
+    let diff = similar::TextDiff::from_lines(old, "");
+    let hunks = diff.unified_diff().context_radius(context).to_string();
+    out.push_str(&hunks);
+    Some(out)
+}
+
 /// Assemble per-file sections into one patch document.
 pub fn assemble_patch(sections: Vec<String>) -> String {
     let mut out = String::new();
@@ -195,5 +222,22 @@ mod tests {
     #[test]
     fn new_file_empty_returns_none() {
         assert!(unified_diff_for_new_file_with_context("x", "", 3).is_none());
+    }
+
+    #[test]
+    fn deleted_file_section_uses_dev_null_headers() {
+        // T350: deleted files lower with `deleted file mode` so a bare
+        // `git apply` removes them (plain `+++ b/…` truncates instead).
+        let d = unified_diff_for_deleted_file_with_context("src/old.rs", "use x;\n", 3).unwrap();
+        assert!(d.contains("deleted file mode"), "got: {d}");
+        assert!(d.contains("+++ /dev/null"), "got: {d}");
+        assert!(d.contains("--- a/src/old.rs"), "got: {d}");
+        assert!(!d.contains("+++ b/"), "got: {d}");
+        assert!(d.contains("-use x;"), "got: {d}");
+    }
+
+    #[test]
+    fn deleted_file_empty_returns_none() {
+        assert!(unified_diff_for_deleted_file_with_context("x", "", 3).is_none());
     }
 }

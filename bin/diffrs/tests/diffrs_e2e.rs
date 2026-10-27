@@ -633,3 +633,52 @@ fn method_to_fn_sweep_compresses_to_one_hunk() {
         serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(3), "got: {v}");
 }
+
+// T349: a mixed file (call sweep in one hunk + body edit in a distant
+// hunk) compresses partially: one semantic hunk for the sweep beside
+// one ordinary hunk, and the mix round-trips with `matches == 2`.
+// The const padding forces two native hunks (one change run would
+// merge into a single mixed hunk, which stays ordinary).
+#[test]
+fn mixed_file_compresses_sweep_hunk_and_round_trips() {
+    let dir = init_repo();
+    let before = "fn m() {\n    foo(1);\n    foo(2);\n}\nconst A: i32 = 1;\nconst B: i32 = 2;\nconst C: i32 = 3;\nconst D: i32 = 4;\nconst E: i32 = 5;\nconst F: i32 = 6;\nconst G: i32 = 7;\nconst H: i32 = 8;\nfn n() {\n    1\n}\n";
+    write(dir.path(), "src/lib.rs", before);
+    commit_all(dir.path());
+    let after = before
+        .replace("    foo(1);\n    foo(2);", "    bar(1);\n    bar(2);")
+        .replace("fn n() {\n    1\n}", "fn n() {\n    2\n}");
+    write(dir.path(), "src/lib.rs", &after);
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("- foo(E0)"), "got: {patch}");
+    assert!(patch.contains("+ bar(E0)"), "got: {patch}");
+    assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
+    assert!(patch.contains("-    1\n"), "got: {patch}");
+    assert!(patch.contains("+    2\n"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--check")
+        .arg("--format")
+        .arg("json")
+        .arg("--diff-max-lines")
+        .arg("0")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&checked.stdout)).unwrap();
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(2), "got: {v}");
+}

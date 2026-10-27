@@ -77,15 +77,15 @@ gitrs diff HEAD~1                        # history: changes since a revision
 gitrs diff --format json                 # {"version":1,"files":[…],"patch":"…"}
 ```
 
-v1 compresses whole-file fn/item renames (one ident delta), N-site
+v1 compresses fn/item renames (one ident delta), N-site
 heterogeneous fn/method renames (one ident delta → one slot-sweep
 `V Q fn … G (…) W` hunk), and N-site call rewrites (same callee/arity
 delta → one `# allow=many` hunk), N-site method-to-function
 fan-outs (`recv.old(args)` → `new_fn(recv, args)` → one `# allow=many`
 `Receiver` hunk), and N-site method-to-method renames
 (`recv.old(args)` → `recv.new(args)` → one `# allow=many` `Receiver`
-hunk) into semantic hunks; everything else passes through
-as ordinary hunks.
+hunk) into semantic hunks — whole-file first, then per balanced
+hunk (T349); unrecognized runs stay ordinary.
 Output always parses and round-trips through `gitrs apply --check`
 against the pre-change tree (measured: 10-site 2-arg sweep 548 B →
 148 B; trivial renames ~parity). Untracked files are included as

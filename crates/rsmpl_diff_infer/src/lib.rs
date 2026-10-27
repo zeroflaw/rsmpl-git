@@ -1,13 +1,13 @@
 //! Pure inference for the inverse mapping (`diffrs`).
 //!
-//! Turns a native unified diff into RSmPL-Git: v1 compresses whole-file
+//! Turns a native unified diff into RSmPL-Git: v1 compresses
 //! fn/item renames (one ident delta, identical bodies), N-site
 //! heterogeneous fn/method renames (one ident delta → one slot-sweep
 //! `V Q fn … G (…) W` hunk), N-site method-to-function fan-outs
 //! (`recv.old(args)` → `new_fn(recv, args)`), N-site method-to-method
 //! renames (`recv.old(args)` → `recv.new(args)`), and N-site call rewrites (same
 //! callee/arity delta → one `# allow=many` hunk) into semantic hunks,
-//! and passes everything else through as ordinary hunks. Binary file sections are stripped (a patch is
+//! whole-file first, then per balanced hunk (T349); the rest stays ordinary. Binary file sections are stripped (a patch is
 //! UTF-8; `applyrs` cannot read binary worktree files) and the
 //! remainder is validated by parsing it as RSmPL-Git, so every
 //! `diffrs` output is applyrs-consumable by construction. A failed

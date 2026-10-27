@@ -4576,7 +4576,9 @@ typo'd path creates a stray file on apply — read the warning before
 committing; `--format json` consumers must also read stderr, where
 all `warning:` lines live (see D.2.3). Created files lower with
 `new file mode 100644` + `--- /dev/null` headers so the concrete
-diff applies with a bare `git apply`. `--output <PATH>` is resolved
+diff applies with a bare `git apply`; deleted files mirror it with
+`deleted file mode 100644` + `+++ /dev/null` headers (T350).
+`--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
 local artifact, not repo content. File renames are not a containment
 issue: differing `diff --git` paths are rejected earlier as a parse
@@ -5706,10 +5708,14 @@ stripped with a stderr `warning:` per path (a patch is UTF-8;
 headers admit only `rule=` tags, Section 8.3; `git apply` likewise
 ignores them).
 
-Inference v1 is pure and per-file all-or-nothing: a file section is
-either fully replaced by semantic hunks or passed through as
-ordinary hunks, never mixed — so Section 10.6 overlap is impossible
-by construction. Every emission uses the `# scope=file` +
+Inference v1 is pure: a file section whose every pair shares one
+shape is fully replaced by one semantic hunk (this preserves
+cross-hunk sweeps); otherwise each balanced native hunk retries the
+same detectors independently (T349) and leftovers stay ordinary in
+original order — native hunks are pairwise disjoint in original
+coordinates, so a compressed hunk never overlaps a leftover hunk
+(Section 10.6 option-1 merge by construction). Every emission uses
+the `# scope=file` +
 `@@ -1,1 @@` dummy (Section 17.3); rule names derive from the
 rewritten idents (`rename_old_to_new`, `calls_old_to_new`, suffixed
 on collision).

@@ -243,8 +243,19 @@ fn run() -> Result<(), CliError> {
         // Created files (missing before the patch) lower with `new file
         // mode` headers so `git apply` creates them (SPEC 27.6); an
         // existing-but-empty file keeps the ordinary headers.
+        // Deleted files (input targets `/dev/null`, engine emptied the
+        // content) lower with `deleted file mode` headers so `git apply`
+        // removes them instead of truncating (T350); an ordinary
+        // all-minus hunk truncates and keeps the file.
         let section = if is_new.contains(rel) {
             rsmpl_git::unified_diff_for_new_file_with_context(rel, new, 0)
+        } else if patch
+            .files
+            .iter()
+            .any(|s| s.target_path == *rel && s.is_deleted_file)
+            && new.is_empty()
+        {
+            rsmpl_git::unified_diff_for_deleted_file_with_context(rel, old, 0)
         } else {
             rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0)
         };

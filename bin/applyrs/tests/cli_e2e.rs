@@ -1761,3 +1761,49 @@ fn too_many_matches_saturates_at_two() {
     // File untouched by the failed run.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(4)"));
 }
+
+#[test]
+fn deleted_file_is_removed_not_truncated() {
+    // T350: an input section targeting `/dev/null` removes the file —
+    // the lowering must carry `deleted file mode` so `git apply`
+    // deletes instead of truncating to empty.
+    let dir = init_repo();
+    write(dir.path(), "src/old.rs", "fn old() {}\n");
+    let patch = "diff --git a/src/old.rs b/src/old.rs\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/src/old.rs\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-fn old() {}\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !dir.path().join("src/old.rs").exists(),
+        "deleted file must be gone, not truncated"
+    );
+}
+
+#[test]
+fn ordinary_all_minus_hunk_truncates_but_keeps_file() {
+    // T350 twin: without `/dev/null` the same all-minus hunk truncates
+    // the file and keeps it (only explicit deletions remove).
+    let dir = init_repo();
+    write(dir.path(), "src/old.rs", "fn old() {}\n");
+    let patch = "diff --git a/src/old.rs b/src/old.rs\n--- a/src/old.rs\n+++ b/src/old.rs\n@@ -1,1 +0,0 @@\n-fn old() {}\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.path().join("src/old.rs").exists(), "file must stay");
+    assert!(
+        read(dir.path(), "src/old.rs").is_empty(),
+        "file must be empty"
+    );
+}
