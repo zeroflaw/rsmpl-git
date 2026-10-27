@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-fn foo(x: i32) -> i32 {
++fn bar(x: i32) -> i32 {
+@@ -8 +8 @@
+-async fn foo(x: i32) -> i32 {
++async fn bar(x: i32) -> i32 {
+@@ -15 +15 @@
+-pub fn foo(x: i32) -> i32 {
++pub fn bar(x: i32) -> i32 {
+@@ -22 +22 @@
+-pub(crate) async fn foo<T>(x: T) -> T where T: Clone {
++pub(crate) async fn bar<T>(x: T) -> T where T: Clone {
