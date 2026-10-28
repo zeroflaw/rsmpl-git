@@ -277,11 +277,21 @@ fn strip_index_lines(section: &str) -> String {
 /// Collapse the section's `diff --git` header to single-path (T381).
 /// Only the header line is rewritten (`---`/`+++` markers stay);
 /// rename, `/dev/null`, and quoted headers pass through via
-/// `rsmpl_patch::collapse_git_header`.
+/// `rsmpl_patch::collapse_git_header`. Headers-only sections (mode
+/// flips, empty creates: no `---`/`+++` markers) keep two-path — bare
+/// `git apply` resolves filenames from the markers and fails on a
+/// collapsed single path without them (T393).
 fn collapse_git_headers(section: &str) -> String {
+    // T393: gate the collapse on marker presence. A headers-only
+    // section has no body lines, so a `--- `/`+++ ` hit can only come
+    // from real file markers; sections that already collapse today
+    // (hunks always ship markers) are unaffected.
+    let collapsible = raw_lines(section)
+        .iter()
+        .any(|l| l.starts_with("--- ") || l.starts_with("+++ "));
     let mut out = String::new();
     for line in raw_lines(section) {
-        if line.starts_with("diff --git ") {
+        if collapsible && line.starts_with("diff --git ") {
             out.push_str(&rsmpl_patch::collapse_git_header(line));
         } else {
             out.push_str(line);
@@ -404,6 +414,30 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
+    }
+
+    #[test]
+    fn headers_only_sections_keep_two_path_headers() {
+        // T393: mode-only and empty-create sections carry no
+        // `---`/`+++` markers, and bare `git apply` resolves
+        // filenames from those markers — collapsing to single-path
+        // breaks bare-git compat (`lacks filename information`), so
+        // these sections keep `diff --git a/P b/P`.
+        let mode = "diff --git a/f.sh b/f.sh\nold mode 100644\nnew mode 100755\n";
+        let out = infer_rsmpl(mode).unwrap();
+        assert!(
+            out.rsmpl.contains("diff --git a/f.sh b/f.sh\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        let empty = "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n";
+        let out = infer_rsmpl(empty).unwrap();
+        assert!(
+            out.rsmpl.contains("diff --git a/empty.txt b/empty.txt\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("kept patch must parse");
     }
 
     #[test]

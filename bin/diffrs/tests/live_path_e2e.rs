@@ -316,3 +316,114 @@ fn subdir_repo_converts_and_round_trips_against_root() {
         "newfile\n"
     );
 }
+
+#[test]
+fn headers_only_sections_keep_two_path_and_bare_apply() {
+    // T393: headers-only sections (mode flips, empty creates) carry
+    // no `---`/`+++` markers, so the T381 single-path collapse must
+    // not fire — bare `git apply` resolves filenames from the
+    // markers and rejects a collapsed single path (`lacks filename
+    // information`). Both cells stay two-path, `--check` clean,
+    // bare-git clean, and real-apply exact.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    // Cell 1: staged chmod-only.
+    let dir = init_repo();
+    write(dir.path(), "f.sh", "x\n");
+    commit_all(dir.path());
+    git(dir.path(), &["update-index", "--chmod=+x", "f.sh"]);
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("diff --git a/f.sh b/f.sh\n"), "got: {patch}");
+    assert!(!patch.contains("diff --git f.sh\n"), "got: {patch}");
+    // Back to HEAD: the mode patch must check clean both ways.
+    git(dir.path(), &["stash", "-q"]);
+    #[cfg(unix)]
+    let before = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(dir.path().join("f.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let bare = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        bare.status.success(),
+        "bare git apply --check failed: {}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    // The flip took effect: the mode moved off the pre-image and
+    // owner-exec is set. No absolute value asserted — `git apply`
+    // itself ORs exec bits onto the worktree mode (664 -> 775 under
+    // umask 002, 644 -> 755 under 022), so mirroring git is the
+    // contract and the pre/post delta proves it here.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let after = std::fs::metadata(dir.path().join("f.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_ne!(after, before, "mode flip had no effect");
+        assert_ne!(after & 0o100, 0, "owner-exec bit not set");
+    }
+    // Cell 2: empty (0-byte) untracked create.
+    let dir2 = init_repo();
+    write(dir2.path(), "a.txt", "base\n");
+    commit_all(dir2.path());
+    write(dir2.path(), "empty.txt", "");
+    let out = run(dir2.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        patch.contains("diff --git a/empty.txt b/empty.txt\n"),
+        "got: {patch}"
+    );
+    // Back to the pre-change tree: check clean both ways, then the
+    // real apply must recreate the 0-byte file.
+    std::fs::remove_file(dir2.path().join("empty.txt")).unwrap();
+    let checked = check_with_applyrs(dir2.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let bare = check_with_bare_git_unidiff_zero(dir2.path(), &patch);
+    assert!(
+        bare.status.success(),
+        "bare git apply --check failed: {}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir2.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::metadata(dir2.path().join("empty.txt"))
+            .unwrap()
+            .len(),
+        0
+    );
+}

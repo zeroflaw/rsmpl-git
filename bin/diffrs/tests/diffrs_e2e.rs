@@ -1063,7 +1063,11 @@ fn empty_untracked_converts_to_headers_only_and_checks_clean() {
         String::from_utf8_lossy(&out.stderr)
     );
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("diff --git empty.txt"), "got: {patch}");
+    // T393: headers-only (no `---`/`+++`) keeps two-path for bare-git.
+    assert!(
+        patch.contains("diff --git a/empty.txt b/empty.txt\n"),
+        "got: {patch}"
+    );
     assert!(patch.contains("new file mode 100644"), "got: {patch}");
     assert!(
         !patch.contains("@@"),

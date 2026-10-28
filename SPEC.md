@@ -5791,6 +5791,9 @@ Two-path `diff --git a/P b/P` headers collapse to single-path
 section); renames, `/dev/null` halves, and quoted headers keep
 two-path, and `---`/`+++` markers stay (bare `git apply` rejects
 stripped markers).
+Headers-only sections (mode flips, empty creates: no `---`/`+++`
+markers) keep two-path — bare `git apply` reads filenames from the
+markers and fails on a collapsed single path without them (T393).
 
 Inference v1 is pure: a file section whose every pair shares one
 shape is fully replaced by one semantic hunk (this preserves
