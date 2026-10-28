@@ -1024,6 +1024,44 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "25-call-literal" {
+            // T448: homo trailing literal delta compresses (a.rs, the
+            // 7025a14 prize miniature); hetero trailing (b.rs) stays
+            // ordinary without vetoing via tuple-keyed totality.
+            assert!(
+                semantic.contains("rule=calls_make_call_literal"),
+                "literal sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- make_call(E0, E1, false)"),
+                "literal minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ make_call(E0, E1, \"100644\")"),
+                "literal plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    make_call(\"alpha\", first_count, false);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    make_call(\"alpha\", first_count, \"100644\");"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    make_call(\"gamma\", third_count, true);"),
+                "hetero-trailing minus lines must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    make_call(\"delta\", fourth_count, symlink);"),
+                "hetero-trailing plus lines must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }

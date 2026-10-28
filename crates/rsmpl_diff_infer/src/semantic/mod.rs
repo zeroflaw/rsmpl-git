@@ -13,11 +13,13 @@
 //! `# scope=file` + `@@ -1,1 @@`; probe-verified via `applyrs --check`.
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
+mod literal;
 mod methods;
 mod moves;
 mod peel;
 mod verbatim;
 
+pub(crate) use literal::try_call_literal_sweep;
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,
@@ -245,6 +247,17 @@ fn compress_section(
     {
         if add.len() < section.len() {
             return Some(add);
+        }
+        used_rules.truncate(checkpoint);
+    }
+    // T448: same-callee same-arity trailing-literal delta (homo concrete
+    // trailing pair, hetero leading bound as E-vars; different-trailing
+    // same-arity sites never veto via tuple-keyed totality).
+    if let Some(lit) =
+        try_call_literal_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if lit.len() < section.len() {
+            return Some(lit);
         }
         used_rules.truncate(checkpoint);
     }

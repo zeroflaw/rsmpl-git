@@ -192,6 +192,70 @@ pub(crate) fn call_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// N-site bare-call trailing-literal totality (T448): bare single-seg
+/// no-turbofish call `cal` with `arity` args whose trailing arg flat-ws
+/// equals `old_trailing` occurs exactly `minuses.len()` times.
+/// `call_holds` (callee+arity) would over-count same-arity sites with a
+/// different trailing literal (e.g. 7025a14's `true` site next to the 2x
+/// `false` prize group); the trailing literal is the precise pre-image,
+/// mirroring `method_literal_holds` (T420).
+pub(crate) fn call_literal_holds(
+    file_old: Option<&str>,
+    cal: &str,
+    arity: usize,
+    old_trailing: &str,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    let want = super::semantic::flat_ws(old_trailing);
+    struct L<'a> {
+        cal: &'a str,
+        arity: usize,
+        want: &'a str,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for L<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.qself.is_none()
+                        && p.path.leading_colon.is_none()
+                        && p.path.segments.len() == 1
+                        && p.path.segments[0].ident == self.cal
+                        && matches!(p.path.segments[0].arguments, syn::PathArguments::None)
+                        && call.args.len() == self.arity
+                    {
+                        if let Some(last) = call.args.last() {
+                            use quote::ToTokens;
+                            if super::semantic::flat_ws(&last.to_token_stream().to_string())
+                                == self.want
+                            {
+                                self.count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut l = L {
+        cal,
+        arity,
+        want: &want,
+        count: 0,
+    };
+    l.visit_file(&file);
+    if l.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
 /// N-site array-head-peel totality (T441 slice 1): bare call `cal`
 /// with exactly 2 args where the second is `&[head, …]` (immutable
 /// ref-of-array, unescaped string head `head`, array length `len`)
@@ -568,6 +632,31 @@ mod tests {
         );
         let pre2 = "fn m() {\n    foo(1);\n    foo(2);\n    foo(3);\n}\n";
         assert!(!infer(&raw, pre2).contains("rule="), "extra site must veto");
+    }
+    #[test]
+    fn call_literal_totality_keys_on_trailing() {
+        // T448: the pre-image count keys on callee + trailing old literal,
+        // not callee+arity alone -- an extra same-arity/different-trailing
+        // site never matches the concrete pattern and must not veto.
+        let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget(alpha, 1, false);\n-    make_widget(beta, 2, false);\n+    make_widget(alpha, 1, \"100644\");\n+    make_widget(beta, 2, \"100644\");\n }\n");
+        let pre =
+            "fn m() {\n    make_widget(alpha, 1, false);\n    make_widget(beta, 2, false);\n}\n";
+        assert!(
+            infer(&raw, pre).contains("rule=calls_make_widget_literal"),
+            "got: {}",
+            infer(&raw, pre)
+        );
+        let pre2 = "fn m() {\n    make_widget(alpha, 1, false);\n    make_widget(beta, 2, false);\n    make_widget(gamma, 3, false);\n}\n";
+        assert!(
+            !infer(&raw, pre2).contains("rule="),
+            "extra same-literal site must veto"
+        );
+        let pre3 = "fn m() {\n    make_widget(alpha, 1, false);\n    make_widget(beta, 2, false);\n    make_widget(gamma, 3, true);\n}\n";
+        assert!(
+            infer(&raw, pre3).contains("rule=calls_make_widget_literal"),
+            "different-trailing site must not veto, got: {}",
+            infer(&raw, pre3)
+        );
     }
     #[test]
     fn method_totality_vetoes_extra_receiver() {

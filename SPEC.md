@@ -5869,6 +5869,16 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   across all sites (emitted verbatim — per-site trailing metavars
   would bind nothing, T442). Pre-image totality reuses the call
   minus-arity count (hetero-trailing siblings veto).
+- Same-callee trailing-literal-delta sweep (T448): N ≥ 2 `-`/`+`
+  pairs, each a bare single-segment call with one shared callee and
+  uniform arity `k + 1` whose leading `k` args token-equal per site
+  (bound as `# expr E0…`, hetero across sites) while the trailing arg
+  is token-equal concrete text across all sites on each side with a
+  real old/new delta (emitted verbatim, T442-safe). All-identical
+  classes stay for the tighter verbatim sweep (peel precedent, T422).
+  Pre-image totality keys on callee + trailing old literal
+  (`call_literal_holds`, T420-style): same-arity sites with a
+  different trailing literal never match and never veto.
 - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
