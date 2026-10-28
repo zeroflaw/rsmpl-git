@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -151,34 +152,40 @@ def check_case(top: Path, wt: Path, tmp: Path, diffrs: Path, applyrs: Path, comm
     patch_path.write_text(patch)
 
     pre = Path(tempfile.mkdtemp(prefix=f"pre-{short}-"))
-    if not root and not materialize(top, f"{commit}~1", pre):
-        return sem, [f"{short}: git archive {commit}~1 failed"]
+    expect_dir: Path | None = None
+    try:
+        if not root and not materialize(top, f"{commit}~1", pre):
+            return sem, [f"{short}: git archive {commit}~1 failed"]
 
-    checked = run([str(applyrs), "--file", str(patch_path), "--check", "--repo", str(pre)])
-    if checked.returncode != 0:
-        failures.append(
-            f"{short}: applyrs --check exited {checked.returncode}: "
-            f"{checked.stderr.decode(errors='replace').strip()}"
-        )
-    applied = run([str(applyrs), "--file", str(patch_path), "--repo", str(pre)])
-    if applied.returncode != 0:
-        failures.append(
-            f"{short}: applyrs apply exited {applied.returncode}: "
-            f"{applied.stderr.decode(errors='replace').strip()}"
-        )
+        checked = run([str(applyrs), "--file", str(patch_path), "--check", "--repo", str(pre)])
+        if checked.returncode != 0:
+            failures.append(
+                f"{short}: applyrs --check exited {checked.returncode}: "
+                f"{checked.stderr.decode(errors='replace').strip()}"
+            )
+        applied = run([str(applyrs), "--file", str(patch_path), "--repo", str(pre)])
+        if applied.returncode != 0:
+            failures.append(
+                f"{short}: applyrs apply exited {applied.returncode}: "
+                f"{applied.stderr.decode(errors='replace').strip()}"
+            )
+            return sem, failures
+        expect_dir = Path(tempfile.mkdtemp(prefix=f"exp-{short}-"))
+        if not materialize(top, commit, expect_dir):
+            return sem, failures + [f"{short}: git archive {commit} failed"]
+        diffs = compare_trees(pre, expect_dir)
+        if diffs:
+            msg = f"{short}: applied tree differs from {commit}:"
+            for d in diffs[:5]:
+                msg += f"\n  {d}"
+                if len(diffs) > 5:
+                    msg += f"\n... and {len(diffs) - 5} more"
+            failures.append(msg)
         return sem, failures
-    expect_dir = Path(tempfile.mkdtemp(prefix=f"exp-{short}-"))
-    if not materialize(top, commit, expect_dir):
-        return sem, failures + [f"{short}: git archive {commit} failed"]
-    diffs = compare_trees(pre, expect_dir)
-    if diffs:
-        msg = f"{short}: applied tree differs from {commit}:"
-        for d in diffs[:5]:
-            msg += f"\n  {d}"
-        if len(diffs) > 5:
-            msg += f"\n... and {len(diffs) - 5} more"
-        failures.append(msg)
-    return sem, failures
+    finally:
+        shutil.rmtree(pre, ignore_errors=True)
+        if expect_dir is not None:
+            shutil.rmtree(expect_dir, ignore_errors=True)
 
 
 def main() -> int:
@@ -215,6 +222,7 @@ def main() -> int:
     wt = tmp / "wt"
     if not git_ok(top, ["worktree", "add", "--detach", str(wt), commits[0]]):
         print("error: worktree add failed", file=sys.stderr)
+        shutil.rmtree(tmp, ignore_errors=True)
         return 2
     try:
         total_failures: list[str] = []
@@ -246,6 +254,7 @@ def main() -> int:
         return 1 if total_failures else 0
     finally:
         run(["git", "-C", str(top), "worktree", "remove", "--force", str(wt)])
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
