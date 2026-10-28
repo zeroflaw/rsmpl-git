@@ -57,6 +57,8 @@ machine-checked counts in the JSON report) at ~zero token premium.
 | 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 272 B / 12 ln | 50% |
 | 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 349 B / 16 ln | 29% |
 | 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 197 B / 7 ln | 49% |
+| 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 204 B / 8 ln | 36% |
+| 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 142 B / 8 ln | 29% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end
