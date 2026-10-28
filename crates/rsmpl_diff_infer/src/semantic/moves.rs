@@ -1,8 +1,8 @@
 //! Whole-item 1-to-1 move inference (T430).
 //!
 //! `diffrs` emitted 873 ordinary lines for 1b8993a (four byte-identical
-//! fns moved `matcher_fn.rs` -> new `matcher_impl.rs`): no move
-//! inference existed. This whole-patch pre-pass pairs byte-identical fn
+//! items moved `matcher_fn.rs` -> new `matcher_impl.rs`): no move
+//! inference existed. This whole-patch pre-pass pairs byte-identical named
 //! items deleted in one file and added in another (or the same file,
 //! or a new file) and emits `# item I` + `# bind` cut hunks spliced at
 //! the consumed minus hunk plus `# use` paste hunks spliced after the
@@ -11,7 +11,7 @@
 //! shape is engine-legal — `diffrs` just never emitted it.
 //!
 //! v1 fires only on the probe-proven shape; everything else stays
-//! ordinary by design (T432 follow-ups): fn items only, pure-minus /
+//! ordinary by design (T432 remainder): named items, pure-minus /
 //! pure-plus `-U0` hunks only (whole-hunk drop, never surgical line
 //! removal), global 1-minus + 1-plus pairing (N-to-1 dedup like 7945da1
 //! and 1-to-2 fan-out skip), cut-file pre-image required with flat-ws
@@ -43,7 +43,7 @@ pub(crate) fn try_move_sweep(
     if parsed.is_empty() {
         return None;
     }
-    // Candidate fn items per pure hunk, keyed by (parsed section idx,
+    // Candidate named items per pure hunk, keyed by (parsed section idx,
     // hunk idx). Deleted-file sections never seed cuts (the file is
     // going away; moves out of it are T432).
     let mut minus_items: Vec<(usize, usize, Vec<MoveItem>)> = Vec::new();
@@ -53,7 +53,7 @@ pub(crate) fn try_move_sweep(
             match classify(hunk) {
                 Some(Side::Minus) => {
                     if !sec.is_deleted {
-                        if let Some(items) = fn_items_in(&hunk.body) {
+                        if let Some(items) = minus_items_in(&hunk.body) {
                             if !items.is_empty() {
                                 minus_items.push((si, hi, items));
                             }
@@ -563,10 +563,10 @@ fn classify(hunk: &HunkParts) -> Option<Side> {
 }
 
 /// Parse a pure-hunk body as a `syn::File`; `None` when any non-blank
-/// line is not whole-item content. Returns the fn items with
-/// body-line spans.
-fn fn_items_in(body: &[String]) -> Option<Vec<MoveItem>> {
-    file_fn_items(body, false)
+/// line is not whole-item content. Returns the named items with
+/// body-line spans (fn + struct/enum/trait/type/mod/union/const/static).
+fn minus_items_in(body: &[String]) -> Option<Vec<MoveItem>> {
+    file_items_in(body, false)
 }
 
 /// Lenient plus-side parse (T430): `//`-comment lines (`//`, `///`,
@@ -574,10 +574,10 @@ fn fn_items_in(body: &[String]) -> Option<Vec<MoveItem>> {
 /// the moved items) are coverable leftovers, never vetoes. Block
 /// `/* */` interiors still veto (rare; ordinary fallback).
 fn plus_items_in(body: &[String]) -> Option<Vec<MoveItem>> {
-    file_fn_items(body, true)
+    file_items_in(body, true)
 }
 
-fn file_fn_items(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
+fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     let texts: Vec<&str> = body.iter().map(|l| line_text(l)).collect();
     let fragment = texts.join("\n");
     let file: syn::File = syn::parse_str(&fragment).ok()?;
@@ -598,12 +598,14 @@ fn file_fn_items(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     }
     let mut items = Vec::new();
     for it in &file.items {
-        let syn::Item::Fn(f) = it else { continue };
+        let Some(ident) = item_ident(it) else {
+            continue;
+        };
         let s = it.span().start().line;
         let e = it.span().end().line;
         let lines: Vec<String> = texts[(s - 1)..e].iter().map(|s| s.to_string()).collect();
         items.push(MoveItem {
-            ident: f.sig.ident.to_string(),
+            ident,
             text: lines.join("\n"),
             lines,
             first: s - 1,
@@ -611,6 +613,23 @@ fn file_fn_items(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
         });
     }
     Some(items)
+}
+
+/// Single plain ident for named items; `None` for ident-less items
+/// (impl blocks, use decls, macros) which stay ordinary.
+fn item_ident(it: &syn::Item) -> Option<String> {
+    match it {
+        syn::Item::Fn(f) => Some(f.sig.ident.to_string()),
+        syn::Item::Struct(s) => Some(s.ident.to_string()),
+        syn::Item::Enum(e) => Some(e.ident.to_string()),
+        syn::Item::Trait(t) => Some(t.ident.to_string()),
+        syn::Item::Type(t) => Some(t.ident.to_string()),
+        syn::Item::Const(c) => Some(c.ident.to_string()),
+        syn::Item::Static(s) => Some(s.ident.to_string()),
+        syn::Item::Mod(m) => Some(m.ident.to_string()),
+        syn::Item::Union(u) => Some(u.ident.to_string()),
+        _ => None,
+    }
 }
 
 /// All occurrences of the contiguous `needle` line run in `body`
@@ -783,9 +802,8 @@ mod tests {
     }
 
     #[test]
-    fn move_non_fn_item_stays_ordinary() {
-        // v1 is fn-only (other item kinds need `collect_non_fn_item_spans`
-        // parity probing — T432).
+    fn move_non_fn_struct_fires() {
+        // T432a: named non-fn items (struct/enum/...) move like fns.
         let body: String = (0..40).map(|i| format!("    f{i}: u32,\n")).collect();
         let strukt = format!("struct Big {{\n{body}}}\n");
         let a_minus: String = strukt.lines().map(|l| format!("-{l}\n")).collect();
@@ -797,7 +815,11 @@ mod tests {
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("struct move must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_Big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_Big\n"), "got:\n{text}");
+        validated(&text);
     }
 
     #[test]
@@ -1017,6 +1039,62 @@ mod tests {
         let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
         let pre = pre_map(&[
             ("a.rs", format!("fn keep() {{}}\n{big}").trim_end()),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+    }
+
+    #[test]
+    fn move_mixed_fn_and_struct_fire_together() {
+        // T432a: one minus hunk holding fn + struct pairs both.
+        let big = big_fn("big");
+        let mut strukt = String::from("struct Big2 {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    g{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let mut minus_body = String::new();
+        for l in big.lines() {
+            minus_body.push_str(&format!("-{l}\n"));
+        }
+        minus_body.push_str("-\n");
+        for l in strukt.lines() {
+            minus_body.push_str(&format!("-{l}\n"));
+        }
+        let n = big.lines().count() + strukt.lines().count() + 1;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{minus_body}");
+        let mut plus_body = String::new();
+        for l in big.lines() {
+            plus_body.push_str(&format!("+{l}\n"));
+        }
+        plus_body.push_str("+\n");
+        for l in strukt.lines() {
+            plus_body.push_str(&format!("+{l}\n"));
+        }
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{n} @@\n{plus_body}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{big}\n{strukt}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("mixed move must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=move_Big2\n"), "got:\n{text}");
+        validated(&text);
+    }
+
+    #[test]
+    fn move_impl_block_stays_ordinary() {
+        // T432a: ident-less items (impl blocks) never seed moves.
+        let imp = "impl Foo {\n    fn m(&self) {}\n}\n";
+        let a_minus: String = imp.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,3 +2,0 @@\n{a_minus}");
+        let b_plus: String = imp.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,3 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", "fn keep() {}\nimpl Foo {\n    fn m(&self) {}\n}\n"),
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();

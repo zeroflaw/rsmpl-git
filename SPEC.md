@@ -5891,18 +5891,20 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   last segment, with per-site textually identical non-empty tails
   (plain/grouped/glob/`as` tails may mix) → one `# allow=many` hunk
   (`- use <parent>::Old` / `+ use <parent>::New`, no metavars).
-- Whole-item move inference (T430): a byte-identical fn item deleted in
+- Whole-item move inference (T430/T432a): a byte-identical named item (fn,
+  struct, enum, trait, type, mod, union, const, static) deleted in
   one file and added in another (or the same file, or a new file) compresses
   to `# item I` + `# bind` cut hunks spliced at the consumed pure-minus hunk
   plus `# use` paste hunks spliced after the rewritten pure-plus hunk (1b8993a:
-  four fns move files, 873 ordinary lines -> 117). v1 gates: fn items only,
+  four fns move files, 873 ordinary lines -> 117). v1 gates: named items only
+  (ident-less impl/use/macro stay ordinary),
   global 1-minus + 1-plus pairing, cut-file pre-image flat-ws uniqueness (twin
   veto), minus blanks positional (no leading blank, no runs — a cut absorbs
   exactly one following blank), plus items as a contiguous suffix with exactly
   one blank between runs (the same-anchor paste join restores exactly one),
   new-file pastes allowed, deleted-file cuts and rename sections skipped, and a
   global T375 byte-win guard. Everything else stays ordinary (T432 follow-ups:
-  non-fn items, mixed-hunk partial consumption, other gap shapes, N-to-1 dedup).
+  mixed-hunk partial consumption, other gap shapes, N-to-1 dedup, deleted-file cuts).
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)
