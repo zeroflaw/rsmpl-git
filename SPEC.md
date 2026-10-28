@@ -5960,6 +5960,8 @@ pinned generator: every entry must convert and check clean with
 its pinned semantic-hunk count, then real-apply byte-identical to
 the child tree (T361: `--check` is blind to sweep over-match) —
 failing conversions become pins there.
+The repo-owned runner `tools/history_sweep.py` (T421) automates this
+recipe over every commit and reports the compressing set.
 
 In a full checkout a missing curated pin fails the harness (stale
 recipe, not a skip); the root conversion ensures the empty-tree
