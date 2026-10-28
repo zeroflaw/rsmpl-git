@@ -5891,7 +5891,7 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   (`!f(...)` hits the macro router, `-f(...)` misclassifies — T414)
   are rejected — each failed loud in-corpus; non-Call-top-level pairs
   with nodes outside the engine's bounded general-expr set
-  (Return/Block/If/..., T412) are rejected.
+  (Block/If/... — Return supported since T418, b9c00d5) are rejected.
   Struct-literal fields (`label: expr`, T416) strip the label and sweep
   on the inner expression when both sides parse and labels match (c48a6e6).
   Soundness is subterm totality on the pre-image file

@@ -147,6 +147,14 @@ const CASES: &[Case] = &[
         expect_sem: 1,
     },
     Case {
+        commit: "b9c00d537adf49568b957837307208821ab4ccd0",
+        rev: None,
+        root: false,
+        // T418 return-shape sweep: two identical `return f(...)` lines
+        // thread a param (engine `Expr::Return` arm; T412 gate lifted).
+        expect_sem: 1,
+    },
+    Case {
         commit: "b20884733ba61b1e6630adfb8920cede2cd751b7",
         rev: None,
         root: false,

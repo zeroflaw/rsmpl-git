@@ -377,6 +377,7 @@ fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> bool {
         }
         (syn::Expr::Await(a), syn::Expr::Await(b)) => match_expr(&a.base, &b.base, cx),
         (syn::Expr::Try(a), syn::Expr::Try(b)) => match_expr(&a.expr, &b.expr, cx),
+        (syn::Expr::Return(a), syn::Expr::Return(b)) => opt_expr_eq(&a.expr, &b.expr, cx),
         _ => false,
     }
 }
@@ -1288,6 +1289,25 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert!(out.contains("y.wrapping_add(1)"), "got: {out}");
         assert!(out.contains("y + 2;"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrites_return_expr() {
+        // T418: `return ...` is an `Expr::Return` general-expr pattern
+        // (b9c00d5 threads a param through two `return` call sites).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@ rule=retthread\n# lang=rust\n# allow=many\n- return compress(section, used);\n+ return compress(section, extra, used);\n";
+        let src = "fn a() {\n    if x {\n        return compress(section, used);\n    }\n    return compress(section, used);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(
+            out.matches("return compress(section, extra, used);")
+                .count(),
+            2,
+            "got: {out}"
+        );
+        assert!(
+            !out.contains("return compress(section, used);"),
+            "got: {out}"
+        );
     }
 
     #[test]

@@ -697,9 +697,9 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     // bounded Expr variant set — a top-level Call/MethodCall pair takes
     // the call matcher (concrete args compare opaquely, closures fine),
     // but any other top-level shape compiles to a General hunk where an
-    // unsupported node (Return/Block/If/...) never matches. Reject the
-    // pair so the section stays ordinary (2382b02 `return ...` failed
-    // `--check` live).
+    // unsupported node (Block/If/... — Return supported since T418)
+    // never matches. Reject the pair so the section stays ordinary
+    // (2382b02 `return ...` failed `--check` live before T418).
     if !matches!(minus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && m.unsupported > 0 {
         return false;
     }
@@ -771,6 +771,7 @@ fn is_general_supported(e: &syn::Expr) -> bool {
             | syn::Expr::Range(_)
             | syn::Expr::Await(_)
             | syn::Expr::Try(_)
+            | syn::Expr::Return(_)
     )
 }
 
@@ -1390,17 +1391,22 @@ mod tests {
         assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
     }
     #[test]
-    fn verbatim_sweep_return_shape_stays_passthrough() {
-        // T412 (found by the T410 full-history sweep on 2382b02): `return
-        // ...` parses as `Expr::Return`, which the engine general matcher
-        // never matches (`_ => false`), so the pair must stay ordinary
-        // even with exact totality — otherwise `--check` fails.
+    fn verbatim_sweep_return_shape_compresses() {
+        // T418 (found by the full-history sweep on b9c00d5): `return ...`
+        // parses as `Expr::Return`, which the engine general matcher now
+        // handles structurally (T412 gate lifted for Return only), so the
+        // pair compresses with exact totality — history_e2e pins the live
+        // `--check` + byte-compare on b9c00d5 itself.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    return compress(section, &path, used);\n+    return compress(section, &path, extra, used);\n@@ -9,1 +10,1 @@\n-    return compress(section, &path, used);\n+    return compress(section, &path, extra, used);\n";
         let pre = "fn f() {\n    if x {\n        return compress(section, &path, used);\n    }\n    return compress(section, &path, used);\n}\n";
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim"),
+            "got: {}",
+            out.rsmpl
+        );
     }
     #[test]
     fn verbatim_sweep_leading_bang_stays_passthrough() {
