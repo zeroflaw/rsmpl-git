@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=calls_contains_literal
+# allow=many
+# scope=file
+# expr Receiver
+- Receiver.contains("skills/rsmpl-git/SKILL.md")
++ Receiver.contains("skills/gitrs/SKILL.md")

@@ -152,7 +152,7 @@ context would be larger, so these are lower bounds.)
 | 19-impl-sweep (4 methods, 1 hunk) | 186 B / 12 ln | 391 B / 15 ln | 52% |
 | 20-trait-sweep (3 methods, 1 hunk) | 154 B / 9 ln | 303 B / 12 ln | 49% |
 
-`example-benches/diffrs/` (8 benches) compares `git diff -U0` (`native.patch`,
+`example-benches/diffrs/` (10 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):
 
 | bench | native | semantic | saved |
@@ -165,6 +165,8 @@ context would be larger, so these are lower bounds.)
 | 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 518 B / 20 ln | 24% |
 | 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 133 B / 7 ln | 37% |
 | 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 272 B / 12 ln | 50% |
+| 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 349 B / 16 ln | 29% |
+| 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 197 B / 7 ln | 49% |
 
 Fan-out edits save 50–90%. Single-ident edits are size-parity — the payoff
 there is semantic safety (slot-exact matching, attrs preserved,

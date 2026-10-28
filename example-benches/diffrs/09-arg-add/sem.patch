@@ -1,0 +1,16 @@
+diff --git src/a.rs
+@@ -1,1 @@ rule=calls_make_widget_add_1
+# allow=many
+# scope=file
+# expr E0
+# expr E1
+- make_widget(E0, E1)
++ make_widget(E0, E1, false)
+diff --git src/b.rs
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -2,2 +2,2 @@
+-    make_widget(theta, 4);
+-    make_widget(iota, 5);
++    make_widget(theta, 4, symlink);
++    make_widget(iota, 5, false);

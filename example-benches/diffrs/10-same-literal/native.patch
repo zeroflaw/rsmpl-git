@@ -1,0 +1,10 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,3 +2,3 @@ fn m() {
+-    agents.contains("skills/rsmpl-git/SKILL.md");
+-    readme.contains("skills/rsmpl-git/SKILL.md");
+-    spec.contains("skills/rsmpl-git/SKILL.md");
++    agents.contains("skills/gitrs/SKILL.md");
++    readme.contains("skills/gitrs/SKILL.md");
++    spec.contains("skills/gitrs/SKILL.md");

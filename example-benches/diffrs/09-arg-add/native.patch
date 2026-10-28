@@ -1,0 +1,18 @@
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -2,3 +2,3 @@ fn m() {
+-    make_widget(alpha, 1);
+-    make_widget(beta, 2);
+-    make_widget(gamma, 3);
++    make_widget(alpha, 1, false);
++    make_widget(beta, 2, false);
++    make_widget(gamma, 3, false);
+diff --git a/src/b.rs b/src/b.rs
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -2,2 +2,2 @@ fn n() {
+-    make_widget(theta, 4);
+-    make_widget(iota, 5);
++    make_widget(theta, 4, symlink);
++    make_widget(iota, 5, false);
