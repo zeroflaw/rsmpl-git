@@ -6,17 +6,10 @@
 //! stays — small singles and tiny sweeps never cost more than the
 //! passthrough.
 //!
-//! Pure detectors over a binary-stripped native diff. Whole-file
-//! first: a section whose every pair shares one shape is fully
-//! replaced by one semantic hunk (this preserves cross-hunk sweeps).
-//! Otherwise each balanced native hunk retries the same detectors
-//! independently (T349) and leftovers stay ordinary in original
-//! order — native hunks are pairwise disjoint in original
-//! coordinates, so a compressed hunk never overlaps a leftover hunk
-//! (SPEC 10.6 option-1 merge by construction). Every emission uses
-//! the `# scope=file` + `@@ -1,1 @@` dummy, so no original spans are
-//! needed. Shapes are probe-verified against `applyrs --check` (see
-//! PLAN.md); anything unrecognized stays ordinary passthrough.
+//! Pure detectors over a binary-stripped diff. Whole-file first (cross-hunk
+//! sweeps); else per balanced hunk (T349), leftovers ordinary in order
+//! (pairwise-disjoint, SPEC 10.6 option-1). Every emission uses
+//! `# scope=file` + `@@ -1,1 @@`; probe-verified via `applyrs --check`.
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the
@@ -135,7 +128,7 @@ fn compress_section(
             }
             used_rules.truncate(checkpoint);
         }
-        return compress_section_per_hunk(section, &path, used_rules);
+        return compress_section_per_hunk(section, &path, file_old, used_rules);
     }
     if !whole {
         // T403: non-whole sections try the cross-hunk verbatim sweep
@@ -143,11 +136,11 @@ fn compress_section(
         if let Some(verbatim) = super::try_verbatim_sweep(section, &path, used_rules, file_old) {
             return Some(verbatim);
         }
-        return compress_section_per_hunk(section, &path, used_rules);
+        return compress_section_per_hunk(section, &path, file_old, used_rules);
     }
     // N >= 2 heterogeneous fn/method renames compress to one slot
     // sweep (T344); fall through to the call sweep otherwise.
-    if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, used_rules) {
+    if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, file_old, used_rules) {
         if slot.len() < section.len() {
             return Some(slot);
         }
@@ -156,31 +149,32 @@ fn compress_section(
     // N >= 2 method-to-function fan-outs (T345), method-to-method
     // renames (T347), `&`-receiver strips (T359), and use-path prefix
     // renames (T363); fall through to the bare-call sweep otherwise.
-    if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, used_rules) {
+    if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, file_old, used_rules) {
         if m2f.len() < section.len() {
             return Some(m2f);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(m2m) = try_method_to_method_sweep(&minuses, &pluses, &path, used_rules) {
+    if let Some(m2m) = try_method_to_method_sweep(&minuses, &pluses, &path, file_old, used_rules) {
         if m2m.len() < section.len() {
             return Some(m2m);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(strip) = try_ref_method_strip_sweep(&minuses, &pluses, &path, used_rules) {
+    if let Some(strip) = try_ref_method_strip_sweep(&minuses, &pluses, &path, file_old, used_rules)
+    {
         if strip.len() < section.len() {
             return Some(strip);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, &path, used_rules) {
+    if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, &path, file_old, used_rules) {
         if uses.len() < section.len() {
             return Some(uses);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, used_rules) {
+    if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, file_old, used_rules) {
         if sweep.len() < section.len() {
             return Some(sweep);
         }
@@ -192,7 +186,7 @@ fn compress_section(
     // T403: verbatim sweep after the whole-section detectors fail.
     // Per-hunk fallback (T349): pairwise-disjoint hunks merge by
     // construction (SPEC 10.6 option-1).
-    compress_section_per_hunk(section, &path, used_rules)
+    compress_section_per_hunk(section, &path, file_old, used_rules)
 }
 
 /// Per-hunk fallback for `compress_section`: compress each balanced
@@ -202,6 +196,7 @@ fn compress_section(
 fn compress_section_per_hunk(
     section: &str,
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     // Split the prelude (`diff --git`/`index`/`---`/`+++`) from the
@@ -248,7 +243,14 @@ fn compress_section_per_hunk(
         // One balanced hunk through the shared detector chain
         // (`compress_balanced_pair_body` — same shapes the verbatim
         // sweep retries leftovers with); ordinary hunks pass through.
-        match super::compress_balanced_pair_body(&minuses, &pluses, path, hunk.len(), used_rules) {
+        match super::compress_balanced_pair_body(
+            &minuses,
+            &pluses,
+            path,
+            file_old,
+            hunk.len(),
+            used_rules,
+        ) {
             Some(body) => {
                 compressed_any = true;
                 out.push_str(&body);
@@ -398,6 +400,7 @@ pub(crate) fn try_fn_slot_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -432,6 +435,9 @@ pub(crate) fn try_fn_slot_sweep(
         .iter()
         .all(|p| !p.is_empty() && !p.starts_with([' ', '\t']));
     if all_indented != plus_indented || all_col0 != plus_col0 {
+        return None;
+    }
+    if !crate::totality::slot_holds(file_old, &old_name, minuses, all_indented) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
@@ -535,6 +541,7 @@ pub(crate) fn try_method_to_fn_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -559,6 +566,9 @@ pub(crate) fn try_method_to_fn_sweep(
         arity = Some(a);
     }
     let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
+    if !crate::totality::method_holds(file_old, &old_method, arity, minuses) {
+        return None;
+    }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
@@ -649,6 +659,7 @@ pub(crate) fn try_method_to_method_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -674,6 +685,9 @@ pub(crate) fn try_method_to_method_sweep(
     }
     let (old_method, new_method, arity) = (old_method?, new_method?, arity?);
     if old_method == new_method {
+        return None;
+    }
+    if !crate::totality::method_holds(file_old, &old_method, arity, minuses) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
@@ -749,23 +763,15 @@ fn parse_method_to_method_pair(old_line: &str, new_line: &str) -> Option<(String
     Some((old_method, new_method, old_call.args.len()))
 }
 
-/// N-site (N ≥ 2) `&`-receiver strip fan-out (T359): every pair
-/// contains exactly one `&recv.method(args)` sub-expression (a shared
-/// reference to a turbofish-free method call) and the plus side equals
-/// the minus side with that sub-expression replaced by `recv`; the
-/// method ident and the arg token-texts are shared across sites
-/// (typically literals like `""`), so the emitted hunk binds them
-/// verbatim and can never over-match `&dir.join("repo")`-style sites.
-/// Bare arg-position lines carry a trailing `,` and call-nested sites
-/// a trailing `;`: one trailing `;` (else one `,`) is stripped before
-/// parsing. Emits one `# allow=many` + `# scope=file` general-expr
-/// hunk (`# expr Receiver` only); a lone site stays ordinary (no token
-/// win), as do turbofish, `&mut`, explicit-lifetime, divergent, and
-/// plus-is-not-receiver pairs.
+/// N-site (N ≥ 2) `&`-receiver strip (T359): one `&recv.method(args)` per
+/// pair, plus is minus with it replaced by `recv`; shared method+args bind
+/// verbatim. One trailing `;`/`,` stripped; lone/turbofish/`&mut`/
+/// divergent/non-receiver stay ordinary.
 pub(crate) fn try_ref_method_strip_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -785,6 +791,9 @@ pub(crate) fn try_ref_method_strip_sweep(
         args = Some(argv);
     }
     let (method, args) = (method?, args?);
+    if !crate::totality::strip_holds(file_old, &method, &args, minuses) {
+        return None;
+    }
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
@@ -916,6 +925,7 @@ pub(crate) fn try_use_prefix_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -949,6 +959,9 @@ pub(crate) fn try_use_prefix_sweep(
         if m[k..] != p[k..] {
             return None;
         }
+    }
+    if !crate::totality::use_holds(file_old, &old_prefix, minuses) {
+        return None;
     }
     let rule = unique_rule(
         used_rules,
@@ -1034,6 +1047,7 @@ pub(crate) fn try_call_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -1059,6 +1073,9 @@ pub(crate) fn try_call_sweep(
     }
     let (old_cal, new_cal, arity) = (old_cal?, new_cal?, arity?);
     if old_cal == new_cal {
+        return None;
+    }
+    if !crate::totality::call_holds(file_old, &old_cal, arity, minuses) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));

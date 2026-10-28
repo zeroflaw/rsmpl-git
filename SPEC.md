@@ -5897,6 +5897,12 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   subterm and does not veto (probe-verified). Leftover balanced hunks
   retry the standard chain in place; the T375 guard applies to the
   verbatim-covered set as a whole.
+  All six metavar sweeps carry the same pre-image subterm totality
+  (T409): matchable-unit count (calls/methods by callee+arity, strips by
+  method+args, slots by fn ident free vs impl, uses by prefix) must equal
+  the pair count, with zero stripped-minus hits in opaque text — precise
+  full-line needles (snippet callee checks over-vetoed 57140fe via
+  assert!/patch-string literals).
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
   `&`-receiver sites, single-segment use prefixes, paths, macro

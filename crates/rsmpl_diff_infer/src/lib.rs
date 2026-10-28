@@ -19,6 +19,7 @@
 //! never an unparseable patch.
 
 pub mod semantic;
+pub(crate) mod totality;
 
 use std::collections::HashMap;
 use syn::visit::Visit;
@@ -526,7 +527,9 @@ pub(crate) fn try_verbatim_sweep(
             .filter(|(j, _, _)| *j == i)
             .map(|(_, _, p)| p.as_str())
             .collect();
-        if let Some(body) = compress_balanced_pair_body(&ms, &ps, path, hunk.len(), used_rules) {
+        if let Some(body) =
+            compress_balanced_pair_body(&ms, &ps, path, file_old, hunk.len(), used_rules)
+        {
             leftover_bodies.push((i, body));
         }
     }
@@ -721,6 +724,7 @@ pub(crate) fn compress_balanced_pair_body(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
+    file_old: Option<&str>,
     hunk_len: usize,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
@@ -730,24 +734,28 @@ pub(crate) fn compress_balanced_pair_body(
     let checkpoint = used_rules.len();
     let full = if minuses.len() == 1 {
         semantic::try_item_rename(minuses[0], pluses[0], path, used_rules)
-    } else if let Some(slot) = semantic::try_fn_slot_sweep(minuses, pluses, path, used_rules) {
+    } else if let Some(slot) =
+        semantic::try_fn_slot_sweep(minuses, pluses, path, file_old, used_rules)
+    {
         Some(slot)
-    } else if let Some(m2f) = semantic::try_method_to_fn_sweep(minuses, pluses, path, used_rules)
+    } else if let Some(m2f) =
+        semantic::try_method_to_fn_sweep(minuses, pluses, path, file_old, used_rules)
     {
         Some(m2f)
     } else if let Some(m2m) =
-        semantic::try_method_to_method_sweep(minuses, pluses, path, used_rules)
+        semantic::try_method_to_method_sweep(minuses, pluses, path, file_old, used_rules)
     {
         Some(m2m)
     } else if let Some(strip) =
-        semantic::try_ref_method_strip_sweep(minuses, pluses, path, used_rules)
+        semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, used_rules)
     {
         Some(strip)
-    } else if let Some(uses) = semantic::try_use_prefix_sweep(minuses, pluses, path, used_rules)
+    } else if let Some(uses) =
+        semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, used_rules)
     {
         Some(uses)
     } else {
-        semantic::try_call_sweep(minuses, pluses, path, used_rules)
+        semantic::try_call_sweep(minuses, pluses, path, file_old, used_rules)
     };
     match full {
         Some(f) => {

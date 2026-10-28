@@ -659,7 +659,7 @@ fn method_slot_sweep_compresses_to_one_hunk() {
     let after: String = before
         .lines()
         .map(|l| {
-            if l.contains("fn old_name(&self)") {
+            if l.contains("fn old_name") && !l.contains("fn old_name()") {
                 l.replace("fn old_name", "fn new_name")
             } else {
                 l.to_string()
