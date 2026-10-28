@@ -152,6 +152,14 @@ context would be larger, so these are lower bounds.)
 | 19-impl-sweep (4 methods, 1 hunk) | 186 B / 12 ln | 391 B / 15 ln | 52% |
 | 20-trait-sweep (3 methods, 1 hunk) | 154 B / 9 ln | 303 B / 12 ln | 49% |
 
+`example-benches/diffrs/` (2 benches) compares `git diff -U0` (`native.patch`,
+`index` lines stripped) against the `diffrs` compression (`sem.patch`):
+
+| bench | native | semantic | saved |
+|---|---|---|---|
+| 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 111 B / 7 ln | 73% |
+| 02-ordinary-edit (1 line, stays ordinary) | 89 B / 6 ln | 72 B / 6 ln | 19% |
+
 Fan-out edits save 50–90%. Single-ident edits are size-parity — the payoff
 there is semantic safety (slot-exact matching, attrs preserved,
 machine-checked match counts) at ~zero token premium.

@@ -13,8 +13,9 @@ emit *more* lines, so the savings below are lower bounds.
 
 Rebuild + re-measure: `./example-benches/run.sh` (from the repo root).
 It re-applies every applyrs `patch.rsmpl`, rewrites every `native.patch`,
-prints the table embedded in the top-level README, then re-measures every
-diffrs bench as native vs semantic bytes.
+prints the applyrs table embedded in the top-level README, then re-measures
+every diffrs bench as native vs semantic bytes (second table, embedded
+below).
 
 | bench | what it shows | rsmpl | native | saved |
 |---|---|---|---|---|
@@ -43,3 +44,12 @@ Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Single-ident edits (09, 10) are size-parity — there the payoff is not bytes
 but semantic safety (slot-exact matching, attrs/doc-comments preserved,
 machine-checked counts in the JSON report) at ~zero token premium.
+
+| bench | native | semantic | saved |
+|---|---|---|---|
+| 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 111 B / 7 ln | 73% |
+| 02-ordinary-edit (1 line, stays ordinary) | 89 B / 6 ln | 72 B / 6 ln | 19% |
+
+`diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
+stripped) against the `diffrs` compression (`sem.patch`) for the same end
+state.
