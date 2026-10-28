@@ -241,6 +241,48 @@ const CASES: &[Case] = &[
         root: true,
         expect_sem: 0,
     },
+    // T462: the 5 compressing commits with no fixture/bench cover —
+    // history_e2e now pins the full compressing set (10 -> 15).
+    // 30741c7 (T437): `validated(&out)` -> `validated_live(&out, &pre)`
+    // pairs in methods.rs + mod.rs — two verbatim hunks.
+    Case {
+        commit: "30741c75847ab8810351dbe12a0ede8e3773b39c",
+        rev: None,
+        root: false,
+        expect_sem: 2,
+    },
+    // 5c4c9e8 (T433): `example-benches` -> `example-benches/applyrs`
+    // path literal — one verbatim hunk.
+    Case {
+        commit: "5c4c9e80002117454bf408023b7e7d27ef22cddb",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // 675431e (T172): seven byte-identical test fns move cli_e2e.rs
+    // -> apply_report_e2e.rs — 7 cuts + 7 pastes.
+    Case {
+        commit: "675431e16e0dfc18f28161467dedfadd13a5fc4a",
+        rev: None,
+        root: false,
+        expect_sem: 14,
+    },
+    // b849869 (T365+T367): two identical string-literal `let patch`
+    // lines (one gains two interior lines) — one verbatim hunk.
+    Case {
+        commit: "b8498697004ce96df90e122b1926923ffc890c96",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // f09edcd (T170): two byte-identical test fns move cli_e2e.rs ->
+    // ellipsis_e2e.rs — 2 cuts + 2 pastes.
+    Case {
+        commit: "f09edcd346cce70aa68b37ad0cbbaae4eadd08bf",
+        rev: None,
+        root: false,
+        expect_sem: 4,
+    },
 ];
 
 fn binary() -> PathBuf {
