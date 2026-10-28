@@ -834,8 +834,14 @@ mod tests {
             .collect()
     }
 
-    fn validated(patch: &str) {
-        rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
     }
 
     #[test]
@@ -867,7 +873,7 @@ mod tests {
             !text.contains("+fn big()"),
             "plus lines must be consumed, got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -892,7 +898,7 @@ mod tests {
             text.contains("@@ -0,0 +1,3 @@\n+use x;\n+\n+// lead\n"),
             "got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -910,7 +916,7 @@ mod tests {
         let text = out.join("");
         assert!(text.contains("rule=move_big\n"), "got:\n{text}");
         assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -974,7 +980,7 @@ mod tests {
         let text = out.join("");
         assert!(text.contains("rule=move_Big\n"), "got:\n{text}");
         assert!(text.contains("rule=paste_Big\n"), "got:\n{text}");
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1037,7 +1043,7 @@ mod tests {
         assert!(text.contains("rule=move_big\n"), "got:\n{text}");
         assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
         assert!(text.contains("@@ -2,1 +2,0 @@\n-\n"), "got:\n{text}");
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1167,7 +1173,7 @@ mod tests {
             !text.contains("+fn big()"),
             "plus lines must be consumed, got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1195,7 +1201,7 @@ mod tests {
             text.contains("@@ -0,0 +46,1 @@\n+// trailing\n"),
             "got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1315,7 +1321,7 @@ mod tests {
             text.contains("@@ -88,3 +2,0 @@\n-fn zed() {\n-    2\n-}\n"),
             "got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1386,7 +1392,7 @@ mod tests {
             !text.contains("-fn big()"),
             "paired lines must be consumed, got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1418,7 +1424,7 @@ mod tests {
             text.contains("@@ -45,3 +2,0 @@\n-fn tail() {\n-    1\n-}\n"),
             "got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1441,7 +1447,7 @@ mod tests {
         let text = out.join("");
         assert!(text.contains("rule=move_big\n"), "got:\n{text}");
         assert!(text.contains("@@ -2,1 +2,0 @@\n-use x;\n"), "got:\n{text}");
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1485,7 +1491,7 @@ mod tests {
             !text.contains("+fn big()"),
             "plus lines must be consumed, got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1514,6 +1520,61 @@ mod tests {
             text.contains("@@ -43,3 +0,0 @@\n-fn tail() {\n-    1\n-}\n"),
             "got:\n{text}"
         );
-        validated(&text);
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_multi_paste_with_prefix_to_new_file_fires() {
+        // T436 first candidate: two items move into a new file that also
+        // carries an ordinary prefix hunk at the same anchor — the
+        // multi-paste + leftover shape was parse-only-tested before the
+        // live-check rule (validated_live now applies it via the engine).
+        let one = big_fn("one");
+        let two = big_fn("two");
+        let mut a_minus = String::new();
+        for l in one.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        a_minus.push_str("-\n");
+        for l in two.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        let n = one.lines().count() + two.lines().count() + 1;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let mut b_plus = String::from("+use x;\n+\n+// lead\n");
+        for l in one.lines() {
+            b_plus.push_str(&format!("+{l}\n"));
+        }
+        b_plus.push_str("+\n");
+        for l in two.lines() {
+            b_plus.push_str(&format!("+{l}\n"));
+        }
+        let m = one.lines().count() + two.lines().count() + 4;
+        let b = format!("diff --git b.rs\nnew file mode 100644\n--- /dev/null\n+++ b/b.rs\n@@ -0,0 +1,{m} @@\n{b_plus}");
+        let pre = pre_map(&[(
+            "a.rs",
+            &format!("fn keep() {{}}\n{one}\n{two}\nfn keep2() {{}}"),
+        )]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("multi-paste with prefix to new file must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_one\n"), "got:\n{text}");
+        assert!(text.contains("rule=move_two\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_one\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_two\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -0,0 +1,3 @@\n+use x;\n+\n+// lead\n"),
+            "got:\n{text}"
+        );
+        assert!(
+            !text.contains("-fn one()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn one()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 }
