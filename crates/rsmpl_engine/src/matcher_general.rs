@@ -1311,6 +1311,18 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_method_with_dotted_string_arg() {
+        // T419: a `.` inside a string-literal arg is not a
+        // receiver/method split (router fix in `classify_call_pattern`) —
+        // `R.contains("a.b")` misrouted to a dotted-callee `Call` before.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@ rule=dotstr\n# lang=rust\n# allow=many\n# expr Receiver\n- Receiver.contains(\"a.b\")\n+ Receiver.found(\"a.b\")\n";
+        let src = "fn m() {\n    let a = agents.contains(\"a.b\");\n    let b = readme.contains(\"a.b\");\n    let c = other.contains(\"zzz\");\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches(".found(\"a.b\")").count(), 2, "got: {out}");
+        assert!(out.contains("other.contains(\"zzz\");"), "got: {out}");
+    }
+
+    #[test]
     fn repeated_metavar_must_agree() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=dedupe\n# lang=rust\n# expr E\n- E + E\n+ twice(E)\n";
         let same = "fn a() {\n    let v = x + x;\n}\n";

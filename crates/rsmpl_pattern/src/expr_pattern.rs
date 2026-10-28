@@ -265,6 +265,43 @@ fn is_call_trailer(rest: &str) -> bool {
     t.is_empty() || t == ";"
 }
 
+/// Byte index of the last `.` outside `"..."` string literals
+/// (escape-aware), or `None` when every dot sits inside a string.
+///
+/// The method-call split must not see dots inside string args: `sub`
+/// is pattern text, so `Receiver.contains("a.b")` would otherwise split
+/// at the string's dot and misroute to a dotted-callee `Call` that never
+/// matches (T419 — same router-precision family as T144's
+/// `balanced_close` string-skipping). `'` char literals are deliberately
+/// NOT skipped: a `'` may open a lifetime (`&'a`), so treating it as a
+/// char literal would swallow real dots — `R.m('.')` keeps today's
+/// fail-safe no-match, mirroring T144's `foo(')')` limitation note.
+fn rfind_dot_outside_strings(sub: &str) -> Option<usize> {
+    let bytes = sub.as_bytes();
+    let mut last = None;
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+        } else if b == b'"' {
+            in_str = true;
+        } else if b == b'.' {
+            last = Some(i);
+        }
+        i += 1;
+    }
+    last
+}
+
 /// High-level classify used by `pattern.rs`. Backtick literals (SPEC 15.4)
 /// are masked — not stripped — so a literal `` `E` `` never becomes a
 /// placeholder: sentinel args classify as `Concrete(literal)` and
@@ -322,8 +359,10 @@ pub fn classify_call_pattern(
     // `let x = a.b(c)`, already bypassed above for `let`) or a method
     // containing whitespace is not a method call; fall through. The call
     // must consume the whole pattern (T144 router-precision fix): trailing
-    // text such as `+ 1` falls through to the general matcher.
-    if let Some(dot) = sub.rfind('.') {
+    // text such as `+ 1` falls through to the general matcher. The dot
+    // split skips `"..."` string literals (T419): a dot inside a string
+    // arg (`Receiver.contains("a.b")`) never splits receiver from method.
+    if let Some(dot) = rfind_dot_outside_strings(&sub) {
         if let Some(paren_rel) = sub[dot..].find('(') {
             let open = dot + paren_rel;
             if let Some(close) = balanced_close(&sub, open) {
@@ -614,5 +653,53 @@ mod tests {
         assert_eq!(receiver, "__RSMPL_Receiver");
         assert!(method.contains('<'), "turbofish lost: {method}");
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn method_dot_inside_string_arg_stays_method_call() {
+        // T419: the receiver/method dot split skips `"..."` string
+        // literals (same router-precision family as T144's
+        // `balanced_close` string-skipping) — `Receiver.contains("a.b")`
+        // split at the string's dot before, misrouting to a dotted-callee
+        // `Call` that never matched.
+        let (kind, _, _) = classify_call_pattern("Receiver.contains(\"a.b\")", &table()).unwrap();
+        let ExprPatternKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } = kind
+        else {
+            panic!("dotted-string method got a non-method shape");
+        };
+        assert_eq!(receiver, "__RSMPL_Receiver");
+        assert_eq!(method, "contains");
+        assert_eq!(args, vec![ArgPat::Concrete("\"a.b\"".to_string())]);
+        // A receiver carrying a dotted string still routes correctly.
+        let (kind, _, _) = classify_call_pattern("foo(\"a.b\").m(x)", &table()).unwrap();
+        let ExprPatternKind::MethodCall {
+            receiver, method, ..
+        } = kind
+        else {
+            panic!("string-carrying receiver got a non-method shape");
+        };
+        assert_eq!(receiver, "foo(\"a.b\")");
+        assert_eq!(method, "m");
+        // Parens and dots inside strings never confuse the split.
+        let (kind, _, _) = classify_call_pattern("R.m(\"a.b(c)\")", &table()).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::MethodCall { .. }),
+            "string parens misrouted: {kind:?}"
+        );
+        // String-free shapes classify exactly as before.
+        let (kind, _, _) = classify_call_pattern("R.m(\"nodot\")", &table()).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::MethodCall { .. }),
+            "plain string arg regressed: {kind:?}"
+        );
+        let (kind, _, _) = classify_call_pattern("a.b(c)", &table()).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::MethodCall { .. }),
+            "plain method regressed: {kind:?}"
+        );
     }
 }

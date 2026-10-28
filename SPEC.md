@@ -3296,6 +3296,8 @@ receiver, so these match structurally as general expressions (Section
 pattern (balanced parens, then only whitespace or a lone `;`): `foo(E) + 1`
 and `E.foo() + 1` route to the general matcher rather than a `foo(E)` /
 `E.foo()` call prefix, while `foo(E);` keeps call routing.
+The receiver/method dot split skips `"..."` string literals (T419): a dot
+inside a string arg (`R.contains("a.b")`) never splits receiver from method.
 
 Envelope: all twelve C1-C12 rejections above fail with
 `RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the

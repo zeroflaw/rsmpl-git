@@ -472,6 +472,25 @@ mod tests {
     }
 
     #[test]
+    fn method_to_method_sweep_with_dotted_string_arg_compresses() {
+        // T419: concrete string args containing `.` route to MethodCall
+        // (router fix) — the existing m2m detector needs no changes
+        // once classification is sound.
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    alpha.old_operation(\"some.dotted.value\");\n-    beta.old_operation(\"some.dotted.value\");\n-    gamma.old_operation(\"some.dotted.value\");\n+    alpha.new_operation(\"some.dotted.value\");\n+    beta.new_operation(\"some.dotted.value\");\n+    gamma.new_operation(\"some.dotted.value\");\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("# expr Receiver\n"), "got: {out}");
+        assert!(out.contains("# expr E0\n"), "got: {out}");
+        assert!(out.contains("- Receiver.old_operation(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.new_operation(E0)\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
     fn method_to_method_sweep_multi_arg() {
         let raw = section(
             "f.rs",
