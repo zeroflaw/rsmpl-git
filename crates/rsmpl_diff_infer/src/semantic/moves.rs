@@ -27,6 +27,8 @@
 //! hunk (prefix-trim, f09edcd);
 //! uncovered prefix/trailing minus lines stay ordinary around the cuts
 //! (T432c; one post-run blank is absorbed by the cut, never re-emitted),
+//! interior blanks ride with their item (the cut removes the whole span,
+//! so covered lines need no gap accounting),
 //! plus paired runs with exactly one blank between runs (the same-anchor
 //! paste join restores exactly one); uncovered prefix/trailing plus lines
 //! stay ordinary around pastes (T432b), deleted-file cuts allowed (T432d;
@@ -562,6 +564,10 @@ fn line_text(line: &str) -> &str {
 /// one following blank); uncovered prefix lines stay ordinary before the
 /// cuts, uncovered trailing lines after (T432c; the single blank right
 /// after the last paired run is absorbed by the cut, never re-emitted).
+/// Interior blanks ride with their item (the cut removes the whole span,
+/// so covered lines need no gap accounting); uncovered middle lines keep
+/// the strict model — non-blanks veto (an unpaired item would be dropped)
+/// and blank runs veto (the paste join restores exactly one).
 /// `minus_items_in` already validated the whole body as item spans, so
 /// leftovers are whole items (or blanks) by construction.
 fn minus_hunk_holds(body: &[String], pairs: &[MovePair], msi: usize, mhi: usize) -> bool {
@@ -580,14 +586,15 @@ fn minus_hunk_holds(body: &[String], pairs: &[MovePair], msi: usize, mhi: usize)
     };
     let mut prev_blank = false;
     for (i, line) in body.iter().enumerate().take(hi + 1).skip(lo) {
+        if covered[i] {
+            prev_blank = false;
+            continue;
+        }
         let blank = line_text(line).trim().is_empty();
-        if blank && covered[i] {
+        if !blank || prev_blank {
             return false;
         }
-        if !covered[i] && (!blank || prev_blank) {
-            return false;
-        }
-        prev_blank = !covered[i];
+        prev_blank = true;
     }
     true
 }
@@ -1879,6 +1886,67 @@ mod tests {
         );
         assert!(
             !text.contains("+fn one()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_item_with_interior_blanks_fires() {
+        // Interior blanks ride with their item: the cut removes the whole
+        // span, so covered lines need no gap accounting (675431e: eight
+        // test fns move file-to-file, one carrying interior blanks, which
+        // used to veto the whole minus hunk via `blank && covered`).
+        let big = big_fn("big");
+        let mut spaced = String::from("fn spaced() {\n");
+        for i in 0..10 {
+            spaced.push_str(&format!("    let v{i} = {i};\n"));
+            if i % 3 == 2 {
+                spaced.push('\n');
+            }
+        }
+        spaced.push_str("}\n");
+        let mut a_minus = String::new();
+        for l in big.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        a_minus.push_str("-\n");
+        for l in spaced.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        let n = big.lines().count() + spaced.lines().count() + 1;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let mut b_plus = String::new();
+        for l in big.lines() {
+            b_plus.push_str(&format!("+{l}\n"));
+        }
+        b_plus.push_str("+\n");
+        for l in spaced.lines() {
+            b_plus.push_str(&format!("+{l}\n"));
+        }
+        let m = big.lines().count() + spaced.lines().count() + 1;
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{m} @@\n{b_plus}");
+        let pre = pre_map(&[
+            (
+                "a.rs",
+                &format!("fn keep() {{}}\n{big}\n{spaced}\n\nfn keep2() {{}}"),
+            ),
+            ("b.rs", "use x;\nuse y;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            try_move_sweep(&[a, b], &pre, &mut used).expect("move with interior blanks must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=move_spaced\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_spaced\n"), "got:\n{text}");
+        assert!(
+            !text.contains("-fn big()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+let v0"),
             "plus lines must be consumed, got:\n{text}"
         );
         validated_live(&text, &pre);

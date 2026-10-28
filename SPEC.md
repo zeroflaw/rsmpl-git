@@ -5906,7 +5906,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   in the file — without one a multi-pair last cut or a blank-ending
   prefix double-claims the preceding blank (f09edcd); uncovered
   prefix/trailing minus lines stay as rewritten ordinary hunks around the
-  cuts, one post-run blank absorbed, never re-emitted), plus paired runs
+  cuts, one post-run blank absorbed, never re-emitted), interior blanks ride
+  with their item (the cut removes the whole span, so covered lines need no
+  gap accounting), plus paired runs
   anywhere with exactly one
   blank between runs (the same-anchor paste join restores exactly one;
   uncovered prefix/trailing plus lines stay as rewritten ordinary hunks around
