@@ -458,6 +458,20 @@ fn is_move_hunk(line: &str) -> bool {
     line.starts_with("@@ ") && (line.contains(" rule=move_") || line.contains(" rule=paste_"))
 }
 
+/// Rule-name guard for `expect_sem > 0` rows (T463): every rule family
+/// the inference can emit (`rename_*`, `calls_*`, `verbatim`, `move_*`,
+/// `paste_*`, `use_*`) passes; an ordinary patch carries no `rule=` at
+/// all. Substring (not anchored) like the call site it replaces — a
+/// sanity check only, the anchored counter above is load-bearing.
+fn has_known_semantic_rule(patch: &str) -> bool {
+    patch.contains("rule=rename_")
+        || patch.contains("rule=calls_")
+        || patch.contains("rule=verbatim")
+        || patch.contains("rule=move_")
+        || patch.contains("rule=paste_")
+        || patch.contains("rule=use_")
+}
+
 fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
     let short = &case.commit[..7];
     if !git_ok(wt, &["checkout", "-qf", case.commit]) {
@@ -500,13 +514,7 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
             case.expect_sem
         ));
     }
-    if case.expect_sem > 0
-        && !(patch.contains("rule=rename_")
-            || patch.contains("rule=calls_")
-            || patch.contains("rule=verbatim")
-            || patch.contains("rule=move_")
-            || patch.contains("rule=paste_"))
-    {
+    if case.expect_sem > 0 && !has_known_semantic_rule(&patch) {
         failures.push(format!(
             "{short}: expected rename/sweep compression, got none"
         ));
@@ -658,4 +666,28 @@ fn history_selection_converts_and_round_trips() {
         "history regressions:\n{}",
         failures.join("\n")
     );
+}
+
+#[test]
+fn semantic_rule_guard_covers_every_emitted_family() {
+    // T463: the `expect_sem > 0` guard must accept each of the six rule
+    // families the inference emits (previously `use_` was missing, so a
+    // future use-prefix-sweep history pin would fail the guard
+    // spuriously); an ordinary patch passes none.
+    for rule in [
+        "rename_foo_to_bar",
+        "calls_foo_to_bar",
+        "verbatim",
+        "move_big",
+        "paste_big",
+        "use_old_to_new",
+    ] {
+        let patch = format!("diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule={rule}\n");
+        assert!(
+            has_known_semantic_rule(&patch),
+            "guard rejects emitted family {rule}"
+        );
+    }
+    let ordinary = "diff --git a/f.rs b/f.rs\n@@ -1,2 +1,3 @@\n- a\n+ b\n";
+    assert!(!has_known_semantic_rule(ordinary));
 }
