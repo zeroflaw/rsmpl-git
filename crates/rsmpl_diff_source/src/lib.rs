@@ -64,7 +64,13 @@ impl GitSource {
                 inner: String::from_utf8_lossy(&out.stderr).trim().to_string(),
             });
         }
-        let mut raw = String::from_utf8_lossy(&out.stdout).to_string();
+        // T396: per-section UTF-8 validity instead of whole-output
+        // lossy decoding — valid-UTF-8 sections pass through
+        // byte-identical (U+FFFD chars in them are genuine text, e.g.
+        // string-literal test data), while invalid-UTF-8 sections
+        // (binary creates, which native `git diff` dumps raw) become
+        // `Binary files … differ` markers for the infer strip.
+        let mut raw = tracked_raw(&out.stdout);
         // `git diff` detects renames by default (`similarity index`
         // + `rename from/to` headers), which applyrs lowers back to
         // rename sections (T377) -- moves stay moves instead of
@@ -154,7 +160,12 @@ impl GitSource {
             // shows once staged, so the infer stage strips them with a
             // warning (T378) instead of silently dropping them (T364
             // silent-drop class).
-            if content.contains(&0) {
+            // T396: NUL is git's binary definition; anything else that
+            // is not valid UTF-8 (e.g. a no-NUL binary blob, which the
+            // old lossy decode turned into U+FFFD text) takes the same
+            // marker — U+FFFD itself is genuine text now that the
+            // tracked side checks validity at the byte level.
+            if content.contains(&0) || std::str::from_utf8(&content).is_err() {
                 raw.push_str(&format!(
                     "diff --git a/{path} b/{path}\nBinary files a/{path} and b/{path} differ\n"
                 ));
@@ -289,6 +300,72 @@ fn new_file_section(path: &str, content: &str, mode: &str) -> String {
     section
 }
 
+/// Tracked-side raw diff with per-section UTF-8 validity (T396).
+/// Valid-UTF-8 sections pass through byte-identical, so any U+FFFD
+/// chars in them are genuine text (e.g. string-literal test data),
+/// never a binary signal. Binary creates — native `git diff` dumps
+/// them raw, since only modifies get the `Binary … differ` marker —
+/// become marker sections for the infer strip, instead of
+/// lossy-decoding into U+FFFD text that corrupts the round-trip
+/// (the T395 shape).
+///
+/// The split itself is byte-level on line-start `diff --git `, so
+/// validity never depends on decoding. A leading chunk that opens
+/// no section passes through lossy (the old shape — infer fails it
+/// as before, never silently).
+fn tracked_raw(stdout: &[u8]) -> String {
+    const MARK: &[u8] = b"diff --git ";
+    let mut sections: Vec<&[u8]> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < stdout.len() {
+        if stdout[i] == b'\n' && stdout[i + 1..].starts_with(MARK) {
+            sections.push(&stdout[start..=i]);
+            start = i + 1;
+        }
+        i += 1;
+    }
+    sections.push(&stdout[start..]);
+    let mut raw = String::new();
+    for section in sections {
+        match std::str::from_utf8(section) {
+            Ok(text) => raw.push_str(text),
+            Err(_) => raw.push_str(&binary_marker_for(section)),
+        }
+    }
+    raw
+}
+
+/// Marker replacing an invalid-UTF-8 tracked section (T396): keeps the
+/// real `diff --git` header (lossy-decoded for the path — headers stay
+/// ASCII under git's default quotepath) and swaps the body for the
+/// `Binary files … differ` line the infer strip already owns. A chunk
+/// that opens no section is not a diff at all: it returns lossy so
+/// infer fails it exactly as before (no new silent shape).
+fn binary_marker_for(section: &[u8]) -> String {
+    let lossy = String::from_utf8_lossy(section);
+    let rest = match lossy
+        .lines()
+        .next()
+        .unwrap_or("")
+        .strip_prefix("diff --git ")
+    {
+        Some(rest) => rest,
+        None => return lossy.into_owned(),
+    };
+    let path = match rsmpl_patch::split_git_paths(rest) {
+        Some(parts) => {
+            let side = parts.last().cloned().unwrap_or_default();
+            side.strip_prefix("b/")
+                .unwrap_or(&side)
+                .trim_matches('"')
+                .to_string()
+        }
+        None => rest.trim().to_string(),
+    };
+    format!("diff --git {rest}\nBinary files a/{path} and b/{path} differ\n")
+}
+
 /// Repo-relative paths covered by a unified diff: the `b/` side of
 /// every `diff --git a/… b/…` header (unquoted spaces rejoined via
 /// `split_git_paths`, T379; a single-path header yields that path).
@@ -408,5 +485,49 @@ mod tests {
         assert!(!is_history_path("src/.history/x"));
         assert!(!is_history_path("history.rs"));
         assert!(!is_history_path("src/lib.rs"));
+    }
+
+    #[test]
+    fn tracked_raw_passes_valid_utf8_byte_identical() {
+        // T396: valid-UTF-8 sections (even carrying genuine U+FFFD
+        // chars, e.g. string-literal fixtures) pass through untouched;
+        // empty and non-diff garbage keep the old lossy shape (failed
+        // downstream as before — no new silent shape).
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-const S: &str = \"�\";\n+const S: &str = \"�!\";\n";
+        assert_eq!(tracked_raw(section.as_bytes()), section);
+        assert_eq!(tracked_raw(b""), "");
+        assert_eq!(
+            tracked_raw(b"fatal: not a git repository\n"),
+            "fatal: not a git repository\n"
+        );
+    }
+
+    #[test]
+    fn tracked_raw_replaces_invalid_utf8_with_binary_marker() {
+        // T396: a binary create (native `git diff` dumps raw bytes —
+        // only modifies get the marker) becomes the same `Binary
+        // files … differ` section staged modifies get, so infer strips
+        // + warns it. The old whole-output lossy decode turned these
+        // bytes into U+FFFD text that corrupted the lowering (T395).
+        let mut create = b"diff --git a/blob.bin b/blob.bin\nnew file mode 100644\n".to_vec();
+        create.extend_from_slice(b"--- /dev/null\n+++ b/blob.bin\n@@ -0,0 +1 @@\n+");
+        create.extend_from_slice(&[0x80, 0x81, 0xFE, b'\n']);
+        let out = tracked_raw(&create);
+        assert!(
+            out.contains("Binary files a/blob.bin and b/blob.bin differ\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains('�'), "got: {out}");
+        // Mixed output: the text section survives byte-identical while
+        // the binary section is replaced.
+        let mut mixed = b"diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n".to_vec();
+        mixed.extend_from_slice(b"@@ -1 +1 @@\n-a\n+b\n");
+        mixed.extend_from_slice(&create);
+        let out = tracked_raw(&mixed);
+        assert!(out.contains("-a\n+b\n"), "got: {out}");
+        assert!(
+            out.contains("Binary files a/blob.bin and b/blob.bin differ\n"),
+            "got: {out}"
+        );
     }
 }

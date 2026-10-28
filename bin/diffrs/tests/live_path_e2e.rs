@@ -511,3 +511,62 @@ fn staged_binary_create_with_text_modify_keeps_text() {
         "fn main() { 1 }\n"
     );
 }
+
+#[test]
+fn tracked_text_with_replacement_char_converts_and_round_trips() {
+    // T396: a literal U+FFFD char (valid UTF-8 text, e.g. a
+    // string-literal fixture) on a changed line is genuine content —
+    // the old infer U+FFFD arm stripped the whole section, silently
+    // dropping the file (caught on 62fae28's own lib.rs). Now it
+    // converts + round-trips byte-exact.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "f.rs", "const S: &str = \"�\";\nfn main() {}\n");
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "f.rs",
+        "const S: &str = \"�!\";\nfn main() {}\n",
+    );
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("const S"), "got: {patch}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!stderr.contains("warning"), "got: {stderr}");
+    let pre = init_repo();
+    write(pre.path(), "f.rs", "const S: &str = \"�\";\nfn main() {}\n");
+    commit_all(pre.path());
+    let checked = check_with_applyrs(pre.path(), &patch);
+    assert_eq!(checked.status.code(), Some(0));
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(pre.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(pre.path().join("f.rs")).unwrap(),
+        std::fs::read(dir.path().join("f.rs")).unwrap()
+    );
+}
+
+#[test]
+fn untracked_non_utf8_without_nul_is_stripped_and_warned() {
+    // T396: an untracked no-NUL non-UTF-8 file takes the source
+    // `Binary` marker (the T395 staged shape, now detected at the byte
+    // level): rc 0, empty patch, warning names the file.
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn main() {}\n");
+    commit_all(dir.path());
+    let bytes: Vec<u8> = (0x80u8..=0xC8).collect();
+    std::fs::write(dir.path().join("blob.bin"), &bytes).unwrap();
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(!stdout.contains("blob.bin"), "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("blob.bin"), "got: {stderr}");
+}

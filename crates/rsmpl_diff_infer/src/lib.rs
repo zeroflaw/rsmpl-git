@@ -165,14 +165,11 @@ fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<Strin
         } else if line.starts_with("Binary files ") {
             current_binary = true;
         } else if is_binary_body_line(line) {
-            // T395: native `git diff` dumps literal bytes for binary
-            // CREATES (only modifies get the `Binary … differ`
-            // marker), which the source lossy-decodes (NUL survives,
-            // other non-UTF-8 becomes U+FFFD). Such sections can
-            // neither apply byte-exact nor lower structurally (the
-            // lowering re-diff splits interior `\r`), so they strip
-            // + warn like marker binaries instead of corrupting the
-            // round-trip.
+            // NUL body line: git's own binary definition. (T396: the
+            // T395 U+FFFD arm is gone — invalid-UTF-8 sections never
+            // reach infer as text because the source swaps them for
+            // `Binary` markers at the byte level, while genuine U+FFFD
+            // chars in valid-UTF-8 text pass through.)
             current_binary = true;
         } else if is_gitlink_mode_line(line) {
             current_gitlink = true;
@@ -196,14 +193,15 @@ fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<Strin
     (kept, stripped, stripped_gitlink)
 }
 
-/// A hunk body `+`/`-` line carrying binary content: NUL (git's own
-/// binary definition) or U+FFFD (lossy-decoded non-UTF-8 from the
-/// source — T395). `+++`/`---` file markers are excluded (paths never
-/// carry these signals from git).
+/// A hunk body `+`/`-` line carrying binary content: NUL, git's own
+/// binary definition (T396: U+FFFD is genuine text — the source
+/// detects invalid UTF-8 at the byte level and sends markers, so
+/// valid-UTF-8 sections keep their U+FFFD chars here). `+++`/`---`
+/// file markers are excluded (paths never carry these signals).
 fn is_binary_body_line(line: &str) -> bool {
     (line.starts_with('+') || line.starts_with('-'))
         && !(line.starts_with("+++") || line.starts_with("---"))
-        && (line.contains('\0') || line.contains('\u{FFFD}'))
+        && line.contains('\0')
 }
 
 /// A mode line declaring a gitlink (mode 160000): submodule add
@@ -538,6 +536,28 @@ mod tests {
         let out = infer_rsmpl(&mixed).unwrap();
         assert_eq!(out.rsmpl, TEXT_STRIPPED);
         assert_eq!(out.stripped_binary, vec!["blob.bin"]);
+    }
+
+    #[test]
+    fn genuine_replacement_char_text_is_not_binary() {
+        // T396: a literal U+FFFD char in valid-UTF-8 text (e.g. a
+        // string-literal fixture) is genuine content — the old U+FFFD
+        // arm stripped the whole section, silently dropping a text
+        // file's changes (caught on 62fae28's own lib.rs, whose T395
+        // test strings carry U+FFFD). Only NUL still strips here;
+        // invalid-UTF-8 sections arrive as `Binary` markers instead.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-const S: &str = \"�\";\n+const S: &str = \"�!\";\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(
+            out.stripped_binary.is_empty(),
+            "got: {:?}",
+            out.stripped_binary
+        );
+        assert!(
+            out.rsmpl.contains("+const S: &str = \"�!\";"),
+            "got: {}",
+            out.rsmpl
+        );
     }
 
     #[test]

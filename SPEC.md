@@ -5773,10 +5773,11 @@ stripped with a stderr `warning:` per path (a patch is UTF-8;
 the same marker sections `git diff` shows once staged, so they warn
 uniformly instead of vanishing silently, and an all-binary change
 reports empty + warnings (exit 0), not an error (T378). Sections whose
-`+`/`-` body lines carry binary content (NUL bytes, or U+FFFD from
-lossy-decoded non-UTF-8 — native `git diff` dumps literal bytes for
-binary creates while modifies get the marker) strip the same way
-(T395). Submodule
+`+`/`-` body lines carry NUL bytes strip the same way (git's binary
+definition); invalid-UTF-8 sections (native `git diff` dumps literal
+bytes for binary creates while modifies get the marker) are swapped
+for `Binary files … differ` markers at the byte level, so genuine
+U+FFFD chars in valid-UTF-8 text pass through (T395/T396). Submodule
 (gitlink, mode 160000) sections strip the same way (one `warning:`
 per path): a gitlink bump/delete cannot round-trip (`applyrs`
 cannot read the directory on the pre-image side) and an add only
