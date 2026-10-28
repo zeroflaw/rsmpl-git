@@ -82,6 +82,7 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
             continue;
         }
         if !in_hunk {
+            balanced &= !(line.starts_with("old mode ") || line.starts_with("new mode ")); // T401
             continue;
         }
         if line.starts_with('-') && !line.starts_with("---") {

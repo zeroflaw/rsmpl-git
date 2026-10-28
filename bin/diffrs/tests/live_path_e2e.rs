@@ -836,3 +836,71 @@ fn untracked_quote_name_binary_strips_with_quoted_warning() {
         "stripped binary must not materialize"
     );
 }
+
+// T401: chmod+content sweep kept content but dropped the exec-bit flip
+// (whole-section semantic emitted no old/new mode). Mode sections now go
+// per-hunk: prelude keeps modes, long-name sweep still compresses, and a
+// staged round-trip is mode-exact.
+#[test]
+#[cfg(unix)]
+fn staged_chmod_sweep_round_trips_mode_exact() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "lib.rs",
+        "fn main() {\nold_handler_name(1);\nold_handler_name(2);\nold_handler_name(3);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "lib.rs",
+        "fn main() {\nnew_handler_name(1);\nnew_handler_name(2);\nnew_handler_name(3);\n}\n",
+    );
+    std::fs::set_permissions(
+        dir.path().join("lib.rs"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "lib.rs"]);
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("rule="), "got: {patch}");
+    assert!(patch.contains("old mode 100644"), "got: {patch}");
+    assert!(patch.contains("new mode 100755"), "got: {patch}");
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("lib.rs")).unwrap(),
+        "fn main() {\nnew_handler_name(1);\nnew_handler_name(2);\nnew_handler_name(3);\n}\n"
+    );
+    assert_ne!(
+        std::fs::metadata(dir.path().join("lib.rs"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0,
+        "exec-bit flip must survive"
+    );
+}

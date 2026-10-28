@@ -5823,7 +5823,11 @@ coordinates, so a compressed hunk never overlaps a leftover hunk
 the `# scope=file` +
 `@@ -1,1 @@` dummy (Section 17.3); rule names derive from the
 rewritten idents (`rename_old_to_new`, `calls_old_to_new`, suffixed
-on collision).
+on collision). Sections carrying `old mode`/`new mode` skip the
+whole-section attempt and go straight per-hunk — whole-section
+emissions rebuild only the `diff --git` header and would silently
+drop the mode flip, while the per-hunk prelude keeps the mode lines
+(T401).
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain

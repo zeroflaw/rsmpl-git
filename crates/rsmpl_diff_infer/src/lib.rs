@@ -418,6 +418,26 @@ mod tests {
     }
 
     #[test]
+    fn mode_flip_call_sweep_keeps_modes_per_hunk() {
+        // T401: whole-section semantic dropped old/new mode (exec-bit lost).
+        // Mode sections go per-hunk: prelude keeps modes, sweep compresses.
+        let raw = "diff --git a/f.rs b/f.rs\nold mode 100644\nnew mode 100755\n--- a/f.rs\n+++ b/f.rs\n@@ -1,5 +1,5 @@\n fn m() {\n-    old_handler_name(a1);\n-    old_handler_name(a2);\n-    old_handler_name(a3);\n+    new_handler_name(a1);\n+    new_handler_name(a2);\n+    new_handler_name(a3);\n }\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(
+            out.rsmpl.contains("old mode 100644\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("new mode 100755\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("mode sweep must parse");
+    }
+
+    #[test]
     fn section_headers_collapse_to_single_path() {
         // T381: two-path `diff --git a/P b/P` headers collapse to
         // single-path `diff --git P` (SPEC 6); `---`/`+++` markers
