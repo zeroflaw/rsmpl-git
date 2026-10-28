@@ -308,6 +308,29 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "04-struct-move" {
+            assert!(
+                semantic.contains("rule=move_Big"),
+                "struct move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_Big"),
+                "struct move must paste, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-struct Big"),
+                "minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+struct Big"),
+                "plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
