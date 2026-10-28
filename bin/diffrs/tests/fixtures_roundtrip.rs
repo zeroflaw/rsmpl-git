@@ -531,6 +531,38 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "11-move-same-file-reorder" {
+            assert!(
+                semantic.contains("rule=move_aaa"),
+                "same-file reorder must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_aaa"),
+                "same-file reorder must paste, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("+ M1\n").count(),
+                1,
+                "single paste shares the bind once, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn aaa("),
+                "moved lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn aaa("),
+                "moved lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("fn bbb("),
+                "untouched middle item stays out of sem, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
