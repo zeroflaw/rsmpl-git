@@ -154,8 +154,29 @@ fn split_top_level(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut cur = String::new();
-    let chars = s.chars().peekable();
-    for c in chars {
+    // T428: string-aware — a paren/bracket/comma inside `"..."` must not
+    // affect depth or split (`log("a!(b", E)` is two args, not one).
+    // Escape-aware; `'` is deliberately not skipped (a `'` may open a
+    // lifetime, same rationale as T419).
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in s.chars() {
+        if in_str {
+            cur.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            cur.push(c);
+            continue;
+        }
         match c {
             '(' | '[' | '{' | '<' => {
                 depth += 1;
@@ -302,6 +323,90 @@ fn rfind_dot_outside_strings(sub: &str) -> Option<usize> {
     last
 }
 
+/// Byte index of a macro-invocation `!`, or `None` when the text holds no
+/// genuine macro bang (T428).
+///
+/// A macro bang is a `!` outside `"..."` string literals (escape-aware;
+/// `'` char literals are deliberately NOT skipped — a `'` may open a
+/// lifetime, mirroring the T419 dot-split rationale) whose next
+/// non-whitespace character opens a macro body (`(`, `[`, or `{` — the
+/// engine's `split_invocation` accepts all three, so `vec![E]` and
+/// `foo!{...}` keep routing) and whose name character immediately before
+/// (trailing whitespace trimmed) is ident-ish
+/// (`alphanumeric | _ | :` for paths).
+///
+/// This rejects the shapes a bare `find('!')` misrouted to `Macro`:
+/// `foo(!E)` / `foo(!(x))` (predecessor `(`), `a != b` (successor `=`),
+/// `!foo(...)` (successor `f`), and `"a!(b"` (string-skipped).
+/// Whitespace on either side is tolerated: `foo! (E)` and `foo !(E)`
+/// still route macro, matching pre-T428 behavior (probe-pinned).
+pub fn find_macro_bang(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'!' {
+            let mut j = i + 1;
+            while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                j += 1;
+            }
+            let opens_body = j < bytes.len() && matches!(bytes[j], b'(' | b'[' | b'{');
+            let mut k = i;
+            while k > 0 && (bytes[k - 1] as char).is_whitespace() {
+                k -= 1;
+            }
+            let preceded_by_name = k > 0 && {
+                let c = bytes[k - 1] as char;
+                c.is_ascii_alphanumeric() || c == '_' || c == ':'
+            };
+            if opens_body && preceded_by_name {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// True when restored concrete pattern text still holds a metavariable
+/// placeholder (`__RSMPL_...`, T428): a declared metavar under operator
+/// syntax the call router cannot bind (`foo(!E)` classifies the arg as
+/// `Concrete("!__RSMPL_E")`, which the engine only compares textually).
+/// Callers bypass such shapes to `Raw` so `try_general` compiles them as
+/// general expressions (same bypass family as the `&`/`!`/`-` prefix
+/// bypasses). A bare placeholder (`__RSMPL_Receiver`) is excluded: the
+/// engine resolves whole-slot metas itself.
+fn concrete_holds_placeholder(text: &str) -> bool {
+    text.contains("__RSMPL_") && !is_bare_placeholder(text)
+}
+
+/// True when the text is exactly one placeholder ident.
+fn is_bare_placeholder(text: &str) -> bool {
+    let t = text.trim();
+    t.starts_with("__RSMPL_")
+        && t["__RSMPL_".len()..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// High-level classify used by `pattern.rs`. Backtick literals (SPEC 15.4)
 /// are masked — not stripped — so a literal `` `E` `` never becomes a
 /// placeholder: sentinel args classify as `Concrete(literal)` and
@@ -356,7 +461,7 @@ pub fn classify_call_pattern(
         ));
     }
     // Macro invocation `name!(...)`.
-    if let Some(bang) = sub.find('!') {
+    if let Some(bang) = find_macro_bang(&sub) {
         let before = sub[..bang].trim();
         if !before.contains(char::is_whitespace) && !before.is_empty() {
             let body_ellipsis = sub.contains("__RSMPL_ELLIPSIS");
@@ -387,14 +492,37 @@ pub fn classify_call_pattern(
                     let recv_ok = !recv.is_empty() && !recv.contains('=') && !recv.contains(';');
                     let method_ok = !method.is_empty() && !method.contains(char::is_whitespace);
                     if recv_ok && method_ok {
-                        let args = classify_args(&sub[open + 1..close], table)
+                        let receiver = unmask_literal_spans(recv.trim(), &sentinels);
+                        let method = unmask_literal_spans(method.trim(), &sentinels);
+                        let args: Vec<ArgPat> = classify_args(&sub[open + 1..close], table)
                             .into_iter()
                             .map(|a| restore_arg(a, &sentinels))
                             .collect();
+                        // T428: a metavar under operator syntax inside a
+                        // concrete slot (`R.m(!E)`) is unbindable here —
+                        // bypass to `Raw` for the general matcher (same
+                        // family as the `&`/`!`/`-` prefix bypasses).
+                        // Args only: callee/receiver/method placeholders
+                        // (`__RSMPL_Old::<u8>`, `__RSMPL_Receiver`) resolve
+                        // through path/symbol matching — bypassing them
+                        // broke T199 symbol-callee tests.
+                        if args.iter().any(
+                            |a| matches!(a, ArgPat::Concrete(c) if concrete_holds_placeholder(c)),
+                        ) {
+                            return Ok((
+                                ExprPatternKind::Raw {
+                                    text: normalize_trailing_commas(&unmask_literal_spans(
+                                        &sub, &sentinels,
+                                    )),
+                                },
+                                maps,
+                                lit_strs,
+                            ));
+                        }
                         return Ok((
                             ExprPatternKind::MethodCall {
-                                receiver: unmask_literal_spans(recv.trim(), &sentinels),
-                                method: unmask_literal_spans(method.trim(), &sentinels),
+                                receiver,
+                                method,
                                 args,
                             },
                             maps,
@@ -418,18 +546,28 @@ pub fn classify_call_pattern(
                 if !callee_unmasked.contains(char::is_whitespace)
                     && !is_statement_keyword(&callee_unmasked)
                 {
-                    let args = classify_args(&sub[paren + 1..close], table)
+                    let callee = restore_path_ellipsis(callee_unmasked, &maps);
+                    let args: Vec<ArgPat> = classify_args(&sub[paren + 1..close], table)
                         .into_iter()
                         .map(|a| restore_arg(a, &sentinels))
                         .collect();
-                    return Ok((
-                        ExprPatternKind::Call {
-                            callee: restore_path_ellipsis(callee_unmasked, &maps),
-                            args,
-                        },
-                        maps,
-                        lit_strs,
-                    ));
+                    // T428: placeholder inside a concrete slot (`foo(!E)`)
+                    // bypasses to `Raw` — see the method-call site above.
+                    if args
+                        .iter()
+                        .any(|a| matches!(a, ArgPat::Concrete(c) if concrete_holds_placeholder(c)))
+                    {
+                        return Ok((
+                            ExprPatternKind::Raw {
+                                text: normalize_trailing_commas(&unmask_literal_spans(
+                                    &sub, &sentinels,
+                                )),
+                            },
+                            maps,
+                            lit_strs,
+                        ));
+                    }
+                    return Ok((ExprPatternKind::Call { callee, args }, maps, lit_strs));
                 }
             }
         }
@@ -732,5 +870,57 @@ mod tests {
         // `NAME!(...)` still classifies as a macro invocation.
         let (kind, _, _) = classify_call_pattern("foo!(E)", &table()).unwrap();
         assert!(matches!(kind, ExprPatternKind::Macro { .. }));
+    }
+
+    #[test]
+    fn macro_bang_routing_table() {
+        // T428: only a genuine macro bang (`name!` + body opener, string
+        // literals skipped) classifies `Macro`. Every other `!`-in-text
+        // shape falls through to the call/general routers.
+        for text in ["foo!(E)", "foo! (E)", "foo !(E)", "vec![E]", "a::foo!{E}"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(matches!(kind, ExprPatternKind::Macro { .. }), "{text}");
+        }
+        for text in [
+            "foo(!E)",
+            "foo(!(x))",
+            "a != b",
+            "!foo(E)",
+            "log(\"a!(b\", E)",
+        ] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(!matches!(kind, ExprPatternKind::Macro { .. }), "{text}");
+        }
+        // String contents never split args: `log("a!(b", E)` is a 2-arg call.
+        let (kind, _, _) = classify_call_pattern("log(\"a!(b\", E)", &table()).unwrap();
+        let ExprPatternKind::Call { args, .. } = kind else {
+            panic!("string-paren call misrouted: {kind:?}");
+        };
+        assert_eq!(args.len(), 2);
+        // The helper agrees (pattern.rs pre-route uses it directly).
+        assert!(find_macro_bang("foo!(E)").is_some());
+        assert!(find_macro_bang("foo! (E)").is_some());
+        assert!(find_macro_bang("foo(!E)").is_none());
+        assert!(find_macro_bang("a != b").is_none());
+    }
+
+    #[test]
+    fn placeholder_concrete_bypasses_to_raw() {
+        // T428: a declared metavar under operator syntax inside a concrete
+        // slot (`!__RSMPL_E`) is unbindable by the call router (concrete
+        // args compare textually) — bypass to `Raw` so `try_general`
+        // binds it structurally. Pure-concrete shapes and whole-slot
+        // metas keep their routing.
+        for text in ["foo(!E)", "foo(!E, x)", "R.m(!E)", "foo(-E)"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(matches!(kind, ExprPatternKind::Raw { .. }), "{text}");
+        }
+        for text in ["foo(!(x))", "foo(\"old\")", "R.m(x)"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(!matches!(kind, ExprPatternKind::Raw { .. }), "{text}");
+        }
+        // Whole-slot metas still route method/call (engine resolves them).
+        let (kind, _, _) = classify_call_pattern("Receiver.m(E)", &table()).unwrap();
+        assert!(matches!(kind, ExprPatternKind::MethodCall { .. }));
     }
 }

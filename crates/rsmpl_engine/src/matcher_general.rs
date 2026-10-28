@@ -1333,6 +1333,19 @@ mod tests {
         assert_eq!(out.matches("!checked(").count(), 2, "got: {out}");
         assert!(out.contains("!other(z)"), "got: {out}");
     }
+
+    #[test]
+    fn rewrites_call_with_unary_arg() {
+        // T428: a call-pattern metavar under `!` bypasses the call router
+        // to the general matcher (a concrete `!E` arg could never bind) —
+        // two sites rewrite, other callee/arity untouched.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@ rule=notarg\n# lang=rust\n# allow=many\n# expr E\n- foo(!E)\n+ bar(!E)\n";
+        let src = "fn m() {\n    foo(!ready);\n    foo(!done);\n    baz(!ready);\n    foo(!ready, 1);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches("bar(!").count(), 2, "got: {out}");
+        assert!(out.contains("baz(!ready);"), "got: {out}");
+        assert!(out.contains("foo(!ready, 1);"), "got: {out}");
+    }
     #[test]
     fn repeated_metavar_must_agree() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=dedupe\n# lang=rust\n# expr E\n- E + E\n+ twice(E)\n";

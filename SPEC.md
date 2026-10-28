@@ -5902,6 +5902,10 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   are rejected — each failed loud in-corpus (top-level Unary matches since
   T415: leading `!` skips the macro pre-route and leading `!`/`-` bypasses
   the call router to a general-expr hunk — b208847 compresses);
+  inner-`!` routes call/general since T428 (only `name!` + body opener
+  `(`, `[`, `{` with strings skipped is macro; placeholder-carrying
+  concrete args bypass to the general matcher; arg splitters are
+  string-aware);
   non-Call-top-level pairs
   with nodes outside the engine's bounded general-expr set
   (Block/If/... — Return supported since T418, b9c00d5) are rejected.

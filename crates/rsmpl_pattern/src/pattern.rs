@@ -7,7 +7,9 @@
 use rsmpl_patch::{AttrsPolicy, Directive, ErrorCode, MetavarKind, RsmplHunk, StructuredError};
 use std::collections::HashSet;
 
-use crate::expr_pattern::{classify_call_pattern, ExprPattern, ExprPatternKind, PlaceholderMaps};
+use crate::expr_pattern::{
+    classify_call_pattern, find_macro_bang, ExprPattern, ExprPatternKind, PlaceholderMaps,
+};
 use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
 use crate::quote_utils::{mask_literal_spans, unmask_literal_spans, validate_quoting};
@@ -645,7 +647,10 @@ fn classify(
     // A leading `!` is unary (T415: `!f(...)` parses as `Expr::Unary`,
     // never `NAME!(...)`) so it falls through to the expression router.
     let leading_bang = m.trim_start().starts_with('!');
-    if is_macro_mode || ((m.contains('!') && m.contains('(')) && !leading_bang) {
+    // T428: only a genuine macro bang (`name!` + body opener, strings
+    // skipped) routes macro — `foo(!E)`, `a != b` fall through to the
+    // call/general routers.
+    if is_macro_mode || (!leading_bang && find_macro_bang(m).is_some()) {
         return Ok(PatternKind::Macro {
             minus_raw: m.to_string(),
             plus_raw: p.to_string(),

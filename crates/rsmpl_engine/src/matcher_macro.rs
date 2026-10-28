@@ -99,7 +99,27 @@ fn split_macro_args(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut cur = String::new();
+    // T428: string-aware like `split_top_level` — commas/parens inside
+    // `"..."` split nothing (`log!("a,b", s)` is two args, not three).
+    let mut in_str = false;
+    let mut escaped = false;
     for c in body.chars() {
+        if in_str {
+            cur.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            cur.push(c);
+            continue;
+        }
         match c {
             '(' | '[' | '{' => {
                 depth += 1;
@@ -567,7 +587,28 @@ fn split_top_level(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut cur = String::new();
+    // T428: string-aware — a comma/paren inside `"..."` must not split or
+    // change depth (`foo!("a,b", E)` is two args). Escape-aware; `'`
+    // deliberately not skipped (lifetime ambiguity, T419).
+    let mut in_str = false;
+    let mut escaped = false;
     for c in s.chars() {
+        if in_str {
+            cur.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            cur.push(c);
+            continue;
+        }
         match c {
             '(' | '[' | '{' => {
                 depth += 1;
@@ -613,6 +654,17 @@ mod tests {
         // M/TT declared as metavars: M binds `old`, TT binds body.
         let out = apply(patch, src).unwrap();
         assert!(out.contains("new_macro!(1, 2);"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_args_with_string_comma() {
+        // T428: commas inside string args do not split (`split_top_level`
+        // is string-aware) — `log!("a,b", E)` keeps two args and rewrites
+        // both sites.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=logren\n# lang=rust\n# allow=many\n# expr E\n- log!(\"a,b\", E)\n+ log2!(\"a,b\", E)\n";
+        let src = "fn m(s: &str, t: &str) {\n    log!(\"a,b\", s);\n    log!(\"a,b\", t);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches("log2!(\"a,b\"").count(), 2, "got: {out}");
     }
 
     #[test]
