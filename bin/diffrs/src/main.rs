@@ -14,8 +14,9 @@
 //! ```
 //!
 //! v1 compresses fn/item renames, N-site slot-sweep renames, N-site
-//! call sweeps, N-site method-to-function fan-outs, and N-site
-//! method-to-method renames (SPEC D.4) and passes
+//! call sweeps, N-site method-to-function fan-outs, N-site
+//! method-to-method renames, and N-site same-method literal-arg
+//! sweeps (SPEC D.4) and passes
 //! everything else through as ordinary hunks. The output always parses as RSmPL-Git and
 //! round-trips through `applyrs --check` against the pre-change tree.
 

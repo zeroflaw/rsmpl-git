@@ -13,7 +13,8 @@
 mod methods;
 
 pub(crate) use methods::{
-    try_method_to_fn_sweep, try_method_to_method_sweep, try_ref_method_strip_sweep,
+    try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
+    try_ref_method_strip_sweep,
 };
 
 /// Try to compress binary-stripped `sections` (one full
@@ -170,6 +171,14 @@ fn compress_section(
     {
         if m2m.len() < section.len() {
             return Some(m2m);
+        }
+        used_rules.truncate(checkpoint);
+    }
+    if let Some(same) =
+        try_method_same_literal_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if same.len() < section.len() {
+            return Some(same);
         }
         used_rules.truncate(checkpoint);
     }

@@ -867,6 +867,10 @@ pub(crate) fn compress_balanced_pair_body(
         semantic::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(m2m)
+    } else if let Some(same) = semantic::try_method_same_literal_sweep(
+        minuses, pluses, path, file_old, changed, used_rules,
+    ) {
+        Some(same)
     } else if let Some(strip) =
         semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {

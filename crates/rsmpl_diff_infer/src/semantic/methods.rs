@@ -244,6 +244,123 @@ fn parse_method_to_method_pair(old_line: &str, new_line: &str) -> Option<(String
     Some((old_method, new_method, old_call.args.len()))
 }
 
+/// N-site (N >= 2) same-method literal-arg sweep (T420): every pair parses
+/// as `recv.method(old...)` -> `recv.method(new...)` with one shared method
+/// ident, uniform arity (at least 1), per-site token-equal receivers,
+/// cross-site token-equal old-arg and new-arg tuples, and a real old/new
+/// delta. Turbofish on either side, `&`-led receivers, and identical arg
+/// tuples stay passthrough. Emits one `# allow=many` + `# scope=file` hunk
+/// with concrete literal spellings (`# expr Receiver` only: backtick
+/// literals are ident-only per SPEC 15.4, and a plus-only `E` would be
+/// unbound). Rule `calls_{method}_literal`.
+pub(crate) fn try_method_same_literal_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() < 2 {
+        return None;
+    }
+    let mut method: Option<String> = None;
+    let mut old_args: Option<Vec<String>> = None;
+    let mut new_args: Option<Vec<String>> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (meth, olds, news) = parse_method_same_literal_pair(m, p)?;
+        if method.as_ref().is_some_and(|c| *c != meth) {
+            return None;
+        }
+        if old_args.as_ref().is_some_and(|a| *a != olds) {
+            return None;
+        }
+        if new_args.as_ref().is_some_and(|a| *a != news) {
+            return None;
+        }
+        method = Some(meth);
+        old_args = Some(olds);
+        new_args = Some(news);
+    }
+    let (method, old_args, new_args) = (method?, old_args?, new_args?);
+    if old_args == new_args {
+        return None;
+    }
+    if !crate::totality::method_literal_holds(file_old, &method, &old_args, minuses, changed) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{method}_literal"));
+    let mut hunk = format!(
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
+        header = crate::git_header(path)
+    );
+    hunk.push_str(&format!(
+        "- Receiver.{method}({})\n+ Receiver.{method}({})\n",
+        old_args.join(", "),
+        new_args.join(", ")
+    ));
+    Some(hunk)
+}
+
+/// Parse a `-`/`+` line pair as a same-method literal-arg delta; return
+/// (method ident, old-arg token-texts, new-arg token-texts) when the method
+/// ident is shared, receivers token-equal per site, and both sides parse
+/// (one trailing `;`/`,` stripped). `ToTokens` spellings are emitted
+/// verbatim (ref-strip precedent). Turbofish, `&`-led sides, arity
+/// mismatch, zero arity (no delta possible), and non-ident methods stay
+/// passthrough.
+fn parse_method_same_literal_pair(
+    old_line: &str,
+    new_line: &str,
+) -> Option<(String, Vec<String>, Vec<String>)> {
+    let old_text = strip_one_terminator(old_line.trim())?;
+    let new_text = strip_one_terminator(new_line.trim())?;
+    if old_text.is_empty() || new_text.is_empty() {
+        return None;
+    }
+    if old_text.starts_with('&') || new_text.starts_with('&') {
+        return None;
+    }
+    let old_expr: syn::Expr = syn::parse_str(old_text).ok()?;
+    let new_expr: syn::Expr = syn::parse_str(new_text).ok()?;
+    let (syn::Expr::MethodCall(old_call), syn::Expr::MethodCall(new_call)) =
+        (&old_expr, &new_expr)
+    else {
+        return None;
+    };
+    if old_call.turbofish.is_some() || new_call.turbofish.is_some() {
+        return None;
+    }
+    if old_call.args.len() != new_call.args.len() || old_call.args.is_empty() {
+        return None;
+    }
+    use quote::ToTokens;
+    if old_call.receiver.to_token_stream().to_string()
+        != new_call.receiver.to_token_stream().to_string()
+    {
+        return None;
+    }
+    let old_method = old_call.method.to_string();
+    let new_method = new_call.method.to_string();
+    if old_method != new_method {
+        return None;
+    }
+    if ident_len(&old_method)? != old_method.len() {
+        return None;
+    }
+    let olds: Vec<String> = old_call
+        .args
+        .iter()
+        .map(|a| a.to_token_stream().to_string())
+        .collect();
+    let news: Vec<String> = new_call
+        .args
+        .iter()
+        .map(|a| a.to_token_stream().to_string())
+        .collect();
+    Some((old_method, olds, news))
+}
+
 /// N-site (N ≥ 2) `&`-receiver strip (T359): one `&recv.method(args)` per
 /// pair, plus is minus with it replaced by `recv`; shared method+args bind
 /// verbatim. One trailing `;`/`,` stripped; lone/turbofish/`&mut`/
@@ -563,6 +680,126 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.foo(1);\n-    &b.foo(2);\n+    &a.bar(1);\n+    &b.bar(2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_sweep_compresses() {
+        // T420: hetero receivers, same method, shared old/new literals.
+        // Long literals so the T375 byte-guard wins; trailing commas
+        // (arg-position sites) tolerated like the strip sweep.
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    agents.contains(\"skills/rsmpl-git/SKILL.md\"),\n-    readme.contains(\"skills/rsmpl-git/SKILL.md\"),\n-    spec.contains(\"skills/rsmpl-git/SKILL.md\"),\n+    agents.contains(\"skills/gitrs/SKILL.md\"),\n+    readme.contains(\"skills/gitrs/SKILL.md\"),\n+    spec.contains(\"skills/gitrs/SKILL.md\"),\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("rule=calls_contains_literal"), "got: {out}");
+        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("# expr Receiver\n"), "got: {out}");
+        assert!(!out.contains("# expr E"), "got: {out}");
+        assert!(
+            out.contains("- Receiver.contains(\"skills/rsmpl-git/SKILL.md\")\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.contains(\"skills/gitrs/SKILL.md\")\n"),
+            "got: {out}"
+        );
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn method_same_literal_multi_arg_sweep_compresses() {
+        // Arity 2 with hetero receivers: both arg positions share their
+        // old/new tuples across sites (comma-joined emission).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.route(\"skills/rsmpl-git/SKILL.md\", true);\n-    b.route(\"skills/rsmpl-git/SKILL.md\", true);\n+    a.route(\"skills/gitrs/SKILL.md\", false);\n+    b.route(\"skills/gitrs/SKILL.md\", false);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated(&out);
+        assert!(out.contains("rule=calls_route_literal"), "got: {out}");
+        assert!(
+            out.contains("- Receiver.route(\"skills/rsmpl-git/SKILL.md\", true)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.route(\"skills/gitrs/SKILL.md\", false)\n"),
+            "got: {out}"
+        );
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn method_same_literal_divergent_old_stays_passthrough() {
+        // Old literals differ across sites: no shared old tuple.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.contains(\"skills/rsmpl-git/SKILL.md\");\n-    b.contains(\"skills/old/SKILL.md\");\n+    a.contains(\"skills/gitrs/SKILL.md\");\n+    b.contains(\"skills/gitrs/SKILL.md\");\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_divergent_new_stays_passthrough() {
+        // New literals differ across sites: no shared new tuple.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.contains(\"skills/rsmpl-git/SKILL.md\");\n-    b.contains(\"skills/rsmpl-git/SKILL.md\");\n+    a.contains(\"skills/gitrs/SKILL.md\");\n+    b.contains(\"skills/new/SKILL.md\");\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_receiver_rewrite_stays_passthrough() {
+        // Per-site receivers must match: a receiver delta is not a
+        // literal-arg sweep (and m2m declines on hetero receivers too).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.contains(\"skills/rsmpl-git/SKILL.md\");\n-    b.contains(\"skills/rsmpl-git/SKILL.md\");\n+    x.contains(\"skills/rsmpl-git/SKILL.md\");\n+    y.contains(\"skills/rsmpl-git/SKILL.md\");\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_single_site_stays_passthrough() {
+        // N >= 2 only: a lone pair costs more as a semantic hunk.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    a.contains(\"skills/rsmpl-git/SKILL.md\");\n+    a.contains(\"skills/gitrs/SKILL.md\");\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_short_stays_passthrough() {
+        // T375: two short sites cost more as a semantic hunk
+        // (rule + scope + receiver overhead) than as ordinary lines.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.f(\"x\");\n-    b.f(\"x\");\n+    a.f(\"y\");\n+    b.f(\"y\");\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_turbofish_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.foo::<u8>(\"skills/rsmpl-git/SKILL.md\");\n-    b.foo::<u8>(\"skills/rsmpl-git/SKILL.md\");\n+    a.foo::<u8>(\"skills/gitrs/SKILL.md\");\n+    b.foo::<u8>(\"skills/gitrs/SKILL.md\");\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_ref_receiver_stays_passthrough() {
+        // `&`-led sides route to the general-expr matcher, never the
+        // method-call shape (mirrors the m2m gate).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.foo(\"skills/rsmpl-git/SKILL.md\");\n-    &b.foo(\"skills/rsmpl-git/SKILL.md\");\n+    &a.foo(\"skills/gitrs/SKILL.md\");\n+    &b.foo(\"skills/gitrs/SKILL.md\");\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }

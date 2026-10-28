@@ -233,6 +233,60 @@ pub(crate) fn method_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// N-site same-method literal totality (T420): `method` with token-equal
+/// old args occurs exactly `minuses.len()` times (turbofish excluded).
+/// `method_holds` (callee+arity) would over-count same-method sites with
+/// different args (e.g. other `contains("...")` calls never touched by a
+/// concrete-literal pattern); the arg tuple is the precise pre-image.
+/// All receivers counted (incl `&`-wrapped -- conservative, like
+/// `method_holds`).
+pub(crate) fn method_literal_holds(
+    file_old: Option<&str>,
+    method: &str,
+    old_args: &[String],
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct L<'a> {
+        method: &'a str,
+        old_args: &'a [String],
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for L<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::MethodCall(m) = node {
+                if m.turbofish.is_none()
+                    && m.method == self.method
+                    && m.args.len() == self.old_args.len()
+                {
+                    let ok = m.args.iter().zip(self.old_args.iter()).all(|(a, b)| {
+                        super::semantic::flat_ws(&a.to_token_stream().to_string())
+                            == super::semantic::flat_ws(b)
+                    });
+                    if ok {
+                        self.count += 1;
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut l = L {
+        method,
+        old_args,
+        count: 0,
+    };
+    l.visit_file(&file);
+    if l.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
 /// N-site `&`-strip totality: `&recv.method(args)` with token-equal args
 /// occurs exactly `minuses.len()` times (turbofish/`&mut` excluded).
 pub(crate) fn strip_holds(
@@ -450,6 +504,30 @@ mod tests {
         assert!(
             !infer(&raw, pre).contains("rule="),
             "extra method site must veto"
+        );
+    }
+    #[test]
+    fn method_literal_totality_fires_and_vetoes_extra() {
+        // T420: the pre-image count keys on method + old-arg tuple, not
+        // callee+arity alone -- an extra same-method/different-arg site
+        // never matches the concrete-literal pattern and must not veto.
+        let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    a.contains(\"skills/rsmpl-git/SKILL.md\");\n-    b.contains(\"skills/rsmpl-git/SKILL.md\");\n+    a.contains(\"skills/gitrs/SKILL.md\");\n+    b.contains(\"skills/gitrs/SKILL.md\");\n }\n");
+        let pre = "fn m() {\n    a.contains(\"skills/rsmpl-git/SKILL.md\");\n    b.contains(\"skills/rsmpl-git/SKILL.md\");\n}\n";
+        assert!(
+            infer(&raw, pre).contains("rule=calls_contains_literal"),
+            "got: {}",
+            infer(&raw, pre)
+        );
+        let pre2 = "fn m() {\n    a.contains(\"skills/rsmpl-git/SKILL.md\");\n    b.contains(\"skills/rsmpl-git/SKILL.md\");\n    c.contains(\"skills/rsmpl-git/SKILL.md\");\n}\n";
+        assert!(
+            !infer(&raw, pre2).contains("rule="),
+            "extra same-literal site must veto"
+        );
+        let pre3 = "fn m() {\n    a.contains(\"skills/rsmpl-git/SKILL.md\");\n    b.contains(\"skills/rsmpl-git/SKILL.md\");\n    c.contains(\"other\");\n}\n";
+        assert!(
+            infer(&raw, pre3).contains("rule=calls_contains_literal"),
+            "different-arg site must not veto, got: {}",
+            infer(&raw, pre3)
         );
     }
     #[test]

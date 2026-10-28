@@ -5868,6 +5868,15 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   one shared old-method ident, one shared new-method ident
   (`old != new`), and uniform arity → one `# allow=many` hunk
   (`# expr Receiver` + `# expr E0…`).
+- Same-method literal sweep (T420): N ≥ 2 `-`/`+` pairs, each a method call
+  (`syn`-parsed, no turbofish either side, non-`&` receivers, one trailing
+  `;`/`,` stripped) → the same method ident with per-site token-equal
+  receivers and cross-site token-equal old-arg and new-arg tuples with a
+  real old/new delta → one `# allow=many` hunk (`# expr Receiver` only,
+  concrete `ToTokens` spellings: backtick literals are ident-only per
+  SPEC 15.4, and a plus-only `E` would be unbound). Pre-image totality
+  keys on method + old-arg tuple (plain callee+arity would over-count
+  same-method/different-arg sites that the pattern can never match).
 - `&`-receiver strip sweep: N ≥ 2 `-`/`+` pairs, each containing
   exactly one shared-reference-to-method call (`syn`-parsed, no
   turbofish/`&mut`/explicit lifetime) with the plus side equal to
@@ -5906,9 +5915,10 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   subterm and does not veto (probe-verified). Leftover balanced hunks
   retry the standard chain in place; the T375 guard applies to the
   verbatim-covered set as a whole.
-  All six metavar sweeps carry the same pre-image subterm totality
-  (T409): matchable-unit count (calls/methods by callee+arity, strips by
-  method+args, slots by fn ident free vs impl, uses by prefix) must equal
+  All seven metavar sweeps carry the same pre-image subterm totality
+  (T409): matchable-unit count (calls/methods by callee+arity, same-method
+  literals by method+old-args, strips by method+args, slots by fn ident
+  free vs impl, uses by prefix) must equal
   the pair count, with zero stripped-minus hits in opaque text — precise
   line-aware needles (T411: container spans must cover a changed old-side
   line; snippet callee checks over-vetoed 57140fe via assert!/patch-string
