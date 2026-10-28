@@ -691,6 +691,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "14-method-to-function" {
+            assert!(
+                semantic.contains("rule=calls_old_method_to_new_function"),
+                "m2f sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- Receiver.old_method(E0)"),
+                "m2f sweep minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ new_function(Receiver, E0)"),
+                "m2f sweep plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    a.old_method(1);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    new_function(a, 1);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
