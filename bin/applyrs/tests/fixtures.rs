@@ -1,4 +1,4 @@
-//! Fixture-driven e2e: each `test-fixtures/NN-name/` holds `repo/`,
+//! Fixture-driven e2e: each `test-fixtures/applyrs/NN-name/` holds `repo/`,
 //! `patch.rsmpl`, and either `expected/` (exact post-state) or
 //! `expect_fail.txt` (stderr substring + nonzero exit).
 
@@ -36,7 +36,7 @@ fn collect_files(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn fixtures_apply_through_binary() {
     let root = workspace_root();
-    let fixtures = root.join("test-fixtures");
+    let fixtures = root.join("test-fixtures/applyrs");
     let mut names: Vec<String> = fs::read_dir(&fixtures)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -133,7 +133,7 @@ fn example_benches_stay_check_clean() {
     // T248: every example-bench patch.rsmpl must still lower + `git apply
     // --check` cleanly against its own repo/, so benches never rot.
     let root = workspace_root();
-    let benches = root.join("example-benches");
+    let benches = root.join("example-benches/applyrs");
     let mut names: Vec<String> = fs::read_dir(&benches)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -178,7 +178,7 @@ fn example_bench_readme_table_matches_recomputed() {
     // byte-identical and the README carries the exact recomputed row.
     let root = workspace_root();
     let readme = fs::read_to_string(root.join("README.md")).unwrap();
-    let benches = root.join("example-benches");
+    let benches = root.join("example-benches/applyrs");
     let mut names: Vec<String> = fs::read_dir(&benches)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())

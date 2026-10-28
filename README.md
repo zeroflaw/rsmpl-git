@@ -123,7 +123,7 @@ SPEC D.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 
-`example-benches/` (20 benches) compares the agent-authored `patch.rsmpl`
+`example-benches/applyrs/` (20 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
 same result, RSmPL input vs full Git spelling. Re-measure any time with
 `./example-benches/run.sh`. (A hand-written native patch with conventional
@@ -216,7 +216,7 @@ crates/rsmpl_pattern/ Rust pattern language (metavars, ellipsis, fn slots)
 crates/rsmpl_engine/  semantic matching + plan/move engine
 crates/rsmpl_git/     unified-diff lowering + `git apply` wrapper
 crates/rsmpl_diff*/   inverse mapping: git source -> infer -> emit RSmPL (see T340)
-test-fixtures/        binary-driven e2e fixtures (see bin tests)
+test-fixtures/        binary-driven e2e fixtures: applyrs/ + diffrs/ (see bin tests)
 ```
 
 No single `.rs` file exceeds 2000 lines (enforced by test).

@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Rebuild every example-bench native.patch from its patch.rsmpl and print
-# the token-savings table (also embedded in README.md).
-# Usage: ./run.sh  (run from the repo root; builds the binary if needed)
+# Rebuild every applyrs example-bench native.patch from its patch.rsmpl and
+# print the token-savings table (also embedded in README.md); then measure
+# every diffrs bench as native `git diff -U0` (index lines stripped) vs
+# semantic `diffrs` output.
+# Usage: ./example-benches/run.sh  (run from the repo root; builds the binaries if needed)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN=target/debug/applyrs
 if [ ! -x "$BIN" ]; then
     cargo build -q -p applyrs
 fi
+DIFBIN=target/debug/diffrs
+if [ ! -x "$DIFBIN" ]; then
+    cargo build -q -p diffrs
+fi
 printf '| bench | rsmpl bytes/lines | native bytes/lines | saved |\n'
 printf '|---|---|---|---|\n'
-for d in example-benches/*/; do
+for d in example-benches/applyrs/*/; do
     name=$(basename "$d")
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
@@ -23,5 +29,28 @@ for d in example-benches/*/; do
     nl=$(wc -l < "$d/native.patch" | tr -d ' ')
     pct=$(python3 -c "print(f'{(1 - $rb / $nb) * 100:.0f}%')" )
     printf '| %s | %s B / %s ln | %s B / %s ln | %s |\n' "$name" "$rb" "$rl" "$nb" "$nl" "$pct"
+    rm -rf "$tmp"
+done
+printf '\n| bench | native bytes/lines | semantic bytes/lines | saved |\n'
+printf '|---|---|---|---|\n'
+for d in example-benches/diffrs/*/; do
+    name=$(basename "$d")
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r "$d/repo/." "$tmp/"
+    git -C "$tmp" init -q
+    git -C "$tmp" add -A
+    git -C "$tmp" -c commit.gpgsign=false -c user.email=t@t -c user.name=t commit -qm base
+    cp -r "$d/after/." "$tmp/"
+    # Outputs land outside $tmp: diffrs embeds untracked worktree files,
+    # so measuring inside $tmp would feed the measurement back into itself.
+    git -C "$tmp" diff --unified=0 --no-color --no-ext-diff | grep -v '^index ' > "$d/native.patch" || true
+    "./$DIFBIN" --repo "$tmp" > "$d/sem.patch" 2>/dev/null
+    nb=$(wc -c < "$d/native.patch" | tr -d ' ')
+    nl=$(wc -l < "$d/native.patch" | tr -d ' ')
+    sb=$(wc -c < "$d/sem.patch" | tr -d ' ')
+    sl=$(wc -l < "$d/sem.patch" | tr -d ' ')
+    pct=$(python3 -c "print(f'{(1 - $sb / $nb) * 100:.0f}%')" )
+    printf '| %s | %s B / %s ln | %s B / %s ln | %s |\n' "$name" "$nb" "$nl" "$sb" "$sl" "$pct"
     rm -rf "$tmp"
 done

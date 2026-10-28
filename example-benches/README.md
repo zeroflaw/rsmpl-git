@@ -1,16 +1,20 @@
 # example-benches — RSmPL vs native Git patch size
 
-Each `NN-name/` holds a `repo/` (pre-state), a `patch.rsmpl` (the agent-authored
+`applyrs/NN-name/` holds a `repo/` (pre-state), a `patch.rsmpl` (the agent-authored
 RSmPL input), and a `native.patch` (the lowered 0-context Git diff the tool
 emits — i.e. the smallest native patch producing the same result).
+`diffrs/NN-name/` holds a `repo/` (pre-state) and an `after/` (post-state);
+`native.patch` is the `git diff -U0` baseline and `sem.patch` the `diffrs`
+compression of the same change.
 
 `native.patch` is the fair baseline: same end state, full Git spelling.
 An agent hand-writing the native patch with conventional 3-line context would
 emit *more* lines, so the savings below are lower bounds.
 
 Rebuild + re-measure: `./example-benches/run.sh` (from the repo root).
-It re-applies every `patch.rsmpl`, rewrites every `native.patch`, and prints
-the table embedded in the top-level README.
+It re-applies every applyrs `patch.rsmpl`, rewrites every `native.patch`,
+prints the table embedded in the top-level README, then re-measures every
+diffrs bench as native vs semantic bytes.
 
 | bench | what it shows | rsmpl | native | saved |
 |---|---|---|---|---|

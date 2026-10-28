@@ -1,0 +1,6 @@
+diff --git f.txt
+--- a/f.txt
++++ b/f.txt
+@@ -6 +6 @@
+-line 5
++line FIVE
