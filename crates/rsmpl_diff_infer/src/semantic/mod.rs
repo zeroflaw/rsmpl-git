@@ -1,5 +1,6 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
-//! method-to-function, method-to-method, &-receiver strip, use-path prefix,
+//! array-head-peel call-migration sweep (T441) + method-to-function,
+//! method-to-method, &-receiver strip, use-path prefix,
 //! and whole-item move (T430) fan-outs. Every emission clears a token-win guard (T375): the
 //! semantic hunk is kept only when byte-smaller than the ordinary
 //! hunk(s) it replaces (bytes proxy tokens), else the ordinary text
@@ -14,11 +15,13 @@
 //! scope=file cut would match every item in the file.
 mod methods;
 mod moves;
+mod peel;
 
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,
 };
+pub(crate) use peel::{try_call_peel_section, try_call_peel_sweep};
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the
@@ -153,6 +156,20 @@ fn compress_section(
         return compress_section_per_hunk(section, &path, file_old, used_rules);
     }
     if !whole {
+        // T441: hetero-arg peel cross-hunk sweep before verbatim
+        // (claims hetero classes; pure-identical classes stay for the
+        // tighter verbatim sweep, which ignores the single-pair peel
+        // bodies — pinned by `peel_body_verbatim_still_fires`). A peel
+        // rewrite already compresses, so it is kept even when verbatim
+        // and per-hunk find nothing further (returning `None` here
+        // would discard the rewrite).
+        if let Some(peeled) = try_call_peel_section(section, &path, used_rules, file_old) {
+            if let Some(verbatim) = super::try_verbatim_sweep(&peeled, &path, used_rules, file_old)
+            {
+                return Some(verbatim);
+            }
+            return Some(peeled);
+        }
         // T403: non-whole sections try the cross-hunk verbatim sweep
         // before per-hunk (whole-section detectors need balance).
         if let Some(verbatim) = super::try_verbatim_sweep(section, &path, used_rules, file_old) {
@@ -215,6 +232,17 @@ fn compress_section(
     if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules) {
         if sweep.len() < section.len() {
             return Some(sweep);
+        }
+        used_rules.truncate(checkpoint);
+    }
+    // T441: hetero-arg array-head-peel call migration
+    // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);
+    // all-identical classes stay for the tighter verbatim sweep below.
+    if let Some(peel) =
+        try_call_peel_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if peel.len() < section.len() {
+            return Some(peel);
         }
         used_rules.truncate(checkpoint);
     }
@@ -841,7 +869,7 @@ fn parse_call_expr(line: &str) -> Option<syn::Expr> {
 
 /// Bare single-segment call callee + args; rejects method calls,
 /// paths, turbofish, and non-ident callees.
-fn call_parts(expr: &syn::Expr) -> Option<(String, Vec<syn::Expr>)> {
+pub(crate) fn call_parts(expr: &syn::Expr) -> Option<(String, Vec<syn::Expr>)> {
     if let syn::Expr::Call(call) = expr {
         if let syn::Expr::Path(path) = call.func.as_ref() {
             if path.qself.is_some() || path.path.leading_colon.is_some() {
@@ -1122,6 +1150,219 @@ mod tests {
             "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(3);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_peel_sweep_j0_hetero_fires() {
+        // T441 slice 1: 05de4d1 miniature — hetero `M` (ident,
+        // literal, call) and hetero method-chain receivers share one
+        // 2-element head-peel class.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = run(dir.path(), &[\"--patch\", patch]);\n-    let b = run(dir.path(), &[\"--patch\", \"\"]);\n-    let c = run(other.path(), &[\"--patch\", rename_patch()]);\n+    let a = run_stdin(dir.path(), patch, &[]);\n+    let b = run_stdin(dir.path(), \"\", &[]);\n+    let c = run_stdin(other.path(), rename_patch(), &[]);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    let c = run(other.path(), &[\"--patch\", rename_patch()]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("rule=calls_run_to_run_stdin_peel\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("# expr D\n# expr M\n"), "got: {out}");
+        assert!(!out.contains("# expr T0"), "got: {out}");
+        assert!(out.contains("- run(D, &[\"--patch\", M])\n"), "got: {out}");
+        assert!(out.contains("+ run_stdin(D, M, &[])\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        // Native sites consumed into the pattern.
+        assert!(
+            !out.contains("run_stdin(dir.path(), patch, &[])"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn call_peel_sweep_j1_hetero_fires() {
+        // T441 slice 1: one shared tail position replayed into the new
+        // trailing slice; both the peeled value and the tail are hetero.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let a = run(dir.path(), &[\"--patch\", patch, \"--check\"]);\n-    let b = run(other.path(), &[\"--patch\", \"\", \"--format\"]);\n+    let a = run_stdin(dir.path(), patch, &[\"--check\"]);\n+    let b = run_stdin(other.path(), \"\", &[\"--format\"]);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = run(dir.path(), &[\"--patch\", patch, \"--check\"]);\n    let b = run(other.path(), &[\"--patch\", \"\", \"--format\"]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("rule=calls_run_to_run_stdin_peel\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("# expr D\n# expr M\n# expr T0\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("- run(D, &[\"--patch\", M, T0])\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("+ run_stdin(D, M, &[T0])\n"), "got: {out}");
+    }
+
+    #[test]
+    fn call_peel_sweep_bare_call_statement_fires() {
+        // The statement form does not matter: bare call-statements peel
+        // exactly like `let` inits (the engine rewrites the call).
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    run(dir.path(), &[\"--patch\", a]);\n-    run(dir.path(), &[\"--patch\", b]);\n+    run_stdin(dir.path(), a, &[]);\n+    run_stdin(dir.path(), b, &[]);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    run(dir.path(), &[\"--patch\", a]);\n    run(dir.path(), &[\"--patch\", b]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("rule=calls_run_to_run_stdin_peel\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn call_peel_single_pair_stays_passthrough() {
+        // T375: one pair can never win as a sweep (the whole-section
+        // single path only tries item rename; per-hunk singles likewise).
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n fn m() {\n-    let a = run(dir.path(), &[\"--patch\", patch]);\n+    let a = run_stdin(dir.path(), patch, &[]);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_peel_all_identical_stays_for_verbatim() {
+        // An all-identical class compresses tighter without metavars:
+        // peel declines, verbatim claims it.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    run(dir.path(), &[\"--patch\", some_long_patch_value]);\n-    run(dir.path(), &[\"--patch\", some_long_patch_value]);\n+    run_stdin(dir.path(), some_long_patch_value, &[]);\n+    run_stdin(dir.path(), some_long_patch_value, &[]);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    run(dir.path(), &[\"--patch\", some_long_patch_value]);\n    run(dir.path(), &[\"--patch\", some_long_patch_value]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(!out.contains("peel"), "got: {out}");
+        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+    }
+
+    #[test]
+    fn call_peel_tail_drift_stays_passthrough() {
+        // Different tail lengths are different classes: no class reaches
+        // N=2, and singletons stay ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let a = run(dir.path(), &[\"--patch\", x]);\n-    let b = run(dir.path(), &[\"--patch\", y, \"--check\"]);\n+    let a = run_stdin(dir.path(), x, &[]);\n+    let b = run_stdin(dir.path(), y, &[\"--check\"]);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_peel_head_drift_stays_passthrough() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let a = run(dir.path(), &[\"--patch\", x]);\n-    let b = run(dir.path(), &[\"--check\", y]);\n+    let a = run_stdin(dir.path(), x, &[]);\n+    let b = run_stdin(dir.path(), y, &[]);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_peel_non_string_head_stays_passthrough() {
+        // The head replays verbatim: only a string literal qualifies.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let a = run(dir.path(), &[head(), x]);\n-    let b = run(dir.path(), &[head(), y]);\n+    let a = run_stdin(dir.path(), x, &[]);\n+    let b = run_stdin(dir.path(), y, &[]);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_peel_plus_tail_mismatch_stays_passthrough() {
+        // Minus carries one tail, plus replays none: not a peel.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let a = run(dir.path(), &[\"--patch\", x, \"--check\"]);\n-    let b = run(dir.path(), &[\"--patch\", y, \"--check\"]);\n+    let a = run_stdin(dir.path(), x, &[]);\n+    let b = run_stdin(dir.path(), y, &[]);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_peel_totality_overcount_vetoes() {
+        // An unchanged same-shape site in the pre-image breaks the
+        // count gate: the sweep would silently rewrite it.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let a = run(d, &[\"--patch\", x]);\n-    let b = run(d, &[\"--patch\", y]);\n+    let a = run_stdin(d, x, &[]);\n+    let b = run_stdin(d, y, &[]);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = run(d, &[\"--patch\", x]);\n    let b = run(d, &[\"--patch\", y]);\n    let c = run(d, &[\"--patch\", z]);\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn call_peel_section_multi_class_fires_twice() {
+        // T441 cross-hunk driver: a non-whole section (pure-addition
+        // hunk) with two hetero classes emits one hunk per class.
+        let raw = section(
+            "f.rs",
+            "@@ -1,0 +1,1 @@\n+// marker\n@@ -10,2 +11,2 @@\n-    let a = run(dir.path(), &[\"--patch\", patch]);\n-    let b = run(dir.path(), &[\"--patch\", \"\"]);\n+    let a = run_stdin(dir.path(), patch, &[]);\n+    let b = run_stdin(dir.path(), \"\", &[]);\n@@ -20,2 +22,2 @@\n-    let c = run(dir.path(), &[\"--patch\", patch, \"--check\"]);\n-    let d = run(dir.path(), &[\"--patch\", other, \"--check\"]);\n+    let c = run_stdin(dir.path(), patch, &[\"--check\"]);\n+    let d = run_stdin(dir.path(), other, &[\"--check\"]);\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    let c = run(dir.path(), &[\"--patch\", patch, \"--check\"]);\n    let d = run(dir.path(), &[\"--patch\", other, \"--check\"]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- run(D, &[\"--patch\", M])\n"), "got: {out}");
+        assert!(
+            out.contains("- run(D, &[\"--patch\", M, T0])\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("+ run_stdin(D, M, &[])\n"), "got: {out}");
+        assert!(out.contains("+ run_stdin(D, M, &[T0])\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 2, "got: {out}");
+        // The pure addition stays ordinary in place.
+        assert!(out.contains("+// marker"), "got: {out}");
+    }
+
+    #[test]
+    fn call_peel_body_verbatim_still_fires() {
+        // Composition pin: peel bodies are `@@ -1,1 @@` single-pattern
+        // hunks, so the later verbatim pass groups them at n=1 (skipped)
+        // and still compresses the remaining identical group.
+        let raw = section(
+            "f.rs",
+            "@@ -1,0 +1,1 @@\n+// marker\n@@ -10,2 +11,2 @@\n-    let a = run(dir.path(), &[\"--patch\", patch]);\n-    let b = run(dir.path(), &[\"--patch\", \"\"]);\n+    let a = run_stdin(dir.path(), patch, &[]);\n+    let b = run_stdin(dir.path(), \"\", &[]);\n@@ -20,2 +22,2 @@\n-    compute(some_long_state_value);\n-    compute(some_long_state_value);\n+    compute_fast(some_long_state_value);\n+    compute_fast(some_long_state_value);\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    compute(some_long_state_value);\n    compute(some_long_state_value);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("calls_run_to_run_stdin_peel\n"), "got: {out}");
+        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+        assert!(
+            out.contains("- compute(some_long_state_value)\n"),
+            "got: {out}"
+        );
     }
 
     #[test]

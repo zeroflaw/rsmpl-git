@@ -203,11 +203,12 @@ const CASES: &[Case] = &[
         commit: "05de4d15bdbe2e44ea2628c8d990ad2a2512e841",
         rev: None,
         root: false,
-        // T440 let-statement verbatim sweep: four identical complete-`let`
-        // migration groups (cli `&[]`, cli `--check`, cli `json`,
-        // stream `&[]`) compress to four literal hunks (--check green +
+        // T440 let-statement verbatim sweep + T441 peel sweep: the four
+        // identical complete-`let` groups keep one literal hunk (cli
+        // `json`); the hetero `run(D, &[--patch, M, T])` classes compress
+        // to four peel hunks (cli/stream j=0/j=1, --check green +
         // byte-identical round-trip).
-        expect_sem: 4,
+        expect_sem: 5,
     },
     // Root commit via the empty tree (3 new-file sections).
     Case {

@@ -5856,6 +5856,21 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   identical args, uniform arity, and one shared callee delta →
   one `# allow=many` hunk (`# expr E0…` per arity position;
   arity 0 needs no metavars).
+- Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
+  pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
+  `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
+  its shared string-literal head `H` while the tail replays
+  positionally into a new trailing slice (statement-level lines: `let`
+  inits and bare call-statements alike — the engine rewrites the call
+  sub-expression in place). One `# allow=many` hunk per shared
+  `(f, g, H, tail-length)` class (`# expr D` + `# expr M` +
+  `# expr T0…` per tail position; all-identical classes stay for the
+  tighter verbatim sweep). Pre-image totality keys on callee + exact
+  array length with the unescaped head (other arities/lengths never
+  match and never count). Cross-hunk classes compress non-whole
+  sections (pure additions elsewhere veto whole-section balance but
+  not this sweep); the emitted single-pattern bodies are invisible to
+  the later verbatim pass.
 - Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
   single-segment call whose first arg token-equals the receiver and

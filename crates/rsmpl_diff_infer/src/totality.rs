@@ -192,6 +192,78 @@ pub(crate) fn call_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// N-site array-head-peel totality (T441 slice 1): bare call `cal`
+/// with exactly 2 args where the second is `&[head, …]` (immutable
+/// ref-of-array, unescaped string head `head`, array length `len`)
+/// occurs exactly `n` times. The sweep replays the head-stripped tail
+/// positionally, so only the exact-length shape is matchable — other
+/// arities/lengths never match and never count.
+pub(crate) fn peel_holds(
+    file_old: Option<&str>,
+    cal: &str,
+    head: &str,
+    len: usize,
+    n: usize,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    struct P<'a> {
+        cal: &'a str,
+        head: &'a str,
+        len: usize,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for P<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.qself.is_none()
+                        && p.path.leading_colon.is_none()
+                        && p.path.segments.len() == 1
+                        && p.path.segments[0].ident == self.cal
+                        && matches!(p.path.segments[0].arguments, syn::PathArguments::None)
+                        && call.args.len() == 2
+                    {
+                        let mut args = call.args.iter();
+                        let _first = args.next();
+                        if let Some(syn::Expr::Reference(r)) = args.next() {
+                            if r.mutability.is_none() {
+                                if let syn::Expr::Array(arr) = r.expr.as_ref() {
+                                    if arr.elems.len() == self.len {
+                                        let mut elems = arr.elems.iter();
+                                        if let Some(syn::Expr::Lit(lit)) = elems.next() {
+                                            if let syn::Lit::Str(s) = &lit.lit {
+                                                if s.value() == self.head {
+                                                    self.count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut p = P {
+        cal,
+        head,
+        len,
+        count: 0,
+    };
+    p.visit_file(&file);
+    if p.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
 /// N-site method totality (m2f + m2m share the minus shape): `method`
 /// with `arity` args occurs exactly `minuses.len()` times. All receivers
 /// counted (incl `&`-wrapped — conservative).

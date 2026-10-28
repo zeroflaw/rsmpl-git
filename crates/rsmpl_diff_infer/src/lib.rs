@@ -1015,8 +1015,16 @@ pub(crate) fn compress_balanced_pair_body(
         semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(uses)
-    } else {
+    } else if let Some(call) =
         semantic::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        Some(call)
+    } else if let Some(call) =
+        semantic::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        Some(call)
+    } else {
+        semantic::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules)
     };
     match full {
         Some(f) => {

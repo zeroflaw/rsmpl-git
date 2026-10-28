@@ -880,6 +880,47 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "21-call-peel" {
+            assert!(
+                semantic.contains("rule=calls_run_to_run_stdin_peel"),
+                "peel sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- run(D, &[\"--patch\", M])"),
+                "j=0 peel minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ run_stdin(D, M, &[])"),
+                "j=0 peel plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- run(D, &[\"--patch\", M, T0])"),
+                "j=1 peel minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ run_stdin(D, M, &[T0])"),
+                "j=1 peel plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    let a = run(dir, &[\"--patch\", patch]);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    let d = run_stdin(dir, patch, &[\"--check\"]);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains(
+                    "-    let f = run(dir, &[\"--patch\", patch, \"--format\", \"json\"]);"
+                ),
+                "singleton j=2 site must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
