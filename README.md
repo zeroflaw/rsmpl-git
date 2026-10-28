@@ -159,6 +159,8 @@ context would be larger, so these are lower bounds.)
 |---|---|---|---|
 | 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 111 B / 7 ln | 73% |
 | 02-ordinary-edit (1 line, stays ordinary) | 89 B / 6 ln | 72 B / 6 ln | 19% |
+| 03-move (same-file reorder, cut+paste) | 1857 B / 89 ln | 128 B / 10 ln | 93% |
+| 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 548 B / 25 ln | 46% |
 
 Fan-out edits save 50–90%. Single-ident edits are size-parity — the payoff
 there is semantic safety (slot-exact matching, attrs preserved,

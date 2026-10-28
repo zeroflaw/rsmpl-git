@@ -1,0 +1,10 @@
+diff --git a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -2,42 @@ rule=move_aaa
+# item I
+# bind=M1
+- I
+@@ -85,0 @@ rule=paste_aaa
+# use=M1
++ M1

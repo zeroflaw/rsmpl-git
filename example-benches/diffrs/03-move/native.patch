@@ -1,0 +1,89 @@
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -2,42 +1,0 @@ fn keep() {}
+-fn aaa() {
+-    let aaa_0 = 0;
+-    let aaa_1 = 1;
+-    let aaa_2 = 2;
+-    let aaa_3 = 3;
+-    let aaa_4 = 4;
+-    let aaa_5 = 5;
+-    let aaa_6 = 6;
+-    let aaa_7 = 7;
+-    let aaa_8 = 8;
+-    let aaa_9 = 9;
+-    let aaa_10 = 10;
+-    let aaa_11 = 11;
+-    let aaa_12 = 12;
+-    let aaa_13 = 13;
+-    let aaa_14 = 14;
+-    let aaa_15 = 15;
+-    let aaa_16 = 16;
+-    let aaa_17 = 17;
+-    let aaa_18 = 18;
+-    let aaa_19 = 19;
+-    let aaa_20 = 20;
+-    let aaa_21 = 21;
+-    let aaa_22 = 22;
+-    let aaa_23 = 23;
+-    let aaa_24 = 24;
+-    let aaa_25 = 25;
+-    let aaa_26 = 26;
+-    let aaa_27 = 27;
+-    let aaa_28 = 28;
+-    let aaa_29 = 29;
+-    let aaa_30 = 30;
+-    let aaa_31 = 31;
+-    let aaa_32 = 32;
+-    let aaa_33 = 33;
+-    let aaa_34 = 34;
+-    let aaa_35 = 35;
+-    let aaa_36 = 36;
+-    let aaa_37 = 37;
+-    let aaa_38 = 38;
+-    let aaa_39 = 39;
+-}
+@@ -85,0 +44,42 @@ fn bbb() {
++fn aaa() {
++    let aaa_0 = 0;
++    let aaa_1 = 1;
++    let aaa_2 = 2;
++    let aaa_3 = 3;
++    let aaa_4 = 4;
++    let aaa_5 = 5;
++    let aaa_6 = 6;
++    let aaa_7 = 7;
++    let aaa_8 = 8;
++    let aaa_9 = 9;
++    let aaa_10 = 10;
++    let aaa_11 = 11;
++    let aaa_12 = 12;
++    let aaa_13 = 13;
++    let aaa_14 = 14;
++    let aaa_15 = 15;
++    let aaa_16 = 16;
++    let aaa_17 = 17;
++    let aaa_18 = 18;
++    let aaa_19 = 19;
++    let aaa_20 = 20;
++    let aaa_21 = 21;
++    let aaa_22 = 22;
++    let aaa_23 = 23;
++    let aaa_24 = 24;
++    let aaa_25 = 25;
++    let aaa_26 = 26;
++    let aaa_27 = 27;
++    let aaa_28 = 28;
++    let aaa_29 = 29;
++    let aaa_30 = 30;
++    let aaa_31 = 31;
++    let aaa_32 = 32;
++    let aaa_33 = 33;
++    let aaa_34 = 34;
++    let aaa_35 = 35;
++    let aaa_36 = 36;
++    let aaa_37 = 37;
++    let aaa_38 = 38;
++    let aaa_39 = 39;
++}

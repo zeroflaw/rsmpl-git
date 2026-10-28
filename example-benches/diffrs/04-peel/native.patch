@@ -1,0 +1,22 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -7,0 +8,3 @@ fn run_stdin(dir: &Path, patch: &str, extra: &[&str]) -> String {
++fn helper() -> String {
++    String::new()
++}
+@@ -9,3 +12,3 @@ fn m(dir: &Path, base: &Path, patch: &str) {
+-    let a = run(dir, &["--patch", patch]);
+-    let b = run(base, &["--patch", ""]);
+-    let c = run(dir, &["--patch", rename_patch()]);
++    let a = run_stdin(dir, patch, &[]);
++    let b = run_stdin(base, "", &[]);
++    let c = run_stdin(dir, rename_patch(), &[]);
+@@ -13,2 +16,2 @@ fn m(dir: &Path, base: &Path, patch: &str) {
+-    let d = run(dir, &["--patch", patch, "--check"]);
+-    let e = run(base, &["--patch", rename_patch(), "--check"]);
++    let d = run_stdin(dir, patch, &["--check"]);
++    let e = run_stdin(base, rename_patch(), &["--check"]);
+@@ -16 +19 @@ fn m(dir: &Path, base: &Path, patch: &str) {
+-    let f = run(dir, &["--patch", patch, "--format", "json"]);
++    let f = run_stdin(dir, patch, &["--format", "json"]);

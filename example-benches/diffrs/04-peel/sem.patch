@@ -1,0 +1,25 @@
+diff --git src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -7,0 +8,3 @@
++fn helper() -> String {
++    String::new()
++}
+@@ -1,1 @@ rule=calls_run_to_run_stdin_peel
+# allow=many
+# scope=file
+# expr D
+# expr M
+- run(D, &["--patch", M])
++ run_stdin(D, M, &[])
+@@ -1,1 @@ rule=calls_run_to_run_stdin_peel_2
+# allow=many
+# scope=file
+# expr D
+# expr M
+# expr T0
+- run(D, &["--patch", M, T0])
++ run_stdin(D, M, &[T0])
+@@ -16 +19 @@
+-    let f = run(dir, &["--patch", patch, "--format", "json"]);
++    let f = run_stdin(dir, patch, &["--format", "json"]);
