@@ -745,6 +745,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "16-use-prefix" {
+            assert!(
+                semantic.contains("rule=use_old_to_new"),
+                "use-prefix sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- use crate::old"),
+                "use-prefix minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ use crate::new"),
+                "use-prefix plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-use crate::old::Thing;"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+use crate::new::Thing;"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
