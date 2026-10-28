@@ -4635,7 +4635,8 @@ empty files, no hunks): an empty create is created, an empty delete
 is removed (T364 -- the old `None` silently dropped both). A pure
 mode change (content equal, `old mode`/`new mode` differ) lowers as
 a headers-only flip section; mode lines also ride along content
-changes, spliced after the `diff --git` header. A declared `100755`
+changes, spliced after the `diff --git` header (the splice keeps body
+bytes exact -- CRLF `\r` survives, T402). A declared `100755`
 (untracked executables, unix) is honored like `120000`.
 Emitted `diff --git`/`---`/`+++`/`rename from/to` slots C-quote paths
 holding control characters, `"` or `\` (bare git cannot parse them

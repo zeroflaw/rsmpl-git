@@ -154,18 +154,18 @@ pub fn with_mode_lines(section: &str, old_mode: &str, new_mode: &str) -> String 
     if old_mode == new_mode {
         return section.to_string();
     }
-    let mut out = String::new();
-    let mut lines = section.lines();
-    if let Some(first) = lines.next() {
-        out.push_str(first);
-        out.push('\n');
+    // T402: splice after the first `\n` without re-splitting the
+    // body. `str::lines` strips a trailing `\r` from every line,
+    // which silently corrupted CRLF content on real-apply (bare
+    // git preserves it). Byte-identical for LF inputs.
+    match section.find('\n') {
+        Some(i) => format!(
+            "{}old mode {old_mode}\nnew mode {new_mode}\n{}",
+            &section[..=i],
+            &section[i + 1..]
+        ),
+        None => format!("{section}\nold mode {old_mode}\nnew mode {new_mode}\n"),
     }
-    out.push_str(&format!("old mode {old_mode}\nnew mode {new_mode}\n"));
-    for line in lines {
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 /// Build a `diff --git` section for a file rename (`old_rel` -> `new_rel`).
@@ -565,5 +565,19 @@ mod tests {
         assert!(!pair[0].contains("@@"), "got: {}", pair[0]);
         assert!(pair[1].contains("new file mode 120000"), "got: {}", pair[1]);
         assert!(!pair[1].contains("@@"), "got: {}", pair[1]);
+    }
+
+    #[test]
+    fn with_mode_lines_preserves_cr_byte_exact() {
+        // T402: mode+content over CRLF must keep the `\r`
+        // byte-exact (bare git preserves it; the old
+        // `lines()`-based splice silently stripped it,
+        // corrupting real-apply while `--check` stayed green).
+        let section = unified_diff_for_file_with_context("f", "a\n", "b\r\n", 0).unwrap();
+        assert!(section.contains("+b\r\n"), "got: {section:?}");
+        let d = with_mode_lines(&section, "100644", "100755");
+        assert!(d.contains("+b\r\n"), "got: {d:?}");
+        assert!(d.contains("old mode 100644"), "got: {d:?}");
+        assert!(d.contains("new mode 100755"), "got: {d:?}");
     }
 }

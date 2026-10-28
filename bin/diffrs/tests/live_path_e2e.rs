@@ -904,3 +904,76 @@ fn staged_chmod_sweep_round_trips_mode_exact() {
         "exec-bit flip must survive"
     );
 }
+
+// T402: mode+content over CRLF silently lost the `\r` on
+// real-apply (the lowering spliced mode lines via `str::lines`,
+// which strips trailing `\r`; bare git preserves it, and
+// `--check` stayed green). Staged cell: convert + `--check` +
+// real-apply byte-exact, exec-bit delta (never absolute —
+// `git apply` ORs exec bits onto the worktree mode, s24 rule).
+#[test]
+#[cfg(unix)]
+fn staged_mode_flip_with_crlf_content_round_trips_byte_exact() {
+    use std::os::unix::fs::PermissionsExt;
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    std::fs::write(dir.path().join("lib.rs"), b"fn a() {}\nfn b() {}\n").unwrap();
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("lib.rs"), b"fn a() {}\r\nfn c() {}\r\n").unwrap();
+    std::fs::set_permissions(
+        dir.path().join("lib.rs"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "lib.rs"]);
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("old mode 100644"), "got: {patch}");
+    assert!(patch.contains("new mode 100755"), "got: {patch}");
+    assert!(
+        patch.contains('\r'),
+        "CRLF must survive conversion, got: {patch:?}"
+    );
+    assert!(!patch.contains("rule="), "got: {patch}");
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let bare = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        bare.status.success(),
+        "bare git apply --check failed: {}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("lib.rs")).unwrap(),
+        b"fn a() {}\r\nfn c() {}\r\n"
+    );
+    assert_ne!(
+        std::fs::metadata(dir.path().join("lib.rs"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0,
+        "exec-bit flip must survive"
+    );
+}
