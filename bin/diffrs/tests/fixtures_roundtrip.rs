@@ -456,6 +456,44 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "09-move-dedup" {
+            assert!(
+                semantic.contains("rule=move_big"),
+                "dedup move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big"),
+                "dedup move must paste, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=move_big\n").count(),
+                1,
+                "first claim wins, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=paste_big\n").count(),
+                1,
+                "single paste, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("+ M1\n").count(),
+                1,
+                "single paste shares the bind once, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-fn big() {"),
+                "losing twin stays ordinary, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn big("),
+                "plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
