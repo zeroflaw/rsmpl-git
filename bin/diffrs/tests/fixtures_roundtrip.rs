@@ -625,6 +625,45 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "12-move-interior-blanks" {
+            assert!(
+                semantic.contains("rule=move_big"),
+                "interior-blank move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=move_spaced"),
+                "interior-blank second item must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big"),
+                "interior-blank move must paste, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_spaced"),
+                "interior-blank second paste must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn big("),
+                "moved lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn big("),
+                "moved lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn spaced("),
+                "interior-blank lines must ride the cut, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn spaced("),
+                "interior-blank lines must ride the paste, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
