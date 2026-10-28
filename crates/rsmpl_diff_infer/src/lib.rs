@@ -373,14 +373,21 @@ struct VerbatimGroup {
 /// balanced single-line (minus, plus) pairs shared across a section's
 /// hunks compress to one `# allow=many` + `# scope=file` hunk each,
 /// with literal pattern lines and no metavars (the T363 use-prefix
-/// precedent; probe-verified against `applyrs --check`). Runs after
+/// precedent; probe-verified against `applyrs --check`). Whole-line
+/// pairs are expressions; single-line complete `let` statements take
+/// the `let` path below (T440 — the engine `Stmt` shape matches
+/// concrete lets structurally, so `let out = run(..)` migrations
+/// compress exactly like expression rewrites). Runs after
 /// the whole-section detectors fail and before the per-hunk fallback,
 /// so sections whose pure additions veto whole-section balance (e.g.
 /// 50d4a49's `+ let parsed = …` lines around eleven `&state.parsed,`
 /// → `parsed,` pairs) still compress their runs. Gates favor
-/// precision: both sides strip one terminator and parse as `syn::Expr`
-/// (for-loop headers, `let`s, struct-field labels and literal-only
-/// deltas stay ordinary); the minus side is structural — bare idents
+/// precision: expression pairs strip one terminator and parse as
+/// `syn::Expr` (for-loop headers, struct-field labels and literal-only
+/// deltas stay ordinary); single-line complete `let` statements take
+/// the `let` path (`verbatim_let_shape` — multi-line fragments like
+/// b849869's `let lenient =` never parse as `Stmt` and stay ordinary);
+/// the minus side is structural — bare idents
 /// (`wide`) and literals would match every mention; the stripped minus
 /// occurs exactly group-size times across all old-side section lines (an
 /// unchanged `foo(&state.parsed)`-style site would otherwise be
@@ -448,39 +455,65 @@ pub(crate) fn try_verbatim_sweep(
         if *n < 2 || m == p {
             continue;
         }
-        let (Some(ms), Some(ps)) = (
+        // Resolve the emission pair per shape (T440): expression pairs
+        // emit the terminator-stripped lines; complete single-line
+        // `let` statements emit the full `;`-terminated lines (the
+        // engine `Stmt` shape parses `let` with its semicolon).
+        let (Some(stripped_m), Some(stripped_p)) = (
             semantic::strip_one_terminator(m),
             semantic::strip_one_terminator(p),
         ) else {
             continue;
         };
-        let (ms, ps) = match (
-            syn::parse_str::<syn::Expr>(ms),
-            syn::parse_str::<syn::Expr>(ps),
-        ) {
-            (Ok(_), Ok(_)) => (ms, ps),
+        // (emission minus, emission plus, uniqueness needle, is-let).
+        // A `let` scrutinee parses as `syn::Expr::Let`, so the Expr arm
+        // below must decline `Let` on either side first — complete
+        // single-line `let` statements take the T440 `Stmt` path, and
+        // the Expr `lets > 0` probe would otherwise veto them here.
+        let parsed = (
+            syn::parse_str::<syn::Expr>(stripped_m),
+            syn::parse_str::<syn::Expr>(stripped_p),
+        );
+        let resolved: Option<(String, String, String, bool)> = match parsed {
+            (Ok(ref a), Ok(ref b))
+                if !matches!(a, syn::Expr::Let(_)) && !matches!(b, syn::Expr::Let(_)) =>
+            {
+                Some((
+                    stripped_m.to_string(),
+                    stripped_p.to_string(),
+                    semantic::flat_ws(stripped_m),
+                    false,
+                ))
+            }
             // T416: struct-literal fields (`label: expr`) fail `Expr`
             // parse on the full line — sweep on the label-stripped inner
             // expression when both sides parse and labels match (the
             // engine visits field values as sub-expressions, c48a6e6).
             _ => match (
-                semantic::strip_field_label(ms),
-                semantic::strip_field_label(ps),
+                semantic::strip_field_label(stripped_m),
+                semantic::strip_field_label(stripped_p),
             ) {
-                (Some((ml, mi)), Some((pl, pi))) if ml == pl => (mi, pi),
-                _ => continue,
+                (Some((ml, mi)), Some((pl, pi))) if ml == pl => {
+                    Some((mi.to_string(), pi.to_string(), semantic::flat_ws(mi), false))
+                }
+                _ => verbatim_let_shape(m, p)
+                    .map(|()| (m.clone(), p.clone(), semantic::flat_ws(m), true)),
             },
         };
-        let minus_expr: syn::Expr = match syn::parse_str(ms) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let plus_expr: syn::Expr = match syn::parse_str(ps) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        if !verbatim_shape_ok(&minus_expr, &plus_expr) {
+        let Some((emit_minus, emit_plus, needle, is_let)) = resolved else {
             continue;
+        };
+        if !is_let {
+            let (minus_expr, plus_expr) = match (
+                syn::parse_str::<syn::Expr>(&emit_minus),
+                syn::parse_str::<syn::Expr>(&emit_plus),
+            ) {
+                (Ok(a), Ok(b)) => (a, b),
+                _ => continue,
+            };
+            if !verbatim_shape_ok(&minus_expr, &plus_expr) {
+                continue;
+            }
         }
         // Section-visible uniqueness, legacy path only (no pre-image):
         // the stripped minus occurs exactly once per own pair across
@@ -489,7 +522,6 @@ pub(crate) fn try_verbatim_sweep(
         // matching false-positives on `&s.p` inside `&s.p.items` —
         // probe-verified a different subterm the engine leaves alone).
         if old_file.is_none() {
-            let needle = semantic::flat_ws(ms);
             let total: usize = old_lines
                 .iter()
                 .map(|l| semantic::count_occurrences(&semantic::flat_ws(l), &needle))
@@ -506,6 +538,9 @@ pub(crate) fn try_verbatim_sweep(
         // round-trip untouched). Syntactic, not textual: `&s.p` inside
         // `&s.p.items` is a different subterm (probe-verified: the
         // `.items` site is left alone while bare sites rewrite).
+        // `let` groups (T440) count whole statements instead: a parsed
+        // `let` cannot hide inside a macro body (opaque tokens) or a
+        // string literal, so no line-aware veto is needed.
         if let Some(Some(old)) = &old_file {
             // Changed lines of the hunks holding this group's pairs.
             let mut group_changed: Vec<usize> = Vec::new();
@@ -518,15 +553,23 @@ pub(crate) fn try_verbatim_sweep(
                     }
                 }
             }
-            if !totality_holds(old, &minus_expr, *n, &group_changed) {
+            let holds = if is_let {
+                totality_holds_local(old, &needle, *n)
+            } else {
+                match syn::parse_str::<syn::Expr>(&emit_minus) {
+                    Ok(minus_expr) => totality_holds(old, &minus_expr, *n, &group_changed),
+                    Err(_) => false,
+                }
+            };
+            if !holds {
                 continue;
             }
         }
         passing.push(VerbatimGroup {
             minus_trim: m.clone(),
             plus_trim: p.clone(),
-            minus: ms.to_string(),
-            plus: ps.to_string(),
+            minus: emit_minus,
+            plus: emit_plus,
             rule: semantic::unique_rule(used_rules, "verbatim"),
         });
     }
@@ -656,8 +699,10 @@ fn split_verbatim_hunks(section: &str) -> (String, Vec<String>) {
 
 /// Engine-capability gates for one verbatim pair (T403): both sides
 /// strip to expressions the engine can match and construct. Rejects
-/// `let` scrutinees (syn parses `let` as `Expr::Let`, but the engine
-/// has no concrete-let shape — 05de4d1/b849869 failed loud), macro
+/// `let` scrutinees (they fail `Expr` parse — complete single-line
+/// `let` statements take the T440 `Stmt` path in the caller instead;
+/// multi-line fragments like b849869's `let lenient =` never parse
+/// and stay ordinary), macro
 /// invocations anywhere on either side (plain patterns never enter
 /// macro bodies, SPEC 21 — 33a8cbb failed loud), bare-ident and
 /// literal minus sides (they would match every mention), and
@@ -772,6 +817,98 @@ fn is_general_supported(e: &syn::Expr) -> bool {
             | syn::Expr::Try(_)
             | syn::Expr::Return(_)
     )
+}
+
+/// Complete-`let` pair gate (T440): both trimmed lines parse as
+/// `syn::Stmt::Local` (a successful `Stmt` parse already implies the
+/// semicolon — syn 2 types it as a plain `Semi`) with no `let-else`
+/// diverge (the engine never moves into let-else targets), and init
+/// presence agrees (engine `(Some, None)` never matches). Init
+/// expressions satisfy the expression shape gates: no macros/lets/
+/// closures and no unsupported nodes on either side (the `Stmt` path
+/// matches inits via structural `match_expr`, never the call router,
+/// so there is no Call/MethodCall top-level exception). Multi-line
+/// fragments (`let lenient =` with no init/semicolon — the b849869
+/// "failed loud") never parse as `Stmt` and stay ordinary. The whole
+/// statement is the pattern, so no bare-ident/literal minus veto
+/// applies (unlike expressions, a `let` statement is always precise).
+fn verbatim_let_shape(m: &str, p: &str) -> Option<()> {
+    let (minus, plus) = match (
+        syn::parse_str::<syn::Stmt>(m),
+        syn::parse_str::<syn::Stmt>(p),
+    ) {
+        (Ok(syn::Stmt::Local(a)), Ok(syn::Stmt::Local(b))) => (a, b),
+        _ => return None,
+    };
+    match (&minus.init, &plus.init) {
+        (Some(a), Some(b)) => {
+            if a.diverge.is_some() || b.diverge.is_some() {
+                return None;
+            }
+            if !verbatim_init_ok(&a.expr, &b.expr) {
+                return None;
+            }
+        }
+        (None, None) => {}
+        _ => return None,
+    }
+    Some(())
+}
+
+/// Init-expression gates for the `let` path (T440): mirrors
+/// `verbatim_shape_ok` minus/plus rules — the engine `match_expr`
+/// rejects macros, lets, closures and unsupported nodes with
+/// `_ => false`, so a pattern containing them matches nothing and
+/// the sweep would fail loud.
+fn verbatim_init_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
+    let mut m = ShapeProbe::default();
+    m.visit_expr(minus);
+    if m.macros > 0 || m.lets > 0 || m.closures > 0 || m.unsupported > 0 {
+        return false;
+    }
+    // The try+closure combination matches nothing (a2fc9b3 precedent).
+    if m.trys > 0 && m.closures > 0 {
+        return false;
+    }
+    let mut p = ShapeProbe::default();
+    p.visit_expr(plus);
+    if p.macros > 0 || p.lets > 0 || p.closures > 0 || p.unsupported > 0 {
+        return false;
+    }
+    if p.trys > 0 && p.closures > 0 {
+        return false;
+    }
+    true
+}
+
+/// Statement totality (T440 soundness): the needle (flat-ws full
+/// `let` line) occurs as a `Stmt::Local` exactly `n` times in the
+/// pre-image file. No line-aware opaque veto: a parsed statement
+/// cannot hide inside a macro body (opaque tokens the engine never
+/// enters either) or a string literal, so statement counting is
+/// exactly the engine's match domain.
+fn totality_holds_local(old: &syn::File, needle_norm: &str, n: usize) -> bool {
+    struct LocalScan<'a> {
+        needle: &'a str,
+        count: usize,
+    }
+    impl<'ast, 'a> syn::visit::Visit<'ast> for LocalScan<'a> {
+        fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
+            if let syn::Stmt::Local(local) = node {
+                use quote::ToTokens as _;
+                if semantic::flat_ws(&local.to_token_stream().to_string()) == self.needle {
+                    self.count += 1;
+                }
+            }
+            syn::visit::visit_stmt(self, node);
+        }
+    }
+    let mut scan = LocalScan {
+        needle: needle_norm,
+        count: 0,
+    };
+    scan.visit_file(old);
+    scan.count == n
 }
 
 /// Subterm totality (T403 soundness), line-aware on opaque text (T411):
@@ -1307,12 +1444,30 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_sweep_let_statements_stay_passthrough() {
-        // 05de4d1 shape: syn parses `let` scrutinees as `Expr::Let`,
-        // but the engine has no concrete-let shape (loud MATCH_CONFLICT).
+    fn verbatim_sweep_let_statements_compress() {
+        // T440 (flips the old 05de4d1 veto): `let` scrutinees parse as
+        // `Expr::Let`, but complete single-line `let` statements take
+        // the `Stmt` path — the engine matches concrete lets
+        // structurally (probe-verified `applyrs --check` clean), so the
+        // identical pair compresses.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n@@ -9,1 +10,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("- let out = run(a);\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+ let out = run2(a);\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim let hunk must parse");
     }
     #[test]
     fn verbatim_sweep_macro_minus_stays_passthrough() {
@@ -1553,5 +1708,125 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_let_sweep_fires_across_hunks() {
+        // T440 miniature of the 05de4d1 shape: two identical complete
+        // `let` migration statements split by a pure addition (which
+        // vetoes whole-section balance) compress to one literal hunk
+        // with the `;`-terminated lines; the addition stays ordinary.
+        // The engine `Stmt` shape matches concrete lets structurally
+        // (probe-verified `applyrs --check` clean).
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let out = run(dir.path(), &[\"--patch\", patch]);\n+    let out = run_stdin(dir.path(), patch, &[]);\n@@ -9,1 +10,1 @@\n-    let out = run(dir.path(), &[\"--patch\", patch]);\n+    let out = run_stdin(dir.path(), patch, &[]);\n@@ -20,0 +21,1 @@\n+let cached = state.parsed;\n";
+        let pre = "fn f() {\n    let out = run(dir.path(), &[\"--patch\", patch]);\n    let out = run(dir.path(), &[\"--patch\", patch]);\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl
+                .contains("- let out = run(dir.path(), &[\"--patch\", patch]);\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl
+                .contains("+ let out = run_stdin(dir.path(), patch, &[]);\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+let cached = state.parsed;\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert_eq!(
+            out.rsmpl.matches("@@ -1,1 @@").count(),
+            1,
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim let hunk must parse");
+    }
+    #[test]
+    fn verbatim_let_sweep_twin_vetoes() {
+        // T440 soundness: an unchanged twin of the minus `let` in the
+        // pre-image breaks statement totality, so the group stays
+        // ordinary — without this veto the sweep would rewrite the twin.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let out = run_old(dir.path());\n+    let out = run_new(dir.path());\n@@ -9,1 +10,1 @@\n-    let out = run_old(dir.path());\n+    let out = run_new(dir.path());\n";
+        let pre = "fn f() {\n    let out = run_old(dir.path());\n    let out = run_old(dir.path());\n    let out = run_old(dir.path());\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_let_multiline_fragment_stays_passthrough() {
+        // T440 boundary (b849869 "failed loud" negative pin): a `let`
+        // declarator line without init/semicolon never parses as `Stmt`
+        // (the engine has no fragment shape), so the pair stays ordinary.
+        // Continuation lines differ per site (n=1 each) so no expression
+        // group fires either — the hunk is genuinely uncovered.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,2 +2,2 @@\n-    let lenient =\n-        run(dir.path(), patch, &[\"--check\"]);\n+    let mismatched =\n+        run_stdin(dir.path(), patch, &[\"--check\"]);\n@@ -9,2 +10,2 @@\n-    let lenient =\n-        run(dir.path(), other, &[\"--check\"]);\n+    let mismatched =\n+        run_stdin(dir.path(), other, &[\"--check\"]);\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_let_else_stays_passthrough() {
+        // T440 boundary: `let-else` diverges — the engine never moves into
+        // let-else targets, so the pair stays ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let Some(x) = opt_old() else { return; };\n+    let Some(x) = opt_new() else { return; };\n@@ -9,1 +10,1 @@\n-    let Some(x) = opt_old() else { return; };\n+    let Some(x) = opt_new() else { return; };\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_let_macro_init_stays_passthrough() {
+        // T440 boundary: a macro invocation in the init matches nothing
+        // (the engine never enters macro bodies), so the pair stays
+        // ordinary rather than failing loud.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let v = vec_old!(1, 2, 3);\n+    let v = vec_new!(1, 2, 3);\n@@ -9,1 +10,1 @@\n-    let v = vec_old!(1, 2, 3);\n+    let v = vec_new!(1, 2, 3);\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_let_init_mismatch_stays_passthrough() {
+        // T440 boundary: init-less `let z;` vs initialized `let z = 1;`
+        // never matches in the engine (`(Some, None) => false`), so the
+        // pair stays ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let z;\n+    let z = 1;\n@@ -9,1 +10,1 @@\n-    let z;\n+    let z = 1;\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_let_initless_pair_compresses() {
+        // T440 gate symmetry: init-less on both sides matches in the
+        // engine (`(None, None) => true`, probe-verified `applyrs
+        // --check` clean), so the identical pair compresses when the
+        // byte-guard clears.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let pending_watcher_item;\n+    let active_watcher_item;\n@@ -9,1 +10,1 @@\n-    let pending_watcher_item;\n+    let active_watcher_item;\n";
+        let pre = "fn f() {\n    let pending_watcher_item;\n    let pending_watcher_item;\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("- let pending_watcher_item;\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+ let active_watcher_item;\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim let hunk must parse");
     }
 }

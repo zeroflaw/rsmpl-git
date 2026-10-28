@@ -125,9 +125,10 @@ const CASES: &[Case] = &[
     // T403 verbatim sweep pins: 50d4a49 (`&state.parsed,` x11 -> `parsed,`)
     // and 3e0b9bc (`cur.push(c)` x2 -> `push_str_byte(&mut cur, c)`) compress
     // to one literal hunk each; 712ad9d (extra `&cand.body_text` guard
-    // occurrence), 33a8cbb (macro interior), a2fc9b3 (`?` over closure) and
-    // 05de4d1 (`let` statements) stay ordinary by design — totality and
-    // shape gates with live corpus evidence.
+    // occurrence), 33a8cbb (macro interior) and a2fc9b3 (`?` over closure)
+    // stay ordinary by design — totality and shape gates with live corpus
+    // evidence. T440: 05de4d1's identical complete `let` migrations compress
+    // (engine `Stmt` shape, statement totality; the `""` twin stays ordinary).
     Case {
         commit: "50d4a498d3e88c3d4f70c0e809106af993bd8cdf",
         rev: None,
@@ -202,9 +203,11 @@ const CASES: &[Case] = &[
         commit: "05de4d15bdbe2e44ea2628c8d990ad2a2512e841",
         rev: None,
         root: false,
-        // T403 let gate: hetero-arg `let` sweeps need engine
-        // arg-restructuring (T404) — stays ordinary.
-        expect_sem: 0,
+        // T440 let-statement verbatim sweep: four identical complete-`let`
+        // migration groups (cli `&[]`, cli `--check`, cli `json`,
+        // stream `&[]`) compress to four literal hunks (--check green +
+        // byte-identical round-trip).
+        expect_sem: 4,
     },
     // Root commit via the empty tree (3 new-file sections).
     Case {

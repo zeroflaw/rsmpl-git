@@ -5929,8 +5929,12 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   additions elsewhere veto whole-section balance but not this sweep)
   compress to one `# allow=many` hunk per group, with literal pattern
   lines and no metavars. Both sides strip one terminator and parse as
-  `syn::Expr`; `let` scrutinees, macro invocations on either side
-  (SPEC 21), bare-ident/literal minus sides, and `?`-applied calls
+  `syn::Expr`; complete single-line `let` statements (T440) parse as
+  `syn::Stmt::Local` and sweep on the full `;`-terminated lines (engine
+  `Stmt` shape; multi-line fragments never parse and stay ordinary).
+  Macro invocations on either side (SPEC 21), bare-ident/literal minus
+  sides (expressions only — a whole-statement `let` pattern is always
+  precise), and `?`-applied calls
   wrapping a closure (minus side), and top-level Unary on either side
   are rejected — each failed loud in-corpus (top-level Unary matches since
   T415: leading `!` skips the macro pre-route and leading `!`/`-` bypasses
@@ -5950,6 +5954,10 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   group-size times, with zero occurrences inside opaque text (macro
   bodies, string interiors — the engine never matches there; line-aware
   (T411): a hit vetoes only when its span covers a changed old-side line).
+  `let` groups count whole statements instead (T440): the full line must
+  occur as a `Stmt::Local` exactly group-size times — parsed statements
+  cannot hide inside macro bodies or string literals, so no line-aware
+  veto applies.
   Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
   subterm and does not veto (probe-verified). Leftover balanced hunks
   retry the standard chain in place; the T375 guard applies to the

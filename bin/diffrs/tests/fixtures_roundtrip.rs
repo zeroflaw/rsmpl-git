@@ -853,6 +853,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "20-let-sweep" {
+            assert!(
+                semantic.contains("rule=verbatim"),
+                "let-statement verbatim sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- let out = run(dir.path(), &[\"--patch\", patch]);"),
+                "let minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ let out = run_stdin(dir.path(), patch, &[]);"),
+                "let plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    let out = run(dir.path(), &[\"--patch\", patch]);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    let out = run_stdin(dir.path(), patch, &[]);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
