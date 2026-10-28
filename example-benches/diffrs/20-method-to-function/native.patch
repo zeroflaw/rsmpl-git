@@ -1,0 +1,10 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,3 +2,3 @@ fn m() {
+-    a.old_method(1);
+-    b.old_method(2);
+-    c.old_method(3);
++    new_function(a, 1);
++    new_function(b, 2);
++    new_function(c, 3);

@@ -65,6 +65,8 @@ machine-checked counts in the JSON report) at ~zero token premium.
 | 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 415 B / 16 ln | 24% |
 | 17-macro-veto (6 sites, macro gates stay ordinary) | 1208 B / 24 ln | 1040 B / 24 ln | 14% |
 | 18-macro-invocation-veto (2 sites + pure addition, stays ordinary) | 378 B / 14 ln | 308 B / 14 ln | 19% |
+| 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 129 B / 7 ln | 70% |
+| 20-method-to-function (3 sites, method-to-function sweep) | 237 B / 10 ln | 178 B / 8 ln | 25% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end
