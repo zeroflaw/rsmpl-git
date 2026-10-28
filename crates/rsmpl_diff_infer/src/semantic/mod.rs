@@ -904,13 +904,27 @@ fn is_rename_header(header: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn section(path: &str, body: &str) -> String {
         format!("diff --git a/{path} b/{path}\n{body}")
     }
 
-    fn validated(patch: &str) {
-        rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
     }
 
     #[test]
@@ -935,8 +949,12 @@ mod tests {
         // `.rs` section silently never compressed. Shared splitter
         // recovers the proven-winner shape.
         let raw = "diff --git a/my file.rs b/my file.rs\n--- a/my file.rs\n+++ b/my file.rs\n@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n";
+        let pre = pre_map(&[(
+            "my file.rs",
+            "fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n1\n}\n",
+        )]);
         let out = infer_semantic(&[raw.to_string()]).expect("must compress");
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("diff --git my file.rs\n"), "got: {out}");
         assert!(!out.contains("diff --git a/"), "got: {out}");
         assert!(out.contains("- fn foo(...) {"), "got: {out}");
@@ -951,8 +969,12 @@ mod tests {
             "f.rs",
             "@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n1\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- fn foo(...) {"), "got: {out}");
         assert!(out.contains("+ fn bar(...) {"), "got: {out}");
         assert!(out.contains("# scope=file"), "got: {out}");
@@ -1018,8 +1040,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n-    foo(3);\n+    bar(1);\n+    bar(2);\n+    bar(3);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    foo(1);\n    foo(2);\n    foo(3);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+ bar(E0)\n"), "got: {out}");
@@ -1033,8 +1059,9 @@ mod tests {
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    foo();\n-    foo();\n+    bar();\n+    bar();\n }\n",
         );
+        let pre = pre_map(&[("f.rs", "fn m() {\n    foo();\n    foo();\n}\n")]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- foo()\n"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
     }
@@ -1045,8 +1072,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    old_function(first, second);\n-    old_function(third, fourth);\n-    old_function(fifth, sixth);\n+    new_function(first, second);\n+    new_function(third, fourth);\n+    new_function(fifth, sixth);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    old_function(first, second);\n    old_function(third, fourth);\n    old_function(fifth, sixth);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- old_function(E0, E1)\n"), "got: {out}");
         assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
     }
@@ -1057,8 +1088,12 @@ mod tests {
             "f.rs",
             "@@ -1,2 +1,2 @@\n-    old_function(first_argument);\n+    new_function(first_argument);\n@@ -9,2 +9,2 @@\n-    old_function(second_argument);\n+    new_function(second_argument);\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    old_function(first_argument);\n    old_function(second_argument);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
@@ -1128,8 +1163,12 @@ mod tests {
             "f.rs",
             "@@ -1,4 +1,4 @@\n-fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n-async fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n+fn new_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n+async fn new_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n    1\n}\nasync fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n    2\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# visibility V\n"), "got: {out}");
         assert!(out.contains("# qualifier_list Q\n"), "got: {out}");
         assert!(
@@ -1164,8 +1203,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n impl T {\n-    fn old_method_name(&self, first_argument: FirstLongType) {\n-    pub fn old_method_name(&self, first_argument: FirstLongType) {\n+    fn new_method_name(&self, first_argument: FirstLongType) {\n+    pub fn new_method_name(&self, first_argument: FirstLongType) {\n     }\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "impl T {\n    fn old_method_name(&self, first_argument: FirstLongType) {\n        1\n    }\n    pub fn old_method_name(&self, first_argument: FirstLongType) {\n        2\n    }\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("impl Svc {\n"), "got: {out}");
         assert!(
             out.contains("-     V Q fn old_method_name G (...) W {\n"),
@@ -1225,8 +1268,12 @@ mod tests {
             "b.rs",
             "@@ -1,4 +1,4 @@\n-    old_function(argument1);\n-    old_function(argument2);\n-    old_function(argument3);\n+    new_function(argument1);\n+    new_function(argument2);\n+    new_function(argument3);\n",
         );
+        let pre = pre_map(&[
+            ("a.rs", "fn m() {\n    old_function(argument1);\n    old_function(argument2);\n    old_function(argument3);\n}\n"),
+            ("b.rs", "fn m() {\n    old_function(argument1);\n    old_function(argument2);\n    old_function(argument3);\n}\n"),
+        ]);
         let out = infer_semantic(&[a, b]).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(
             out.contains("rule=calls_old_function_to_new_function\n"),
             "got: {out}"
@@ -1247,8 +1294,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    foo(argument1);\n-    foo(argument2);\n-    foo(argument3);\n+    bar(argument1);\n+    bar(argument2);\n+    bar(argument3);\n }\n@@ -10,3 +10,3 @@\n fn n() {\n-    1\n+    2\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    foo(argument1);\n    foo(argument2);\n    foo(argument3);\n}\n// pad6\n// pad7\n// pad8\n// pad9\nfn n() {\n    1\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+ bar(E0)\n"), "got: {out}");
         assert!(out.contains("@@ -10,3 +10,3 @@\n"), "got: {out}");
@@ -1263,8 +1314,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    foo(argument1);\n-    foo(argument2);\n-    foo(argument3);\n+    bar(argument1);\n+    bar(argument2);\n+    bar(argument3);\n }\n@@ -6,0 +7,2 @@\n+fn added() {}\n+// new\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    foo(argument1);\n    foo(argument2);\n    foo(argument3);\n}\n// tail\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+fn added() {}\n"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
@@ -1287,8 +1342,9 @@ mod tests {
             "f.rs",
             "@@ -1,3 +1,3 @@\n- use crate::old::Thing;\n- use crate::old::Other;\n+ use crate::new::Thing;\n+ use crate::new::Other;\n",
         );
+        let pre = pre_map(&[("f.rs", "use crate::old::Thing;\nuse crate::old::Other;\n")]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("rule=use_old_to_new"), "got: {out}");
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
@@ -1305,8 +1361,12 @@ mod tests {
             "f.rs",
             "@@ -1,6 +1,6 @@\n- use crate::old::Thing;\n- use crate::old::{A, B};\n- use crate::old::*;\n- use crate::old::Widget as W;\n- pub use crate::old::Reexport;\n+ use crate::new::Thing;\n+ use crate::new::{A, B};\n+ use crate::new::*;\n+ use crate::new::Widget as W;\n+ pub use crate::new::Reexport;\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "use crate::old::Thing;\nuse crate::old::{A, B};\nuse crate::old::*;\nuse crate::old::Widget as W;\npub use crate::old::Reexport;\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("rule=use_old_to_new"), "got: {out}");
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
@@ -1322,8 +1382,12 @@ mod tests {
             "f.rs",
             "@@ -1,4 +1,4 @@\n- use crate::old::A;\n- pub use crate::old::B;\n- pub(crate) use crate::old::C;\n+ use crate::new::A;\n+ pub use crate::new::B;\n+ pub(crate) use crate::new::C;\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "use crate::old::A;\npub use crate::old::B;\npub(crate) use crate::old::C;\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("rule=use_old_to_new"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
@@ -1334,8 +1398,9 @@ mod tests {
             "f.rs",
             "@@ -1,3 +1,3 @@\n- use ::crate::old::A;\n- use ::crate::old::B;\n+ use ::crate::new::A;\n+ use ::crate::new::B;\n",
         );
+        let pre = pre_map(&[("f.rs", "use ::crate::old::A;\nuse ::crate::old::B;\n")]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
     }
@@ -1411,8 +1476,9 @@ mod tests {
             "f.rs",
             "@@ -1,3 +1,3 @@\n- use crate :: old :: A;\n- use crate :: old :: B;\n+ use crate::new::A;\n+ use crate::new::B;\n",
         );
+        let pre = pre_map(&[("f.rs", "use crate :: old :: A;\nuse crate :: old :: B;\n")]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
     }

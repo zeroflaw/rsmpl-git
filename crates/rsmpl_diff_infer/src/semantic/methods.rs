@@ -480,13 +480,27 @@ fn collect_ref_strips(expr: &syn::Expr, out: &mut Vec<RefStripHit>) {
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;
+    use std::collections::HashMap;
 
     fn section(path: &str, body: &str) -> String {
         format!("diff --git a/{path} b/{path}\n{body}")
     }
 
-    fn validated(patch: &str) {
-        rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
     }
 
     #[test]
@@ -495,8 +509,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    a.old_method(1);\n-    b.old_method(2);\n-    c.old_method(3);\n+    new_function(a, 1);\n+    new_function(b, 2);\n+    new_function(c, 3);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.old_method(1);\n    b.old_method(2);\n    c.old_method(3);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("# expr Receiver\n"), "got: {out}");
         assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
@@ -510,8 +528,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    source.old_operation(first, second);\n-    target.old_operation(third, fourth);\n-    other.old_operation(fifth, sixth);\n+    new_operation(source, first, second);\n+    new_operation(target, third, fourth);\n+    new_operation(other, fifth, sixth);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    source.old_operation(first, second);\n    target.old_operation(third, fourth);\n    other.old_operation(fifth, sixth);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
         assert!(
             out.contains("- Receiver.old_operation(E0, E1)\n"),
@@ -529,8 +551,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    source.old_operation();\n-    target.old_operation();\n-    other.old_operation();\n+    new_operation(source);\n+    new_operation(target);\n+    new_operation(other);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    source.old_operation();\n    target.old_operation();\n    other.old_operation();\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(!out.contains("# expr E"), "got: {out}");
         assert!(out.contains("- Receiver.old_operation()\n"), "got: {out}");
         assert!(out.contains("+ new_operation(Receiver)\n"), "got: {out}");
@@ -578,8 +604,12 @@ mod tests {
             "f.rs",
             "@@ -1,6 +1,6 @@\n fn m() {\n-    a.old_method(1);\n-    b.old_method(2);\n-    c.old_method(3);\n-    d.old_method(4);\n+    a.new_method(1);\n+    b.new_method(2);\n+    c.new_method(3);\n+    d.new_method(4);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.old_method(1);\n    b.old_method(2);\n    c.old_method(3);\n    d.old_method(4);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("# expr Receiver\n"), "got: {out}");
         assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
@@ -596,8 +626,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    alpha.old_operation(\"some.dotted.value\");\n-    beta.old_operation(\"some.dotted.value\");\n-    gamma.old_operation(\"some.dotted.value\");\n+    alpha.new_operation(\"some.dotted.value\");\n+    beta.new_operation(\"some.dotted.value\");\n+    gamma.new_operation(\"some.dotted.value\");\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    alpha.old_operation(\"some.dotted.value\");\n    beta.old_operation(\"some.dotted.value\");\n    gamma.old_operation(\"some.dotted.value\");\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("# expr Receiver\n"), "got: {out}");
         assert!(out.contains("# expr E0\n"), "got: {out}");
@@ -612,8 +646,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    a.old_method(first, second);\n-    b.old_method(third, fourth);\n-    c.old_method(fifth, sixth);\n+    a.new_method(first, second);\n+    b.new_method(third, fourth);\n+    c.new_method(fifth, sixth);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.old_method(first, second);\n    b.old_method(third, fourth);\n    c.old_method(fifth, sixth);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
         assert!(
             out.contains("- Receiver.old_method(E0, E1)\n"),
@@ -631,8 +669,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    a.old_operation();\n-    b.old_operation();\n-    c.old_operation();\n+    a.new_operation();\n+    b.new_operation();\n+    c.new_operation();\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.old_operation();\n    b.old_operation();\n    c.old_operation();\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(!out.contains("# expr E"), "got: {out}");
         assert!(out.contains("- Receiver.old_operation()\n"), "got: {out}");
         assert!(out.contains("+ Receiver.new_operation()\n"), "got: {out}");
@@ -692,8 +734,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    agents.contains(\"skills/rsmpl-git/SKILL.md\"),\n-    readme.contains(\"skills/rsmpl-git/SKILL.md\"),\n-    spec.contains(\"skills/rsmpl-git/SKILL.md\"),\n+    agents.contains(\"skills/gitrs/SKILL.md\"),\n+    readme.contains(\"skills/gitrs/SKILL.md\"),\n+    spec.contains(\"skills/gitrs/SKILL.md\"),\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    check(\n        agents.contains(\"skills/rsmpl-git/SKILL.md\"),\n        readme.contains(\"skills/rsmpl-git/SKILL.md\"),\n        spec.contains(\"skills/rsmpl-git/SKILL.md\"),\n    );\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("rule=calls_contains_literal"), "got: {out}");
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("# expr Receiver\n"), "got: {out}");
@@ -717,8 +763,12 @@ mod tests {
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    a.route(\"skills/rsmpl-git/SKILL.md\", true);\n-    b.route(\"skills/rsmpl-git/SKILL.md\", true);\n+    a.route(\"skills/gitrs/SKILL.md\", false);\n+    b.route(\"skills/gitrs/SKILL.md\", false);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    check(\n        a.route(\"skills/rsmpl-git/SKILL.md\", true),\n        b.route(\"skills/rsmpl-git/SKILL.md\", true),\n    );\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("rule=calls_route_literal"), "got: {out}");
         assert!(
             out.contains("- Receiver.route(\"skills/rsmpl-git/SKILL.md\", true)\n"),
@@ -811,8 +861,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    &dir.path().join(\"\"),\n-    &dir.path().join(\"\"),\n-    write(&dir.path().join(\"\"), \"a\");\n+    dir.path(),\n+    dir.path(),\n+    write(dir.path(), \"a\");\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    check(\n        &dir.path().join(\"\"),\n        &dir.path().join(\"\"),\n        write(&dir.path().join(\"\"), \"a\"),\n    );\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("# allow=many"), "got: {out}");
         assert!(out.contains("# expr Receiver\n"), "got: {out}");
         assert!(!out.contains("# expr E"), "got: {out}");
@@ -829,8 +883,12 @@ mod tests {
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    copy_tree(&a.join(\"repo\"), x);\n-    copy_tree(&b.join(\"repo\"), y);\n+    copy_tree(a, x);\n+    copy_tree(b, y);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    copy_tree(&a.join(\"repo\"), x);\n    copy_tree(&b.join(\"repo\"), y);\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- &Receiver.join(\"repo\")\n"), "got: {out}");
         assert!(out.contains("+ Receiver\n"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
@@ -843,8 +901,12 @@ mod tests {
             "f.rs",
             "@@ -1,5 +1,5 @@\n fn m() {\n-    &alpha.shutdown();\n-    &beta.shutdown();\n-    &gamma.shutdown();\n+    alpha;\n+    beta;\n+    gamma;\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    &alpha.shutdown();\n    &beta.shutdown();\n    &gamma.shutdown();\n}\n",
+        )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
-        validated(&out);
+        validated_live(&out, &pre);
         assert!(out.contains("- &Receiver.shutdown()\n"), "got: {out}");
         assert!(out.contains("+ Receiver\n"), "got: {out}");
     }
