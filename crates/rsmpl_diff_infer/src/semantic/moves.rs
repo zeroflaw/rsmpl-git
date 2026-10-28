@@ -17,8 +17,9 @@
 //! and 1-to-2 fan-out skip), cut-file pre-image required with flat-ws
 //! uniqueness (twin veto; legacy no-pre path skips), minus blanks
 //! positional (no leading blank, no runs — a cut absorbs exactly one
-//! following blank), plus items as a suffix with exactly one blank between
-//! runs (the same-anchor paste join restores exactly one), deleted-file cuts
+//! following blank), plus paired runs with exactly one blank between
+//! runs (the same-anchor paste join restores exactly one); uncovered
+//! prefix/trailing plus lines stay ordinary around pastes (T432b), deleted-file cuts
 //! skipped, rename sections skipped, and a global T375 byte-win guard.
 
 use std::collections::HashMap;
@@ -281,14 +282,21 @@ pub(crate) fn try_move_sweep(
                 }
                 continue;
             }
-            // Leftover prefix stays ordinary with recomputed counts;
-            // pastes follow immediately (order-preserving by the
-            // suffix gate). A fully consumed hunk drops entirely.
+            // Leftover prefix stays ordinary with recomputed counts,
+            // pastes follow in document order, then any trailing
+            // leftovers stay ordinary (T432b; same-point insertions
+            // keep order). A fully consumed hunk drops entirely.
             let lo = named
                 .iter()
                 .filter(|(p, _, _)| p.plus_hunk_key == (*si, hi))
                 .map(|(p, _, _)| p.plus_first)
                 .min()
+                .unwrap();
+            let phi = named
+                .iter()
+                .filter(|(p, _, _)| p.plus_hunk_key == (*si, hi))
+                .map(|(p, _, _)| p.plus_last)
+                .max()
                 .unwrap();
             if lo > 0 {
                 let header = format!(
@@ -307,6 +315,25 @@ pub(crate) fn try_move_sweep(
             for q in pastes {
                 emitted += q.len();
                 rebuilt.push_str(q);
+            }
+            if phi + 1 < hunk.body.len() {
+                let tlo = phi + 1;
+                let tlen = hunk.body.len() - tlo;
+                let header = format!(
+                    "@@ -{},{} +{},{} @@",
+                    hunk.old_start,
+                    hunk.old_len,
+                    hunk.new_start + tlo as u32,
+                    tlen
+                );
+                emitted += header.len() + 1;
+                rebuilt.push_str(&header);
+                rebuilt.push('\n');
+                for line in hunk.body.iter().skip(tlo) {
+                    emitted += line.len() + 1;
+                    rebuilt.push_str(line);
+                    rebuilt.push('\n');
+                }
             }
         }
         out_sections[sec.orig_idx] = rebuilt;
@@ -391,22 +418,18 @@ fn minus_hunk_holds(body: &[String], pairs: &[MovePair], msi: usize, mhi: usize)
     true
 }
 
-/// Runs tile a contiguous suffix of a `len`-line hunk body.
-/// Paired runs tile a suffix of the plus hunk with exactly one blank
+/// Paired runs in a plus-hunk body, in any position.
+/// Paired runs sit anywhere in the plus hunk with exactly one blank
 /// line between consecutive runs (the same-anchor paste join restores
 /// exactly one blank between pastes, so only single-blank gaps
-/// round-trip; adjacent or multi-blank gaps veto). Leftovers form a
-/// prefix, so splice-at-position preserves order.
+/// round-trip; adjacent or multi-blank gaps veto). Uncovered prefix
+/// lines stay ordinary before the pastes, trailing lines after.
 fn plus_runs_hold(body: &[String], runs: &[(usize, usize)]) -> bool {
     if runs.is_empty() || body.is_empty() {
         return false;
     }
     let mut sorted = runs.to_vec();
     sorted.sort();
-    let hi = sorted.last().map(|(_, l)| *l).unwrap();
-    if hi != body.len() - 1 {
-        return false;
-    }
     for w in sorted.windows(2) {
         let (_, l1) = w[0];
         let (f2, _) = w[1];
@@ -958,9 +981,9 @@ mod tests {
     }
 
     #[test]
-    fn move_plus_trailing_leftovers_stay_ordinary() {
-        // Leftover plus lines after the moved items would sort before
-        // the pastes and corrupt order — veto (T432).
+    fn move_plus_trailing_leftovers_fire() {
+        // T432b: trailing plus leftovers stay as a rewritten ordinary
+        // hunk after the pastes (same-point insertions keep order).
         let big = big_fn("big");
         let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
         let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
@@ -973,7 +996,47 @@ mod tests {
             ("b.rs", "use x;\nuse y;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("trailing leftovers must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -2,0 +45,1 @@\n+// trailing\n"),
+            "got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn big()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated(&text);
+    }
+
+    #[test]
+    fn move_plus_prefix_and_trailing_fire() {
+        // T432b: prefix stays ordinary before the pastes, trailing
+        // after — both preserved verbatim around the moved item.
+        let big = big_fn("big");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!(
+            "diff --git b.rs\nnew file mode 100644\n--- /dev/null\n+++ b/b.rs\n@@ -0,0 +1,46 @@\n+use x;\n+\n+// lead\n{b_plus}+// trailing\n"
+        );
+        let pre = pre_map(&[("a.rs", &format!("fn keep() {{}}\n{big}"))]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("prefix+trailing must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -0,0 +1,3 @@\n+use x;\n+\n+// lead\n"),
+            "got:\n{text}"
+        );
+        assert!(
+            text.contains("@@ -0,0 +46,1 @@\n+// trailing\n"),
+            "got:\n{text}"
+        );
+        validated(&text);
     }
 
     #[test]
