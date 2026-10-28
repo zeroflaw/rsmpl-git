@@ -1393,4 +1393,20 @@ mod tests {
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
     }
+
+    #[test]
+    fn strip_field_label_edge_cases() {
+        // T417: T416 shipped the helper with integration tests only;
+        // pin the guards directly (the `::` guard is load-bearing).
+        assert_eq!(
+            strip_field_label("text: normalize(&sub)"),
+            Some(("text", "normalize(&sub)"))
+        );
+        assert_eq!(strip_field_label("a::b()"), None);
+        assert_eq!(strip_field_label("::foo: bar"), None);
+        assert_eq!(strip_field_label("\"http://x\""), None);
+        assert_eq!(strip_field_label("text:"), None);
+        assert_eq!(strip_field_label("text : foo()"), Some(("text", "foo()")));
+        assert_eq!(strip_field_label("_t1: foo()"), Some(("_t1", "foo()")));
+    }
 }
