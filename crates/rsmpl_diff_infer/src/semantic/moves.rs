@@ -1,4 +1,4 @@
-//! Whole-item 1-to-1 move inference (T430).
+//! Whole-item 1-to-N move/copy inference (T430; 1-to-N fan-out T432).
 //!
 //! `diffrs` emitted 873 ordinary lines for 1b8993a (four byte-identical
 //! items moved `matcher_fn.rs` -> new `matcher_impl.rs`): no move
@@ -12,8 +12,8 @@
 //!
 //! v1 fires only on the probe-proven shape; everything else stays
 //! ordinary by design (T432 remainder): named items, pure-minus /
-//! pure-plus `-U0` hunks only (never mixed-hunk surgery), global 1-minus/1-plus
-//! pairing (N-to-1 dedup like 7945da1 and 1-to-2 fan-out skip),
+//! pure-plus `-U0` hunks only (never mixed-hunk surgery), global 1-minus/N-plus
+//! pairing (one cut + N pastes sharing one bind; 2-to-1 duplicate-plus veto),
 //! cut-file pre-image required with flat-ws uniqueness (twin veto; legacy
 //! no-pre path skips), minus paired runs with exactly one blank between
 //! following blank; the last run needs a following blank in the file —
@@ -82,7 +82,10 @@ pub(crate) fn try_move_sweep(
     if minus_items.is_empty() || plus_hunks.is_empty() {
         return None;
     }
-    // Global 1-to-1 pairing by exact item text.
+    // Global 1-to-N pairing by exact item text (T432 fan-out): one
+    // minus item may match N plus runs; each pair shares the minus
+    // cut bind downstream (one cut, N pastes). Two minus items sharing
+    // one plus run still vetoes via the plus gate (duplicate runs).
     let mut pairs: Vec<MovePair> = Vec::new();
     for (msi, mhi, items) in &minus_items {
         for item in items {
@@ -93,22 +96,23 @@ pub(crate) fn try_move_sweep(
                     hits.push((*psi, *phi, first, last));
                 }
             }
-            if hits.len() != 1 {
+            if hits.is_empty() {
                 continue;
             }
-            let (psi, phi, first, last) = hits[0];
-            // The plus run must coincide with a parsed fn-item span
-            // (never a sub-range of a larger item).
-            if !plus_run_is_item(&parsed[psi].hunks[phi].body, first, last) {
-                continue;
+            for (psi, phi, first, last) in hits {
+                // The plus run must coincide with a parsed fn-item span
+                // (never a sub-range of a larger item).
+                if !plus_run_is_item(&parsed[psi].hunks[phi].body, first, last) {
+                    continue;
+                }
+                pairs.push(MovePair {
+                    minus_hunk_key: (*msi, *mhi),
+                    plus_hunk_key: (psi, phi),
+                    item: item.clone(),
+                    plus_first: first,
+                    plus_last: last,
+                });
             }
-            pairs.push(MovePair {
-                minus_hunk_key: (*msi, *mhi),
-                plus_hunk_key: (psi, phi),
-                item: item.clone(),
-                plus_first: first,
-                plus_last: last,
-            });
         }
     }
     if pairs.is_empty() {
@@ -224,18 +228,34 @@ pub(crate) fn try_move_sweep(
         return None;
     }
     final_pairs.sort_by_key(|p| (p.minus_hunk_key.0, p.minus_hunk_key.1, p.item.first));
-    // Name every pair, then rebuild each touched section once.
+    // Name every pair, then rebuild each touched section once. Fan-out
+    // shares one cut+bind per distinct minus item (one cut, N pastes);
+    // each paste keeps its own rule name.
     let mut named: Vec<(MovePair, String, String)> = Vec::new();
     let mut bind_seq: usize = 0;
+    let mut bind_of: HashMap<(usize, usize, usize, usize), (String, String)> = HashMap::new();
     for p in &final_pairs {
-        let cut_rule = super::unique_rule(used_rules, &format!("move_{}", p.item.ident));
+        let key = (
+            p.minus_hunk_key.0,
+            p.minus_hunk_key.1,
+            p.item.first,
+            p.item.last,
+        );
+        let (bind, cut) = if let Some((b, c)) = bind_of.get(&key) {
+            (b.clone(), c.clone())
+        } else {
+            let cut_rule = super::unique_rule(used_rules, &format!("move_{}", p.item.ident));
+            bind_seq += 1;
+            let bind = format!("M{bind_seq}");
+            let hunk = &parsed[p.minus_hunk_key.0].hunks[p.minus_hunk_key.1];
+            let start = hunk.old_start + p.item.first as u32;
+            let len = (p.item.last - p.item.first + 1) as u32;
+            let cut =
+                format!("@@ -{start},{len} @@ rule={cut_rule}\n# item I\n# bind={bind}\n- I\n");
+            bind_of.insert(key, (bind.clone(), cut.clone()));
+            (bind, cut)
+        };
         let paste_rule = super::unique_rule(used_rules, &format!("paste_{}", p.item.ident));
-        bind_seq += 1;
-        let bind = format!("M{bind_seq}");
-        let hunk = &parsed[p.minus_hunk_key.0].hunks[p.minus_hunk_key.1];
-        let start = hunk.old_start + p.item.first as u32;
-        let len = (p.item.last - p.item.first + 1) as u32;
-        let cut = format!("@@ -{start},{len} @@ rule={cut_rule}\n# item I\n# bind={bind}\n- I\n");
         let anchor = parsed[p.plus_hunk_key.0].hunks[p.plus_hunk_key.1].old_start;
         let paste = format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {bind}\n");
         named.push((p.clone(), cut, paste));
@@ -274,11 +294,12 @@ pub(crate) fn try_move_sweep(
         let sec = &parsed[*si];
         let mut rebuilt = sec.prelude.clone();
         for (hi, hunk) in sec.hunks.iter().enumerate() {
-            let cuts: Vec<&String> = named
-                .iter()
-                .filter(|(p, _, _)| p.minus_hunk_key == (*si, hi))
-                .map(|(_, c, _)| c)
-                .collect();
+            let mut cuts: Vec<&String> = Vec::new();
+            for (p, c, _) in &named {
+                if p.minus_hunk_key == (*si, hi) && !cuts.contains(&c) {
+                    cuts.push(c);
+                }
+            }
             if !cuts.is_empty() {
                 // Prefix leftovers stay ordinary before the cuts (T432c;
                 // disjoint old-range deletions, SPEC 10.6 option-1).
@@ -1205,8 +1226,9 @@ mod tests {
     }
 
     #[test]
-    fn move_one_to_two_fanout_stays_ordinary() {
-        // Same text added in two files: no unique target — veto.
+    fn move_one_to_two_fanout_fires() {
+        // T432 fan-out: one minus item, two plus copies — one cut,
+        // two pastes sharing the bind (a copy, round-trips exactly).
         let big = big_fn("big");
         let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
         let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
@@ -1220,12 +1242,26 @@ mod tests {
             mk_plus()
         );
         let pre = pre_map(&[
-            ("a.rs", &format!("fn keep() {{}}\n{big}")),
+            ("a.rs", &format!("fn keep() {{}}\n{big}\nfn keep2() {{}}")),
             ("b.rs", "use x;\n"),
             ("c.rs", "use y;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b, c], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("fan-out must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big_2\n"), "got:\n{text}");
+        assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
+        assert!(
+            !text.contains("-fn big()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn big()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]

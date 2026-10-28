@@ -5898,7 +5898,7 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   plus `# use` paste hunks spliced after the rewritten pure-plus hunk (1b8993a:
   four fns move files, 873 ordinary lines -> 117). v1 gates: named items only
   (ident-less impl/use/macro stay ordinary),
-  global 1-minus + 1-plus pairing, cut-file pre-image flat-ws uniqueness (twin
+  global 1-minus + N-plus pairing (one cut, N pastes sharing one bind), cut-file pre-image flat-ws uniqueness (twin
   veto), minus paired runs anywhere with exactly one blank between runs (a cut
   absorbs exactly one following blank; the last run needs a following blank
   in the file — without one a multi-pair last cut or a blank-ending
@@ -5912,7 +5912,7 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   rebuilt prelude keeps the deletion, so the file still goes away), rename
   sections skipped, and a global T375 byte-win guard. Everything else stays
   ordinary (T432 remainder: mixed-hunk partial consumption, inter-run gap
-  relaxation, N-to-1 dedup, vis-evolution sweeps).
+  relaxation, N-to-1 (many-minus-to-one-plus) dedup, vis-evolution sweeps, multi-pair-at-EOF).
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)
