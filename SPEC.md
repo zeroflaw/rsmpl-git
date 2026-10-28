@@ -5891,7 +5891,7 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   last segment, with per-site textually identical non-empty tails
   (plain/grouped/glob/`as` tails may mix) → one `# allow=many` hunk
   (`- use <parent>::Old` / `+ use <parent>::New`, no metavars).
-- Whole-item move inference (T430/T432a/T432b/T432c): a byte-identical named item (fn,
+- Whole-item move inference (T430/T432a/T432b/T432c/T432d): a byte-identical named item (fn,
   struct, enum, trait, type, mod, union, const, static) deleted in
   one file and added in another (or the same file, or a new file) compresses
   to `# item I` + `# bind` cut hunks spliced at the consumed pure-minus hunk
@@ -5908,10 +5908,11 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   anywhere with exactly one
   blank between runs (the same-anchor paste join restores exactly one;
   uncovered prefix/trailing plus lines stay as rewritten ordinary hunks around
-  the pastes), new-file pastes allowed, deleted-file cuts and rename sections
-  skipped, and a global T375 byte-win guard. Everything else stays ordinary
-  (T432 remainder: mixed-hunk partial consumption, inter-run gap relaxation,
-  N-to-1 dedup, deleted-file cuts, vis-evolution sweeps).
+  the pastes), new-file pastes and deleted-file cuts allowed (T432d; the
+  rebuilt prelude keeps the deletion, so the file still goes away), rename
+  sections skipped, and a global T375 byte-win guard. Everything else stays
+  ordinary (T432 remainder: mixed-hunk partial consumption, inter-run gap
+  relaxation, N-to-1 dedup, vis-evolution sweeps).
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

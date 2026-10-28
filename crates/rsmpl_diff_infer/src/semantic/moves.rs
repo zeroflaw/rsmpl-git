@@ -25,8 +25,9 @@
 //! plus paired
 //! runs with exactly one blank between runs (the same-anchor paste join
 //! restores exactly one); uncovered prefix/trailing plus lines stay
-//! ordinary around pastes (T432b), deleted-file cuts skipped, rename
-//! sections skipped, and a global T375 byte-win guard.
+//! ordinary around pastes (T432b), deleted-file cuts allowed (T432d;
+//! the rebuilt prelude keeps the deletion), rename sections skipped,
+//! and a global T375 byte-win guard.
 
 use std::collections::HashMap;
 use syn::spanned::Spanned;
@@ -51,19 +52,18 @@ pub(crate) fn try_move_sweep(
         return None;
     }
     // Candidate named items per pure hunk, keyed by (parsed section idx,
-    // hunk idx). Deleted-file sections never seed cuts (the file is
-    // going away; moves out of it are T432).
+    // hunk idx). Deleted-file sections seed cuts like any other (T432d):
+    // the rebuilt section keeps the `deleted file mode` prelude, so the
+    // file still goes away once cuts + leftover hunks empty it.
     let mut minus_items: Vec<(usize, usize, Vec<MoveItem>)> = Vec::new();
     let mut plus_hunks: Vec<(usize, usize)> = Vec::new();
     for (si, sec) in parsed.iter().enumerate() {
         for (hi, hunk) in sec.hunks.iter().enumerate() {
             match classify(hunk) {
                 Some(Side::Minus) => {
-                    if !sec.is_deleted {
-                        if let Some(items) = minus_items_in(&hunk.body) {
-                            if !items.is_empty() {
-                                minus_items.push((si, hi, items));
-                            }
+                    if let Some(items) = minus_items_in(&hunk.body) {
+                        if !items.is_empty() {
+                            minus_items.push((si, hi, items));
                         }
                     }
                 }
@@ -1458,5 +1458,62 @@ mod tests {
         ]);
         let mut used = Vec::new();
         assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+    }
+
+    #[test]
+    fn move_deleted_file_cut_fires() {
+        // T432d: the cut side may be a `deleted file mode` section —
+        // the rebuilt prelude keeps the deletion, so cuts + leftovers
+        // still empty the file. Whole file = one moved item here.
+        let big = big_fn("big");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let n = big.lines().count();
+        let a = format!("diff --git a.rs\ndeleted file mode 100644\n--- a/a.rs\n+++ /dev/null\n@@ -1,{n} +0,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[("a.rs", &big), ("b.rs", "use x;\n")]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("deleted-file cut must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            !text.contains("-fn big()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn big()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated(&text);
+    }
+
+    #[test]
+    fn move_deleted_file_with_leftover_fires() {
+        // T432d with a trailing deleted item: it stays as a rewritten
+        // ordinary hunk after the cuts (single pair, no prefix, so the
+        // last-cut gate passes: nothing preceding to double-claim).
+        let big = big_fn("big");
+        let tail = "fn tail() {\n    1\n}\n";
+        let mut a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        for l in tail.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        let n = big.lines().count() + tail.lines().count();
+        let a = format!("diff --git a.rs\ndeleted file mode 100644\n--- a/a.rs\n+++ /dev/null\n@@ -1,{n} +0,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[("a.rs", &format!("{big}{tail}")), ("b.rs", "use x;\n")]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("deleted-file cut with leftover must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -43,3 +0,0 @@\n-fn tail() {\n-    1\n-}\n"),
+            "got:\n{text}"
+        );
+        validated(&text);
     }
 }
