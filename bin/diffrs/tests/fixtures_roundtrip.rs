@@ -385,6 +385,38 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "07-move-fanout" {
+            assert!(
+                semantic.contains("rule=move_big"),
+                "fan-out move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big"),
+                "fan-out move must paste, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big_2"),
+                "fan-out second paste must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("+ M1\n").count(),
+                2,
+                "fan-out pastes must share the bind, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn big("),
+                "minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn big("),
+                "plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
