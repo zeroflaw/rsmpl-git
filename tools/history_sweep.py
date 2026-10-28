@@ -208,6 +208,11 @@ def main() -> int:
     if top is None:
         print("error: not a git checkout", file=sys.stderr)
         return 2
+    # T439: capture the swept HEAD so the convert denominator is
+    # attributable (loops drifted +1 against the "same" HEAD via
+    # transient resets; the swept list is fixed, the hash pins it).
+    head_out = run(["git", "-C", str(top), "rev-parse", "HEAD"])
+    head_full = head_out.stdout.decode().strip() if head_out.returncode == 0 else "unknown"
     build = run(["cargo", "build", "--bin", "diffrs", "--bin", "applyrs"], cwd=top)
     if build.returncode != 0:
         print(f"error: cargo build failed:\n{build.stderr.decode(errors='replace')}", file=sys.stderr)
@@ -250,7 +255,9 @@ def main() -> int:
                 compressing.append((commit[:7], sem))
             if (i + 1) % 50 == 0:
                 print(f"... {i + 1}/{len(commits)}", file=sys.stderr)
-        print(f"convert {len(commits) - len(failed)}/{len(commits)}")
+        print(f"head {head_full} range {args.rev_range} commits {len(commits)} tip {commits[-1][:7]} root {commits[0][:7]}")
+        head_short = head_full[:7] if len(head_full) >= 7 else head_full
+        print(f"convert {len(commits) - len(failed)}/{len(commits)} (head {head_short})")
         if total_failures:
             print("failures:")
             for f in total_failures:
