@@ -407,7 +407,7 @@ pub(crate) fn compress_balanced_pair_body(
     {
         Some(call)
     } else if let Some(call) =
-        semantic::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
+        semantic::try_call_arg_add_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(call)
     } else {

@@ -5861,6 +5861,14 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   identical args, uniform arity, and one shared callee delta →
   one `# allow=many` hunk (`# expr E0…` per arity position;
   arity 0 needs no metavars).
+- Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
+  pairs, each a bare single-segment call with one shared callee,
+  uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
+  whose leading args token-equal per site (bound as `# expr E0…`)
+  while the trailing plus-only args are token-equal concrete text
+  across all sites (emitted verbatim — per-site trailing metavars
+  would bind nothing, T442). Pre-image totality reuses the call
+  minus-arity count (hetero-trailing siblings veto).
 - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds

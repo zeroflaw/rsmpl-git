@@ -987,6 +987,43 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "24-call-arg-add" {
+            // T447: homo trailing addition compresses (a.rs), hetero
+            // trailing (b.rs, 09d3446 miniature) stays ordinary.
+            assert!(
+                semantic.contains("rule=calls_make_widget_add_1"),
+                "arg-add sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- make_widget(E0, E1)"),
+                "arg-add minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ make_widget(E0, E1, false)"),
+                "arg-add plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    make_widget(alpha, 1);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    make_widget(alpha, 1, false);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    make_widget(theta, 4);"),
+                "hetero-trailing minus lines must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    make_widget(theta, 4, symlink);"),
+                "hetero-trailing plus lines must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }

@@ -237,6 +237,17 @@ fn compress_section(
         }
         used_rules.truncate(checkpoint);
     }
+    // T447: same-callee trailing-arg addition (homo concrete tails
+    // compress; hetero tails like 09d3446's `symlink` vs `false`
+    // veto via minus-arity totality).
+    if let Some(add) =
+        try_call_arg_add_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if add.len() < section.len() {
+            return Some(add);
+        }
+        used_rules.truncate(checkpoint);
+    }
     // T441: hetero-arg array-head-peel call migration
     // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);
     // all-identical classes stay for the tighter verbatim sweep below.
@@ -838,6 +849,86 @@ pub(crate) fn try_call_sweep(
     Some(hunk)
 }
 
+/// N-site (N >= 2) same-callee trailing-arg-addition call sweep (T447):
+/// every pair parses as a bare single-segment no-turbofish call with
+/// one shared callee, uniform minus arity `k`, and uniform plus arity
+/// `k + t` (`t >= 1`); each site's minus args token-equal its plus-side
+/// leading args (bound as `E0…`); the `t` trailing plus-only args are
+/// token-equal concrete text across ALL sites and emit verbatim —
+/// per-site trailing metavars would bind nothing on the minus side
+/// (T442-illegal unbound emission), so hetero trailing additions
+/// (09d3446's `symlink` vs `false`) stay ordinary. Pre-image totality
+/// reuses `call_holds` over the minus arity (exact for this shape:
+/// every old-arity call matches the minus pattern).
+pub(crate) fn try_call_arg_add_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() < 2 {
+        return None;
+    }
+    use quote::ToTokens;
+    let tok = |e: &syn::Expr| e.to_token_stream().to_string();
+    let mut cal: Option<String> = None;
+    let mut prefix: Option<usize> = None;
+    let mut tail: Option<Vec<String>> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (o_cal, o_args) = call_parts(&parse_call_expr(m)?)?;
+        let (n_cal, n_args) = call_parts(&parse_call_expr(p)?)?;
+        if o_cal != n_cal || n_args.len() <= o_args.len() {
+            return None;
+        }
+        if cal.as_ref().is_some_and(|c| *c != o_cal) {
+            return None;
+        }
+        if prefix.is_some_and(|k| k != o_args.len()) {
+            return None;
+        }
+        if !o_args
+            .iter()
+            .zip(n_args.iter())
+            .all(|(a, b)| tok(a) == tok(b))
+        {
+            return None;
+        }
+        let grown: Vec<String> = n_args[o_args.len()..].iter().map(tok).collect();
+        if tail.as_ref().is_some_and(|t| *t != grown) {
+            return None;
+        }
+        cal = Some(o_cal);
+        prefix = Some(o_args.len());
+        tail = Some(grown);
+    }
+    let (cal, k, tail) = (cal?, prefix?, tail?);
+    if !crate::totality::call_holds(file_old, &cal, k, minuses, changed) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{cal}_add_{}", tail.len()));
+    let mut hunk = format!(
+        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        header = super::git_header(path)
+    );
+    let mut vars = Vec::new();
+    for i in 0..k {
+        let v = format!("E{i}");
+        hunk.push_str(&format!("# expr {v}\n"));
+        vars.push(v);
+    }
+    let head = vars.join(", ");
+    let grown = tail.join(", ");
+    let (minus_call, plus_call) = if head.is_empty() {
+        (format!("{cal}()"), format!("{cal}({grown})"))
+    } else {
+        (format!("{cal}({head})"), format!("{cal}({head}, {grown})"))
+    };
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
 /// Parse a `-`/`+` line pair as bare calls; return
 /// (old callee, new callee, arity) when the delta is callee-only.
 fn parse_call_pair(old_line: &str, new_line: &str) -> Option<(String, String, usize)> {
@@ -1150,6 +1241,108 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(3);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_arg_add_three_sites_fire() {
+        // T447: homo concrete trailing addition, hetero leading args.
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    make_widget(alpha, 1);\n-    make_widget(beta, 2);\n-    make_widget(gamma, 3);\n+    make_widget(alpha, 1, false);\n+    make_widget(beta, 2, false);\n+    make_widget(gamma, 3, false);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    make_widget(alpha, 1);\n    make_widget(beta, 2);\n    make_widget(gamma, 3);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=calls_make_widget_add_1\n"), "got: {out}");
+        assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
+        assert!(out.contains("- make_widget(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ make_widget(E0, E1, false)\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn call_arg_add_zero_prefix_fire() {
+        // T447: minus arity 0 grows by one concrete arg.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget();\n-    make_widget();\n+    make_widget(false);\n+    make_widget(false);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    make_widget();\n    make_widget();\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=calls_make_widget_add_1\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
+        assert!(out.contains("- make_widget()\n"), "got: {out}");
+        assert!(out.contains("+ make_widget(false)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn call_arg_add_multi_trailing_fire() {
+        // T447: two shared concrete trailing args.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget(alpha);\n-    make_widget(beta);\n+    make_widget(alpha, false, 1);\n+    make_widget(beta, false, 1);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    make_widget(alpha);\n    make_widget(beta);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=calls_make_widget_add_2\n"), "got: {out}");
+        assert!(out.contains("+ make_widget(E0, false, 1)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn call_arg_add_hetero_trailing_vetoes() {
+        // T447: 09d3446 miniature — `symlink` vs `false` trailing is
+        // unexpressible (plus-side metavars bind nothing, T442).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget(alpha, 1);\n-    make_widget(beta, 2);\n+    make_widget(alpha, 1, symlink);\n+    make_widget(beta, 2, false);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_arg_add_extra_old_arity_site_vetoes() {
+        // T447: minus-arity totality — an unchanged third `make_widget`
+        // call in the pre-image over-counts (3 != 2).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget(alpha, 1);\n-    make_widget(beta, 2);\n+    make_widget(alpha, 1, false);\n+    make_widget(beta, 2, false);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    make_widget(alpha, 1);\n    make_widget(beta, 2);\n    make_widget(gamma, 3);\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn call_arg_add_changed_prefix_vetoes() {
+        // T447: a leading arg rewritten in transit is not an addition.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget(alpha, 1);\n-    make_widget(beta, 2);\n+    make_widget(alpha, 9, false);\n+    make_widget(beta, 2, false);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_arg_add_single_site_vetoes() {
+        // T447: lone additions keep the ordinary hunk (no token win).
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    make_widget(alpha, 1);\n+    make_widget(alpha, 1, false);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
