@@ -5891,7 +5891,7 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   last segment, with per-site textually identical non-empty tails
   (plain/grouped/glob/`as` tails may mix) → one `# allow=many` hunk
   (`- use <parent>::Old` / `+ use <parent>::New`, no metavars).
-- Whole-item move inference (T430/T432a/T432b): a byte-identical named item (fn,
+- Whole-item move inference (T430/T432a/T432b/T432c): a byte-identical named item (fn,
   struct, enum, trait, type, mod, union, const, static) deleted in
   one file and added in another (or the same file, or a new file) compresses
   to `# item I` + `# bind` cut hunks spliced at the consumed pure-minus hunk
@@ -5899,8 +5899,13 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   four fns move files, 873 ordinary lines -> 117). v1 gates: named items only
   (ident-less impl/use/macro stay ordinary),
   global 1-minus + 1-plus pairing, cut-file pre-image flat-ws uniqueness (twin
-  veto), minus blanks positional (no leading blank, no runs — a cut absorbs
-  exactly one following blank), plus paired runs anywhere with exactly one
+  veto), minus paired runs anywhere with exactly one blank between runs (a cut
+  absorbs exactly one following blank; the last run needs a following blank
+  in the file — without one a multi-pair last cut or a blank-ending
+  prefix double-claims the preceding blank (f09edcd); uncovered
+  prefix/trailing minus lines stay as rewritten ordinary hunks around the
+  cuts, one post-run blank absorbed, never re-emitted), plus paired runs
+  anywhere with exactly one
   blank between runs (the same-anchor paste join restores exactly one;
   uncovered prefix/trailing plus lines stay as rewritten ordinary hunks around
   the pastes), new-file pastes allowed, deleted-file cuts and rename sections

@@ -12,15 +12,21 @@
 //!
 //! v1 fires only on the probe-proven shape; everything else stays
 //! ordinary by design (T432 remainder): named items, pure-minus /
-//! pure-plus `-U0` hunks only (whole-hunk drop, never surgical line
-//! removal), global 1-minus + 1-plus pairing (N-to-1 dedup like 7945da1
-//! and 1-to-2 fan-out skip), cut-file pre-image required with flat-ws
-//! uniqueness (twin veto; legacy no-pre path skips), minus blanks
-//! positional (no leading blank, no runs — a cut absorbs exactly one
-//! following blank), plus paired runs with exactly one blank between
-//! runs (the same-anchor paste join restores exactly one); uncovered
-//! prefix/trailing plus lines stay ordinary around pastes (T432b), deleted-file cuts
-//! skipped, rename sections skipped, and a global T375 byte-win guard.
+//! pure-plus `-U0` hunks only (never mixed-hunk surgery), global 1-minus/1-plus
+//! pairing (N-to-1 dedup like 7945da1 and 1-to-2 fan-out skip),
+//! cut-file pre-image required with flat-ws uniqueness (twin veto; legacy
+//! no-pre path skips), minus paired runs with exactly one blank between
+//! following blank; the last run needs a following blank in the file —
+//! runs (a cut absorbs exactly one following blank; the last run needs a
+//! following blank in the file — without one a multi-pair last cut or a
+//! blank-ending prefix double-claims the preceding blank, f09edcd);
+//! uncovered prefix/trailing minus lines stay ordinary around the cuts
+//! (T432c; one post-run blank is absorbed by the cut, never re-emitted),
+//! plus paired
+//! runs with exactly one blank between runs (the same-anchor paste join
+//! restores exactly one); uncovered prefix/trailing plus lines stay
+//! ordinary around pastes (T432b), deleted-file cuts skipped, rename
+//! sections skipped, and a global T375 byte-win guard.
 
 use std::collections::HashMap;
 use syn::spanned::Spanned;
@@ -174,7 +180,19 @@ pub(crate) fn try_move_sweep(
     // shrank must still tile a suffix).
     let mut emit: Vec<MovePair> = Vec::new();
     for (msi, mhi, _) in &minus_items {
-        if !minus_hunk_holds(&parsed[*msi].hunks[*mhi].body, &sound, *msi, *mhi) {
+        let hunk = &parsed[*msi].hunks[*mhi];
+        if !minus_hunk_holds(&hunk.body, &sound, *msi, *mhi) {
+            continue;
+        }
+        // Last-cut absorption soundness (f09edcd): the last cut absorbs
+        // its following blank, else its preceding blank — which is
+        // already claimed (middle-gap blank by the previous cut,
+        // blank-ending prefix by the leftover hunk). Needs the pre-image
+        // file text; every sound pair verified it, so it exists here.
+        let Some(file_old) = pre.get(&parsed[*msi].path) else {
+            continue;
+        };
+        if !minus_last_cut_sound(&hunk.body, &sound, *msi, *mhi, hunk.old_start, file_old) {
             continue;
         }
         emit.extend(
@@ -262,9 +280,63 @@ pub(crate) fn try_move_sweep(
                 .map(|(_, c, _)| c)
                 .collect();
             if !cuts.is_empty() {
+                // Prefix leftovers stay ordinary before the cuts (T432c;
+                // disjoint old-range deletions, SPEC 10.6 option-1).
+                // Cuts never absorb preceding blanks, so no skip here.
+                let mlo = named
+                    .iter()
+                    .filter(|(p, _, _)| p.minus_hunk_key == (*si, hi))
+                    .map(|(p, _, _)| p.item.first)
+                    .min()
+                    .unwrap();
+                let mhi = named
+                    .iter()
+                    .filter(|(p, _, _)| p.minus_hunk_key == (*si, hi))
+                    .map(|(p, _, _)| p.item.last)
+                    .max()
+                    .unwrap();
+                if mlo > 0 {
+                    let header = format!(
+                        "@@ -{},{} +{},{} @@",
+                        hunk.old_start, mlo, hunk.new_start, 0
+                    );
+                    emitted += header.len() + 1;
+                    rebuilt.push_str(&header);
+                    rebuilt.push('\n');
+                    for line in hunk.body.iter().take(mlo) {
+                        emitted += line.len() + 1;
+                        rebuilt.push_str(line);
+                        rebuilt.push('\n');
+                    }
+                }
                 for c in cuts {
                     emitted += c.len();
                     rebuilt.push_str(c);
+                }
+                // Trailing leftovers stay ordinary after the cuts; the
+                // single blank right after the last paired run is
+                // absorbed by the cut, never re-emitted.
+                let mut tlo = mhi + 1;
+                if tlo < hunk.body.len() && line_text(&hunk.body[tlo]).trim().is_empty() {
+                    tlo += 1;
+                }
+                if tlo < hunk.body.len() {
+                    let tlen = hunk.body.len() - tlo;
+                    let header = format!(
+                        "@@ -{},{} +{},{} @@",
+                        hunk.old_start + tlo as u32,
+                        tlen,
+                        hunk.new_start,
+                        0
+                    );
+                    emitted += header.len() + 1;
+                    rebuilt.push_str(&header);
+                    rebuilt.push('\n');
+                    for line in hunk.body.iter().skip(tlo) {
+                        emitted += line.len() + 1;
+                        rebuilt.push_str(line);
+                        rebuilt.push('\n');
+                    }
                 }
                 continue;
             }
@@ -391,8 +463,13 @@ fn line_text(line: &str) -> &str {
     line.get(1..).unwrap_or("")
 }
 
-/// Minus-hunk drop gate over a narrowed pair set: every non-blank line
-/// belongs to a paired item, no leading blank, no blank runs.
+/// Minus-hunk gate over a narrowed pair set: paired runs sit anywhere
+/// with exactly one blank between consecutive runs (a cut absorbs exactly
+/// one following blank); uncovered prefix lines stay ordinary before the
+/// cuts, uncovered trailing lines after (T432c; the single blank right
+/// after the last paired run is absorbed by the cut, never re-emitted).
+/// `minus_items_in` already validated the whole body as item spans, so
+/// leftovers are whole items (or blanks) by construction.
 fn minus_hunk_holds(body: &[String], pairs: &[MovePair], msi: usize, mhi: usize) -> bool {
     if body.is_empty() {
         return false;
@@ -401,11 +478,14 @@ fn minus_hunk_holds(body: &[String], pairs: &[MovePair], msi: usize, mhi: usize)
     for p in pairs.iter().filter(|p| p.minus_hunk_key == (msi, mhi)) {
         covered[p.item.first..=p.item.last].fill(true);
     }
-    if !covered[0] {
+    let Some(lo) = covered.iter().position(|&c| c) else {
         return false;
-    }
+    };
+    let Some(hi) = covered.iter().rposition(|&c| c) else {
+        return false;
+    };
     let mut prev_blank = false;
-    for (i, line) in body.iter().enumerate() {
+    for (i, line) in body.iter().enumerate().take(hi + 1).skip(lo) {
         let blank = line_text(line).trim().is_empty();
         if blank && covered[i] {
             return false;
@@ -416,6 +496,58 @@ fn minus_hunk_holds(body: &[String], pairs: &[MovePair], msi: usize, mhi: usize)
         prev_blank = !covered[i];
     }
     true
+}
+
+/// Last-cut absorption soundness (f09edcd): a cut absorbs its following
+/// blank line, otherwise (non-blank or EOF) its preceding blank line.
+/// The preceding blank of the last paired run is always claimed already
+/// — the middle-gap blank by the previous cut (multi-pair), or the last
+/// line of a blank-ending prefix leftover hunk — so without a following
+/// blank in the file the last cut double-claims it (plan-stage overlap).
+/// Single pairs with a non-blank preceding line (no prefix, or a
+/// non-blank-ending prefix) absorb nothing and stay sound.
+fn minus_last_cut_sound(
+    body: &[String],
+    pairs: &[MovePair],
+    msi: usize,
+    mhi: usize,
+    old_start: u32,
+    file_old: &str,
+) -> bool {
+    let mut lo = usize::MAX;
+    let mut hi = 0usize;
+    let mut n = 0usize;
+    for p in pairs.iter().filter(|p| p.minus_hunk_key == (msi, mhi)) {
+        lo = lo.min(p.item.first);
+        hi = hi.max(p.item.last);
+        n += 1;
+    }
+    if n == 0 {
+        return false;
+    }
+    // The file line right after the last paired run: in-hunk first
+    // (covers trailing leftovers), else the pre-image's next line (a cut
+    // absorbs beyond hunk bounds; EOF has no following line).
+    let follows_blank = if hi + 1 < body.len() {
+        line_text(&body[hi + 1]).trim().is_empty()
+    } else {
+        file_old
+            .lines()
+            .nth(old_start as usize + hi)
+            .is_some_and(|l| l.trim().is_empty())
+    };
+    if follows_blank {
+        return true;
+    }
+    if n != 1 {
+        return false;
+    }
+    if lo == 0 {
+        // No prefix: the preceding line lives outside the hunk,
+        // unclaimed by any leftover hunk — absorbing it is harmless.
+        return true;
+    }
+    !line_text(&body[lo - 1]).trim().is_empty()
 }
 
 /// Paired runs in a plus-hunk body, in any position.
@@ -865,8 +997,9 @@ mod tests {
 
     #[test]
     fn move_leading_blank_minus_stays_ordinary() {
-        // A leading blank in the minus hunk is not absorbed by any cut
-        // (cuts prefer the following blank) — veto.
+        // A leading blank with no following blank (EOF): the single cut
+        // would absorb the preceding prefix blank the leftover hunk also
+        // deletes — veto (T432c last-cut gate, f09edcd).
         let big = big_fn("big");
         let mut a_minus = String::from("-\n");
         a_minus.push_str(&big.lines().map(|l| format!("-{l}\n")).collect::<String>());
@@ -879,6 +1012,32 @@ mod tests {
         ]);
         let mut used = Vec::new();
         assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+    }
+
+    #[test]
+    fn move_leading_blank_with_following_blank_fires() {
+        // T432c: prefix blank + following blank — the cut absorbs the
+        // following one, the prefix hunk deletes the preceding one.
+        let big = big_fn("big");
+        let mut a_minus = String::from("-\n");
+        a_minus.push_str(&big.lines().map(|l| format!("-{l}\n")).collect::<String>());
+        a_minus.push_str("-\n");
+        let n = big.lines().count() + 2;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n\n{big}\nfn keep2() {{}}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("leading blank with following blank must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("@@ -2,1 +2,0 @@\n-\n"), "got:\n{text}");
+        validated(&text);
     }
 
     #[test]
@@ -1110,8 +1269,11 @@ mod tests {
 
     #[test]
     fn move_mixed_fn_and_struct_fire_together() {
-        // T432a: one minus hunk holding fn + struct pairs both.
+        // T432a/c: one minus hunk holding fn + struct pairs both, plus a
+        // trailing deleted item (the struct's following blank keeps the
+        // last cut sound at non-EOF).
         let big = big_fn("big");
+        let zed = "fn zed() {\n    2\n}\n";
         let mut strukt = String::from("struct Big2 {\n");
         for i in 0..40 {
             strukt.push_str(&format!("    g{i}: u32,\n"));
@@ -1125,7 +1287,11 @@ mod tests {
         for l in strukt.lines() {
             minus_body.push_str(&format!("-{l}\n"));
         }
-        let n = big.lines().count() + strukt.lines().count() + 1;
+        minus_body.push_str("-\n");
+        for l in zed.lines() {
+            minus_body.push_str(&format!("-{l}\n"));
+        }
+        let n = big.lines().count() + strukt.lines().count() + zed.lines().count() + 2;
         let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{minus_body}");
         let mut plus_body = String::new();
         for l in big.lines() {
@@ -1137,7 +1303,7 @@ mod tests {
         }
         let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{n} @@\n{plus_body}");
         let pre = pre_map(&[
-            ("a.rs", &format!("fn keep() {{}}\n{big}\n{strukt}")),
+            ("a.rs", &format!("fn keep() {{}}\n{big}\n{strukt}\n{zed}")),
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
@@ -1145,6 +1311,136 @@ mod tests {
         let text = out.join("");
         assert!(text.contains("rule=move_big\n"), "got:\n{text}");
         assert!(text.contains("rule=move_Big2\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -88,3 +2,0 @@\n-fn zed() {\n-    2\n-}\n"),
+            "got:\n{text}"
+        );
+        validated(&text);
+    }
+
+    #[test]
+    fn move_multi_pair_at_eof_stays_ordinary() {
+        // f09edcd: the last of several cuts at file EOF would absorb its
+        // preceding (middle-gap) blank — already claimed by the previous
+        // cut's following-blank absorption — so multi-pair hunks whose
+        // last run has no following blank stay ordinary.
+        let one = big_fn("one");
+        let two = big_fn("two");
+        let mut a_minus = String::new();
+        for l in one.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        a_minus.push_str("-\n");
+        for l in two.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        let n = one.lines().count() + two.lines().count() + 1;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let mut b_plus = String::new();
+        for l in one.lines() {
+            b_plus.push_str(&format!("+{l}\n"));
+        }
+        b_plus.push_str("+\n");
+        for l in two.lines() {
+            b_plus.push_str(&format!("+{l}\n"));
+        }
+        let m = one.lines().count() + two.lines().count() + 1;
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{m} @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{one}\n{two}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+    }
+
+    #[test]
+    fn move_minus_trailing_leftovers_fire() {
+        // T432c: a trailing deleted whole item stays as a rewritten
+        // ordinary hunk after the cuts (adjacent: no absorbed blank).
+        let big = big_fn("big");
+        let tail = "fn tail() {\n    1\n}\n";
+        let mut a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        for l in tail.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        let n = big.lines().count() + tail.lines().count();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{big}{tail}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            try_move_sweep(&[a, b], &pre, &mut used).expect("trailing minus leftovers must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -44,3 +2,0 @@\n-fn tail() {\n-    1\n-}\n"),
+            "got:\n{text}"
+        );
+        assert!(
+            !text.contains("-fn big()"),
+            "paired lines must be consumed, got:\n{text}"
+        );
+        validated(&text);
+    }
+
+    #[test]
+    fn move_minus_trailing_blank_sep_fire() {
+        // T432c: the single blank between the last paired run and a
+        // trailing leftover is absorbed by the cut — the trailing hunk
+        // holds the leftover item only (no double-delete).
+        let big = big_fn("big");
+        let tail = "fn tail() {\n    1\n}\n";
+        let mut a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        a_minus.push_str("-\n");
+        for l in tail.lines() {
+            a_minus.push_str(&format!("-{l}\n"));
+        }
+        let n = big.lines().count() + tail.lines().count() + 1;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{big}\n{tail}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            try_move_sweep(&[a, b], &pre, &mut used).expect("blank-separated trailing must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -45,3 +2,0 @@\n-fn tail() {\n-    1\n-}\n"),
+            "got:\n{text}"
+        );
+        validated(&text);
+    }
+
+    #[test]
+    fn move_minus_prefix_leftovers_fire() {
+        // T432c: a leading deleted item stays ordinary before the cuts.
+        let big = big_fn("big");
+        let mut a_minus = String::from("-use x;\n");
+        a_minus.push_str(&big.lines().map(|l| format!("-{l}\n")).collect::<String>());
+        let n = big.lines().count() + 1;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\nuse x;\n{big}")),
+            ("b.rs", "use y;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            try_move_sweep(&[a, b], &pre, &mut used).expect("prefix minus leftovers must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("@@ -2,1 +2,0 @@\n-use x;\n"), "got:\n{text}");
         validated(&text);
     }
 
