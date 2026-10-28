@@ -5911,8 +5911,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   the pastes), new-file pastes and deleted-file cuts allowed (T432d; the
   rebuilt prelude keeps the deletion, so the file still goes away), rename
   sections skipped, multi-pair hunks whose last run has no following blank
-  cap to N-1 pairs (the last run stays an ordinary trailing leftover;
-  single-item blank-prefix-at-EOF stays vetoed), and a global T375 byte-win
+  cap to N-1 pairs (the last run stays an ordinary trailing leftover; a
+  single item with a blank-ending prefix and no following blank trims the
+  absorbed blank from the prefix leftover hunk), and a global T375 byte-win
   guard. Everything else stays ordinary (T432 remainder: mixed-hunk partial
   consumption, inter-run gap relaxation, N-to-1 (many-minus-to-one-plus)
   dedup, vis-evolution sweeps).

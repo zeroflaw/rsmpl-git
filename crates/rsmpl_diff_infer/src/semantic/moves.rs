@@ -18,8 +18,9 @@
 //! no-pre path skips), minus paired runs with exactly one blank between
 //! runs (a cut absorbs exactly one following blank; multi-pair hunks whose
 //! last run has no following blank cap to N-1 pairs, the last run staying
-//! an ordinary trailing leftover — single-item blank-prefix-at-EOF stays
-//! vetoed, f09edcd);
+//! an ordinary trailing leftover; a single item with a blank-ending prefix
+//! and no following blank trims the absorbed blank from the prefix leftover
+//! hunk (prefix-trim, f09edcd);
 //! uncovered prefix/trailing minus lines stay ordinary around the cuts
 //! (T432c; one post-run blank is absorbed by the cut, never re-emitted),
 //! plus paired runs with exactly one blank between runs (the same-anchor
@@ -325,7 +326,9 @@ pub(crate) fn try_move_sweep(
             if !cuts.is_empty() {
                 // Prefix leftovers stay ordinary before the cuts (T432c;
                 // disjoint old-range deletions, SPEC 10.6 option-1).
-                // Cuts never absorb preceding blanks, so no skip here.
+                // Prefix-trim: a single item with a blank-ending prefix
+                // and no following blank has its cut absorb the preceding
+                // blank, so that one line leaves the leftover hunk.
                 let mlo = named
                     .iter()
                     .filter(|(p, _, _)| p.minus_hunk_key == (*si, hi))
@@ -338,15 +341,37 @@ pub(crate) fn try_move_sweep(
                     .map(|(p, _, _)| p.item.last)
                     .max()
                     .unwrap();
-                if mlo > 0 {
+                let mut plo = mlo;
+                if plo > 0 && line_text(&hunk.body[plo - 1]).trim().is_empty() {
+                    let mut distinct: Vec<(usize, usize)> = named
+                        .iter()
+                        .filter(|(p, _, _)| p.minus_hunk_key == (*si, hi))
+                        .map(|(p, _, _)| (p.item.first, p.item.last))
+                        .collect();
+                    distinct.sort();
+                    distinct.dedup();
+                    if distinct.len() == 1 {
+                        let follows = if mhi + 1 < hunk.body.len() {
+                            line_text(&hunk.body[mhi + 1]).trim().is_empty()
+                        } else {
+                            pre.get(&sec.path)
+                                .and_then(|old| old.lines().nth(hunk.old_start as usize + mhi))
+                                .is_some_and(|l| l.trim().is_empty())
+                        };
+                        if !follows {
+                            plo -= 1;
+                        }
+                    }
+                }
+                if plo > 0 {
                     let header = format!(
                         "@@ -{},{} +{},{} @@",
-                        hunk.old_start, mlo, hunk.new_start, 0
+                        hunk.old_start, plo, hunk.new_start, 0
                     );
                     emitted += header.len() + 1;
                     rebuilt.push_str(&header);
                     rebuilt.push('\n');
-                    for line in hunk.body.iter().take(mlo) {
+                    for line in hunk.body.iter().take(plo) {
                         emitted += line.len() + 1;
                         rebuilt.push_str(line);
                         rebuilt.push('\n');
@@ -590,7 +615,13 @@ fn minus_last_cut_sound(
         // unclaimed by any leftover hunk — absorbing it is harmless.
         return true;
     }
-    !line_text(&body[lo - 1]).trim().is_empty()
+    if !line_text(&body[lo - 1]).trim().is_empty() {
+        return true;
+    }
+    // Blank-ending prefix with no following blank (prefix-trim): the cut
+    // absorbs the preceding blank, and the rebuild trims that one line
+    // from the prefix leftover hunk — nothing double-claims it.
+    true
 }
 
 /// Paired runs in a plus-hunk body, in any position.
@@ -1045,10 +1076,10 @@ mod tests {
     }
 
     #[test]
-    fn move_leading_blank_minus_stays_ordinary() {
-        // A leading blank with no following blank (EOF): the single cut
-        // would absorb the preceding prefix blank the leftover hunk also
-        // deletes — veto (T432c last-cut gate, f09edcd).
+    fn move_leading_blank_prefix_trimmed_at_eof_fires() {
+        // T432 slice 7 (prefix-trim): a single item with a leading blank
+        // and no following blank (EOF) — the cut absorbs the preceding
+        // blank, so the prefix leftover hunk trims away entirely.
         let big = big_fn("big");
         let mut a_minus = String::from("-\n");
         a_minus.push_str(&big.lines().map(|l| format!("-{l}\n")).collect::<String>());
@@ -1060,7 +1091,57 @@ mod tests {
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("blank-prefix at EOF must fire via prefix-trim");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            !text.contains("-fn big()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn big()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("@@ -2,1"),
+            "trimmed prefix hunk must be gone, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_blank_ending_prefix_trimmed_at_eof_fires() {
+        // T432 slice 7 (prefix-trim): a longer blank-ending prefix at EOF
+        // keeps its non-blank lines ordinary while the cut absorbs the
+        // last prefix blank.
+        let big = big_fn("big");
+        let mut a_minus = String::from("-fn gone() {}\n-\n");
+        a_minus.push_str(&big.lines().map(|l| format!("-{l}\n")).collect::<String>());
+        let n = big.lines().count() + 2;
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\nfn gone() {{}}\n\n{big}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("blank-ending prefix at EOF must fire via prefix-trim");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(
+            text.contains("@@ -2,1 +2,0 @@\n-fn gone() {}\n"),
+            "got:\n{text}"
+        );
+        assert!(
+            !text.contains("-fn big()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
