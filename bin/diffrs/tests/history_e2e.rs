@@ -62,10 +62,10 @@ const CASES: &[Case] = &[
         commit: "b57d0f2c3a77a18326dc2612b0eb8c2e28f229bb",
         rev: None,
         root: false,
-        // T375: the lone long-name test-fn rename now stays ordinary
-        // (its semantic hunk cost +160 B over the ordinary hunk), so
-        // this row pins zero semantic — still converting + round-trip.
-        expect_sem: 0,
+        // T464: two whole-file deletions (inspect.rs, json_counts_e2e.rs)
+        // compress to delete_items/delete_items_2; the lone long-name
+        // test-fn rename stays ordinary (T375, +160 B over ordinary).
+        expect_sem: 2,
     },
     Case {
         commit: "12d70c6b4e3d027f22f52316243f05989afd6d55",
@@ -283,6 +283,14 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 4,
     },
+    // e062dda (T464): whole-file deletion of semantic.rs (1998 lines) —
+    // one delete_items hunk + blank/doc leftovers (79KB -> 2KB).
+    Case {
+        commit: "e062ddad978aab91dc3864e25168ad75b55b7dbd",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
 ];
 
 fn binary() -> PathBuf {
@@ -460,7 +468,7 @@ fn is_move_hunk(line: &str) -> bool {
 
 /// Rule-name guard for `expect_sem > 0` rows (T463): every rule family
 /// the inference can emit (`rename_*`, `calls_*`, `verbatim`, `move_*`,
-/// `paste_*`, `use_*`) passes; an ordinary patch carries no `rule=` at
+/// `paste_*`, `use_*`, `delete_*`) passes; an ordinary patch carries no `rule=` at
 /// all. Substring (not anchored) like the call site it replaces — a
 /// sanity check only, the anchored counter above is load-bearing.
 fn has_known_semantic_rule(patch: &str) -> bool {
@@ -470,6 +478,7 @@ fn has_known_semantic_rule(patch: &str) -> bool {
         || patch.contains("rule=move_")
         || patch.contains("rule=paste_")
         || patch.contains("rule=use_")
+        || patch.contains("rule=delete_")
 }
 
 fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
@@ -673,7 +682,8 @@ fn semantic_rule_guard_covers_every_emitted_family() {
     // T463: the `expect_sem > 0` guard must accept each of the six rule
     // families the inference emits (previously `use_` was missing, so a
     // future use-prefix-sweep history pin would fail the guard
-    // spuriously); an ordinary patch passes none.
+    // spuriously); T464 adds the seventh (`delete_`).
+    // An ordinary patch passes none.
     for rule in [
         "rename_foo_to_bar",
         "calls_foo_to_bar",
@@ -681,6 +691,7 @@ fn semantic_rule_guard_covers_every_emitted_family() {
         "move_big",
         "paste_big",
         "use_old_to_new",
+        "delete_items",
     ] {
         let patch = format!("diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule={rule}\n");
         assert!(

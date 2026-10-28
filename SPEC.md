@@ -3856,6 +3856,7 @@ Text carries `file:` but no `rule:`/`old_range:` lines (JSON: `rule: null` / `ra
 Document order is the deterministic tie-breaker for non-overlapping insertions at exactly the same original insertion point: the first insertion hunk in the patch appears first (topmost) in the final file. Same-anchor capture pastes additionally gain one blank line between items (Section 20.2).
 
 > **v0.1 implementation note:** multiple insertions at exactly the same point are applied in document order (first hunk topmost); an insertion strictly inside a deleted or replaced range is rejected as an overlap conflict.
+Overlapping pure deletions union-merge instead (T464): two edits that both only delete can never conflict, so adjacent item deletes (which double-claim their shared separator blank) apply as the union.
 
 ---
 
@@ -5969,6 +5970,16 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   inter-run gap relaxation stays vetoed (the same-anchor paste join
   restores exactly one blank); vis-evolution needs engine move+evolve
   support and stays deferred. Everything else stays ordinary.
+- Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
+  minus lines tile the whole file and parse as Rust compresses to one
+  `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
+  `# item I`, `- I` — SPEC 18.2 bare deletion; the engine deletes every
+  contained item) plus ordinary `@@ -s,l +0,0 @@` leftovers for non-item
+  lines (module docs, comments, stray blanks; `\ No newline` markers ride
+  their minus line). Overlapping pure deletions union-merge at plan time
+  (each item delete absorbs one adjacent blank, so neighbours double-claim
+  the shared separator — the union is still just a deletion), every other
+  overlap pair still fails. Byte-win guarded (T375).
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

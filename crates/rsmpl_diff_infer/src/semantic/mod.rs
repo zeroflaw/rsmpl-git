@@ -1,6 +1,7 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
 //! array-head-peel call-migration sweep (T441) + method-to-function,
 //! method-to-method, &-receiver strip, use-path prefix,
+//! whole-file item-deletion (T464),
 //! and whole-item move (T430) fan-outs. Every emission clears a token-win guard (T375): the
 //! semantic hunk is kept only when byte-smaller than the ordinary
 //! hunk(s) it replaces (bytes proxy tokens), else the ordinary text
@@ -13,6 +14,7 @@
 //! `# scope=file` + `@@ -1,1 @@`; probe-verified via `applyrs --check`.
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
+mod deletes;
 mod literal;
 mod methods;
 mod moves;
@@ -93,6 +95,11 @@ fn compress_section(
     let path = super::b_side_path(header.strip_prefix("diff --git ")?)?;
     if !path.ends_with(".rs") {
         return None;
+    }
+    // T464: whole-file item-deletion sweep (minus-only deletion sections
+    // compress to one many-delete hunk + ordinary leftovers).
+    if let Some(deleted) = deletes::try_delete_sweep(section, used_rules) {
+        return Some(deleted);
     }
     // T403 totality input: the pre-image text for this path, if the
     // caller supplied it (None = section-visible evidence only).

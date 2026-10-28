@@ -17,7 +17,7 @@ use rsmpl_patch::{Directive, ErrorCode, Hunk, Patch, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
 
 use crate::capture::CaptureStore;
-use crate::edits::{apply_edits, TextEdit};
+use crate::edits::{apply_edits, coalesce_deletes, TextEdit};
 use crate::lines::LineIndex;
 use crate::validate::{ensure_match_count, ZeroMatchHint};
 use crate::{
@@ -379,6 +379,10 @@ pub fn apply_with_captures(
         if edits.is_empty() {
             continue;
         }
+        // T464: overlapping pure deletions union-merge (adjacent item
+        // deletes double-claim their shared separator blank); every
+        // other overlap pair still fails in `check_overlaps` below.
+        let edits = coalesce_deletes(edits);
         check_overlaps(&edits, path)?;
         let updated = apply_edits(&state.original, edits).map_err(|e| e.with_file(path))?;
         if state.parsed.is_some() {

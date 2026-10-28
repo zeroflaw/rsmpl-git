@@ -41,10 +41,19 @@ impl TextEdit {
     pub fn contains(&self, other: &TextEdit) -> bool {
         self.start <= other.start && other.end <= self.end
     }
+
+    /// A whole-range removal (T464): non-empty range, empty replacement.
+    /// Overlapping pure deletions union-merge — the union deletes
+    /// everything both asked to delete, with no content conflict possible.
+    pub fn is_pure_delete(&self) -> bool {
+        self.start < self.end && self.replacement.is_empty()
+    }
 }
 
 /// Apply edits (original coordinates) to `text`. Edits are sorted descending
 /// so earlier offsets stay valid. Overlapping non-nested edits are rejected.
+/// (Plan-time `coalesce_deletes` union-merges overlapping pure deletions
+/// first, so by the time the planner calls this no delete+delete pair remains.)
 ///
 /// Same-point insertions materialize in document order: the first-pushed
 /// edit appears first (topmost) in the output (SPEC 20.4, 23.5). The input
@@ -83,6 +92,44 @@ pub fn apply_edits(text: &str, edits: Vec<TextEdit>) -> Result<String, Structure
         applied.push(e);
     }
     Ok(out)
+}
+
+/// Union-merge overlapping pure-deletion edits (T464).
+///
+/// `delete_lines` absorbs one adjacent blank per item, so adjacent item
+/// deletions double-claim their shared separator blank; the overlap gates
+/// would reject the pair even though the merged outcome (delete the union)
+/// is unambiguous — both edits remove text and insert nothing, so no
+/// content conflict is possible. Any overlap involving a replacement or an
+/// insertion keeps the existing rejection. Output preserves input
+/// document order.
+pub fn coalesce_deletes(edits: Vec<TextEdit>) -> Vec<TextEdit> {
+    let mut out: Vec<TextEdit> = Vec::new();
+    for e in edits {
+        if !e.is_pure_delete() {
+            out.push(e);
+            continue;
+        }
+        let mut cur = e;
+        let mut i = 0;
+        while i < out.len() {
+            // Touching counts: whole-line deletes meet at line starts
+            // (`[a,b)` + `[b,c)`), and the union is still just a deletion.
+            if out[i].is_pure_delete() && out[i].start <= cur.end && cur.start <= out[i].end {
+                let merged = TextEdit::new(
+                    out[i].start.min(cur.start),
+                    out[i].end.max(cur.end),
+                    String::new(),
+                );
+                out.remove(i);
+                cur = merged;
+            } else {
+                i += 1;
+            }
+        }
+        out.push(cur);
+    }
+    out
 }
 
 /// Token-normalized equality for code fragments: parse both as expressions
@@ -151,5 +198,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "AX\nY\nZ\nB");
+    }
+
+    #[test]
+    fn coalesce_merges_shared_separator_blank() {
+        // Adjacent whole-line deletes double-claiming one blank line
+        // merge to the union instead of conflicting (T464).
+        let out = coalesce_deletes(vec![
+            TextEdit::new(0, 4, String::new()),
+            TextEdit::new(4, 8, String::new()),
+        ]);
+        assert_eq!(out, vec![TextEdit::new(0, 8, String::new())]);
+    }
+
+    #[test]
+    fn coalesce_merges_nested_deletes() {
+        let out = coalesce_deletes(vec![
+            TextEdit::new(0, 10, String::new()),
+            TextEdit::new(2, 5, String::new()),
+        ]);
+        assert_eq!(out, vec![TextEdit::new(0, 10, String::new())]);
+    }
+
+    #[test]
+    fn coalesce_leaves_disjoint_deletes_alone() {
+        let out = coalesce_deletes(vec![
+            TextEdit::new(0, 4, String::new()),
+            TextEdit::new(8, 12, String::new()),
+        ]);
+        assert_eq!(
+            out,
+            vec![
+                TextEdit::new(0, 4, String::new()),
+                TextEdit::new(8, 12, String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn coalesce_keeps_delete_plus_replace_conflict() {
+        // A replacement overlapping a deletion is not a pure pair, so
+        // both survive for the overlap gates to reject (T464).
+        let out = coalesce_deletes(vec![
+            TextEdit::new(0, 8, String::new()),
+            TextEdit::new(4, 12, "x".into()),
+        ]);
+        assert_eq!(out.len(), 2);
     }
 }
