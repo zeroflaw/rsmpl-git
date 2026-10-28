@@ -1106,6 +1106,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "27-macro-invocation-veto" {
+            // T450: top-level macro invocations stay ordinary even as a
+            // clean same-callee same-arity literal-delta pair (68f092f
+            // miniature: 2x assert_eq!(out.rsmpl, TEXT_SECTION) ->
+            // TEXT_STRIPPED in singleton hunks + a pure addition forcing
+            // the unbalanced section). Expr::Macro never reaches
+            // call_parts and verbatim rejects macros > 0 (engine-blind
+            // macro gate, SPEC 21/22, T445 family) — the literal
+            // cross-hunk driver skips the unparseable pairs, no rule=
+            // lines, passthrough is exactly normalized native.
+            assert!(
+                !semantic.contains("rule="),
+                "macro-invocation pairs must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    assert_eq!(out.rsmpl, TEXT_SECTION);"),
+                "macro-invocation minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    assert_eq!(out.rsmpl, TEXT_STRIPPED);"),
+                "macro-invocation plus lines must be preserved, got: {semantic}"
+            );
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
