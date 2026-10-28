@@ -826,6 +826,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "19-verbatim" {
+            assert!(
+                semantic.contains("rule=verbatim"),
+                "verbatim sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- foo(&state.parsed)"),
+                "verbatim minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ foo(parsed)"),
+                "verbatim plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    foo(&state.parsed);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    foo(parsed);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
