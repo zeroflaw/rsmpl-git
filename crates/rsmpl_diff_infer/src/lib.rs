@@ -1330,6 +1330,45 @@ mod tests {
         assert!(!out.rsmpl.contains("rule=verbatim_2"), "got: {}", out.rsmpl);
     }
     #[test]
+    fn verbatim_sweep_bare_call_literal_repeat_compresses() {
+        // T422 (closed, no detector): same-callee literal-arg repeats
+        // (`run("old")` -> `run("new")` xN) already compress via the
+        // verbatim sweep - hetero receivers (the T420 gap) cannot exist
+        // for bare calls, and a dedicated `calls_run_literal` hunk would
+        // only rename the rule (`verbatim` is shorter) for byte-identical
+        // bodies. A same-callee/different-arg neighbor must not veto
+        // (subterm totality keys on the full needle).
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,6 +1,6 @@\n fn m() {\n-    run(\"old_literal_value_long_enough_for_token_win\");\n-    run(\"old_literal_value_long_enough_for_token_win\");\n-    run(\"old_literal_value_long_enough_for_token_win\");\n+    run(\"new_literal_value_long_enough_for_token_win\");\n+    run(\"new_literal_value_long_enough_for_token_win\");\n+    run(\"new_literal_value_long_enough_for_token_win\");\n     run(\"something_else_entirely\");\n }\n";
+        let pre = "fn m() {\n    run(\"old_literal_value_long_enough_for_token_win\");\n    run(\"old_literal_value_long_enough_for_token_win\");\n    run(\"old_literal_value_long_enough_for_token_win\");\n    run(\"something_else_entirely\");\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl
+                .contains("- run(\"old_literal_value_long_enough_for_token_win\")\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl
+                .contains("+ run(\"new_literal_value_long_enough_for_token_win\")\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert_eq!(
+            out.rsmpl.matches("@@ -1,1 @@").count(),
+            1,
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
+    }
+    #[test]
     fn verbatim_sweep_totality_fires_past_substring_false_positive() {
         // 50d4a49 precision: `&state.parsed` inside `&state.parsed.items` is
         // a different subterm (probe-verified the engine leaves it alone),
