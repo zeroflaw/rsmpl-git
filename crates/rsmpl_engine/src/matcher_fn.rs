@@ -1,9 +1,10 @@
 //! Function-item matching and rewriting (SPEC 14).
 //!
 //! v0.1 supports: rename of plain/explicit functions (minus/plus differ only
-//! in the function name), item deletion via bare `- I`, literal insertion,
-//! and rename inside `impl` context blocks. Format is preserved by replacing
-//! only the name token (or deleting/inserting whole line spans).
+//! in the function name), item deletion via bare `- I`, and literal
+//! insertion (`impl`/`trait`-context methods live in `matcher_impl`).
+//! Format is preserved by replacing only the name token (or
+//! deleting/inserting whole line spans).
 
 use syn::spanned::Spanned;
 
@@ -18,7 +19,7 @@ use crate::lines::LineIndex;
 /// Whitespace-insensitive normalization for signature slot comparison.
 /// Both sides are token text; stripping all whitespace makes `pub(crate)`,
 /// `x : i32`, and `< T >` compare equal to their canonical spellings.
-fn norm_slot(s: &str) -> String {
+pub(crate) fn norm_slot(s: &str) -> String {
     s.split_whitespace().collect()
 }
 /// List-slot normalization: `norm_slot` plus trailing-comma tolerance.
@@ -141,7 +142,7 @@ fn check_attrs(
 /// Preserve site filter: pattern text (token-joined at parse) vs
 /// `quote!`-rendered target attributes. Whitespace-insensitive so
 /// `///`/`#[doc]` mirrors (normalized at parse) compare equal.
-fn attrs_equal(pattern_attrs: &[String], item_attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn attrs_equal(pattern_attrs: &[String], item_attrs: &[syn::Attribute]) -> bool {
     let want: Vec<String> = pattern_attrs.iter().map(|a| norm_slot(a)).collect();
     let have: Vec<String> = item_attrs
         .iter()
@@ -156,7 +157,7 @@ fn attrs_equal(pattern_attrs: &[String], item_attrs: &[syn::Attribute]) -> bool 
 /// `impl`/`trait` header lines, so only the function block (from the first
 /// fn-like line, balanced to its closing brace — or to `;` for trait
 /// declarations) is parsed.
-fn minus_fn_pattern(
+pub(crate) fn minus_fn_pattern(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
 ) -> Result<FnPattern, StructuredError> {
@@ -170,7 +171,9 @@ fn minus_fn_pattern(
         .collect::<Vec<_>>()
         .join("\n");
     let block = match &compiled.kind {
-        PatternKind::ImplContext { .. } => extract_fn_block(&full, &[vis.clone(), qual.clone()].concat()),
+        PatternKind::ImplContext { .. } => {
+            extract_fn_block(&full, &[vis.clone(), qual.clone()].concat())
+        }
         _ => full,
     };
     rsmpl_pattern::parse_fn_pattern(&block, &vis, &qual, &gen, &wh, hunk.returns_none())
@@ -185,7 +188,7 @@ fn minus_fn_pattern(
 /// terminates at zero nesting (parens + brackets + braces) and before any
 /// `{` opens, so `[u8; N]` lengths and fn-pointer params never cut the block
 /// short, and mixed bodies still reach the T160 parser gate.
-fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
+pub(crate) fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut start = None;
     for (idx, line) in lines.iter().enumerate() {
@@ -199,7 +202,10 @@ fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
             continue;
         }
         // T337: leading slot metavars (`V Q fn ...`) are fn-like when declared.
-        let head = t.split(|c: char| c.is_whitespace() || c == '(').find(|s| !s.is_empty()).unwrap_or("");
+        let head = t
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
         if (slot_leads.iter().any(|m| m == head) && t.contains("fn "))
             || t.starts_with("fn ")
             || t.starts_with("pub ")
@@ -264,7 +270,9 @@ fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
     lines[s..end].join("\n")
 }
 
-fn slot_metas(compiled: &CompiledPattern) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+pub(crate) fn slot_metas(
+    compiled: &CompiledPattern,
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
     use rsmpl_patch::MetavarKind;
     let mut vis = Vec::new();
     let mut qual = Vec::new();
@@ -431,7 +439,7 @@ fn swallow_one_space(original: &str, end: usize) -> usize {
 /// and adds parameter-list checking (previously unchecked), slicing the
 /// target slot text from the original. Any failure rejects the candidate
 /// (fail over guessing); un-sliceable spans also reject.
-fn minus_matches_strict(
+pub(crate) fn minus_matches_strict(
     minus: &FnPattern,
     vis: &syn::Visibility,
     sig: &syn::Signature,
@@ -517,7 +525,7 @@ fn minus_matches_strict(
 /// "keep original"). Returns the edits (possibly only the name edit).
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-fn plan_sig_edits(
+pub(crate) fn plan_sig_edits(
     vis: &syn::Visibility,
     sig: &syn::Signature,
     minus: &FnPattern,
@@ -1140,398 +1148,6 @@ pub fn apply_insertion(
     }
     edits.push(TextEdit::new(pos, pos, ins));
     Ok(1)
-}
-
-/// Rename a function inside an `impl` or `trait` context block (SPEC 29.9).
-pub fn apply_impl_context_hunk(
-    parsed: &syn::File,
-    original: &str,
-    index: &LineIndex,
-    hunk: &RsmplHunk,
-    compiled: &CompiledPattern,
-    edits: &mut Vec<TextEdit>,
-) -> Result<usize, StructuredError> {
-    let impl_header = match &compiled.kind {
-        PatternKind::ImplContext { impl_header } => impl_header.clone(),
-        _ => {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "expected impl-context pattern".to_string(),
-            ))
-        }
-    };
-    let rule = hunk.rule_name();
-    // Method-context covers `impl` blocks (existing behavior) and `trait`
-    // blocks (T182: `;` declarations + default bodies via `TraitItem::Fn`).
-    // The pattern header picks the half: an `impl` header never matches a
-    // trait block and vice versa.
-    let want_trait = rsmpl_pattern::is_trait_header(&impl_header);
-    // Find the block whose header matches (whitespace-normalized).
-    let want = impl_header.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut matched = 0;
-    for it in &parsed.items {
-        // Resolve each item to a borrowable method list; other items (incl.
-        // the opposite block kind) are skipped. `inherited` backs the
-        // trait-method view (trait methods carry no `vis` field).
-        let inherited = syn::Visibility::Inherited;
-        let mut methods: Vec<(
-            &syn::Visibility,
-            &syn::Signature,
-            &[syn::Attribute],
-            proc_macro2::Span,
-        )> = Vec::new();
-        match it {
-            syn::Item::Impl(imp) if !want_trait => {
-                // T336: under `# scope=file` the header is purely advisory
-                // (SPEC 13.4) — every `impl` block is scanned and the inner
-                // fn match decides, giving impl/trait sweep parity.
-                if hunk.scope() != Scope::File {
-                    let header_tokens: Vec<&str> = want.split_whitespace().collect();
-                    // Verify the impl's self type + optional trait match the pattern by
-                    // comparing normalized renderings.
-                    let pat_self = header_tokens.join(" ");
-                    let self_ty = &imp.self_ty;
-                    let got_self = quote::quote!(#self_ty)
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let got_trait = imp
-                        .trait_
-                        .as_ref()
-                        .map(|(_, p, _)| {
-                            quote::quote!(#p)
-                                .to_string()
-                                .split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .unwrap_or_default();
-                    let pat_has_trait = pat_self.contains(&got_trait) && !got_trait.is_empty();
-                    let pat_mentions_self = header_tokens.iter().any(|t| {
-                        got_self.split_whitespace().any(|g| g == *t) || pat_self.contains(&got_self)
-                    });
-                    if !pat_has_trait && !pat_mentions_self {
-                        // Fallback: accept impl blocks overlapping the range and let the
-                        // inner fn match decide (range-gated).
-                        let s = it.span().start().line as u32;
-                        let e = it.span().end().line as u32;
-                        let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-                        if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
-                            continue;
-                        }
-                    }
-                }
-                for item in &imp.items {
-                    if let syn::ImplItem::Fn(m) = item {
-                        methods.push((&m.vis, &m.sig, &m.attrs, m.span()));
-                    }
-                }
-            }
-            syn::Item::Trait(t) if want_trait => {
-                // T336: under `# scope=file` the header is purely advisory
-                // (SPEC 13.4) — every `trait` block is scanned, impl parity.
-                if hunk.scope() != Scope::File {
-                    // T182: the header names the trait ident
-                    // (`trait T<U>: B ...` → `T`). Anything else (attribute
-                    // lines, garbage) falls back to the range-overlap check so
-                    // a mistyped header fails as no-match, never a wrong match.
-                    let ident_ok = rsmpl_pattern::trait_header_ident(&impl_header)
-                        .is_some_and(|w| t.ident == w);
-                    if !ident_ok {
-                        let s = it.span().start().line as u32;
-                        let e = it.span().end().line as u32;
-                        let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-                        if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
-                            continue;
-                        }
-                    }
-                }
-                for item in &t.items {
-                    if let syn::TraitItem::Fn(f) = item {
-                        methods.push((&inherited, &f.sig, &f.attrs, f.span()));
-                    }
-                }
-            }
-            _ => continue,
-        }
-        // Match methods inside (same slot-evolution semantics as free
-        // functions, via the shared planner).
-        let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
-        let (pvis, pqual, pgen, pwh) = slot_metas(compiled);
-        let full_plus_all: String = hunk
-            .lines
-            .iter()
-            .filter(|l| l.is_addition() || l.is_context())
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let plus_pat = rsmpl_pattern::parse_fn_pattern(
-            &extract_fn_block(&full_plus_all, &[pvis.clone(), pqual.clone()].concat()),
-            &pvis,
-            &pqual,
-            &pgen,
-            &pwh,
-            false,
-        )
-        .map_err(|e| e.with_rule(&rule))?;
-        if !minus_pat.body_ellipsis || !plus_pat.body_ellipsis {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)",
-            )
-            .with_rule(&rule));
-        }
-        // Attribute mirror gates (same contract as `apply_fn_hunk`: the
-        // plus side must mirror the minus side, never invent or drop).
-        if !plus_pat.attrs_written.is_empty() && minus_pat.attrs_written.is_empty() {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
-            )
-            .with_rule(&rule)
-            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
-        }
-        if hunk.attrs_policy() != AttrsPolicy::Strip
-            && !minus_pat.attrs_written.is_empty()
-            && minus_pat
-                .attrs_written
-                .iter()
-                .map(|a| norm_slot(a))
-                .collect::<Vec<_>>()
-                != plus_pat
-                    .attrs_written
-                    .iter()
-                    .map(|a| norm_slot(a))
-                    .collect::<Vec<_>>()
-        {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
-            )
-            .with_rule(&rule)
-            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
-        }
-        let minus_name = pattern_name(&minus_pat.name);
-        let plus_name = pattern_name(&plus_pat.name);
-        // T182: trait methods never carry visibility qualifiers, so a `+`
-        // side writing `pub` could only emit invalid Rust (the reparse
-        // backstop would catch it with a confusing message). Fail fast with
-        // the repair; the minus side needs no gate (explicit `pub` simply
-        // never matches inherited trait visibility).
-        if want_trait && matches!(plus_pat.visibility, rsmpl_pattern::VisPat::Concrete(_)) {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "trait methods cannot declare visibility: drop `pub` (or `pub(...)`) on the `+` side",
-            )
-            .with_rule(&rule));
-        }
-        for (vis, sig, attrs, span) in methods {
-            let name_ok = if minus_name.starts_with('$') {
-                true
-            } else {
-                sig.ident == minus_name.as_str()
-            };
-            if !name_ok {
-                continue;
-            }
-            // Scope: method span within old range.
-            let ms = span.start().line as u32;
-            let me = span.end().line as u32;
-            let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-            let inside = match hunk.scope() {
-                Scope::File => true,
-                Scope::Contained => {
-                    ms >= hunk.header.old_start && me <= end.max(hunk.header.old_start)
-                }
-                _ => ms >= hunk.header.old_start && ms <= end.max(hunk.header.old_start),
-            };
-            if !inside {
-                continue;
-            }
-            // Qualifier/visibility strictness via minus pattern on a
-            // synthetic ItemFn. The synth carries the method's real
-            // visibility: `Signature` alone renders inherited vis, which
-            // would fail every explicit-`pub` pattern (T175).
-            let synth: syn::ItemFn =
-                syn::parse_str(&format!("{} {{}}", full_sig_without_body(vis, sig))).map_err(
-                    |_| {
-                        StructuredError::new(
-                            ErrorCode::PatternConflict,
-                            "cannot analyze method signature",
-                        )
-                        .with_rule(&rule)
-                    },
-                )?;
-            if !minus_pat.matches_item_fn(&synth) {
-                continue;
-            }
-            if !minus_matches_strict(&minus_pat, vis, sig, original, index) {
-                continue;
-            }
-            // Written attributes constrain under default preserve, like
-            // free functions (site-level filter, not an error).
-            if hunk.attrs_policy() == AttrsPolicy::Preserve
-                && !minus_pat.attrs_written.is_empty()
-                && !attrs_equal(&minus_pat.attrs_written, attrs)
-            {
-                continue;
-            }
-            if hunk.returns_none() && !matches!(sig.output, syn::ReturnType::Default) {
-                continue;
-            }
-            // Signature evolution: name plus any explicitly changed slots.
-            let mut new_edits = plan_sig_edits(
-                vis,
-                sig,
-                &minus_pat,
-                &plus_pat,
-                &minus_name,
-                &plus_name,
-                original,
-                index,
-                &rule,
-            )?;
-            edits.append(&mut new_edits);
-            matched += 1;
-        }
-    }
-    Ok(matched)
-}
-
-/// Pattern function name as match text (`$Meta` stays sigiled).
-fn pattern_name(name: &rsmpl_pattern::NamePat) -> String {
-    match name {
-        rsmpl_pattern::NamePat::Concrete(n) => n.clone(),
-        rsmpl_pattern::NamePat::Meta(n) => format!("${n}"),
-    }
-}
-
-/// Render a signature without its body for synthetic parsing, carrying the
-/// item's real visibility: `Signature` alone has none, so without `vis` the
-/// synth would read as inherited and fail every explicit-`pub` pattern.
-fn full_sig_without_body(vis: &syn::Visibility, sig: &syn::Signature) -> String {
-    let mut s = quote::quote!(#sig).to_string();
-    // `quote` renders `fn foo (x : i32)` etc.; parse needs no trailing body.
-    // Drop anything from the first `{` (shouldn't be present for Signature).
-    if let Some(pos) = s.find('{') {
-        s.truncate(pos);
-    }
-    // Ensure it starts with `fn` (methods have receiver; keep as-is for
-    // qualifier checks by wrapping in a trait? No: parse as ItemFn requires
-    // no `self`. Replace `self` params textually for the check.)
-    // NOTE: the `self` rewrite stays scoped to the sig text -- it runs
-    // before the vis prepend so `pub(in self::...)` paths are untouched.
-    s = replace_self_receiver(&s);
-    // T190: `quote!(#sig)` renders qualifiers (`const fn …`, `async fn …`,
-    // `unsafe fn …`, `extern "ABI" fn …`), so gating the defensive `fn `
-    // prepend on a bare-`fn` prefix turned every qualified method synth into
-    // `fn const fn …` (unparsable → bare `cannot analyze method signature`).
-    // Accept the qualifier prefixes; the prepend stays for whatever
-    // non-`fn` rendering needed it.
-    let t = s.trim_start();
-    if !t.starts_with("fn ")
-        && !t.starts_with("const ")
-        && !t.starts_with("async ")
-        && !t.starts_with("unsafe ")
-        && !t.starts_with("extern ")
-    {
-        s = format!("fn {s}");
-    }
-    let vis_text = quote::quote!(#vis).to_string();
-    if vis_text.trim().is_empty() {
-        s
-    } else {
-        format!("{vis_text} {s}")
-    }
-}
-
-/// Replace the `self` receiver for synthetic parsing, word-aware (T221).
-/// The impl/trait-context presence gate parses a synthetic free `fn`
-/// built from the method signature, and a bare `self` receiver does not
-/// parse there -- so the receiver is rewritten to a placeholder param.
-/// The old blind `str::replace("self", …)` broke three valid spellings:
-/// lifetime receivers (`&'a self` -- reference patterns take no
-/// lifetime), idents merely containing `self` (`myself`), and typed
-/// receivers (`self: Box<Self>`). All three failed with the bare
-/// `cannot analyze method signature` needle. Scan rules: `& 'lt [mut]
-/// self` drops the lifetime (reference pattern + `: u8` type, as
-/// before); a `self` word followed by `:` (but not `::`) keeps its type
-/// (`self: Box<Self>` becomes the placeholder with the same type); any
-/// other `self` word becomes the placeholder param. `self::` paths and
-/// `Self` are never touched.
-fn replace_self_receiver(s: &str) -> String {
-    fn is_ident(b: u8) -> bool {
-        b.is_ascii_alphanumeric() || b == b'_'
-    }
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + 16);
-    let mut i = 0;
-    while i < b.len() {
-        // `& 'lt [mut] self`: drop the lifetime, keep `& [mut]`.
-        if b[i] == b'&' {
-            let mut j = i + 1;
-            while j < b.len() && b[j] == b' ' {
-                j += 1;
-            }
-            if j < b.len() && b[j] == b'\'' {
-                j += 1;
-                while j < b.len() && is_ident(b[j]) {
-                    j += 1;
-                }
-                while j < b.len() && b[j] == b' ' {
-                    j += 1;
-                }
-                let mut has_mut = false;
-                if s[j..].starts_with("mut") && (j + 3 >= b.len() || !is_ident(b[j + 3])) {
-                    has_mut = true;
-                    j += 3;
-                    while j < b.len() && b[j] == b' ' {
-                        j += 1;
-                    }
-                }
-                if s[j..].starts_with("self") && (j + 4 >= b.len() || !is_ident(b[j + 4])) {
-                    out.push_str("& ");
-                    if has_mut {
-                        out.push_str("mut ");
-                    }
-                    out.push_str("_self_placeholder : u8");
-                    i = j + 4;
-                    continue;
-                }
-            }
-            out.push('&');
-            i += 1;
-            continue;
-        }
-        if s[i..].starts_with("self")
-            && (i == 0 || !is_ident(b[i - 1]))
-            && (i + 4 >= b.len() || !is_ident(b[i + 4]))
-        {
-            // Typed receiver (`self: Type`, not `self::path`): keep the type.
-            let mut j = i + 4;
-            while j < b.len() && b[j] == b' ' {
-                j += 1;
-            }
-            if j < b.len() && b[j] == b':' {
-                if j + 1 >= b.len() || b[j + 1] != b':' {
-                    out.push_str("_self_placeholder");
-                    i += 4;
-                    continue;
-                }
-                // `self::…`: not a receiver; leave untouched.
-                out.push_str("self");
-                i += 4;
-                continue;
-            }
-            out.push_str("_self_placeholder : u8");
-            i += 4;
-            continue;
-        }
-        out.push(b[i] as char);
-        i += 1;
-    }
-    out
 }
 
 fn range_err(rule: &str, line: u32) -> StructuredError {

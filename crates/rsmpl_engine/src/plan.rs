@@ -20,7 +20,10 @@ use crate::capture::CaptureStore;
 use crate::edits::{apply_edits, TextEdit};
 use crate::lines::LineIndex;
 use crate::validate::{ensure_match_count, ZeroMatchHint};
-use crate::{matcher_expr, matcher_fn, matcher_general, matcher_item, matcher_macro, matcher_use};
+use crate::{
+    matcher_expr, matcher_fn, matcher_general, matcher_impl, matcher_item, matcher_macro,
+    matcher_use,
+};
 use crate::{ordinary_hunk_edits, RuleReport};
 
 /// Parsed original state for one file.
@@ -488,7 +491,7 @@ fn apply_rsmpl_hunk(
                 matcher_fn::apply_insertion(&state.original, &state.index, rh, compiled, edits)
             }
         },
-        PatternKind::ImplContext { .. } => matcher_fn::apply_impl_context_hunk(
+        PatternKind::ImplContext { .. } => matcher_impl::apply_impl_context_hunk(
             parsed,
             &state.original,
             &state.index,
@@ -1323,7 +1326,8 @@ mod tests {
         // Mirrors the R2 stdin-trio move: pastes [one, two, three] must
         // read [one, two, three], not reversed, with blanks restored.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=paste_one\n# use=One\n+ One\n\n@@ -1,0 @@ rule=paste_two\n# use=Two\n+ Two\n\n@@ -1,0 @@ rule=paste_three\n# use=Three\n+ Three\n\n@@ -2,1 @@ rule=cut_one\n# item I\n# bind=One\n- I\n\n@@ -4,1 @@ rule=cut_two\n# item I\n# bind=Two\n- I\n\n@@ -6,1 @@ rule=cut_three\n# item I\n# bind=Three\n- I\n";
-        let src = "fn top() {}\nfn one() {}\nfn mid() {}\nfn two() {}\nfn keep() {}\nfn three() {}\n";
+        let src =
+            "fn top() {}\nfn one() {}\nfn mid() {}\nfn two() {}\nfn keep() {}\nfn three() {}\n";
         let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
         let out = &files["src/lib.rs"];
         let p1 = out.find("fn one() {}").expect("one");
