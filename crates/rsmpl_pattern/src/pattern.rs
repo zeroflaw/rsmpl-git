@@ -642,7 +642,10 @@ fn classify(
 
     // Macro modes: explicit token_tree or `!` in pattern.
     let is_macro_mode = hunk.macro_mode() != rsmpl_patch::MacroMode::Invocation;
-    if is_macro_mode || (m.contains('!') && m.contains('(')) {
+    // A leading `!` is unary (T415: `!f(...)` parses as `Expr::Unary`,
+    // never `NAME!(...)`) so it falls through to the expression router.
+    let leading_bang = m.trim_start().starts_with('!');
+    if is_macro_mode || ((m.contains('!') && m.contains('(')) && !leading_bang) {
         return Ok(PatternKind::Macro {
             minus_raw: m.to_string(),
             plus_raw: p.to_string(),

@@ -158,9 +158,10 @@ const CASES: &[Case] = &[
         commit: "b20884733ba61b1e6630adfb8920cede2cd751b7",
         rev: None,
         root: false,
-        // T414 leading-`!` gate: five identical `!f(...)` pairs parse
-        // as Unary (engine macro-misroute) — zero semantic by design.
-        expect_sem: 0,
+        // T415 unary routing: five identical `!opaque_hit_lines(...)`
+        // pairs compress to one verbatim hunk (leading-`!` bypasses to
+        // `Raw`; the engine matches `Unary` structurally).
+        expect_sem: 1,
     },
     Case {
         commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",

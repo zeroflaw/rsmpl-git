@@ -1323,6 +1323,17 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_unary_not() {
+        // T415: leading-bang patterns compile as general unary exprs
+        // (router bypass in classify_call_pattern plus the macro
+        // pre-route carve-out) - two sites rewrite, other untouched.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@ rule=notcheck\n# lang=rust\n# allow=many\n# expr E\n- !check(E)\n+ !checked(E)\n";
+        let src = "fn a(x: bool) -> bool {\n    !check(x)\n}\nfn b(y: bool) -> bool {\n    !check(y)\n}\nfn c(z: bool) -> bool {\n    !other(z)\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches("!checked(").count(), 2, "got: {out}");
+        assert!(out.contains("!other(z)"), "got: {out}");
+    }
+    #[test]
     fn repeated_metavar_must_agree() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@ rule=dedupe\n# lang=rust\n# expr E\n- E + E\n+ twice(E)\n";
         let same = "fn a() {\n    let v = x + x;\n}\n";

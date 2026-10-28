@@ -5899,8 +5899,10 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   `syn::Expr`; `let` scrutinees, macro invocations on either side
   (SPEC 21), bare-ident/literal minus sides, and `?`-applied calls
   wrapping a closure (minus side), and top-level Unary on either side
-  (`!f(...)` hits the macro router, `-f(...)` misclassifies — T414)
-  are rejected — each failed loud in-corpus; non-Call-top-level pairs
+  are rejected — each failed loud in-corpus (top-level Unary matches since
+  T415: leading `!` skips the macro pre-route and leading `!`/`-` bypasses
+  the call router to a general-expr hunk — b208847 compresses);
+  non-Call-top-level pairs
   with nodes outside the engine's bounded general-expr set
   (Block/If/... — Return supported since T418, b9c00d5) are rejected.
   Struct-literal fields (`label: expr`, T416) strip the label and sweep

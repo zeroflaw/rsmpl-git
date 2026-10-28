@@ -664,8 +664,9 @@ fn split_verbatim_hunks(section: &str) -> (String, Vec<String>) {
 /// — a2fc9b3 failed loud, probe-bisected). Plus-side closures are
 /// construct fine (probe-verified: concrete plus text splices),
 /// so only plus-side macros and lets stay rejected. Top-level Unary
-/// (`!`, `-`, ...) on either side is rejected (T414): `!f(...)` hits
-/// the macro router and other prefix ops misclassify as callees.
+/// (`!`, `-`, ...) matches via the general matcher (T415: the router
+/// bypasses leading `!`/`-` to `Raw`, mirroring the T252 `&` bypass;
+/// the T414 veto was removed when routing was fixed).
 fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     match minus {
         syn::Expr::Lit(_) => return false,
@@ -675,14 +676,10 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     if matches!(plus, syn::Expr::Lit(_)) {
         return false;
     }
-    // T414: top-level Unary (`!`, `-`, ...) never matches — the pattern
-    // router reads any minus text with `!`+`(` as a macro invocation
-    // (b208847 `!f(...)` failed loud), and other prefix ops misclassify
-    // as call callees (`-foo`, probe-verified no match). Reference (`&`)
-    // stays allowed (T252 bypass into the general matcher, 50d4a49).
-    if matches!(minus, syn::Expr::Unary(_)) || matches!(plus, syn::Expr::Unary(_)) {
-        return false;
-    }
+    // Unary (`!`, `-`, ...) matches since T415 (the T414 veto is gone):
+    // (T414 veto removed by T415: leading `!`/`-` now bypasses to `Raw`
+    // in `classify_call_pattern` and skips the macro pre-route, so the
+    // general matcher handles unary structurally. `&` precedent is T252.)
     let mut m = ShapeProbe::default();
     m.visit_expr(minus);
     if m.macros > 0 || m.lets > 0 || (m.trys > 0 && m.closures > 0) {
@@ -1480,19 +1477,39 @@ mod tests {
         );
     }
     #[test]
-    fn verbatim_sweep_leading_bang_stays_passthrough() {
-        // T414 (found by the full-history sweep on b208847): `!f(...)`
-        // parses as `Expr::Unary`, which sails through the T412 gate
-        // (Unary is engine-supported) with exact totality — but the
-        // pattern router reads any `!`+`(` minus as a macro invocation
-        // and rejects the empty name (loud PATTERN_CONFLICT), so the
-        // pair must stay ordinary.
+    fn verbatim_sweep_leading_bang_compresses() {
+        // T415 (unblocked by the unary router fix; b208847 compresses):
+        // leading-`!` bypasses to `Raw` and compiles as a general unary
+        // expr (mirrors the T252 `&` bypass), the engine matches `Unary`
+        // structurally, and the pre-image holds exactly two subterms.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    !hit(&a, &b)\n+    !hit(&a, &b, c)\n@@ -9,1 +10,1 @@\n-    !hit(&a, &b)\n+    !hit(&a, &b, c)\n";
         let pre = "fn f() {\n    if !hit(&a, &b) {}\n    if !hit(&a, &b) {}\n}\n";
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
+    }
+    #[test]
+    fn verbatim_sweep_leading_neg_compresses() {
+        // T415 symmetric case: leading-`-` (`-f(...)` parses as
+        // `Expr::Unary::Neg`) bypasses the call router to `Raw` exactly
+        // like leading-`!`, so the identical pair compresses.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    -neg(x)\n+    -pos(x)\n@@ -9,1 +10,1 @@\n-    -neg(x)\n+    -pos(x)\n";
+        let pre = "fn f(x: i32) -> i32 {\n    -neg(x)\n}\nfn g(x: i32) -> i32 {\n    -neg(x)\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
     }
     #[test]
     fn verbatim_sweep_field_label_strips_and_compresses() {

@@ -340,6 +340,21 @@ pub fn classify_call_pattern(
             lit_strs,
         ));
     }
+    // Leading `!`/`-` unary (`!f(...)`, `-f(...)`): like the `&` wrapper
+    // above, the prefix is a general-expression operator, not part of a
+    // call callee — routing it as `Call` would verbatim-compare the
+    // `!`/`-`-carrying callee and never match (T415). Bypass to `Raw` so
+    // the general matcher handles it structurally.
+    let trimmed = sub.trim_start();
+    if trimmed.starts_with('!') || trimmed.starts_with('-') {
+        return Ok((
+            ExprPatternKind::Raw {
+                text: normalize_trailing_commas(&unmask_literal_spans(&sub, &sentinels)),
+            },
+            maps,
+            lit_strs,
+        ));
+    }
     // Macro invocation `name!(...)`.
     if let Some(bang) = sub.find('!') {
         let before = sub[..bang].trim();
@@ -701,5 +716,21 @@ mod tests {
             matches!(kind, ExprPatternKind::MethodCall { .. }),
             "plain method regressed: {kind:?}"
         );
+    }
+    #[test]
+    fn leading_unary_bypasses_call_router_to_raw() {
+        // T415: a leading `!`/`-` is a general-expression operator, not
+        // part of a call callee — `!foo(...)` reached the macro pre-route
+        // and `-foo(...)` classified as `Call` callee `-foo` (both
+        // probe-verified never-match). Both bypass to `Raw` so
+        // `try_general` compiles them as unary general-exprs (mirrors
+        // the T252 `&` bypass).
+        for text in ["!check(E)", "!hit(&a, &b)", "-neg(E)", "-foo(x)"] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(matches!(kind, ExprPatternKind::Raw { .. }), "{text}");
+        }
+        // `NAME!(...)` still classifies as a macro invocation.
+        let (kind, _, _) = classify_call_pattern("foo!(E)", &table()).unwrap();
+        assert!(matches!(kind, ExprPatternKind::Macro { .. }));
     }
 }
