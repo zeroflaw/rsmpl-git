@@ -427,3 +427,23 @@ fn headers_only_sections_keep_two_path_and_bare_apply() {
         0
     );
 }
+
+// T246 session 27: staged binary-only change under `--format json`.
+// Text mode strips to `(no changes)` rc 0 with a warning (T378); the
+// JSON contract is the envelope with `files: []` and an empty patch,
+// warning on stderr.
+#[test]
+fn staged_binary_only_json_envelope_is_empty() {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn main() {}\n");
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("blob.bin"), [0u8, 1, 2, 3, 255, 254]).unwrap();
+    git(dir.path(), &["add", "blob.bin"]);
+    let out = run(dir.path(), &["--staged", "--format", "json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("\"files\":[]"), "got: {stdout}");
+    assert!(stdout.contains("\"patch\":\"\""), "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("blob.bin"), "got: {stderr}");
+}
