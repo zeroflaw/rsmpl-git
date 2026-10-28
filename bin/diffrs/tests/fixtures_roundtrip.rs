@@ -921,6 +921,37 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "22-verbatim-stranded" {
+            assert!(
+                semantic.contains("@@ -1,1 @@ rule=verbatim"),
+                "stranded verbatim sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- validated(&text)"),
+                "stranded minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ validated_live(&text, &pre)"),
+                "stranded plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("@@ -20,0 +21,3 @@"),
+                "stranded leftover insertion must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    validated(&text);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    validated_live(&text, &pre);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }

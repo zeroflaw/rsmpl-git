@@ -5977,7 +5977,12 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   `let` groups count whole statements instead (T440): the full line must
   occur as a `Stmt::Local` exactly group-size times — parsed statements
   cannot hide inside macro bodies or string literals, so no line-aware
-  veto applies.
+  veto applies. A stranded identical pair inside an unbalanced hunk
+  joins its group instead of vetoing it (T441 slice): an exactly-1-minus
+  pure `-`/`+` hunk whose first plus matches the group sheds minus +
+  first plus and stays as a pure-insertion leftover (`@@ -O,0 +N+1,K-1 @@`);
+  multi-minus, context-bearing, or first-plus-mismatch hunks stay
+  ordinary (the leftover would split in two).
   Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
   subterm and does not veto (probe-verified). Leftover balanced hunks
   retry the standard chain in place; the T375 guard applies to the
@@ -5992,7 +5997,8 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   literals).
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks (whole-item moves pair pure-minus/pure-plus
-  twins instead — see above), turbofish sites, non-strip
+  twins instead — see above; verbatim stranded-join pairs excepted),
+  turbofish sites, non-strip
   `&`-receiver sites, single-segment use prefixes, paths, macro
   interiors, rename sections — detectors key emissions to the
   b-side path, which would seed from the wrong file, so differing

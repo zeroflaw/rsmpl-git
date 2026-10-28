@@ -210,6 +210,18 @@ const CASES: &[Case] = &[
         // byte-identical round-trip).
         expect_sem: 5,
     },
+    Case {
+        commit: "c52441a183f07572c56cbb59556e8603415617d2",
+        rev: None,
+        root: false,
+        // T441 slice stranded join: twelve balanced (1,1)
+        // `validated(&text);` -> `validated_live(&text, &pre);` pairs
+        // plus the same pair stranded in an unbalanced hunk (the new
+        // test's extra lines) compress to one verbatim hunk + one
+        // pure-insertion leftover (`--check` green + byte-identical
+        // real-apply).
+        expect_sem: 1,
+    },
     // Root commit via the empty tree (3 new-file sections).
     Case {
         commit: "acd1c1eef9758629edc74dfce2920d760114beb9",

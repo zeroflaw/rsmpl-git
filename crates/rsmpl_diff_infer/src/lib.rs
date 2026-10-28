@@ -24,8 +24,6 @@ pub mod semantic;
 pub(crate) mod totality;
 
 use std::collections::HashMap;
-use syn::spanned::Spanned;
-use syn::visit::Visit;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InferError {
@@ -356,617 +354,6 @@ fn collapse_git_headers(section: &str) -> String {
         out.push('\n');
     }
     out
-}
-
-/// One N-site (N ≥ 2) verbatim identical-line group: trimmed (minus,
-/// plus) pair texts, their terminator-stripped emission lines, and the
-/// reserved rule name.
-struct VerbatimGroup {
-    minus_trim: String,
-    plus_trim: String,
-    minus: String,
-    plus: String,
-    rule: String,
-}
-
-/// N-site verbatim identical-line sweep (T403): groups of identical
-/// balanced single-line (minus, plus) pairs shared across a section's
-/// hunks compress to one `# allow=many` + `# scope=file` hunk each,
-/// with literal pattern lines and no metavars (the T363 use-prefix
-/// precedent; probe-verified against `applyrs --check`). Whole-line
-/// pairs are expressions; single-line complete `let` statements take
-/// the `let` path below (T440 — the engine `Stmt` shape matches
-/// concrete lets structurally, so `let out = run(..)` migrations
-/// compress exactly like expression rewrites). Runs after
-/// the whole-section detectors fail and before the per-hunk fallback,
-/// so sections whose pure additions veto whole-section balance (e.g.
-/// 50d4a49's `+ let parsed = …` lines around eleven `&state.parsed,`
-/// → `parsed,` pairs) still compress their runs. Gates favor
-/// precision: expression pairs strip one terminator and parse as
-/// `syn::Expr` (for-loop headers, struct-field labels and literal-only
-/// deltas stay ordinary); single-line complete `let` statements take
-/// the `let` path (`verbatim_let_shape` — multi-line fragments like
-/// b849869's `let lenient =` never parse as `Stmt` and stay ordinary);
-/// the minus side is structural — bare idents
-/// (`wide`) and literals would match every mention; the stripped minus
-/// occurs exactly group-size times across all old-side section lines (an
-/// unchanged `foo(&state.parsed)`-style site would otherwise be
-/// rewritten and its ordinary hunk would fail to match). Leftover
-/// balanced hunks retry the standard chain in place (fallback-identical
-/// — no regression by construction); the T375 byte-guard applies to
-/// the verbatim-covered set as a whole, else the section falls through
-/// untouched.
-pub(crate) fn try_verbatim_sweep(
-    section: &str,
-    path: &str,
-    used_rules: &mut Vec<String>,
-    file_old: Option<&str>,
-) -> Option<String> {
-    let (prelude, hunks) = split_verbatim_hunks(section);
-    // T411: per-hunk changed old-side lines for the line-aware opaque veto.
-    let hunk_changed: Vec<Vec<usize>> = hunks
-        .iter()
-        .map(|h| crate::totality::changed_old_lines(h))
-        .collect();
-    if hunks.is_empty() {
-        return None;
-    }
-    // Balanced-hunk pairs in order; unbalanced hunks can only be leftovers.
-    // Every old-side line (minus + context) feeds the uniqueness gate.
-    let mut pairs: Vec<(usize, String, String)> = Vec::new();
-    let mut old_lines: Vec<String> = Vec::new();
-    let mut hunk_balanced = vec![false; hunks.len()];
-    for (i, hunk) in hunks.iter().enumerate() {
-        let mut minuses = Vec::new();
-        let mut pluses = Vec::new();
-        for line in hunk.lines().skip(1) {
-            if line.starts_with('-') && !line.starts_with("---") {
-                minuses.push(line[1..].trim().to_string());
-            } else if line.starts_with('+') && !line.starts_with("+++") {
-                pluses.push(line[1..].trim().to_string());
-            } else if line.starts_with(' ') {
-                old_lines.push(line.strip_prefix(' ').unwrap_or(line).trim().to_string());
-            }
-        }
-        old_lines.extend(minuses.iter().cloned());
-        if minuses.len() == pluses.len() && !minuses.is_empty() {
-            hunk_balanced[i] = true;
-            pairs.extend(minuses.into_iter().zip(pluses).map(|(m, p)| (i, m, p)));
-        }
-    }
-    // Group identical pairs, first-occurrence order.
-    let mut counts: Vec<(String, String, usize)> = Vec::new();
-    for (_, m, p) in &pairs {
-        match counts.iter_mut().find(|(gm, gp, _)| gm == m && gp == p) {
-            Some((_, _, n)) => *n += 1,
-            None => counts.push((m.clone(), p.clone(), 1)),
-        }
-    }
-    let checkpoint = used_rules.len();
-    let mut passing: Vec<VerbatimGroup> = Vec::new();
-    // Pre-image parse, once per section (None = no entry: legacy
-    // section-visible evidence only; Some(Err) = unparseable: veto all).
-    let old_file: Option<Option<syn::File>> = file_old.map(|t| syn::parse_str::<syn::File>(t).ok());
-    if matches!(old_file, Some(None)) {
-        used_rules.truncate(checkpoint);
-        return None;
-    }
-    for (m, p, n) in &counts {
-        if *n < 2 || m == p {
-            continue;
-        }
-        // Resolve the emission pair per shape (T440): expression pairs
-        // emit the terminator-stripped lines; complete single-line
-        // `let` statements emit the full `;`-terminated lines (the
-        // engine `Stmt` shape parses `let` with its semicolon).
-        let (Some(stripped_m), Some(stripped_p)) = (
-            semantic::strip_one_terminator(m),
-            semantic::strip_one_terminator(p),
-        ) else {
-            continue;
-        };
-        // (emission minus, emission plus, uniqueness needle, is-let).
-        // A `let` scrutinee parses as `syn::Expr::Let`, so the Expr arm
-        // below must decline `Let` on either side first — complete
-        // single-line `let` statements take the T440 `Stmt` path, and
-        // the Expr `lets > 0` probe would otherwise veto them here.
-        let parsed = (
-            syn::parse_str::<syn::Expr>(stripped_m),
-            syn::parse_str::<syn::Expr>(stripped_p),
-        );
-        let resolved: Option<(String, String, String, bool)> = match parsed {
-            (Ok(ref a), Ok(ref b))
-                if !matches!(a, syn::Expr::Let(_)) && !matches!(b, syn::Expr::Let(_)) =>
-            {
-                Some((
-                    stripped_m.to_string(),
-                    stripped_p.to_string(),
-                    semantic::flat_ws(stripped_m),
-                    false,
-                ))
-            }
-            // T416: struct-literal fields (`label: expr`) fail `Expr`
-            // parse on the full line — sweep on the label-stripped inner
-            // expression when both sides parse and labels match (the
-            // engine visits field values as sub-expressions, c48a6e6).
-            _ => match (
-                semantic::strip_field_label(stripped_m),
-                semantic::strip_field_label(stripped_p),
-            ) {
-                (Some((ml, mi)), Some((pl, pi))) if ml == pl => {
-                    Some((mi.to_string(), pi.to_string(), semantic::flat_ws(mi), false))
-                }
-                _ => verbatim_let_shape(m, p)
-                    .map(|()| (m.clone(), p.clone(), semantic::flat_ws(m), true)),
-            },
-        };
-        let Some((emit_minus, emit_plus, needle, is_let)) = resolved else {
-            continue;
-        };
-        if !is_let {
-            let (minus_expr, plus_expr) = match (
-                syn::parse_str::<syn::Expr>(&emit_minus),
-                syn::parse_str::<syn::Expr>(&emit_plus),
-            ) {
-                (Ok(a), Ok(b)) => (a, b),
-                _ => continue,
-            };
-            if !verbatim_shape_ok(&minus_expr, &plus_expr) {
-                continue;
-            }
-        }
-        // Section-visible uniqueness, legacy path only (no pre-image):
-        // the stripped minus occurs exactly once per own pair across
-        // all old-side section lines. With a parsed pre-image the
-        // subterm totality below subsumes this exactly (substring
-        // matching false-positives on `&s.p` inside `&s.p.items` —
-        // probe-verified a different subterm the engine leaves alone).
-        if old_file.is_none() {
-            let total: usize = old_lines
-                .iter()
-                .map(|l| semantic::count_occurrences(&semantic::flat_ws(l), &needle))
-                .sum();
-            if total != *n {
-                continue;
-            }
-        }
-        // Subterm totality on the pre-image file (T403 soundness),
-        // line-aware on opaque text (T411): the needle occurs as a
-        // sub-expression exactly group-size times; macro-body and
-        // string-interior occurrences veto only when their span covers
-        // a changed line of a hunk holding this group (unrelated twins
-        // round-trip untouched). Syntactic, not textual: `&s.p` inside
-        // `&s.p.items` is a different subterm (probe-verified: the
-        // `.items` site is left alone while bare sites rewrite).
-        // `let` groups (T440) count whole statements instead: a parsed
-        // `let` cannot hide inside a macro body (opaque tokens) or a
-        // string literal, so no line-aware veto is needed.
-        if let Some(Some(old)) = &old_file {
-            // Changed lines of the hunks holding this group's pairs.
-            let mut group_changed: Vec<usize> = Vec::new();
-            for (j, gm, gp) in pairs.iter() {
-                if gm == m && gp == p {
-                    for &c in &hunk_changed[*j] {
-                        if !group_changed.contains(&c) {
-                            group_changed.push(c);
-                        }
-                    }
-                }
-            }
-            let holds = if is_let {
-                totality_holds_local(old, &needle, *n)
-            } else {
-                match syn::parse_str::<syn::Expr>(&emit_minus) {
-                    Ok(minus_expr) => totality_holds(old, &minus_expr, *n, &group_changed),
-                    Err(_) => false,
-                }
-            };
-            if !holds {
-                continue;
-            }
-        }
-        passing.push(VerbatimGroup {
-            minus_trim: m.clone(),
-            plus_trim: p.clone(),
-            minus: emit_minus,
-            plus: emit_plus,
-            rule: semantic::unique_rule(used_rules, "verbatim"),
-        });
-    }
-    if passing.is_empty() {
-        used_rules.truncate(checkpoint);
-        return None;
-    }
-    // A hunk is covered iff balanced and every pair sits in a group.
-    let covered_hunk: Vec<bool> = hunk_balanced
-        .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            *b && pairs.iter().filter(|(j, _, _)| *j == i).all(|(_, m, p)| {
-                passing
-                    .iter()
-                    .any(|g| g.minus_trim == *m && g.plus_trim == *p)
-            })
-        })
-        .collect();
-    // Leftover balanced hunks retry the standard chain (identical to
-    // the per-hunk fallback): compressible ones splice their bodies in
-    // place, the rest stay ordinary.
-    let mut leftover_bodies: Vec<(usize, String)> = Vec::new();
-    for (i, hunk) in hunks.iter().enumerate() {
-        if !hunk_balanced[i] || covered_hunk[i] {
-            continue;
-        }
-        let ms: Vec<&str> = pairs
-            .iter()
-            .filter(|(j, _, _)| *j == i)
-            .map(|(_, m, _)| m.as_str())
-            .collect();
-        let ps: Vec<&str> = pairs
-            .iter()
-            .filter(|(j, _, _)| *j == i)
-            .map(|(_, _, p)| p.as_str())
-            .collect();
-        if let Some(body) = compress_balanced_pair_body(
-            &ms,
-            &ps,
-            path,
-            file_old,
-            &hunk_changed[i],
-            hunk.len(),
-            used_rules,
-        ) {
-            leftover_bodies.push((i, body));
-        }
-    }
-    // T375 over the verbatim-covered set: the leftover retry is
-    // fallback-identical, so the section beats the fallback exactly
-    // when the verbatim bodies beat the covered ordinary hunks.
-    let covered_len: usize = hunks
-        .iter()
-        .zip(&covered_hunk)
-        .filter(|(_, b)| **b)
-        .map(|(h, _)| h.len())
-        .sum();
-    let bodies: Vec<String> = passing
-        .iter()
-        .map(|g| {
-            format!(
-                "@@ -1,1 @@ rule={}\n# allow=many\n# scope=file\n- {}\n+ {}\n",
-                g.rule, g.minus, g.plus
-            )
-        })
-        .collect();
-    if bodies.iter().map(|b| b.len()).sum::<usize>() >= covered_len {
-        used_rules.truncate(checkpoint);
-        return None;
-    }
-    // Emit each group's hunk at its first covered hunk; leftover
-    // bodies and ordinary hunks stay in place.
-    let mut out = prelude;
-    let mut emitted = vec![false; passing.len()];
-    for (i, hunk) in hunks.iter().enumerate() {
-        if covered_hunk[i] {
-            for (gi, g) in passing.iter().enumerate() {
-                if !emitted[gi]
-                    && pairs
-                        .iter()
-                        .any(|(j, m, p)| *j == i && *m == g.minus_trim && *p == g.plus_trim)
-                {
-                    out.push_str(&bodies[gi]);
-                    emitted[gi] = true;
-                }
-            }
-            continue;
-        }
-        match leftover_bodies.iter().find(|(j, _)| *j == i) {
-            Some((_, body)) => out.push_str(body),
-            None => out.push_str(hunk),
-        }
-    }
-    Some(out)
-}
-
-/// Split a section into its prelude lines and native hunks (the split
-/// the per-hunk fallback uses; each part keeps trailing newlines).
-fn split_verbatim_hunks(section: &str) -> (String, Vec<String>) {
-    let mut prelude = String::new();
-    let mut hunks: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in section.lines() {
-        if line.starts_with("@@") {
-            if let Some(h) = current.take() {
-                hunks.push(h);
-            }
-            current = Some(String::new());
-        }
-        match current.as_mut() {
-            Some(h) => {
-                h.push_str(line);
-                h.push('\n');
-            }
-            None => {
-                prelude.push_str(line);
-                prelude.push('\n');
-            }
-        }
-    }
-    if let Some(h) = current.take() {
-        hunks.push(h);
-    }
-    (prelude, hunks)
-}
-
-/// Engine-capability gates for one verbatim pair (T403): both sides
-/// strip to expressions the engine can match and construct. Rejects
-/// `let` scrutinees (they fail `Expr` parse — complete single-line
-/// `let` statements take the T440 `Stmt` path in the caller instead;
-/// multi-line fragments like b849869's `let lenient =` never parse
-/// and stay ordinary), macro
-/// invocations anywhere on either side (plain patterns never enter
-/// macro bodies, SPEC 21 — 33a8cbb failed loud), bare-ident and
-/// literal minus sides (they would match every mention), and
-/// `?`-applied calls wrapping a closure on the minus side (Try alone
-/// and closures alone match fine, but the combination matches nothing
-/// — a2fc9b3 failed loud, probe-bisected). Plus-side closures are
-/// construct fine (probe-verified: concrete plus text splices),
-/// so only plus-side macros and lets stay rejected. Top-level Unary
-/// (`!`, `-`, ...) matches via the general matcher (T415: the router
-/// bypasses leading `!`/`-` to `Raw`, mirroring the T252 `&` bypass;
-/// the T414 veto was removed when routing was fixed).
-fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
-    match minus {
-        syn::Expr::Lit(_) => return false,
-        syn::Expr::Path(ep) if ep.qself.is_none() && ep.path.segments.len() == 1 => return false,
-        _ => {}
-    }
-    if matches!(plus, syn::Expr::Lit(_)) {
-        return false;
-    }
-    // Unary (`!`, `-`, ...) matches since T415 (the T414 veto is gone):
-    // (T414 veto removed by T415: leading `!`/`-` now bypasses to `Raw`
-    // in `classify_call_pattern` and skips the macro pre-route, so the
-    // general matcher handles unary structurally. `&` precedent is T252.)
-    let mut m = ShapeProbe::default();
-    m.visit_expr(minus);
-    if m.macros > 0 || m.lets > 0 || (m.trys > 0 && m.closures > 0) {
-        return false;
-    }
-    let mut p = ShapeProbe::default();
-    p.visit_expr(plus);
-    if p.macros > 0 || p.lets > 0 {
-        return false;
-    }
-    // T412: the engine general matcher (`match_expr`) handles only a
-    // bounded Expr variant set — a top-level Call/MethodCall pair takes
-    // the call matcher (concrete args compare opaquely, closures fine),
-    // but any other top-level shape compiles to a General hunk where an
-    // unsupported node (Block/If/... — Return supported since T418)
-    // never matches. Reject the pair so the section stays ordinary
-    // (2382b02 `return ...` failed `--check` live before T418).
-    if !matches!(minus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && m.unsupported > 0 {
-        return false;
-    }
-    if !matches!(plus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && p.unsupported > 0 {
-        return false;
-    }
-    true
-}
-
-/// One AST walk collecting engine-relevant shape flags (T403 gates).
-#[derive(Default)]
-struct ShapeProbe {
-    macros: usize,
-    lets: usize,
-    closures: usize,
-    trys: usize,
-    /// Nodes outside the engine general matcher's bounded variant set
-    /// (T412): anything not in `is_general_supported` falls to
-    /// `_ => false` in `match_expr` and never matches.
-    unsupported: usize,
-}
-
-impl<'ast> syn::visit::Visit<'ast> for ShapeProbe {
-    fn visit_expr(&mut self, node: &'ast syn::Expr) {
-        if !is_general_supported(node) {
-            self.unsupported += 1;
-        }
-        syn::visit::visit_expr(self, node);
-    }
-    fn visit_expr_macro(&mut self, _node: &'ast syn::ExprMacro) {
-        self.macros += 1;
-    }
-    fn visit_expr_let(&mut self, node: &'ast syn::ExprLet) {
-        self.lets += 1;
-        syn::visit::visit_expr_let(self, node);
-    }
-    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
-        self.closures += 1;
-        syn::visit::visit_expr_closure(self, node);
-    }
-    fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
-        self.trys += 1;
-        syn::visit::visit_expr_try(self, node);
-    }
-}
-
-/// The engine general matcher's bounded variant set (`match_expr` in
-/// `matcher_general.rs` handles exactly these — everything else falls
-/// to `_ => false` and never matches, T412).
-fn is_general_supported(e: &syn::Expr) -> bool {
-    matches!(
-        e,
-        syn::Expr::Path(_)
-            | syn::Expr::Lit(_)
-            | syn::Expr::Binary(_)
-            | syn::Expr::Unary(_)
-            | syn::Expr::Cast(_)
-            | syn::Expr::Reference(_)
-            | syn::Expr::Paren(_)
-            | syn::Expr::Group(_)
-            | syn::Expr::Call(_)
-            | syn::Expr::MethodCall(_)
-            | syn::Expr::Assign(_)
-            | syn::Expr::Field(_)
-            | syn::Expr::Index(_)
-            | syn::Expr::Array(_)
-            | syn::Expr::Tuple(_)
-            | syn::Expr::Struct(_)
-            | syn::Expr::Range(_)
-            | syn::Expr::Await(_)
-            | syn::Expr::Try(_)
-            | syn::Expr::Return(_)
-    )
-}
-
-/// Complete-`let` pair gate (T440): both trimmed lines parse as
-/// `syn::Stmt::Local` (a successful `Stmt` parse already implies the
-/// semicolon — syn 2 types it as a plain `Semi`) with no `let-else`
-/// diverge (the engine never moves into let-else targets), and init
-/// presence agrees (engine `(Some, None)` never matches). Init
-/// expressions satisfy the expression shape gates: no macros/lets/
-/// closures and no unsupported nodes on either side (the `Stmt` path
-/// matches inits via structural `match_expr`, never the call router,
-/// so there is no Call/MethodCall top-level exception). Multi-line
-/// fragments (`let lenient =` with no init/semicolon — the b849869
-/// "failed loud") never parse as `Stmt` and stay ordinary. The whole
-/// statement is the pattern, so no bare-ident/literal minus veto
-/// applies (unlike expressions, a `let` statement is always precise).
-fn verbatim_let_shape(m: &str, p: &str) -> Option<()> {
-    let (minus, plus) = match (
-        syn::parse_str::<syn::Stmt>(m),
-        syn::parse_str::<syn::Stmt>(p),
-    ) {
-        (Ok(syn::Stmt::Local(a)), Ok(syn::Stmt::Local(b))) => (a, b),
-        _ => return None,
-    };
-    match (&minus.init, &plus.init) {
-        (Some(a), Some(b)) => {
-            if a.diverge.is_some() || b.diverge.is_some() {
-                return None;
-            }
-            if !verbatim_init_ok(&a.expr, &b.expr) {
-                return None;
-            }
-        }
-        (None, None) => {}
-        _ => return None,
-    }
-    Some(())
-}
-
-/// Init-expression gates for the `let` path (T440): mirrors
-/// `verbatim_shape_ok` minus/plus rules — the engine `match_expr`
-/// rejects macros, lets, closures and unsupported nodes with
-/// `_ => false`, so a pattern containing them matches nothing and
-/// the sweep would fail loud.
-fn verbatim_init_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
-    let mut m = ShapeProbe::default();
-    m.visit_expr(minus);
-    if m.macros > 0 || m.lets > 0 || m.closures > 0 || m.unsupported > 0 {
-        return false;
-    }
-    // The try+closure combination matches nothing (a2fc9b3 precedent).
-    if m.trys > 0 && m.closures > 0 {
-        return false;
-    }
-    let mut p = ShapeProbe::default();
-    p.visit_expr(plus);
-    if p.macros > 0 || p.lets > 0 || p.closures > 0 || p.unsupported > 0 {
-        return false;
-    }
-    if p.trys > 0 && p.closures > 0 {
-        return false;
-    }
-    true
-}
-
-/// Statement totality (T440 soundness): the needle (flat-ws full
-/// `let` line) occurs as a `Stmt::Local` exactly `n` times in the
-/// pre-image file. No line-aware opaque veto: a parsed statement
-/// cannot hide inside a macro body (opaque tokens the engine never
-/// enters either) or a string literal, so statement counting is
-/// exactly the engine's match domain.
-fn totality_holds_local(old: &syn::File, needle_norm: &str, n: usize) -> bool {
-    struct LocalScan<'a> {
-        needle: &'a str,
-        count: usize,
-    }
-    impl<'ast, 'a> syn::visit::Visit<'ast> for LocalScan<'a> {
-        fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
-            if let syn::Stmt::Local(local) = node {
-                use quote::ToTokens as _;
-                if semantic::flat_ws(&local.to_token_stream().to_string()) == self.needle {
-                    self.count += 1;
-                }
-            }
-            syn::visit::visit_stmt(self, node);
-        }
-    }
-    let mut scan = LocalScan {
-        needle: needle_norm,
-        count: 0,
-    };
-    scan.visit_file(old);
-    scan.count == n
-}
-
-/// Subterm totality (T403 soundness), line-aware on opaque text (T411):
-/// the needle occurs as a sub-expression exactly `n` times in the
-/// pre-image file; macro-body and string-literal occurrences veto only
-/// when their span covers a changed old-side line (unrelated twins
-/// round-trip untouched).
-fn totality_holds(old: &syn::File, needle: &syn::Expr, n: usize, changed: &[usize]) -> bool {
-    use quote::ToTokens;
-    let needle_text = semantic::flat_ws(&needle.to_token_stream().to_string());
-    let mut scan = TotalityScan {
-        needle: needle_text,
-        changed: changed.to_vec(),
-        subterms: 0,
-        opaque_hits: 0,
-    };
-    scan.visit_file(old);
-    scan.subterms == n && scan.opaque_hits == 0
-}
-
-/// One AST walk counting flat-ws-equal sub-expressions of the needle;
-/// macro-body occurrences (the engine never matches inside one) and
-/// string-literal interiors (never match, T360) veto only when their
-/// span covers a changed line (T411 line-aware: unrelated twins
-/// round-trip untouched).
-struct TotalityScan {
-    needle: String,
-    changed: Vec<usize>,
-    subterms: usize,
-    opaque_hits: usize,
-}
-
-impl<'ast> syn::visit::Visit<'ast> for TotalityScan {
-    fn visit_expr(&mut self, node: &'ast syn::Expr) {
-        use quote::ToTokens;
-        if semantic::flat_ws(&node.to_token_stream().to_string()) == self.needle {
-            self.subterms += 1;
-        }
-        syn::visit::visit_expr(self, node);
-    }
-    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
-        let hay = semantic::flat_ws(&node.mac.tokens.to_string());
-        if semantic::count_occurrences(&hay, &self.needle) > 0 {
-            let span = node.span();
-            if crate::totality::covers_changed(span.start().line, span.end().line, &self.changed) {
-                self.opaque_hits += 1;
-            }
-        }
-    }
-    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
-        let hay = semantic::flat_ws(&node.value());
-        if semantic::count_occurrences(&hay, &self.needle) > 0 {
-            let span = node.span();
-            if crate::totality::covers_changed(span.start().line, span.end().line, &self.changed) {
-                self.opaque_hits += 1;
-            }
-        }
-    }
 }
 
 /// One balanced hunk through the shared detector chain (the per-hunk
@@ -1439,6 +826,90 @@ mod tests {
             out.rsmpl
         );
         rsmpl_patch::parse_patch(&out.rsmpl).expect("mixed output must parse");
+    }
+
+    #[test]
+    fn verbatim_sweep_stranded_unbalanced_hunk_joins() {
+        // T441 slice (c52441a miniature): two balanced (1,1) identical
+        // pairs plus the same pair stranded in an unbalanced hunk (1
+        // minus + extras, converted line first). The stranded site
+        // joins the group (totality 3 == 3) instead of vetoing it; the
+        // extras stay as a pure-insertion leftover. Byte-exact
+        // round-trip through the engine pins the split.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n@@ -9,1 +9,1 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n@@ -20,1 +21,4 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n+    let done = extra();\n+\n+    done();\n";
+        let pre = "fn m() {\n    validated(&text);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated(&text);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated(&text);\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("- validated(&text)\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+ validated_live(&text, &pre)\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl
+                .contains("@@ -20,0 +22,3 @@\n+    let done = extra();\n+\n+    done();\n"),
+            "leftover insertion missing, got: {}",
+            out.rsmpl
+        );
+        assert!(
+            !out.rsmpl.contains("-    validated(&text);"),
+            "native minus must be consumed, got: {}",
+            out.rsmpl
+        );
+        assert!(
+            !out.rsmpl.contains("+    validated_live(&text, &pre);"),
+            "native plus must be consumed, got: {}",
+            out.rsmpl
+        );
+        assert_eq!(
+            out.rsmpl.matches("@@ -1,1 @@").count(),
+            1,
+            "got: {}",
+            out.rsmpl
+        );
+        let parsed = rsmpl_patch::parse_patch(&out.rsmpl).expect("sweep must parse");
+        let mut files = map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("sweep must apply cleanly");
+        let post = "fn m() {\n    validated_live(&text, &pre);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated_live(&text, &pre);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated_live(&text, &pre);\n    let done = extra();\n\n    done();\n}\n";
+        assert_eq!(files["f.rs"], post, "round-trip must be byte-exact");
+    }
+
+    #[test]
+    fn verbatim_sweep_stranded_join_vetoes_first_plus_mismatch() {
+        // The stranded hunk's first plus differs from the group plus
+        // (the converted line is not leading) — the leftover would
+        // split in two, so the hunk cannot join and totality (2 != 3)
+        // vetoes the group: fully ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n@@ -9,1 +9,1 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n@@ -20,1 +21,2 @@\n-    validated(&text);\n+    extra();\n+    validated_live(&text, &pre);\n";
+        let pre = "fn m() {\n    validated(&text);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated(&text);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated(&text);\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(!out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
+    }
+
+    #[test]
+    fn verbatim_sweep_stranded_join_vetoes_extra_pre_image_site() {
+        // Joining makes the group n=3, but the pre-image holds a
+        // fourth untouched `validated(&text)` — totality 3 != 4
+        // vetoes: sweeping would over-match the guard site.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n@@ -9,1 +9,1 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n@@ -20,1 +21,4 @@\n-    validated(&text);\n+    validated_live(&text, &pre);\n+    let done = extra();\n+\n+    done();\n";
+        let pre = "fn m() {\n    validated(&text);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated(&text);\n    validated(&text);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    validated(&text);\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(!out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
     }
 
     #[test]

@@ -16,6 +16,7 @@
 mod methods;
 mod moves;
 mod peel;
+mod verbatim;
 
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
@@ -164,7 +165,8 @@ fn compress_section(
         // and per-hunk find nothing further (returning `None` here
         // would discard the rewrite).
         if let Some(peeled) = try_call_peel_section(section, &path, used_rules, file_old) {
-            if let Some(verbatim) = super::try_verbatim_sweep(&peeled, &path, used_rules, file_old)
+            if let Some(verbatim) =
+                verbatim::try_verbatim_sweep(&peeled, &path, used_rules, file_old)
             {
                 return Some(verbatim);
             }
@@ -172,7 +174,7 @@ fn compress_section(
         }
         // T403: non-whole sections try the cross-hunk verbatim sweep
         // before per-hunk (whole-section detectors need balance).
-        if let Some(verbatim) = super::try_verbatim_sweep(section, &path, used_rules, file_old) {
+        if let Some(verbatim) = verbatim::try_verbatim_sweep(section, &path, used_rules, file_old) {
             return Some(verbatim);
         }
         return compress_section_per_hunk(section, &path, file_old, used_rules);
@@ -246,7 +248,7 @@ fn compress_section(
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(verbatim) = super::try_verbatim_sweep(section, &path, used_rules, file_old) {
+    if let Some(verbatim) = verbatim::try_verbatim_sweep(section, &path, used_rules, file_old) {
         return Some(verbatim);
     }
     // T403: verbatim sweep after the whole-section detectors fail.
