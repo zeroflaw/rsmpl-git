@@ -5888,7 +5888,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   `syn::Expr`; `let` scrutinees, macro invocations on either side
   (SPEC 21), bare-ident/literal minus sides, and `?`-applied calls
   wrapping a closure (minus side) are rejected — each failed loud
-  in-corpus. Soundness is subterm totality on the pre-image file
+  in-corpus; non-Call-top-level pairs with nodes outside the engine's
+  bounded general-expr set (Return/Block/If/..., T412) are rejected.
+  Soundness is subterm totality on the pre-image file
   (index blob for pending diffs, `rev` blob for staged/rev diffs):
   the stripped minus must occur as a sub-expression exactly
   group-size times, with zero occurrences inside opaque text (macro

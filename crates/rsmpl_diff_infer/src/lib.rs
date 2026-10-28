@@ -639,7 +639,23 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     }
     let mut p = ShapeProbe::default();
     p.visit_expr(plus);
-    !(p.macros > 0 || p.lets > 0)
+    if p.macros > 0 || p.lets > 0 {
+        return false;
+    }
+    // T412: the engine general matcher (`match_expr`) handles only a
+    // bounded Expr variant set — a top-level Call/MethodCall pair takes
+    // the call matcher (concrete args compare opaquely, closures fine),
+    // but any other top-level shape compiles to a General hunk where an
+    // unsupported node (Return/Block/If/...) never matches. Reject the
+    // pair so the section stays ordinary (2382b02 `return ...` failed
+    // `--check` live).
+    if !matches!(minus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && m.unsupported > 0 {
+        return false;
+    }
+    if !matches!(plus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && p.unsupported > 0 {
+        return false;
+    }
+    true
 }
 
 /// One AST walk collecting engine-relevant shape flags (T403 gates).
@@ -649,9 +665,19 @@ struct ShapeProbe {
     lets: usize,
     closures: usize,
     trys: usize,
+    /// Nodes outside the engine general matcher's bounded variant set
+    /// (T412): anything not in `is_general_supported` falls to
+    /// `_ => false` in `match_expr` and never matches.
+    unsupported: usize,
 }
 
 impl<'ast> syn::visit::Visit<'ast> for ShapeProbe {
+    fn visit_expr(&mut self, node: &'ast syn::Expr) {
+        if !is_general_supported(node) {
+            self.unsupported += 1;
+        }
+        syn::visit::visit_expr(self, node);
+    }
     fn visit_expr_macro(&mut self, _node: &'ast syn::ExprMacro) {
         self.macros += 1;
     }
@@ -667,6 +693,34 @@ impl<'ast> syn::visit::Visit<'ast> for ShapeProbe {
         self.trys += 1;
         syn::visit::visit_expr_try(self, node);
     }
+}
+
+/// The engine general matcher's bounded variant set (`match_expr` in
+/// `matcher_general.rs` handles exactly these — everything else falls
+/// to `_ => false` and never matches, T412).
+fn is_general_supported(e: &syn::Expr) -> bool {
+    matches!(
+        e,
+        syn::Expr::Path(_)
+            | syn::Expr::Lit(_)
+            | syn::Expr::Binary(_)
+            | syn::Expr::Unary(_)
+            | syn::Expr::Cast(_)
+            | syn::Expr::Reference(_)
+            | syn::Expr::Paren(_)
+            | syn::Expr::Group(_)
+            | syn::Expr::Call(_)
+            | syn::Expr::MethodCall(_)
+            | syn::Expr::Assign(_)
+            | syn::Expr::Field(_)
+            | syn::Expr::Index(_)
+            | syn::Expr::Array(_)
+            | syn::Expr::Tuple(_)
+            | syn::Expr::Struct(_)
+            | syn::Expr::Range(_)
+            | syn::Expr::Await(_)
+            | syn::Expr::Try(_)
+    )
 }
 
 /// Subterm totality (T403 soundness): the needle occurs as a
@@ -1249,6 +1303,19 @@ mod tests {
         // reparse still guards the apply side).
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -9,1 +10,1 @@\n-        &state.parsed,\n+        parsed,\n";
         let pre = "this is not rust {{{\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_sweep_return_shape_stays_passthrough() {
+        // T412 (found by the T410 full-history sweep on 2382b02): `return
+        // ...` parses as `Expr::Return`, which the engine general matcher
+        // never matches (`_ => false`), so the pair must stay ordinary
+        // even with exact totality — otherwise `--check` fails.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    return compress(section, &path, used);\n+    return compress(section, &path, extra, used);\n@@ -9,1 +10,1 @@\n-    return compress(section, &path, used);\n+    return compress(section, &path, extra, used);\n";
+        let pre = "fn f() {\n    if x {\n        return compress(section, &path, used);\n    }\n    return compress(section, &path, used);\n}\n";
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
