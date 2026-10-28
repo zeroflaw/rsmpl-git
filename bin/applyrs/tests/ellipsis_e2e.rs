@@ -41,11 +41,7 @@ fn ellipsis_plus_without_minus_fails_fast_json() {
     // T157: `+ ...` with no `- ...` is a compile-time pattern conflict
     // (was a silent arg-list duplication).
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1, 2);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1, 2);\n}\n");
     let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# allow=many\n# expr E\n# expr F\n- foo(E, F)\n+ bar(E, F, ...)\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert!(!out.status.success(), "must fail");
@@ -59,11 +55,7 @@ fn ellipsis_leading_backtrack_applies() {
     // T159: `- foo(..., E)` on `foo(1, 2, 3)` binds the last arg via
     // backtracking (was a first-fit-only `no match found`).
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1, 2, 3);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1, 2, 3);\n}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# allow=many\n# expr E\n- foo(..., E)\n+ bar(E)\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(

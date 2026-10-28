@@ -72,8 +72,7 @@ fn patch_inline_apply_for_real_and_json_reports_history() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let v: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     let hist = v["history"].as_str().expect("JSON carries history key");
     assert!(hist.ends_with(".rsmpl"), "got: {hist}");
     assert!(
@@ -100,18 +99,11 @@ fn patch_inline_conflicts_with_file() {
     let out = run(
         dir.path(),
         &[
-            "--patch",
-            RENAME,
-            "--file",
-            "x",
-            "--format",
-            "json",
-            "--check",
+            "--patch", RENAME, "--file", "x", "--format", "json", "--check",
         ],
     );
     assert_eq!(out.status.code(), Some(2));
-    let v: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
 }
 

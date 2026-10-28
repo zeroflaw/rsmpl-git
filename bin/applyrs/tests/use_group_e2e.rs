@@ -83,7 +83,10 @@ fn fn_body_use_needs_ordinary_hunk() {
         "got: {v}"
     );
     assert!(
-        v["error"]["reason"].as_str().unwrap().contains("no match found"),
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no match found"),
         "got: {v}"
     );
     let textual = "diff --git a.rs\n@@ -1,4 +1,4 @@\n fn outer() {\n-    use crate::old::Thing;\n+    use crate::new::Thing;\n     let _ = Thing;\n }\n";

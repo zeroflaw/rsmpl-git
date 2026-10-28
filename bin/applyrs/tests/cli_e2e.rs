@@ -316,11 +316,7 @@ fn json_report_arrays_follow_document_order() {
     // sorts second in the document although the engine evaluates
     // cuts first: old code reported [r_cut, r_rename, r_paste].
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/z.rs",
-        "fn keep() {}\nfn helper() {}\n",
-    );
+    write(dir.path(), "src/z.rs", "fn keep() {}\nfn helper() {}\n");
     write(dir.path(), "src/a.rs", "fn a() {}\n");
     let patch = "diff --git a/src/z.rs b/src/z.rs\n@@ -1,1 +1,1 @@ rule=r_rename\n# lang=rust\n- fn keep(...) {\n+ fn keep2(...) {\n      ...\n  }\n@@ -2,1 +2,1 @@ rule=r_cut\n# lang=rust\n# item I\n# bind=H\n- I\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1,0 +1,0 @@ rule=r_paste\n# lang=rust\n# use=H\n+ H\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
@@ -383,11 +379,7 @@ fn symbol_fallback_rejects_bare_path() {
     // T24: exactness negative — a bare `foo(1)` call site does not match
     // `# symbol Old=crate::foo`, so the hunk reports no match (SPEC 19.3).
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# fallback=syntax\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# expr E\n- Old(E)\n+ New(E)\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -450,11 +442,7 @@ fn symbol_in_macro_shape_is_pattern_conflict() {
     // T24/C14: macro names with `# symbol` fail at compile — v0.1
     // token-tree matching is verbatim-only and never resolves symbols.
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    m!(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    m!(1);\n}\n");
     let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# lang=rust\n# fallback=syntax\n# symbol Old=crate::m\n# symbol New=crate::n\n- Old!(1)\n+ New!(1)\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
@@ -594,11 +582,7 @@ fn item_rename_prefix_difference_fails_fast_text_and_json() {
 #[test]
 fn json_report_carries_rules_and_diff() {
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, patch).unwrap();
@@ -1292,11 +1276,7 @@ fn context_flag_is_gone() {
     // Passing it is now a clap usage error (exit 2; enveloped in json
     // mode since T26, pinned in `usage_envelope_e2e.rs`).
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, two_call_patch()).unwrap();
     let out = run(
@@ -1499,11 +1479,7 @@ fn missing_target_warns_and_creates_on_apply() {
 fn output_path_is_cwd_relative_not_repo_joined() {
     // T114: `--output` resolves against the caller cwd, never `--repo`.
     let repo = init_repo();
-    write(
-        repo.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(repo.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let cwd = tempfile::tempdir().unwrap();
     let patch =
         "diff --git src/lib.rs\n@@ -1,2 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
@@ -1681,7 +1657,8 @@ fn bind_with_allow_many_rejected_json_envelope() {
     // scalar captures under distinct names instead.
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
-    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=cut\n# item I\n# bind=H\n# allow=many\n- I\n";
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,2 @@ rule=cut\n# item I\n# bind=H\n# allow=many\n- I\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1692,7 +1669,10 @@ fn bind_with_allow_many_rejected_json_envelope() {
         serde_json::json!("RSMPL_CAPTURE_CONFLICT")
     );
     assert!(
-        v["error"]["reason"].as_str().unwrap().contains("# allow=many"),
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("# allow=many"),
         "got: {v}"
     );
 }

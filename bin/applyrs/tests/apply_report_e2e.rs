@@ -15,11 +15,7 @@ fn json_apply_mutates_worktree() {
     // lands. Before the fix this exited 0 with a full report while
     // leaving the worktree untouched.
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
     let before = read(dir.path(), "src/lib.rs");
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
@@ -43,11 +39,7 @@ fn json_check_still_applies_nothing() {
     // T151 guard: the mirror fix must not over-apply — JSON `--check`
     // verifies only.
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
     let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
     assert!(
@@ -163,11 +155,7 @@ fn explicit_doc_comment_mirror_applies_end_to_end() {
     // T155: `///` doc lines mirror like `#[...]` attrs end to end —
     // `--check` previews the rename, `--output` saves the full diff.
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "/// Doc comment.\nfn foo() {}\n",
-    );
+    write(dir.path(), "src/lib.rs", "/// Doc comment.\nfn foo() {}\n");
     let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=r\n# attrs=explicit\n- /// Doc comment.\n- fn foo(...) {\n+ /// Doc comment.\n+ fn bar(...) {\n      ...\n  }\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(

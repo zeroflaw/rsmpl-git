@@ -663,10 +663,7 @@ fn prune_history(dir: &std::path::Path) {
     if entries.len() > KEEP {
         for stale in entries.iter().take(entries.len() - KEEP) {
             if let Err(e) = std::fs::remove_file(stale) {
-                eprintln!(
-                    "warning: history: cannot prune {}: {e}",
-                    stale.display()
-                );
+                eprintln!("warning: history: cannot prune {}: {e}", stale.display());
             }
         }
     }

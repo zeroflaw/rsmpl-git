@@ -63,7 +63,8 @@ fn assert_bare_json(v: &serde_json::Value, code: &str, reason: &str) {
 
 #[test]
 fn empty_directive_verbatim() {
-    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n#\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let patch =
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n#\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
     let reason = "empty directive: #";
     let stderr = check_text(patch, "a.rs", "fn f() {}\n");
     assert_bare_envelope(&stderr, "RSMPL_PATTERN_CONFLICT", reason);
@@ -88,10 +89,7 @@ fn self_cycle_verbatim() {
     let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# item I\n# bind=H\n# use=H\n- I\n";
     let reason = "hunk both binds and uses `H` (self-cycle)";
     let stderr = check_text(patch, "a.rs", "fn f() {}\n");
-    assert!(
-        stderr.contains("RSMPL_CAPTURE_CONFLICT"),
-        "got: {stderr}"
-    );
+    assert!(stderr.contains("RSMPL_CAPTURE_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains(reason), "got: {stderr}");
     assert!(stderr.contains("rule: r"), "got: {stderr}");
     assert!(stderr.contains("file: a.rs"), "got: {stderr}");
@@ -138,10 +136,7 @@ fn empty_patch_verbatim() {
     let reason = "empty patch: no `diff --git` file sections";
     let suggestion = "provide at least one `diff --git a/.. b/..` file section with a hunk (see SPEC 6 minimal recipe); check for an empty patch input (stdin, --file, or --patch)";
     let stderr = check_text(patch, "a.rs", "fn f() {}\n");
-    assert!(
-        stderr.contains("RSMPL_PARSE_CONFLICT"),
-        "got: {stderr}"
-    );
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains(reason), "got: {stderr}");
     assert!(stderr.contains(suggestion), "got: {stderr}");
     assert!(!stderr.contains("rule:"), "got: {stderr}");

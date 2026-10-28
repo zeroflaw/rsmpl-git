@@ -497,15 +497,8 @@ mod tests {
         // T377: rename+modify lowers to rename headers + ---/+++ +
         // hunks, with no similarity/index lines (git apply needs
         // neither) -- the minimal appliable shape.
-        let d = unified_diff_for_rename_with_context(
-            "old.txt",
-            "new.txt",
-            "a\n",
-            "b\n",
-            None,
-            None,
-            0,
-        );
+        let d =
+            unified_diff_for_rename_with_context("old.txt", "new.txt", "a\n", "b\n", None, None, 0);
         assert!(d.contains("diff --git a/old.txt b/new.txt"), "got: {d}");
         assert!(d.contains("rename from old.txt"), "got: {d}");
         assert!(d.contains("rename to new.txt"), "got: {d}");
@@ -521,13 +514,7 @@ mod tests {
         // T377: a pure rename lowers to headers only, exactly what
         // real git shows -- and never to an empty string.
         let d = unified_diff_for_rename_with_context(
-            "old.txt",
-            "new.txt",
-            "same\n",
-            "same\n",
-            None,
-            None,
-            0,
+            "old.txt", "new.txt", "same\n", "same\n", None, None, 0,
         );
         assert!(d.contains("rename from old.txt"), "got: {d}");
         assert!(d.contains("rename to new.txt"), "got: {d}");
@@ -553,7 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn typechange_empty_sides_emit_headers_only_pair() {        // T364: empty halves no longer drop -- the pair stays complete
+    fn typechange_empty_sides_emit_headers_only_pair() {
+        // T364: empty halves no longer drop -- the pair stays complete
         // (delete headers + create headers), in git order.
         let pair = unified_diff_for_typechange_with_context("f", "", "", false, "120000", 0);
         assert_eq!(pair.len(), 2, "got: {pair:?}");

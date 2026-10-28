@@ -437,8 +437,7 @@ pub(crate) fn try_verbatim_sweep(
     let mut passing: Vec<VerbatimGroup> = Vec::new();
     // Pre-image parse, once per section (None = no entry: legacy
     // section-visible evidence only; Some(Err) = unparseable: veto all).
-    let old_file: Option<Option<syn::File>> =
-        file_old.map(|t| syn::parse_str::<syn::File>(t).ok());
+    let old_file: Option<Option<syn::File>> = file_old.map(|t| syn::parse_str::<syn::File>(t).ok());
     if matches!(old_file, Some(None)) {
         used_rules.truncate(checkpoint);
         return None;
@@ -538,10 +537,11 @@ pub(crate) fn try_verbatim_sweep(
         .iter()
         .enumerate()
         .map(|(i, b)| {
-            *b && pairs
-                .iter()
-                .filter(|(j, _, _)| *j == i)
-                .all(|(_, m, p)| passing.iter().any(|g| g.minus_trim == *m && g.plus_trim == *p))
+            *b && pairs.iter().filter(|(j, _, _)| *j == i).all(|(_, m, p)| {
+                passing
+                    .iter()
+                    .any(|g| g.minus_trim == *m && g.plus_trim == *p)
+            })
         })
         .collect();
     // Leftover balanced hunks retry the standard chain (identical to
@@ -1204,14 +1204,23 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
-        assert!(out.rsmpl.contains("- &state.parsed\n"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("- &state.parsed\n"),
+            "got: {}",
+            out.rsmpl
+        );
         assert!(out.rsmpl.contains("+ parsed\n"), "got: {}", out.rsmpl);
         assert!(
             out.rsmpl.contains("+let cached = state.parsed;\n"),
             "got: {}",
             out.rsmpl
         );
-        assert_eq!(out.rsmpl.matches("@@ -1,1 @@").count(), 1, "got: {}", out.rsmpl);
+        assert_eq!(
+            out.rsmpl.matches("@@ -1,1 @@").count(),
+            1,
+            "got: {}",
+            out.rsmpl
+        );
         rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
     }
 
@@ -1273,11 +1282,18 @@ mod tests {
             out.rsmpl
         );
         assert!(
-            out.rsmpl.contains("@@ -20,1 +21,1 @@\n-        timeout_secs,\n+        timeout_secs.max(1),\n"),
+            out.rsmpl.contains(
+                "@@ -20,1 +21,1 @@\n-        timeout_secs,\n+        timeout_secs.max(1),\n"
+            ),
             "got: {}",
             out.rsmpl
         );
-        assert_eq!(out.rsmpl.matches("@@ -1,1 @@").count(), 1, "got: {}", out.rsmpl);
+        assert_eq!(
+            out.rsmpl.matches("@@ -1,1 @@").count(),
+            1,
+            "got: {}",
+            out.rsmpl
+        );
         rsmpl_patch::parse_patch(&out.rsmpl).expect("mixed output must parse");
     }
 
@@ -1326,7 +1342,11 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
         assert!(!out.rsmpl.contains("rule=verbatim_2"), "got: {}", out.rsmpl);
     }
     #[test]
@@ -1379,8 +1399,16 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"), "got: {}", out.rsmpl);
-        assert!(out.rsmpl.contains("- &state.parsed\n"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("- &state.parsed\n"),
+            "got: {}",
+            out.rsmpl
+        );
     }
     #[test]
     fn verbatim_sweep_totality_vetoes_unchanged_occurrence() {

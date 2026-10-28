@@ -27,12 +27,11 @@ fn impl_slot_sweep_renames_all_four_preserving_slots() {
         String::from_utf8_lossy(&out.stderr)
     );
     let got = read(dir.path(), "src/lib.rs");
-    assert_eq!(
-        got.matches("fn new_name").count(),
-        4,
+    assert_eq!(got.matches("fn new_name").count(), 4, "got: {got}");
+    assert!(
+        got.contains("    fn new_name(&self) -> i32 {"),
         "got: {got}"
     );
-    assert!(got.contains("    fn new_name(&self) -> i32 {"), "got: {got}");
     assert!(
         got.contains("    pub fn new_name(&self) -> i32 {"),
         "got: {got}"

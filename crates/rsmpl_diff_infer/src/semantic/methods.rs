@@ -323,8 +323,7 @@ fn parse_method_same_literal_pair(
     }
     let old_expr: syn::Expr = syn::parse_str(old_text).ok()?;
     let new_expr: syn::Expr = syn::parse_str(new_text).ok()?;
-    let (syn::Expr::MethodCall(old_call), syn::Expr::MethodCall(new_call)) =
-        (&old_expr, &new_expr)
+    let (syn::Expr::MethodCall(old_call), syn::Expr::MethodCall(new_call)) = (&old_expr, &new_expr)
     else {
         return None;
     };

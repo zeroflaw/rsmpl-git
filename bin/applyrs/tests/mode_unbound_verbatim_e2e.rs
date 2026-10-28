@@ -28,8 +28,7 @@ fn check_json(patch: &str, file: &str, content: &str) -> serde_json::Value {
 
 #[test]
 fn mode_tokens_on_non_macro_rejected_verbatim() {
-    let patch =
-        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# mode=tokens\n- foo()\n+ bar()\n";
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# mode=tokens\n- foo()\n+ bar()\n";
     let reason = "`# mode=tokens` is only supported for macro token-tree patterns in v0.1";
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn f() {\n    foo();\n}\n");
@@ -59,7 +58,8 @@ fn mode_tokens_on_non_macro_rejected_verbatim() {
 
 #[test]
 fn unbound_plus_metavariable_rejected_verbatim() {
-    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=y\n# expr E\n# expr F\n- foo(E)\n+ bar(F)\n";
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=y\n# expr E\n# expr F\n- foo(E)\n+ bar(F)\n";
     let reason = "metavariable(s) used in `+` pattern without binding: F";
     let suggestion = "bind them in `-`/context or declare `# use=`";
     let dir = init_repo();

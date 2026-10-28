@@ -29,7 +29,12 @@ pub enum DiffError {
 /// (`git show :path`, exact whether or not the index is layered), the
 /// `rev` blob for staged and rev diffs. Fetch failures omit the entry
 /// (that section falls back to section-visible evidence).
-fn pre_images(repo: &Path, staged: bool, rev: Option<&str>, files: &[String]) -> HashMap<String, String> {
+fn pre_images(
+    repo: &Path,
+    staged: bool,
+    rev: Option<&str>,
+    files: &[String],
+) -> HashMap<String, String> {
     // Index blob (`:path`) for pending worktree diffs — exact whether or
     // not the index is layered; the `rev` blob otherwise.
     let base = if staged || rev.is_some() {
@@ -43,7 +48,11 @@ fn pre_images(repo: &Path, staged: bool, rev: Option<&str>, files: &[String]) ->
             continue;
         }
         let spec = format!("{base}:{path}");
-        let got = Command::new("git").arg("-C").arg(repo).args(["show", &spec]).output();
+        let got = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["show", &spec])
+            .output();
         if let Ok(o) = got {
             if o.status.success() {
                 if let Ok(text) = String::from_utf8(o.stdout) {

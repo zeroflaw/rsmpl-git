@@ -993,14 +993,19 @@ fn verbatim_sweep_pending_change_round_trips() {
     commit_all(dir.path());
     write(dir.path(), "a.rs", changed);
 
-
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert_eq!(patch.matches("@@ -1,1 @@ rule=verbatim\n").count(), 1, "got: {patch}");
+    assert_eq!(
+        patch.matches("@@ -1,1 @@ rule=verbatim\n").count(),
+        1,
+        "got: {patch}"
+    );
     assert!(patch.contains("- &state.parsed\n"), "got: {patch}");
-    assert!(patch.contains("+    let cached = state.parsed;"), "got: {patch}");
-
+    assert!(
+        patch.contains("+    let cached = state.parsed;"),
+        "got: {patch}"
+    );
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);
@@ -1033,12 +1038,10 @@ fn verbatim_sweep_guard_occurrence_stays_ordinary() {
     commit_all(dir.path());
     write(dir.path(), "a.rs", changed);
 
-
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(!patch.contains("rule="), "got: {patch}");
-
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);
