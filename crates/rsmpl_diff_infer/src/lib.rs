@@ -247,13 +247,25 @@ fn b_side_path(rest: &str) -> Option<String> {
     // single-path header yields that path.
     rsmpl_patch::split_git_paths(rest).map(|parts| {
         let side = parts.last().cloned().unwrap_or_default();
-        side.strip_prefix("b/")
-            .unwrap_or(&side)
-            .trim_matches('"')
-            .to_string()
+        // T399: no `trim_matches('"')` — the splitter already strips
+        // only the outer C-quote pair, so edge quotes that belong to
+        // the filename survive (trimming corrupted `"lead`/trail"`).
+        side.strip_prefix("b/").unwrap_or(&side).to_string()
     })
 }
 
+/// `diff --git` header line for `path` (T399): C-quote `"`, `\` +
+/// control slots via `quote_git_path` (native quotepath shape; plain
+/// paths stay raw), then the T381 single-path collapse. Plain
+/// `a/{p} b/{p}` interpolation mis-splits quote/backslash names.
+pub(crate) fn git_header(path: &str) -> String {
+    let raw = format!(
+        "diff --git {} {}",
+        rsmpl_patch::quote_git_path(&format!("a/{path}")),
+        rsmpl_patch::quote_git_path(&format!("b/{path}"))
+    );
+    rsmpl_patch::collapse_git_header(&raw)
+}
 /// Drop git's trailing `@@ … @@ <title>` section titles on
 /// two-sided (native ordinary) hunk headers.
 fn strip_hunk_titles(section: &str) -> String {
@@ -571,5 +583,25 @@ mod tests {
         let out = infer_rsmpl(raw).unwrap();
         assert!(out.stripped_binary.is_empty());
         assert!(out.rsmpl.contains("+a\rb\n"), "got: {}", out.rsmpl);
+    }
+
+    #[test]
+    fn quoted_binary_marker_strips_with_real_name() {
+        // T399: the header decode used to drop the interior `"` (the
+        // source emitted it raw and the splitter mis-read it), so the
+        // stripped name lost the quote. Quoted emission round-trips it.
+        let raw = "diff --git \"a/q\\\"bin.txt\" \"b/q\\\"bin.txt\"\nBinary files \"a/q\\\"bin.txt\" and \"b/q\\\"bin.txt\" differ\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(out.rsmpl.is_empty(), "got: {}", out.rsmpl);
+        assert_eq!(out.stripped_binary, vec!["q\"bin.txt"]);
+    }
+
+    #[test]
+    fn quoted_b_side_path_keeps_edge_quotes() {
+        // T399: `trim_matches('"')` stripped genuine edge quotes from
+        // the decoded name (`"lead.txt` became `lead.txt`). The
+        // splitter already removes only the outer C-quote pair.
+        let rest = "\"a/\\\"lead.txt\" \"b/\\\"lead.txt\"";
+        assert_eq!(b_side_path(rest).as_deref(), Some("\"lead.txt"));
     }
 }

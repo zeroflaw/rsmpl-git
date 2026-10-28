@@ -307,7 +307,7 @@ fn try_item_rename(
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# scope=file\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     if old_kind == "fn" {
         // Plain top-level fns only: the canonical `fn Old(...)`
@@ -458,7 +458,7 @@ fn try_fn_slot_sweep(
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     if all_indented {
         hunk.push_str(&format!(
@@ -583,7 +583,7 @@ fn try_method_to_fn_sweep(
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     let mut vars = Vec::new();
     for i in 0..arity {
@@ -700,7 +700,7 @@ fn try_method_to_method_sweep(
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     let mut vars = Vec::new();
     for i in 0..arity {
@@ -809,7 +809,7 @@ fn try_ref_method_strip_sweep(
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr Receiver\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     hunk.push_str(&format!(
         "- &Receiver.{method}({})\n+ Receiver\n",
@@ -977,7 +977,7 @@ fn try_use_prefix_sweep(
     );
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     hunk.push_str(&format!(
         "- use {}\n+ use {}\n",
@@ -1085,7 +1085,7 @@ fn try_call_sweep(
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     let mut hunk = format!(
         "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+        header = super::git_header(path)
     );
     let mut vars = Vec::new();
     for i in 0..arity {
@@ -1199,10 +1199,9 @@ fn b_side_path(header: &str) -> Option<String> {
     let rest = header.strip_prefix("diff --git ")?;
     rsmpl_patch::split_git_paths(rest).map(|parts| {
         let side = parts.last().cloned().unwrap_or_default();
-        side.strip_prefix("b/")
-            .unwrap_or(&side)
-            .trim_matches('"')
-            .to_string()
+        // T399: no `trim_matches('"')` — the splitter already strips
+        // only the outer C-quote pair (genuine edge quotes survive).
+        side.strip_prefix("b/").unwrap_or(&side).to_string()
     })
 }
 

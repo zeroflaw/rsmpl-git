@@ -5787,7 +5787,10 @@ reports empty + warnings (exit 0), not an error (T378). Sections whose
 definition); invalid-UTF-8 sections (native `git diff` dumps literal
 bytes for binary creates while modifies get the marker) are swapped
 for `Binary files … differ` markers at the byte level, so genuine
-U+FFFD chars in valid-UTF-8 text pass through (T395/T396). Submodule
+U+FFFD chars in valid-UTF-8 text pass through (T395/T396). Emitted
+untracked headers and marker slots C-quote `"`, `\`, control bytes
+(native quotepath shape; plain names stay raw) — raw interpolation
+mis-split quote names into silent wrong-file writes (T399). Submodule
 (gitlink, mode 160000) sections strip the same way (one `warning:`
 per path): a gitlink bump/delete cannot round-trip (`applyrs`
 cannot read the directory on the pre-image side) and an add only

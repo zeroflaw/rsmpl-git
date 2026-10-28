@@ -166,8 +166,14 @@ impl GitSource {
             // marker — U+FFFD itself is genuine text now that the
             // tracked side checks validity at the byte level.
             if content.contains(&0) || std::str::from_utf8(&content).is_err() {
+                // T399: C-quote `"`, `\` + control slots (native
+                // quotepath shape; plain paths stay raw).
+                let (old_slot, new_slot) = (
+                    rsmpl_patch::quote_git_path(&format!("a/{path}")),
+                    rsmpl_patch::quote_git_path(&format!("b/{path}")),
+                );
                 raw.push_str(&format!(
-                    "diff --git a/{path} b/{path}\nBinary files a/{path} and b/{path} differ\n"
+                    "diff --git {old_slot} {new_slot}\nBinary files {old_slot} and {new_slot} differ\n"
                 ));
                 continue;
             }
@@ -274,11 +280,17 @@ fn regular_file_mode(_md: &std::fs::Metadata) -> &'static str {
 /// an empty new file (T364) -- the old `@@ -0,0 +1,0 @@` shape was
 /// never git's and masked the empty-create drop.
 fn new_file_section(path: &str, content: &str, mode: &str) -> String {
-    let mut section = format!("diff --git a/{path} b/{path}\nnew file mode {mode}\n");
+    // T399: C-quote `"`, `\` + control slots (native quotepath shape;
+    // plain paths stay raw — raw interpolation mis-splits quote names).
+    let (old_slot, new_slot) = (
+        rsmpl_patch::quote_git_path(&format!("a/{path}")),
+        rsmpl_patch::quote_git_path(&format!("b/{path}")),
+    );
+    let mut section = format!("diff --git {old_slot} {new_slot}\nnew file mode {mode}\n");
     if content.is_empty() {
         return section;
     }
-    section.push_str(&format!("--- /dev/null\n+++ b/{path}\n"));
+    section.push_str(&format!("--- /dev/null\n+++ {new_slot}\n"));
     // T385: split on `\n` (not `str::lines`, which strips `\r`) so
     // CRLF content round-trips byte-exact instead of converting to LF.
     let mut clines: Vec<&str> = content.split('\n').collect();
@@ -356,14 +368,17 @@ fn binary_marker_for(section: &[u8]) -> String {
     let path = match rsmpl_patch::split_git_paths(rest) {
         Some(parts) => {
             let side = parts.last().cloned().unwrap_or_default();
-            side.strip_prefix("b/")
-                .unwrap_or(&side)
-                .trim_matches('"')
-                .to_string()
+            side.strip_prefix("b/").unwrap_or(&side).to_string()
         }
         None => rest.trim().to_string(),
     };
-    format!("diff --git {rest}\nBinary files a/{path} and b/{path} differ\n")
+    // T399: C-quote the marker slots (native shape for quoted names;
+    // the `diff --git` line above keeps byte-identical native `rest`).
+    let (old_slot, new_slot) = (
+        rsmpl_patch::quote_git_path(&format!("a/{path}")),
+        rsmpl_patch::quote_git_path(&format!("b/{path}")),
+    );
+    format!("diff --git {rest}\nBinary files {old_slot} and {new_slot} differ\n")
 }
 
 /// Repo-relative paths covered by a unified diff: the `b/` side of
@@ -527,6 +542,51 @@ mod tests {
         assert!(out.contains("-a\n+b\n"), "got: {out}");
         assert!(
             out.contains("Binary files a/blob.bin and b/blob.bin differ\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn new_file_section_quotes_quote_and_backslash_names() {
+        // T399: raw interpolation mis-split quote/backslash names at
+        // both ends (silent wrong-file write, rc 0) — C-quote them
+        // (native quotepath shape); plain names stay raw.
+        let section = new_file_section("q\"ute.txt", "hello\n", "100644");
+        assert!(
+            section.contains("diff --git \"a/q\\\"ute.txt\" \"b/q\\\"ute.txt\"\n"),
+            "got: {section}"
+        );
+        assert!(
+            section.contains("+++ \"b/q\\\"ute.txt\"\n"),
+            "got: {section}"
+        );
+        assert!(
+            !section.contains("a/q\"ute.txt b/"),
+            "raw unquoted header: {section}"
+        );
+        let section = new_file_section("back\\slash.txt", "hi\n", "100644");
+        assert!(
+            section.contains("\"a/back\\\\slash.txt\" \"b/back\\\\slash.txt\""),
+            "got: {section}"
+        );
+        let plain = new_file_section("plain.txt", "hi\n", "100644");
+        assert!(
+            plain.starts_with("diff --git a/plain.txt b/plain.txt\n"),
+            "got: {plain}"
+        );
+    }
+
+    #[test]
+    fn binary_marker_for_quotes_quoted_names() {
+        // T399: the marker for a quoted-name binary section keeps the
+        // real name (C-quoted slots, native shape for quoted names).
+        let mut section =
+            b"diff --git \"a/q\\\"bin.txt\" \"b/q\\\"bin.txt\"\nnew file mode 100644\n".to_vec();
+        section.extend_from_slice(b"--- /dev/null\n+++ \"b/q\\\"bin.txt\"\n@@ -0,0 +1 @@\n+");
+        section.extend_from_slice(&[0x80, 0x81, b'\n']);
+        let out = binary_marker_for(&section);
+        assert!(
+            out.contains("\"a/q\\\"bin.txt\" and \"b/q\\\"bin.txt\""),
             "got: {out}"
         );
     }

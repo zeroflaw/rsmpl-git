@@ -732,3 +732,107 @@ fn spaced_rename_resolves_from_rename_lines() {
     );
     assert!(!dir.path().join("old b").exists(), "old side not removed");
 }
+
+#[test]
+fn untracked_quote_name_text_create_round_trips() {
+    // T399: `new_file_section` interpolated the path raw, so
+    // `q"ute2.txt` emitted `diff --git a/q"ute2.txt b/q"ute2.txt` —
+    // the splitter mis-read the interior `"` and applyrs silently
+    // wrote `qute2.txt b/qute2.txt`, rc 0. Quoted emission targets
+    // the real file; no stray dirs may appear.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "top.txt", "x\n");
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("q\"ute2.txt"), "hello\n").unwrap();
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("q\\\"ute2.txt"), "got: {patch}");
+    assert!(
+        !patch.contains("a/q\"ute2.txt b/"),
+        "raw unquoted header: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let git_out = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        git_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(dir.path().join("q\"ute2.txt")).unwrap(),
+        b"hello\n"
+    );
+    assert!(
+        !dir.path().join("qute2.txt").exists(),
+        "mis-split stray file"
+    );
+}
+
+#[test]
+fn untracked_quote_name_binary_strips_with_quoted_warning() {
+    // T399: the untracked binary marker interpolated the path raw, so
+    // `q"bin.txt` warned as `a/qbin.txt b/qbin.txt` (quote dropped by
+    // the mis-split). Quoted emission keeps the real name in the
+    // warning; the binary still strips and the text mix round-trips.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "top.txt", "x\n");
+    commit_all(dir.path());
+    std::fs::write(dir.path().join("q\"bin.txt"), [0u8, 1, 2, 255, 254]).unwrap();
+    write(dir.path(), "keep.txt", "keep me\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(patch.contains("+keep me"), "got: {patch}");
+    assert!(!patch.contains("qbin"), "binary leaked: {patch}");
+    assert!(
+        stderr.contains("q\"bin.txt"),
+        "warning lost the quote: {stderr}"
+    );
+
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(dir.path().join("keep.txt")).unwrap(),
+        b"keep me\n"
+    );
+    assert!(
+        !dir.path().join("q\"bin.txt").exists(),
+        "stripped binary must not materialize"
+    );
+}
