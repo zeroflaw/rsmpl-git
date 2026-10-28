@@ -35,6 +35,16 @@ from pathlib import Path
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SEM_PREFIX = "@@ -1,1 @@ rule="
+MOVE_PREFIXES = (" rule=move_", " rule=paste_")
+
+
+def is_sem_hunk(line: str) -> bool:
+    """Anchored semantic-hunk test (T358-safe: diff content lines never
+    start with `@@`); covers scope=file dummies plus T430 move cut/paste
+    hunks, which cite real ranges/anchors instead."""
+    return line.startswith(SEM_PREFIX) or (
+        line.startswith("@@ ") and any(p in line for p in MOVE_PREFIXES)
+    )
 
 
 def run(cmd: list[str], cwd: Path | None = None, inp: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
@@ -147,7 +157,7 @@ def check_case(top: Path, wt: Path, tmp: Path, diffrs: Path, applyrs: Path, comm
     if out.returncode != 0:
         return 0, [f"{short}: diffrs {rev} exited {out.returncode}: {out.stderr.decode(errors='replace').strip()}"]
     patch = out.stdout.decode(errors="replace")
-    sem = sum(1 for line in patch.splitlines() if line.startswith(SEM_PREFIX))
+    sem = sum(1 for line in patch.splitlines() if is_sem_hunk(line))
     patch_path = tmp / f"{short}.rsmpl"
     patch_path.write_text(patch)
 

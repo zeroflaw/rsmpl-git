@@ -5891,6 +5891,18 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   last segment, with per-site textually identical non-empty tails
   (plain/grouped/glob/`as` tails may mix) → one `# allow=many` hunk
   (`- use <parent>::Old` / `+ use <parent>::New`, no metavars).
+- Whole-item move inference (T430): a byte-identical fn item deleted in
+  one file and added in another (or the same file, or a new file) compresses
+  to `# item I` + `# bind` cut hunks spliced at the consumed pure-minus hunk
+  plus `# use` paste hunks spliced after the rewritten pure-plus hunk (1b8993a:
+  four fns move files, 873 ordinary lines -> 117). v1 gates: fn items only,
+  global 1-minus + 1-plus pairing, cut-file pre-image flat-ws uniqueness (twin
+  veto), minus blanks positional (no leading blank, no runs — a cut absorbs
+  exactly one following blank), plus items as a contiguous suffix with exactly
+  one blank between runs (the same-anchor paste join restores exactly one),
+  new-file pastes allowed, deleted-file cuts and rename sections skipped, and a
+  global T375 byte-win guard. Everything else stays ordinary (T432 follow-ups:
+  non-fn items, mixed-hunk partial consumption, other gap shapes, N-to-1 dedup).
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)
@@ -5930,7 +5942,8 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   line; snippet callee checks over-vetoed 57140fe via assert!/patch-string
   literals).
 - Everything else (multi-line edits, pure deletions/additions,
-  non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
+  non-`.rs` files, unbalanced hunks (whole-item moves pair pure-minus/pure-plus
+  twins instead — see above), turbofish sites, non-strip
   `&`-receiver sites, single-segment use prefixes, paths, macro
   interiors, rename sections — detectors key emissions to the
   b-side path, which would seed from the wrong file, so differing

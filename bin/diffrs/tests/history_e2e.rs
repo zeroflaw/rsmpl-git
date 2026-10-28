@@ -41,7 +41,9 @@ struct Case {
     rev: Option<&'static str>,
     /// Root commit: the pre-change tree is an empty dir, not a checkout.
     root: bool,
-    /// Pinned `^@@ -1,1 @@ rule=` header count.
+    /// Pinned semantic-hunk header count (`^@@ -1,1 @@ rule=` plus
+    /// anchored `rule=move_/`paste_` cut/paste hunks, which cite real
+    /// ranges/anchors instead of the scope=file dummy).
     expect_sem: usize,
 }
 
@@ -162,6 +164,15 @@ const CASES: &[Case] = &[
         // pairs compress to one verbatim hunk (leading-`!` bypasses to
         // `Raw`; the engine matches `Unary` structurally).
         expect_sem: 1,
+    },
+    Case {
+        commit: "1b8993a08b6b8c9175403230c8daaff9e3dd3f5b",
+        rev: None,
+        root: false,
+        // T430 whole-item move inference: four byte-identical fns move
+        // matcher_fn.rs -> new matcher_impl.rs (vis/fmt leftovers stay
+        // ordinary); four cuts + four pastes = 8 semantic hunks.
+        expect_sem: 8,
     },
     Case {
         commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",
@@ -369,6 +380,14 @@ fn compare_trees(applied: &Path, expect: &Path) -> Vec<String> {
     diffs
 }
 
+/// A move cut/paste hunk header: anchored `@@ ` prefix plus a
+/// `rule=move_/`paste_` tag (cuts cite real ranges, pastes cite
+/// `-N,0` anchors — never the scope=file dummy). The ` rule=` infix
+/// keeps T358 safety: diff content lines never start with `@@`.
+fn is_move_hunk(line: &str) -> bool {
+    line.starts_with("@@ ") && (line.contains(" rule=move_") || line.contains(" rule=paste_"))
+}
+
 fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
     let short = &case.commit[..7];
     if !git_ok(wt, &["checkout", "-qf", case.commit]) {
@@ -403,7 +422,7 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
     // false "compressing"), so never loosen this prefix.
     let sem = patch
         .lines()
-        .filter(|l| l.starts_with("@@ -1,1 @@ rule="))
+        .filter(|l| l.starts_with("@@ -1,1 @@ rule=") || is_move_hunk(l))
         .count();
     if sem != case.expect_sem {
         failures.push(format!(
@@ -414,7 +433,9 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
     if case.expect_sem > 0
         && !(patch.contains("rule=rename_")
             || patch.contains("rule=calls_")
-            || patch.contains("rule=verbatim"))
+            || patch.contains("rule=verbatim")
+            || patch.contains("rule=move_")
+            || patch.contains("rule=paste_"))
     {
         failures.push(format!(
             "{short}: expected rename/sweep compression, got none"

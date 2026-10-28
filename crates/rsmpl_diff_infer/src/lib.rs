@@ -8,7 +8,9 @@
 //! renames (`recv.old(args)` → `recv.new(args)`), N-site use-path
 //! prefix renames (`use P::Old::T` → `use P::New::T`), and N-site
 //! call rewrites (same callee/arity delta → one `# allow=many`
-//! hunk) into semantic hunks,
+//! hunk), and whole-item 1-to-1 moves (byte-identical fn deleted here,
+//! added there → `# item I` + `# bind` cut / `# use` paste, T430) into
+//! semantic hunks,
 //! whole-file first, then per balanced hunk (T349); the rest stays ordinary. Binary file sections are stripped (a patch is
 //! UTF-8; `applyrs` cannot read binary worktree files), `index` lines
 //! are dropped (optional metadata the lowering never reproduces —

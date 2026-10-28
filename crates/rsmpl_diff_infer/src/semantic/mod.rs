@@ -1,6 +1,6 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
-//! method-to-function, method-to-method, &-receiver strip, and use-path
-//! prefix fan-outs. Every emission clears a token-win guard (T375): the
+//! method-to-function, method-to-method, &-receiver strip, use-path prefix,
+//! and whole-item move (T430) fan-outs. Every emission clears a token-win guard (T375): the
 //! semantic hunk is kept only when byte-smaller than the ordinary
 //! hunk(s) it replaces (bytes proxy tokens), else the ordinary text
 //! stays — small singles and tiny sweeps never cost more than the
@@ -8,9 +8,12 @@
 //!
 //! Pure detectors over a binary-stripped diff. Whole-file first (cross-hunk
 //! sweeps); else per balanced hunk (T349), leftovers ordinary in order
-//! (pairwise-disjoint, SPEC 10.6 option-1). Every emission uses
+//! (pairwise-disjoint, SPEC 10.6 option-1). Every per-hunk emission uses
 //! `# scope=file` + `@@ -1,1 @@`; probe-verified via `applyrs --check`.
+//! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
+//! scope=file cut would match every item in the file.
 mod methods;
+mod moves;
 
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
@@ -36,6 +39,17 @@ pub fn infer_semantic_with_pre_images(
     let mut out = String::new();
     let mut used_rules: Vec<String> = Vec::new();
     let mut compressed_any = false;
+    // T430 whole-patch move pre-pass (cross-section bind/use pairs);
+    // per-section detectors run on the rewritten sections below.
+    let sections_owned: Vec<String>;
+    let sections: &[String] = match moves::try_move_sweep(sections, pre, &mut used_rules) {
+        Some(rewritten) => {
+            compressed_any = true;
+            sections_owned = rewritten;
+            &sections_owned
+        }
+        None => sections,
+    };
     for section in sections {
         match compress_section(section, &mut used_rules, pre) {
             Some(semantic) => {
