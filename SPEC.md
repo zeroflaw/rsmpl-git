@@ -5910,9 +5910,12 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   uncovered prefix/trailing plus lines stay as rewritten ordinary hunks around
   the pastes), new-file pastes and deleted-file cuts allowed (T432d; the
   rebuilt prelude keeps the deletion, so the file still goes away), rename
-  sections skipped, and a global T375 byte-win guard. Everything else stays
-  ordinary (T432 remainder: mixed-hunk partial consumption, inter-run gap
-  relaxation, N-to-1 (many-minus-to-one-plus) dedup, vis-evolution sweeps, multi-pair-at-EOF).
+  sections skipped, multi-pair hunks whose last run has no following blank
+  cap to N-1 pairs (the last run stays an ordinary trailing leftover;
+  single-item blank-prefix-at-EOF stays vetoed), and a global T375 byte-win
+  guard. Everything else stays ordinary (T432 remainder: mixed-hunk partial
+  consumption, inter-run gap relaxation, N-to-1 (many-minus-to-one-plus)
+  dedup, vis-evolution sweeps).
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

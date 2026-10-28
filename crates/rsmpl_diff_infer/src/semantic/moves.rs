@@ -16,16 +16,15 @@
 //! pairing (one cut + N pastes sharing one bind; 2-to-1 duplicate-plus veto),
 //! cut-file pre-image required with flat-ws uniqueness (twin veto; legacy
 //! no-pre path skips), minus paired runs with exactly one blank between
-//! following blank; the last run needs a following blank in the file —
-//! runs (a cut absorbs exactly one following blank; the last run needs a
-//! following blank in the file — without one a multi-pair last cut or a
-//! blank-ending prefix double-claims the preceding blank, f09edcd);
+//! runs (a cut absorbs exactly one following blank; multi-pair hunks whose
+//! last run has no following blank cap to N-1 pairs, the last run staying
+//! an ordinary trailing leftover — single-item blank-prefix-at-EOF stays
+//! vetoed, f09edcd);
 //! uncovered prefix/trailing minus lines stay ordinary around the cuts
 //! (T432c; one post-run blank is absorbed by the cut, never re-emitted),
-//! plus paired
-//! runs with exactly one blank between runs (the same-anchor paste join
-//! restores exactly one); uncovered prefix/trailing plus lines stay
-//! ordinary around pastes (T432b), deleted-file cuts allowed (T432d;
+//! plus paired runs with exactly one blank between runs (the same-anchor
+//! paste join restores exactly one); uncovered prefix/trailing plus lines
+//! stay ordinary around pastes (T432b), deleted-file cuts allowed (T432d;
 //! the rebuilt prelude keeps the deletion), rename sections skipped,
 //! and a global T375 byte-win guard.
 
@@ -196,15 +195,38 @@ pub(crate) fn try_move_sweep(
         let Some(file_old) = pre.get(&parsed[*msi].path) else {
             continue;
         };
-        if !minus_last_cut_sound(&hunk.body, &sound, *msi, *mhi, hunk.old_start, file_old) {
+        // Multi-pair-at-EOF capping (T432 slice 6): a last run with no
+        // following blank vetoed the whole hunk; instead drop the last
+        // paired minus item (all its fan-out hits) until the survivors
+        // are sound. The dropped run stays an ordinary trailing leftover
+        // (the surviving cut absorbs the gap blank). Single-item unsound
+        // hunks stay vetoed (prefix-trim deferred).
+        let mut cand: Vec<MovePair> = sound
+            .iter()
+            .filter(|p| p.minus_hunk_key == (*msi, *mhi))
+            .cloned()
+            .collect();
+        while !minus_last_cut_sound(&hunk.body, &cand, *msi, *mhi, hunk.old_start, file_old) {
+            let mut spans: Vec<(usize, usize)> =
+                cand.iter().map(|p| (p.item.first, p.item.last)).collect();
+            spans.sort();
+            spans.dedup();
+            if spans.len() < 2 {
+                break;
+            }
+            let last = cand.iter().map(|p| p.item.last).max().unwrap();
+            cand.retain(|p| p.item.last != last);
+            if !minus_hunk_holds(&hunk.body, &cand, *msi, *mhi) {
+                cand.clear();
+                break;
+            }
+        }
+        if cand.is_empty()
+            || !minus_last_cut_sound(&hunk.body, &cand, *msi, *mhi, hunk.old_start, file_old)
+        {
             continue;
         }
-        emit.extend(
-            sound
-                .iter()
-                .filter(|p| p.minus_hunk_key == (*msi, *mhi))
-                .cloned(),
-        );
+        emit.extend(cand);
     }
     let mut final_pairs: Vec<MovePair> = Vec::new();
     for (psi, phi) in &plus_hunks {
@@ -1361,11 +1383,12 @@ mod tests {
     }
 
     #[test]
-    fn move_multi_pair_at_eof_stays_ordinary() {
-        // f09edcd: the last of several cuts at file EOF would absorb its
-        // preceding (middle-gap) blank — already claimed by the previous
-        // cut's following-blank absorption — so multi-pair hunks whose
-        // last run has no following blank stay ordinary.
+    fn move_multi_pair_at_eof_caps_to_first_fires() {
+        // T432 slice 6: the last of several cuts at file EOF would absorb
+        // its preceding (middle-gap) blank — already claimed by the
+        // previous cut's following-blank absorption — so the last paired
+        // minus item drops and the survivors fire; the dropped run stays
+        // an ordinary trailing leftover on both sides.
         let one = big_fn("one");
         let two = big_fn("two");
         let mut a_minus = String::new();
@@ -1393,7 +1416,24 @@ mod tests {
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("multi-pair at EOF must cap to the first pair");
+        let text = out.join("");
+        assert!(text.contains("rule=move_one\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_one\n"), "got:\n{text}");
+        assert!(!text.contains("rule=move_two\n"), "got:\n{text}");
+        assert!(!text.contains("rule=paste_two\n"), "got:\n{text}");
+        assert!(
+            !text.contains("-fn one()"),
+            "paired lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn one()"),
+            "paired lines must be consumed, got:\n{text}"
+        );
+        assert!(text.contains("-fn two() {\n"), "got:\n{text}");
+        assert!(text.contains("+fn two() {\n"), "got:\n{text}");
+        validated_live(&text, &pre);
     }
 
     #[test]
