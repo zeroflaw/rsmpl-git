@@ -67,6 +67,39 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
+fn sync_expected_deletions(work: &Path, repo_dir: &Path, expected_dir: &Path) {
+    let mut pre = Vec::new();
+    collect_files(repo_dir, repo_dir, &mut pre);
+    for rel in pre {
+        if !expected_dir.join(&rel).exists() {
+            let victim = work.join(&rel);
+            if victim.is_file() {
+                std::fs::remove_file(&victim).unwrap();
+            }
+        }
+    }
+}
+
+fn assert_deletions_gone(
+    result: &Path,
+    repo_dir: &Path,
+    expected_dir: &Path,
+    name: &str,
+    stage: &str,
+) {
+    let mut pre = Vec::new();
+    collect_files(repo_dir, repo_dir, &mut pre);
+    for rel in pre {
+        if !expected_dir.join(&rel).exists() {
+            assert!(
+                !result.join(&rel).exists(),
+                "[{name}] {stage}: deleted file {} still present",
+                rel.display()
+            );
+        }
+    }
+}
+
 fn collect_files(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
@@ -128,6 +161,9 @@ fn native_to_semantic_to_native_round_trip() {
             &name,
         );
         copy_tree(&dir.join("expected"), work.path());
+        // Deleted-file post-states: drop worktree files absent from expected/
+        // (full-tree fixture convention; identical sets are a no-op).
+        sync_expected_deletions(work.path(), &dir.join("repo"), &dir.join("expected"));
 
         // 2. Native input: zero-context git diff, `index` lines stripped
         // (diffrs never emits them, T374 — strip for a fair byte count).
@@ -221,6 +257,13 @@ fn native_to_semantic_to_native_round_trip() {
             &name,
             "native round-trip",
         );
+        assert_deletions_gone(
+            verify.path(),
+            &dir.join("repo"),
+            &dir.join("expected"),
+            &name,
+            "native round-trip",
+        );
 
         // 7. Per-fixture shape pins.
         if name == "01-call-sweep" {
@@ -242,6 +285,29 @@ fn native_to_semantic_to_native_round_trip() {
             );
             let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
             assert!(context.is_empty(), "zero-context, got: {context:?}");
+        } else if name == "03-deleted-file-move" {
+            assert!(
+                semantic.contains("rule=move_big"),
+                "deleted-file move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big"),
+                "deleted-file move must paste, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn big("),
+                "minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn big("),
+                "plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
