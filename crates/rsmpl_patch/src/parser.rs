@@ -612,7 +612,7 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
             )
             .into());
         }
-        let (body, next) = parse_body_lines(lines, idx, false)?;
+        let (mut body, mut next) = parse_body_lines(lines, idx, false)?;
         // T367: ordinary hunk headers must agree with the body: old-side
         // lines (` ` + `-`) equal `-old,len`, new-side lines (` ` + `+`)
         // equal `+new,len` (`\ No newline` markers are neither side).
@@ -620,6 +620,15 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
         // used to surface downstream as a misleading `GIT_HUNK_CONFLICT`.
         // RSmPL hunks are exempt (counts are search ranges there, bodies
         // are patterns, SPEC 10.4).
+        // T431: trailing blank-context repair (see `trailing_blank` module,
+        // kept out of line to hold the 2000-line hygiene limit).
+        crate::trailing_blank::repair_trailing_blank_context(
+            &mut body,
+            &mut next,
+            lines,
+            header.old_len,
+            header.new_len,
+        );
         let old_count = body
             .iter()
             .filter(|b| b.prefix == ' ' || b.prefix == '-')
