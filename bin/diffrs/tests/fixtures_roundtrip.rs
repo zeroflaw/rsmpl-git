@@ -1133,6 +1133,98 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "28-verbatim-return" {
+            // T452: return-shape verbatim (b9c00d5/T418 miniature) — two
+            // identical `return make_widget("a", 1);` lines sweep via the
+            // engine Expr::Return arm (bare-call sweeps decline: `return`
+            // is not a bare call).
+            assert!(
+                semantic.contains("rule=verbatim"),
+                "return verbatim sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- return make_widget(\"a\", 1)"),
+                "return minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ return make_widget(\"a\", 2)"),
+                "return plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    return make_widget(\"a\", 1);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    return make_widget(\"a\", 2);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "29-verbatim-struct-field" {
+            // T452: struct-field verbatim (c48a6e6/T416 miniature) — two
+            // identical `text: make_text(sub),` field lines sweep on the
+            // stripped inner call (labels match, engine drops the label).
+            assert!(
+                semantic.contains("rule=verbatim"),
+                "struct-field verbatim sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- make_text(sub)"),
+                "struct-field minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ make_text_new(sub)"),
+                "struct-field plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-        text: make_text(sub),"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+        text: make_text_new(sub),"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "30-verbatim-unary" {
+            // T452: unary verbatim (b208847/T415 miniature) — two bare
+            // `!ready(flag);` lines sweep via leading-`!` Raw bypass and
+            // the structural Unary match (bare-call sweeps decline: the
+            // top-level node is Unary, not Call).
+            assert!(
+                semantic.contains("rule=verbatim"),
+                "unary verbatim sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- !ready(flag)"),
+                "unary minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ !ready_done(flag)"),
+                "unary plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    !ready(flag);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    !ready_done(flag);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
