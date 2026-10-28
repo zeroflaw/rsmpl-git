@@ -5892,6 +5892,8 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   are rejected — each failed loud in-corpus; non-Call-top-level pairs
   with nodes outside the engine's bounded general-expr set
   (Return/Block/If/..., T412) are rejected.
+  Struct-literal fields (`label: expr`, T416) strip the label and sweep
+  on the inner expression when both sides parse and labels match (c48a6e6).
   Soundness is subterm totality on the pre-image file
   (index blob for pending diffs, `rev` blob for staged/rev diffs):
   the stripped minus must occur as a sub-expression exactly

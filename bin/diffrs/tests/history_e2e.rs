@@ -139,6 +139,14 @@ const CASES: &[Case] = &[
         expect_sem: 1,
     },
     Case {
+        commit: "c48a6e60e286137a092b1ffb10084396440da6ee",
+        rev: None,
+        root: false,
+        // T416 field-label sweep: two identical `text: f(&sub)` struct
+        // fields sweep on the inner call (label preserved by the engine).
+        expect_sem: 1,
+    },
+    Case {
         commit: "b20884733ba61b1e6630adfb8920cede2cd751b7",
         rev: None,
         root: false,

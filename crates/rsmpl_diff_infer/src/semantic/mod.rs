@@ -562,6 +562,28 @@ pub(crate) fn strip_one_terminator(text: &str) -> Option<&str> {
     Some(text)
 }
 
+/// Strip one leading struct-literal field label (`label:`) for shape
+/// parsing (T416): `text: f(&sub)` sweeps on the inner `f(&sub)` — the
+/// engine general-expr matcher visits field values as sub-expressions,
+/// so a Call pattern rewrites them with the label preserved
+/// (probe-verified on c48a6e6). Returns the label and the remainder.
+/// `a::b(...)` paths never strip (colon followed by another colon).
+pub(crate) fn strip_field_label(text: &str) -> Option<(&str, &str)> {
+    let (label, rest) = text.split_once(':')?;
+    if rest.starts_with(':') {
+        return None;
+    }
+    let label = label.trim();
+    if label.is_empty() || !label.chars().all(is_ident_char) {
+        return None;
+    }
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    Some((label, rest))
+}
+
 /// Whitespace-insensitive text for detection-time containment and
 /// replacement checks (the engine re-verifies structurally at apply).
 pub(crate) fn flat_ws(s: &str) -> String {

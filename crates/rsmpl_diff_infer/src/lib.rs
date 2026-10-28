@@ -453,6 +453,23 @@ pub(crate) fn try_verbatim_sweep(
         ) else {
             continue;
         };
+        let (ms, ps) = match (
+            syn::parse_str::<syn::Expr>(ms),
+            syn::parse_str::<syn::Expr>(ps),
+        ) {
+            (Ok(_), Ok(_)) => (ms, ps),
+            // T416: struct-literal fields (`label: expr`) fail `Expr`
+            // parse on the full line — sweep on the label-stripped inner
+            // expression when both sides parse and labels match (the
+            // engine visits field values as sub-expressions, c48a6e6).
+            _ => match (
+                semantic::strip_field_label(ms),
+                semantic::strip_field_label(ps),
+            ) {
+                (Some((ml, mi)), Some((pl, pi))) if ml == pl => (mi, pi),
+                _ => continue,
+            },
+        };
         let minus_expr: syn::Expr = match syn::parse_str(ms) {
             Ok(e) => e,
             Err(_) => continue,
@@ -1395,6 +1412,47 @@ mod tests {
         // pair must stay ordinary.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    !hit(&a, &b)\n+    !hit(&a, &b, c)\n@@ -9,1 +10,1 @@\n-    !hit(&a, &b)\n+    !hit(&a, &b, c)\n";
         let pre = "fn f() {\n    if !hit(&a, &b) {}\n    if !hit(&a, &b) {}\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_sweep_field_label_strips_and_compresses() {
+        // T416 (mined from c48a6e6): struct-literal `label: expr` lines
+        // fail `Expr` parse on the full line — the sweep strips the label
+        // and compresses on the inner expression (the engine visits field
+        // values as sub-expressions; probe-verified `--check` clean).
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        text: normalize(&sub),\n+        text: normalize(&wrap(&sub)),\n@@ -9,1 +10,1 @@\n-        text: normalize(&sub),\n+        text: normalize(&wrap(&sub)),\n";
+        let pre = "struct S { text: String }\nfn f(sub: &str) -> S {\n    S { text: normalize(&sub) }\n}\nfn g(sub: &str) -> S {\n    S { text: normalize(&sub) }\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("- normalize(&sub)\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+ normalize(&wrap(&sub))\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(!out.rsmpl.contains("- text:"), "got: {}", out.rsmpl);
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
+    }
+    #[test]
+    fn verbatim_sweep_mismatched_labels_stay_passthrough() {
+        // T416 boundary: the label itself changed (`text:` -> `name:`) —
+        // the inner-expression rewrite would leave the wrong label, so
+        // the pair stays ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        text: normalize(&sub),\n+        name: normalize(&wrap(&sub)),\n@@ -9,1 +10,1 @@\n-        text: normalize(&sub),\n+        name: normalize(&wrap(&sub)),\n";
+        let pre = "struct S { text: String }\nfn f(sub: &str) -> S {\n    S { text: normalize(&sub) }\n}\nfn g(sub: &str) -> S {\n    S { text: normalize(&sub) }\n}\n";
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
