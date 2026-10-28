@@ -53,6 +53,8 @@ machine-checked counts in the JSON report) at ~zero token premium.
 | 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 548 B / 25 ln | 46% |
 | 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 214 B / 12 ln | 39% |
 | 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 518 B / 20 ln | 24% |
+| 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 133 B / 7 ln | 37% |
+| 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 272 B / 12 ln | 50% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

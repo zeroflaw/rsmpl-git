@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=calls_join_strip
+# allow=many
+# scope=file
+# expr Receiver
+- &Receiver.join("repo")
++ Receiver

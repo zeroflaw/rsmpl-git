@@ -1,0 +1,12 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=rename_old_function_name_to_new_function_name
+# scope=file
+# allow=many
+# visibility V
+# qualifier_list Q
+# generic_params G
+# where_clause W
+- V Q fn old_function_name G (...) W {
++ V Q fn new_function_name G (...) W {
+      ...
+  }

@@ -1,0 +1,8 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,2 +2,2 @@ fn m() {
+-    copy_tree(&a.join("repo"), x);
+-    copy_tree(&b.join("repo"), y);
++    copy_tree(a, x);
++    copy_tree(b, y);
