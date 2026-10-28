@@ -121,6 +121,16 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
                     sec.is_deleted_file = true;
                 } else if line.starts_with("new file mode") {
                     sec.is_new_file = true;
+                } else if let Some(from) = line.strip_prefix("rename from ") {
+                    // T397: bare git resolves renames from these lines
+                    // (not the `diff --git` split), so they override the
+                    // halves — a no-op when both agree (the T377 shapes).
+                    // Uniform is kept: halves wear `a/`/`b/` downstream.
+                    sec.old_path = with_ab_prefix(from, 'a');
+                    sec.target_path = target_path(&sec.new_path, &sec.old_path);
+                } else if let Some(to) = line.strip_prefix("rename to ") {
+                    sec.new_path = with_ab_prefix(to, 'b');
+                    sec.target_path = target_path(&sec.new_path, &sec.old_path);
                 }
                 sec.metadata.push(line.to_string());
                 idx += 1;
@@ -246,10 +256,35 @@ pub fn split_git_paths(rest: &str) -> Option<Vec<String>> {
         }
         return Some(vec![rest.to_string()]);
     }
-    if let Some(i) = parts.iter().position(|p| p.starts_with("b/")) {
-        if i > 0 && parts[..i].join(" ").starts_with("a/") {
-            return Some(vec![parts[..i].join(" "), parts[i..].join(" ")]);
+    // T397: the true path itself may contain a `b/…` segment
+    // (`diff --git a/a b/c d/e f.txt b/a b/c d/e f.txt`), so the
+    // first `b/`-led part is not always the split. Bare git resolves
+    // these to the split whose stripped sides are EQUAL (verified via
+    // `apply --stat`), so prefer that candidate; differing halves
+    // (renames) keep the first split — their exact paths come from
+    // the `rename from/to` lines (see the metadata branch above).
+    let mut first: Option<Vec<String>> = None;
+    let mut saw_b = false;
+    for (i, p) in parts.iter().enumerate() {
+        if !p.starts_with("b/") {
+            continue;
         }
+        saw_b = true;
+        if i == 0 || !parts[..i].join(" ").starts_with("a/") {
+            continue;
+        }
+        let pair = vec![parts[..i].join(" "), parts[i..].join(" ")];
+        if first.is_none() {
+            first = Some(pair.clone());
+        }
+        if strip_ab_prefix(&pair[0]) == strip_ab_prefix(&pair[1]) {
+            return Some(pair);
+        }
+    }
+    if let Some(pair) = first {
+        return Some(pair);
+    }
+    if saw_b {
         return None;
     }
     if parts.len() > 2 && is_dev_null(&parts[parts.len() - 1]) {
@@ -431,6 +466,46 @@ pub fn decode_git_path_token(token: &str) -> String {
     bytes_to_path(&cur)
 }
 
+/// Quote a header-slot path for emission (`diff --git`/`---`/`+++`/
+/// `rename from/to`, T398): bare git only parses unquoted paths when
+/// they hold no whitespace/control characters, so a slot containing a
+/// byte `< 0x20`, `0x7f`, `"` or `\` is emitted C-quoted — exactly
+/// what git's own quotepath produces (spaces and non-ASCII stay raw:
+/// the native shape, parseable unquoted per T379/T389). Every escape
+/// produced here round-trips through `push_c_escape`.
+pub fn quote_git_path(slot: &str) -> String {
+    if !slot
+        .chars()
+        .any(|c| c < '\u{20}' || c == '\u{7f}' || c == '"' || c == '\\')
+    {
+        return slot.to_string();
+    }
+    let mut out = String::with_capacity(slot.len() + 2);
+    out.push('"');
+    for c in slot.chars() {
+        match c {
+            '\u{7}' => out.push_str("\\a"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{b}' => out.push_str("\\v"),
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c < '\u{20}' || c == '\u{7f}' => {
+                let mut buf = [0u8; 4];
+                for b in c.encode_utf8(&mut buf).bytes() {
+                    out.push_str(&format!("\\{b:03o}"));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn strip_ab_prefix(p: &str) -> String {
     if let Some(s) = p.strip_prefix("a/") {
         return s.to_string();
@@ -442,6 +517,21 @@ fn strip_ab_prefix(p: &str) -> String {
         let _ = s;
     }
     p.to_string()
+}
+
+/// Re-attach the `diff --git` side uniform to a `rename from/to` value
+/// (T397): native git emits these without a prefix (`rename to new d`),
+/// while section halves wear `a/`/`b/` everywhere downstream — so
+/// prepend unless already present (hand-authored prefixed values and
+/// `/dev/null` pass through untouched). C-quoted values decode via the
+/// shared quotepath rule; raw values (spaces included) pass byte-exact.
+fn with_ab_prefix(p: &str, side: char) -> String {
+    let decoded = decode_git_path_token(p);
+    let want = if side == 'a' { "a/" } else { "b/" };
+    if decoded == "/dev/null" || decoded == "dev/null" || decoded.starts_with(want) {
+        return decoded;
+    }
+    format!("{want}{decoded}")
 }
 
 fn target_path(new_path: &str, old_path: &str) -> String {
@@ -1284,6 +1374,33 @@ mod tests {
         .unwrap();
         assert!(pure.files[0].is_rename());
         assert!(pure.files[0].hunks.is_empty());
+    }
+
+    #[test]
+    fn splits_equal_sides_and_prefers_rename_lines() {
+        // T397: a path containing an interior `b/…` segment must split
+        // where the stripped sides are EQUAL (bare-git parity), not at
+        // the first `b/`-led part (which silently mis-targeted the file).
+        let p = parse_patch(
+            "diff --git a/a b/c d/e f.txt b/a b/c d/e f.txt\n--- /dev/null\n+++ b/a b/c d/e f.txt\n@@ -0,0 +1,1 @@\n+deep\n",
+        )
+        .unwrap();
+        assert_eq!(p.files.len(), 1);
+        assert_eq!(p.files[0].target_path, "a b/c d/e f.txt");
+        assert!(!p.files[0].is_rename());
+        // Spaced renames: halves alone mis-split, but the `rename
+        // from/to` lines (what bare git resolves) win.
+        let r = parse_patch("diff --git a/old b/c b/new d\nrename from old b/c\nrename to new d\n")
+            .unwrap();
+        assert!(r.files[0].is_rename());
+        assert_eq!(r.files[0].target_path, "new d");
+        assert_eq!(r.files[0].old_path, "a/old b/c");
+        // Plain space paths still split at the single `b/` part.
+        let s = parse_patch(
+            "diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\n+++ b/my file.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+        )
+        .unwrap();
+        assert_eq!(s.files[0].target_path, "my file.txt");
     }
 
     #[test]

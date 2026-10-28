@@ -369,8 +369,14 @@ pure rename, exactly git's shape). RSmPL hunks may appear in rename
 sections and rewrite old-side content. `/dev/null` halves stay the create/delete spelling
 (`diff --git /dev/null b/new`, `diff --git a/old /dev/null`).
 Paths may be quoted; unquoted paths may contain spaces (real git never
-quotes spaces) — the header splits at the first `b/`-led part, or at a
-`/dev/null` half, else it fails to parse (T379). Quoted paths decode
+quotes spaces) — the header splits at the `b/`-led part whose stripped
+sides are equal (bare-git parity, T397 — the old first-`b/` rule
+mis-targeted paths holding an interior `b/…` segment), else the first
+`b/`-led part (differing halves are renames), or at a `/dev/null`
+half, else it fails to parse (T379). `rename from`/`rename to` lines
+override the halves (bare git resolves spaced renames from them, T397).
+Emitted headers C-quote slots holding control chars, `"` or `\`
+(spaces stay raw, T398). Quoted paths decode
 git's C-style escapes (default `core.quotepath` quotes non-ASCII names,
 so `"caf\303\251.txt"` resolves to `café.txt`, T389).
 A two-part remainder that wears neither git's `a/`/`b/` uniform nor a
@@ -4631,6 +4637,10 @@ mode change (content equal, `old mode`/`new mode` differ) lowers as
 a headers-only flip section; mode lines also ride along content
 changes, spliced after the `diff --git` header. A declared `100755`
 (untracked executables, unix) is honored like `120000`.
+Emitted `diff --git`/`---`/`+++`/`rename from/to` slots C-quote paths
+holding control characters, `"` or `\` (bare git cannot parse them
+raw — it never emits them raw either); spaces and non-ASCII stay raw,
+the native shape (T398).
 `--output <PATH>` is resolved
 against the caller cwd, never joined to `--repo`: it is the agent's
 local artifact, not repo content. File renames are not a containment

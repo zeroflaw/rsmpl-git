@@ -11,5 +11,6 @@ mod parser;
 pub use errors::{ErrorCode, StructuredError};
 pub use model::*;
 pub use parser::{
-    collapse_git_header, decode_git_path_token, parse_patch, split_git_paths, ParseError,
+    collapse_git_header, decode_git_path_token, parse_patch, quote_git_path, split_git_paths,
+    ParseError,
 };

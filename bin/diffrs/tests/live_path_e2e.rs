@@ -570,3 +570,165 @@ fn untracked_non_utf8_without_nul_is_stripped_and_warned() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("blob.bin"), "got: {stderr}");
 }
+
+#[test]
+fn tab_filename_stays_quoted_through_lowering() {
+    // T398: native git C-quotes control chars (`"tab\tname.txt"`).
+    // diffrs passes the quoted header through, but the old lowering
+    // re-emitted a literal TAB unquoted, which bare git rejects
+    // (`error: tab: No such file`). The lowering now C-quotes too, so
+    // the lowered artifact itself is pinned here via `--output`.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "tab\tname.txt", "l1\nl2\nl3\n");
+    commit_all(dir.path());
+    write(dir.path(), "tab\tname.txt", "l1\nL2\nl3\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("\"a/tab\\tname.txt\""), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let lowered_path = dir.path().join("lowered.patch");
+    let checked = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--check")
+        .arg("--output")
+        .arg(&lowered_path)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let lowered = std::fs::read_to_string(&lowered_path).unwrap();
+    assert!(lowered.contains("\"a/tab\\tname.txt\""), "got: {lowered}");
+    assert!(!lowered.contains('\t'), "literal TAB leaked: {lowered}");
+    // The lowered artifact is what bare git must accept.
+    let git_out = Command::new("git")
+        .args([
+            "apply",
+            "--check",
+            "--unidiff-zero",
+            lowered_path.to_str().unwrap(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        git_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    std::fs::remove_file(&lowered_path).unwrap();
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(dir.path().join("tab\tname.txt")).unwrap(),
+        b"l1\nL2\nl3\n"
+    );
+}
+
+#[test]
+fn space_path_with_b_segment_applies_at_right_path() {
+    // T397: `split_git_paths` split at the FIRST `b/`-led part, so a
+    // path holding an interior `b/…` segment mis-targeted — silently
+    // creating `c d/e f.txt b/a b/c d/e f.txt`, rc 0. The equal-sides
+    // split targets the real file; no stray dirs may appear.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "top.txt", "x\n");
+    commit_all(dir.path());
+    write(dir.path(), "a b/c d/e f.txt", "deep\n");
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("+deep"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q", "-u"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let git_out = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        git_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(dir.path().join("a b/c d/e f.txt")).unwrap(),
+        b"deep\n"
+    );
+    assert!(!dir.path().join("c d").exists(), "stray mis-split dirs");
+}
+
+#[test]
+fn spaced_rename_resolves_from_rename_lines() {
+    // T397: `diff --git a/old b/c b/new d` halves mis-split (the new
+    // side read `c b/new d`); bare git resolves via `rename to`. The
+    // `rename from/to` override carries the exact paths instead.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "old b/c", "one\ntwo\n");
+    commit_all(dir.path());
+    std::fs::rename(dir.path().join("old b/c"), dir.path().join("new d")).unwrap();
+    git(dir.path(), &["add", "-A"]);
+
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("rename to new d"), "got: {patch}");
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let git_out = check_with_bare_git_unidiff_zero(dir.path(), &patch);
+    assert!(
+        git_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_out.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(dir.path().join("new d")).unwrap(),
+        b"one\ntwo\n"
+    );
+    assert!(!dir.path().join("old b").exists(), "old side not removed");
+}

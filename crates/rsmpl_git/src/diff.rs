@@ -3,6 +3,13 @@
 //! The lowered patch must contain no RSmPL directives (guaranteed: it is
 //! generated from materialized file text, never from the input patch).
 
+/// Quote one `diff --git`/`---`/`+++` header slot (T398): control
+/// chars, `"` and `\` must be C-quoted (bare git cannot parse them
+/// raw — it never emits them raw either); spaces stay raw (T379).
+fn quoted_header(prefix: &str, path: &str) -> String {
+    rsmpl_patch::quote_git_path(&format!("{prefix}/{path}"))
+}
+
 /// Build a `diff --git` section for one file with an explicit unified-diff
 /// context radius, or `None` when unchanged.
 ///
@@ -21,9 +28,10 @@ pub fn unified_diff_for_file_with_context(
         return None;
     }
     let mut out = String::new();
-    out.push_str(&format!("diff --git a/{path} b/{path}\n"));
-    out.push_str(&format!("--- a/{path}\n"));
-    out.push_str(&format!("+++ b/{path}\n"));
+    let (a_slot, b_slot) = (quoted_header("a", path), quoted_header("b", path));
+    out.push_str(&format!("diff --git {a_slot} {b_slot}\n"));
+    out.push_str(&format!("--- {a_slot}\n"));
+    out.push_str(&format!("+++ {b_slot}\n"));
     let diff = similar::TextDiff::from_lines(old, new);
     // Portable `@@ -a,b +c,d @@` hunks with N context lines (unified format).
     // `---`/`+++` headers are emitted above (a/ b/ style, git-compatible).
@@ -51,13 +59,14 @@ pub fn unified_diff_for_new_file_with_context(
     mode: &str,
 ) -> Option<String> {
     let mut out = String::new();
-    out.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    let (a_slot, b_slot) = (quoted_header("a", path), quoted_header("b", path));
+    out.push_str(&format!("diff --git {a_slot} {b_slot}\n"));
     out.push_str(&format!("new file mode {mode}\n"));
     if new.is_empty() {
         return Some(out);
     }
     out.push_str("--- /dev/null\n");
-    out.push_str(&format!("+++ b/{path}\n"));
+    out.push_str(&format!("+++ {b_slot}\n"));
     let diff = similar::TextDiff::from_lines("", new);
     let hunks = diff.unified_diff().context_radius(context).to_string();
     out.push_str(&hunks);
@@ -83,7 +92,8 @@ pub fn unified_diff_for_deleted_file_with_context(
     symlink: bool,
 ) -> Option<String> {
     let mut out = String::new();
-    out.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    let (a_slot, b_slot) = (quoted_header("a", path), quoted_header("b", path));
+    out.push_str(&format!("diff --git {a_slot} {b_slot}\n"));
     out.push_str(if symlink {
         "deleted file mode 120000\n"
     } else {
@@ -92,7 +102,7 @@ pub fn unified_diff_for_deleted_file_with_context(
     if old.is_empty() {
         return Some(out);
     }
-    out.push_str(&format!("--- a/{path}\n"));
+    out.push_str(&format!("--- {a_slot}\n"));
     out.push_str("+++ /dev/null\n");
     let diff = similar::TextDiff::from_lines(old, "");
     let hunks = diff.unified_diff().context_radius(context).to_string();
@@ -131,7 +141,8 @@ pub fn unified_diff_for_typechange_with_context(
 /// real git emits for a pure mode change -- T364: `git apply` flips the
 /// mode, while content-only lowering silently dropped it.
 pub fn mode_change_section(path: &str, old_mode: &str, new_mode: &str) -> String {
-    format!("diff --git a/{path} b/{path}\nold mode {old_mode}\nnew mode {new_mode}\n")
+    let (a_slot, b_slot) = (quoted_header("a", path), quoted_header("b", path));
+    format!("diff --git {a_slot} {b_slot}\nold mode {old_mode}\nnew mode {new_mode}\n")
 }
 
 /// Splice `old mode`/`new mode` lines into a lowered content section
@@ -179,9 +190,12 @@ pub fn unified_diff_for_rename_with_context(
     context: usize,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&format!("diff --git a/{old_rel} b/{new_rel}\n"));
-    out.push_str(&format!("rename from {old_rel}\n"));
-    out.push_str(&format!("rename to {new_rel}\n"));
+    let (a_old, b_new) = (quoted_header("a", old_rel), quoted_header("b", new_rel));
+    let q_old = rsmpl_patch::quote_git_path(old_rel);
+    let q_new = rsmpl_patch::quote_git_path(new_rel);
+    out.push_str(&format!("diff --git {a_old} {b_new}\n"));
+    out.push_str(&format!("rename from {q_old}\n"));
+    out.push_str(&format!("rename to {q_new}\n"));
     if let (Some(o), Some(n)) = (old_mode, new_mode) {
         if o != n {
             out.push_str(&format!("old mode {o}\nnew mode {n}\n"));
@@ -190,8 +204,8 @@ pub fn unified_diff_for_rename_with_context(
     if old == new {
         return out;
     }
-    out.push_str(&format!("--- a/{old_rel}\n"));
-    out.push_str(&format!("+++ b/{new_rel}\n"));
+    out.push_str(&format!("--- {a_old}\n"));
+    out.push_str(&format!("+++ {b_new}\n"));
     let diff = similar::TextDiff::from_lines(old, new);
     let hunks = diff.unified_diff().context_radius(context).to_string();
     out.push_str(&hunks);
@@ -252,6 +266,29 @@ mod tests {
         assert!(d.contains("+++ b/src/lib.rs"));
         assert!(d.contains("@@"));
         assert!(!d.contains("# lang=rust"));
+    }
+
+    #[test]
+    fn control_chars_quote_but_spaces_and_unicode_stay_raw() {
+        // T398: bare git cannot parse raw control chars in unquoted
+        // headers (it never emits them raw), so the lowering C-quotes
+        // those slots; spaces + non-ASCII keep the native raw shape.
+        let d = unified_diff_for_file_with_context("tab\tname.txt", "a\n", "b\n", 0).unwrap();
+        assert!(
+            d.contains("diff --git \"a/tab\\tname.txt\" \"b/tab\\tname.txt\""),
+            "got: {d}"
+        );
+        assert!(d.contains("--- \"a/tab\\tname.txt\""), "got: {d}");
+        let s = unified_diff_for_file_with_context("my file.txt", "a\n", "b\n", 0).unwrap();
+        assert!(
+            s.contains("diff --git a/my file.txt b/my file.txt"),
+            "got: {s}"
+        );
+        let u = unified_diff_for_file_with_context("café.txt", "a\n", "b\n", 0).unwrap();
+        assert!(u.contains("diff --git a/café.txt b/café.txt"), "got: {u}");
+        // Quoted slots re-parse to the same target.
+        let p = rsmpl_patch::parse_patch(&d).unwrap();
+        assert_eq!(p.files[0].target_path, "tab\tname.txt");
     }
 
     #[test]
