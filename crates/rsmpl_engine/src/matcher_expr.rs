@@ -1753,4 +1753,17 @@ mod tests {
         let src = "fn a() {\n    crate::a::newer(1);\n}\n";
         assert!(apply(patch, src).is_err());
     }
+
+    #[test]
+    fn inner_array_ellipsis_rejected_not_literal() {
+        // T442: `- run(D, &["--patch", M, ...])` is not an arg-level
+        // `...` shape — the inner `...` must fail fast as PatternConflict
+        // (via the Raw bypass + general-pattern `...` rejection), never
+        // match with a literal unbound `M` in the output.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr D\n# expr M\n- run(D, &[\"--patch\", M, ...])\n+ run_stdin(D, M, &[...])\n";
+        let src = "fn m() {\n    run(dir, &[\"--patch\", rename_patch()]);\n}\n";
+        let err = apply(patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("..."), "got: {err}");
+    }
 }

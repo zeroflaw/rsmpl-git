@@ -559,7 +559,7 @@ fn rsmpl_pattern_args(pattern_args: &str, reverse_map: &HashMap<String, String>)
         if t.is_empty() {
             continue;
         }
-        if t == "..." || t.starts_with("__RSMPL_ELLIPSIS") {
+        if t == "..." || is_bare_ellipsis(&t) {
             out.push(ArgPat::Ellipsis);
             continue;
         }
@@ -581,6 +581,15 @@ fn rsmpl_pattern_args(pattern_args: &str, reverse_map: &HashMap<String, String>)
         }
     }
     out
+}
+
+/// True when `t` is exactly a substituted `__RSMPL_ELLIPSIS_N` ident
+/// (T442: `starts_with` alone misclassified args containing `...` inside
+/// a larger expression as arg-level `Ellipsis`).
+fn is_bare_ellipsis(t: &str) -> bool {
+    t.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 fn split_top_level(s: &str) -> Vec<String> {
@@ -710,5 +719,16 @@ mod tests {
         let src = "fn a() {\n    foo!(1, 2, 3);\n}\n";
         let out = apply(patch, src).unwrap();
         assert!(out.contains("bar!(3);"), "got: {out}");
+    }
+
+    #[test]
+    fn bare_ellipsis_gate() {
+        // T442: only a bare `...` ident is an arg-level ellipsis — an arg
+        // merely containing `...` inside a larger expression stays Concrete.
+        assert!(super::is_bare_ellipsis("__RSMPL_ELLIPSIS_0"));
+        assert!(!super::is_bare_ellipsis(
+            "&[\"--patch\", __RSMPL_ELLIPSIS_0]"
+        ));
+        assert!(!super::is_bare_ellipsis("__RSMPL_ELLIPSIS"));
     }
 }

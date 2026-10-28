@@ -2782,7 +2782,12 @@ empty and swallows one adjacent comma, so the same hunk rewrites
 `foo(1)` to `bar(1)`. Omitting `...` on the `+` side is a deliberate
 arg-drop (`- foo(E, ...)` / `+ bar(E)` rewrites `foo(1, 2)` to
 `bar(1)`). A `...` in `+` with no matching `- ...` is a pattern error:
-there is nothing to replay.
+there is nothing to replay. An arg merely *containing* `...` inside a
+larger expression (e.g. an array literal `&["--patch", M, ...]`) is not an
+arg-level `...`: the call router treats that arg as concrete, the
+placeholder bypass routes the hunk to the general matcher, and the general
+matcher rejects `...` as a pattern error — never a silent literal emission
+(T442).
   The engine reports this verbatim (rule + file lines; text carries the suggestion line, JSON explicit nulls):
   ```text
   RSMPL_PATTERN_CONFLICT

@@ -134,7 +134,7 @@ pub fn classify_args(args_text: &str, table: &MetavarTable) -> Vec<ArgPat> {
         if t.is_empty() {
             continue;
         }
-        if t == "..." || t.contains("__RSMPL_ELLIPSIS") {
+        if is_bare_ellipsis(&t) {
             args.push(ArgPat::Ellipsis);
         } else if table.is_meta(&t)
             || (t.starts_with('$') && table.is_meta(t.trim_start_matches('$')))
@@ -148,6 +148,18 @@ pub fn classify_args(args_text: &str, table: &MetavarTable) -> Vec<ArgPat> {
         }
     }
     args
+}
+
+/// True when `t` is exactly an arg-level `...` (raw or placeholder-
+/// substituted `__RSMPL_ELLIPSIS_N` ident). Anything larger — e.g. an
+/// array literal containing `...` — is not an ellipsis arg (T442).
+fn is_bare_ellipsis(t: &str) -> bool {
+    if t == "..." {
+        return true;
+    }
+    t.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 fn split_top_level(s: &str) -> Vec<String> {
@@ -630,6 +642,27 @@ mod tests {
         if let ExprPatternKind::Call { args, .. } = kind {
             assert_eq!(args, vec![ArgPat::Ellipsis]);
         }
+    }
+
+    #[test]
+    fn inner_array_ellipsis_is_not_arg_ellipsis() {
+        // T442: `...` inside a larger arg (array literal) is not an
+        // arg-level `...` — the arg stays `Concrete` so the
+        // `concrete_holds_placeholder` bypass routes to `Raw`
+        // (`try_general` rejects `...` as PatternConflict) instead of
+        // swallowing the whole arg (and its metavars) as `Ellipsis`.
+        let (kind, _, _) =
+            classify_call_pattern("run(D, &[\"--patch\", M, ...])", &table()).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::Raw { .. }),
+            "inner-array ... must bypass to Raw, got: {kind:?}"
+        );
+        // Bare uses still classify as arg-level ellipsis.
+        let (kind, _, _) = classify_call_pattern("foo(E, ...)", &table()).unwrap();
+        let ExprPatternKind::Call { args, .. } = kind else {
+            panic!("foo(E, ...) must stay a call");
+        };
+        assert!(args.contains(&ArgPat::Ellipsis));
     }
 
     #[test]
