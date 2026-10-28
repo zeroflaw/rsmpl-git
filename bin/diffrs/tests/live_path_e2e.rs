@@ -447,3 +447,67 @@ fn staged_binary_only_json_envelope_is_empty() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("blob.bin"), "got: {stderr}");
 }
+
+// T246 session 28 (T395): staged binary CREATE without NUL bytes.
+// Native `git diff --cached` dumps literal non-UTF-8 bytes for creates
+// (only modifies get the `Binary … differ` marker), which used to leak
+// through as `+` lines with no warning and corrupt the lowering
+// (`--check` failed `corrupt patch` where bare git passes). Now the
+// section strips + warns like marker binaries: rc 0, empty patch,
+// warning names the file. Bytes avoid NUL (NUL'd creates already take
+// the marker path) and LF (a literal 0x0A would start a prefix-less
+// line, a different shape).
+#[test]
+fn staged_binary_create_without_nul_is_stripped_and_warned() {
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn main() {}\n");
+    commit_all(dir.path());
+    let bytes: Vec<u8> = (1u8..=200).filter(|&b| b != 10).collect();
+    std::fs::write(dir.path().join("blob.bin"), &bytes).unwrap();
+    git(dir.path(), &["add", "blob.bin"]);
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(!stdout.contains("blob.bin"), "got: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("blob.bin"), "got: {stderr}");
+}
+
+// T395 follow-up cell: staged binary create ALONGSIDE a text modify —
+// only the binary section strips; the text side converts and
+// round-trips `--check` + real-apply byte-exact.
+#[test]
+fn staged_binary_create_with_text_modify_keeps_text() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "a.rs", "fn main() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "a.rs", "fn main() { 1 }\n");
+    let bytes: Vec<u8> = (1u8..=200).filter(|&b| b != 10).collect();
+    std::fs::write(dir.path().join("blob.bin"), &bytes).unwrap();
+    git(dir.path(), &["add", "-A"]);
+    let out = run(dir.path(), &["--staged"]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("+fn main() { 1 }"), "got: {patch}");
+    assert!(!patch.contains("blob.bin"), "got: {patch}");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("blob.bin"), "got: {stderr}");
+    let pre = init_repo();
+    write(pre.path(), "a.rs", "fn main() {}\n");
+    commit_all(pre.path());
+    let checked = check_with_applyrs(pre.path(), &patch);
+    assert_eq!(checked.status.code(), Some(0));
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(pre.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(pre.path().join("a.rs")).unwrap(),
+        "fn main() { 1 }\n"
+    );
+}

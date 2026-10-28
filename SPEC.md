@@ -5772,7 +5772,11 @@ stripped with a stderr `warning:` per path (a patch is UTF-8;
 `applyrs` cannot read binary worktree files); untracked binaries emit
 the same marker sections `git diff` shows once staged, so they warn
 uniformly instead of vanishing silently, and an all-binary change
-reports empty + warnings (exit 0), not an error (T378). Submodule
+reports empty + warnings (exit 0), not an error (T378). Sections whose
+`+`/`-` body lines carry binary content (NUL bytes, or U+FFFD from
+lossy-decoded non-UTF-8 — native `git diff` dumps literal bytes for
+binary creates while modifies get the marker) strip the same way
+(T395). Submodule
 (gitlink, mode 160000) sections strip the same way (one `warning:`
 per path): a gitlink bump/delete cannot round-trip (`applyrs`
 cannot read the directory on the pre-image side) and an add only

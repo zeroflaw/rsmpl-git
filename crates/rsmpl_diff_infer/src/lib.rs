@@ -130,9 +130,10 @@ fn raw_lines(s: &str) -> Vec<&str> {
 }
 
 /// Split `raw` into `diff --git` sections; drop sections holding a
-/// `Binary files … differ` line or a mode-160000 (gitlink/submodule)
-/// declaration. Returns (kept sections, stripped `b/`-side binary
-/// paths, stripped `b/`-side gitlink paths).
+/// `Binary files … differ` line, binary-content `+`/`-` body lines
+/// (T395), or a mode-160000 (gitlink/submodule) declaration. Returns
+/// (kept sections, stripped `b/`-side binary paths, stripped `b/`-side
+/// gitlink paths).
 fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut stripped = Vec::new();
@@ -163,6 +164,16 @@ fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<Strin
             current_path = b_side_path(rest);
         } else if line.starts_with("Binary files ") {
             current_binary = true;
+        } else if is_binary_body_line(line) {
+            // T395: native `git diff` dumps literal bytes for binary
+            // CREATES (only modifies get the `Binary … differ`
+            // marker), which the source lossy-decodes (NUL survives,
+            // other non-UTF-8 becomes U+FFFD). Such sections can
+            // neither apply byte-exact nor lower structurally (the
+            // lowering re-diff splits interior `\r`), so they strip
+            // + warn like marker binaries instead of corrupting the
+            // round-trip.
+            current_binary = true;
         } else if is_gitlink_mode_line(line) {
             current_gitlink = true;
         }
@@ -183,6 +194,16 @@ fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<Strin
         );
     }
     (kept, stripped, stripped_gitlink)
+}
+
+/// A hunk body `+`/`-` line carrying binary content: NUL (git's own
+/// binary definition) or U+FFFD (lossy-decoded non-UTF-8 from the
+/// source — T395). `+++`/`---` file markers are excluded (paths never
+/// carry these signals from git).
+fn is_binary_body_line(line: &str) -> bool {
+    (line.starts_with('+') || line.starts_with('-'))
+        && !(line.starts_with("+++") || line.starts_with("---"))
+        && (line.contains('\0') || line.contains('\u{FFFD}'))
 }
 
 /// A mode line declaring a gitlink (mode 160000): submodule add
@@ -500,5 +521,35 @@ mod tests {
         let out = infer_rsmpl(add).unwrap();
         assert!(out.rsmpl.is_empty(), "got: {}", out.rsmpl);
         assert_eq!(out.stripped_gitlink, vec!["sub"]);
+    }
+
+    #[test]
+    fn binary_create_with_literal_bytes_is_stripped_and_named() {
+        // T395: a staged no-NUL binary create reaches infer as body
+        // lines (native `git diff` dumps literal bytes for creates),
+        // lossy-decoded with an interior `\r` — the exact shape that
+        // used to leak through with no warning and corrupt the
+        // lowering (`--check` failed `corrupt patch`).
+        let create = "diff --git a/blob.bin b/blob.bin\nnew file mode 100644\n--- /dev/null\n+++ b/blob.bin\n@@ -0,0 +1,2 @@\n+C�q�;\u{0}1�\n+]\u{FFFD}`[=\u{8}:\u{FFFD}05\r�\n";
+        let out = infer_rsmpl(create).unwrap();
+        assert!(out.rsmpl.is_empty(), "got: {}", out.rsmpl);
+        assert_eq!(out.stripped_binary, vec!["blob.bin"]);
+        let mixed = format!("{TEXT_SECTION}{create}");
+        let out = infer_rsmpl(&mixed).unwrap();
+        assert_eq!(out.rsmpl, TEXT_STRIPPED);
+        assert_eq!(out.stripped_binary, vec!["blob.bin"]);
+    }
+
+    #[test]
+    fn interior_cr_text_is_not_binary() {
+        // T395 boundary: a lone interior `\r` in *text* content is
+        // not a binary signal — the section stays ordinary (diffrs
+        // output matches native U0 here, and bare git fails both
+        // identically, so the outcome is faithful).
+        let raw =
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-aaa\n+a\rb\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(out.stripped_binary.is_empty());
+        assert!(out.rsmpl.contains("+a\rb\n"), "got: {}", out.rsmpl);
     }
 }
