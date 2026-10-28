@@ -5887,9 +5887,11 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   lines and no metavars. Both sides strip one terminator and parse as
   `syn::Expr`; `let` scrutinees, macro invocations on either side
   (SPEC 21), bare-ident/literal minus sides, and `?`-applied calls
-  wrapping a closure (minus side) are rejected — each failed loud
-  in-corpus; non-Call-top-level pairs with nodes outside the engine's
-  bounded general-expr set (Return/Block/If/..., T412) are rejected.
+  wrapping a closure (minus side), and top-level Unary on either side
+  (`!f(...)` hits the macro router, `-f(...)` misclassifies — T414)
+  are rejected — each failed loud in-corpus; non-Call-top-level pairs
+  with nodes outside the engine's bounded general-expr set
+  (Return/Block/If/..., T412) are rejected.
   Soundness is subterm totality on the pre-image file
   (index blob for pending diffs, `rev` blob for staged/rev diffs):
   the stripped minus must occur as a sub-expression exactly

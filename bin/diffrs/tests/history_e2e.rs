@@ -139,6 +139,14 @@ const CASES: &[Case] = &[
         expect_sem: 1,
     },
     Case {
+        commit: "b20884733ba61b1e6630adfb8920cede2cd751b7",
+        rev: None,
+        root: false,
+        // T414 leading-`!` gate: five identical `!f(...)` pairs parse
+        // as Unary (engine macro-misroute) — zero semantic by design.
+        expect_sem: 0,
+    },
+    Case {
         commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",
         rev: None,
         root: false,

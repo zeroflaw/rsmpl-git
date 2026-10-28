@@ -646,7 +646,9 @@ fn split_verbatim_hunks(section: &str) -> (String, Vec<String>) {
 /// and closures alone match fine, but the combination matches nothing
 /// — a2fc9b3 failed loud, probe-bisected). Plus-side closures are
 /// construct fine (probe-verified: concrete plus text splices),
-/// so only plus-side macros and lets stay rejected.
+/// so only plus-side macros and lets stay rejected. Top-level Unary
+/// (`!`, `-`, ...) on either side is rejected (T414): `!f(...)` hits
+/// the macro router and other prefix ops misclassify as callees.
 fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     match minus {
         syn::Expr::Lit(_) => return false,
@@ -654,6 +656,14 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
         _ => {}
     }
     if matches!(plus, syn::Expr::Lit(_)) {
+        return false;
+    }
+    // T414: top-level Unary (`!`, `-`, ...) never matches — the pattern
+    // router reads any minus text with `!`+`(` as a macro invocation
+    // (b208847 `!f(...)` failed loud), and other prefix ops misclassify
+    // as call callees (`-foo`, probe-verified no match). Reference (`&`)
+    // stays allowed (T252 bypass into the general matcher, 50d4a49).
+    if matches!(minus, syn::Expr::Unary(_)) || matches!(plus, syn::Expr::Unary(_)) {
         return false;
     }
     let mut m = ShapeProbe::default();
@@ -1370,6 +1380,21 @@ mod tests {
         // even with exact totality — otherwise `--check` fails.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    return compress(section, &path, used);\n+    return compress(section, &path, extra, used);\n@@ -9,1 +10,1 @@\n-    return compress(section, &path, used);\n+    return compress(section, &path, extra, used);\n";
         let pre = "fn f() {\n    if x {\n        return compress(section, &path, used);\n    }\n    return compress(section, &path, used);\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_sweep_leading_bang_stays_passthrough() {
+        // T414 (found by the full-history sweep on b208847): `!f(...)`
+        // parses as `Expr::Unary`, which sails through the T412 gate
+        // (Unary is engine-supported) with exact totality — but the
+        // pattern router reads any `!`+`(` minus as a macro invocation
+        // and rejects the empty name (loud PATTERN_CONFLICT), so the
+        // pair must stay ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    !hit(&a, &b)\n+    !hit(&a, &b, c)\n@@ -9,1 +10,1 @@\n-    !hit(&a, &b)\n+    !hit(&a, &b, c)\n";
+        let pre = "fn f() {\n    if !hit(&a, &b) {}\n    if !hit(&a, &b) {}\n}\n";
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
