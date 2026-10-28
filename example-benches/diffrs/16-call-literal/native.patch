@@ -1,0 +1,16 @@
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -2,2 +2,2 @@ fn m() {
+-    make_call("alpha", first_count, false);
+-    make_call("beta", second_count, false);
++    make_call("alpha", first_count, "100644");
++    make_call("beta", second_count, "100644");
+diff --git a/src/b.rs b/src/b.rs
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -2,2 +2,2 @@ fn n() {
+-    make_call("gamma", third_count, true);
+-    make_call("delta", fourth_count, false);
++    make_call("gamma", third_count, "120000");
++    make_call("delta", fourth_count, symlink);
