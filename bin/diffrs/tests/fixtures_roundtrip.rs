@@ -111,6 +111,60 @@ fn collect_files(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+fn normalize_native(native_input: &str) -> String {
+    // T434 slice 10: mirror infer's three ordinary-passthrough rewrites
+    // (title strip + index drop + header collapse) so patch bytes compare
+    // directly for ordinary shapes.
+    let mut sections: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut seen = false;
+    for line in native_input.lines() {
+        if line.starts_with("diff --git ") {
+            if seen {
+                sections.push(std::mem::take(&mut current));
+            }
+            seen = true;
+        }
+        if seen {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if seen {
+        sections.push(current);
+    }
+    let mut out = String::new();
+    for sec in &sections {
+        let collapsible = sec
+            .lines()
+            .any(|l| l.starts_with("--- ") || l.starts_with("+++ "));
+        for line in sec.lines() {
+            if line.starts_with("index ") {
+                continue;
+            }
+            if collapsible && line.starts_with("diff --git ") {
+                out.push_str(&rsmpl_patch::collapse_git_header(line));
+                out.push('\n');
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("@@") {
+                if let Some(end) = rest.find("@@") {
+                    let ranges = &rest[..end];
+                    if ranges.contains('-') && ranges.contains('+') {
+                        out.push_str("@@");
+                        out.push_str(ranges);
+                        out.push_str("@@\n");
+                        continue;
+                    }
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn assert_tree_matches(result: &Path, expected: &Path, name: &str, stage: &str) {
     let mut files = Vec::new();
     collect_files(expected, expected, &mut files);
@@ -285,6 +339,14 @@ fn native_to_semantic_to_native_round_trip() {
             );
             let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
             assert!(context.is_empty(), "zero-context, got: {context:?}");
+            // T434 slice 10: ordinary passthrough is exactly normalized
+            // native (the three infer rewrites), so patch bytes compare
+            // directly — not just end-states.
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         } else if name == "03-deleted-file-move" {
             assert!(
                 semantic.contains("rule=move_big"),
