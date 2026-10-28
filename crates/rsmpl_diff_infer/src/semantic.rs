@@ -64,7 +64,7 @@ fn compress_section(
     if is_rename_header(header) {
         return None;
     }
-    let path = b_side_path(header)?;
+    let path = super::b_side_path(header.strip_prefix("diff --git ")?)?;
     if !path.ends_with(".rs") {
         return None;
     }
@@ -118,6 +118,8 @@ fn compress_section(
     // through to the per-hunk retry so one losing shape never vetoes
     // winning runs in other hunks.
     let checkpoint = used_rules.len();
+    // T411: old-side changed lines for the line-aware opaque veto.
+    let changed = crate::totality::changed_old_lines(section);
     if whole && minuses.len() == 1 {
         // Single pair: fn/item rename only (a lone call rewrite has
         // no token win over the ordinary hunk; a lone heterogeneous
@@ -140,7 +142,8 @@ fn compress_section(
     }
     // N >= 2 heterogeneous fn/method renames compress to one slot
     // sweep (T344); fall through to the call sweep otherwise.
-    if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, file_old, used_rules) {
+    if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
         if slot.len() < section.len() {
             return Some(slot);
         }
@@ -149,32 +152,39 @@ fn compress_section(
     // N >= 2 method-to-function fan-outs (T345), method-to-method
     // renames (T347), `&`-receiver strips (T359), and use-path prefix
     // renames (T363); fall through to the bare-call sweep otherwise.
-    if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, &path, file_old, used_rules) {
+    if let Some(m2f) =
+        try_method_to_fn_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
         if m2f.len() < section.len() {
             return Some(m2f);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(m2m) = try_method_to_method_sweep(&minuses, &pluses, &path, file_old, used_rules) {
+    if let Some(m2m) =
+        try_method_to_method_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
         if m2m.len() < section.len() {
             return Some(m2m);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(strip) = try_ref_method_strip_sweep(&minuses, &pluses, &path, file_old, used_rules)
+    if let Some(strip) =
+        try_ref_method_strip_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if strip.len() < section.len() {
             return Some(strip);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, &path, file_old, used_rules) {
+    if let Some(uses) =
+        try_use_prefix_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
         if uses.len() < section.len() {
             return Some(uses);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, file_old, used_rules) {
+    if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules) {
         if sweep.len() < section.len() {
             return Some(sweep);
         }
@@ -243,11 +253,13 @@ fn compress_section_per_hunk(
         // One balanced hunk through the shared detector chain
         // (`compress_balanced_pair_body` — same shapes the verbatim
         // sweep retries leftovers with); ordinary hunks pass through.
+        let changed = crate::totality::changed_old_lines(hunk);
         match super::compress_balanced_pair_body(
             &minuses,
             &pluses,
             path,
             file_old,
+            &changed,
             hunk.len(),
             used_rules,
         ) {
@@ -401,6 +413,7 @@ pub(crate) fn try_fn_slot_sweep(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -437,7 +450,7 @@ pub(crate) fn try_fn_slot_sweep(
     if all_indented != plus_indented || all_col0 != plus_col0 {
         return None;
     }
-    if !crate::totality::slot_holds(file_old, &old_name, minuses, all_indented) {
+    if !crate::totality::slot_holds(file_old, &old_name, minuses, all_indented, changed) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
@@ -542,6 +555,7 @@ pub(crate) fn try_method_to_fn_sweep(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -566,7 +580,7 @@ pub(crate) fn try_method_to_fn_sweep(
         arity = Some(a);
     }
     let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
-    if !crate::totality::method_holds(file_old, &old_method, arity, minuses) {
+    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
@@ -660,6 +674,7 @@ pub(crate) fn try_method_to_method_sweep(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -687,7 +702,7 @@ pub(crate) fn try_method_to_method_sweep(
     if old_method == new_method {
         return None;
     }
-    if !crate::totality::method_holds(file_old, &old_method, arity, minuses) {
+    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
@@ -772,6 +787,7 @@ pub(crate) fn try_ref_method_strip_sweep(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -791,7 +807,7 @@ pub(crate) fn try_ref_method_strip_sweep(
         args = Some(argv);
     }
     let (method, args) = (method?, args?);
-    if !crate::totality::strip_holds(file_old, &method, &args, minuses) {
+    if !crate::totality::strip_holds(file_old, &method, &args, minuses, changed) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
@@ -926,6 +942,7 @@ pub(crate) fn try_use_prefix_sweep(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -960,7 +977,7 @@ pub(crate) fn try_use_prefix_sweep(
             return None;
         }
     }
-    if !crate::totality::use_holds(file_old, &old_prefix, minuses) {
+    if !crate::totality::use_holds(file_old, &old_prefix, minuses, changed) {
         return None;
     }
     let rule = unique_rule(
@@ -1048,6 +1065,7 @@ pub(crate) fn try_call_sweep(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     if minuses.len() < 2 {
@@ -1075,7 +1093,7 @@ pub(crate) fn try_call_sweep(
     if old_cal == new_cal {
         return None;
     }
-    if !crate::totality::call_holds(file_old, &old_cal, arity, minuses) {
+    if !crate::totality::call_holds(file_old, &old_cal, arity, minuses, changed) {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
@@ -1185,20 +1203,6 @@ fn is_rename_header(header: &str) -> bool {
         return false;
     }
     old != new
-}
-
-fn b_side_path(header: &str) -> Option<String> {
-    // Shared space-aware splitter (T379/T380): real git never quotes
-    // spaces, so the old `splitn(2, ' ')` mis-split them (space-path
-    // `.rs` files silently never compressed).
-    let header = header.lines().next().unwrap_or(header);
-    let rest = header.strip_prefix("diff --git ")?;
-    rsmpl_patch::split_git_paths(rest).map(|parts| {
-        let side = parts.last().cloned().unwrap_or_default();
-        // T399: no `trim_matches('"')` — the splitter already strips
-        // only the outer C-quote pair (genuine edge quotes survive).
-        side.strip_prefix("b/").unwrap_or(&side).to_string()
-    })
 }
 
 #[cfg(test)]

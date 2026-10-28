@@ -8,12 +8,16 @@
 //! must equal the diff pair count with zero opaque-text hits. Opaque is
 //! precise: each stripped diff minus line (flat-ws) searched inside macro
 //! bodies and string interiors (engine-blind per SPEC 21/T360) — a hit
-//! means a diff site could be the opaque one (under-match/loss), so veto.
+//! vetoes only when the container's span covers a changed old-side line
+//! (T411: then a diff site could be the opaque one — under-match/loss).
+//! Twins on untouched lines are unrelated and never veto. Empty changed
+//! lines (unparseable header) keep the legacy veto-all.
 //! Extra opaque shapes with different text never veto (e.g. `join("a")`
 //! vs `join("")`, `&E.join("")` vs `&dir.path().join("")`). Counting is
 //! conservative: any extra same-shape real site vetoes.
 
 use quote::ToTokens;
+use syn::spanned::Spanned;
 use syn::visit::Visit;
 
 /// Parse the pre-image once; `None` = no entry (caller allows).
@@ -21,42 +25,98 @@ fn parse_pre(file_old: Option<&str>) -> Option<syn::File> {
     file_old.and_then(|t| syn::parse_str::<syn::File>(t).ok())
 }
 
-/// Opaque veto over stripped diff minus lines: flat-ws `needles` inside
-/// any macro body or string value. Without line info a diff site could
-/// be the opaque one, so any hit vetoes.
-fn opaque_hit_lines(file: &syn::File, needles: &[String]) -> bool {
+/// Changed-line cover (T411): an opaque container spanning 1-based
+/// `start..=end` lines can only hide a diff site when it covers a
+/// changed old-side line. Empty `changed` (unparseable hunk header)
+/// keeps the legacy veto-all.
+pub(crate) fn covers_changed(start: usize, end: usize, changed: &[usize]) -> bool {
+    changed.is_empty() || changed.iter().any(|&c| start <= c && c <= end)
+}
+
+/// Old-side changed line numbers for one section or hunk chunk (T411):
+/// parse each `@@ -start[,len]` header, walk the body counting old-side
+/// lines (context and `-` lines advance; `+` lines do not), and collect
+/// the 1-based `-` line numbers the opaque veto checks container spans
+/// against. A truly empty body line counts as context (blank context
+/// lines carry no prefix). Unparseable headers contribute nothing —
+/// callers treat an empty set as the legacy veto-all.
+pub(crate) fn changed_old_lines(chunk: &str) -> Vec<usize> {
+    fn old_start(header: &str) -> usize {
+        // `@@ -start[,len] +... @@`: len defaults to 1; `@@ -0,0`
+        // (pure addition) holds no old lines, so its start is unused.
+        let first = header.split_whitespace().nth(1).unwrap_or("");
+        let start = first
+            .trim_start_matches('-')
+            .split(',')
+            .next()
+            .unwrap_or("");
+        start.parse::<usize>().unwrap_or(0)
+    }
+    let mut out = Vec::new();
+    let mut old = 0usize;
+    let mut in_hunk = false;
+    for line in chunk.lines() {
+        if line.starts_with("@@") {
+            in_hunk = true;
+            old = old_start(line);
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        if line.starts_with('-') && !line.starts_with("---") {
+            if old > 0 {
+                out.push(old);
+            }
+            old += 1;
+        } else if line.starts_with(' ') || line.is_empty() {
+            old += 1;
+        }
+        // `+` lines (and `\ No newline` markers) hold no old-side line.
+    }
+    out
+}
+
+/// Opaque veto over stripped diff minus lines (T411 line-aware):
+/// flat-ws `needles` inside a macro body or string value veto only when
+/// the container's span covers a changed old-side line (see
+/// `covers_changed`).
+fn opaque_hit_lines(file: &syn::File, needles: &[String], changed: &[usize]) -> bool {
     struct Scan<'a> {
         needles: &'a [String],
+        changed: &'a [usize],
         hit: bool,
     }
-    impl<'ast> Visit<'ast> for Scan<'_> {
-        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+    impl Scan<'_> {
+        fn check(&mut self, hay: &str, start: usize, end: usize) {
             if self.hit {
                 return;
             }
-            let hay = super::semantic::flat_ws(&node.tokens.to_string());
             for n in self.needles {
-                if super::semantic::count_occurrences(&hay, n) > 0 {
+                if super::semantic::count_occurrences(hay, n) > 0
+                    && covers_changed(start, end, self.changed)
+                {
                     self.hit = true;
                     return;
                 }
             }
         }
+    }
+    impl<'ast> Visit<'ast> for Scan<'_> {
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            let hay = super::semantic::flat_ws(&node.tokens.to_string());
+            let span = node.span();
+            self.check(&hay, span.start().line, span.end().line);
+        }
         fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
-            if self.hit {
-                return;
-            }
             let hay = super::semantic::flat_ws(&node.value());
-            for n in self.needles {
-                if super::semantic::count_occurrences(&hay, n) > 0 {
-                    self.hit = true;
-                    return;
-                }
-            }
+            let span = node.span();
+            self.check(&hay, span.start().line, span.end().line);
         }
     }
     let mut s = Scan {
         needles,
+        changed,
         hit: false,
     };
     s.visit_file(file);
@@ -91,6 +151,7 @@ pub(crate) fn call_holds(
     old_cal: &str,
     arity: usize,
     minuses: &[&str],
+    changed: &[usize],
 ) -> bool {
     let Some(file) = parse_pre(file_old) else {
         return file_old.is_none();
@@ -128,7 +189,7 @@ pub(crate) fn call_holds(
     if c.count != n {
         return false;
     }
-    !opaque_hit_lines(&file, &needles_of(minuses))
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
 /// N-site method totality (m2f + m2m share the minus shape): `method`
@@ -139,6 +200,7 @@ pub(crate) fn method_holds(
     method: &str,
     arity: usize,
     minuses: &[&str],
+    changed: &[usize],
 ) -> bool {
     let Some(file) = parse_pre(file_old) else {
         return file_old.is_none();
@@ -168,7 +230,7 @@ pub(crate) fn method_holds(
     if m.count != n {
         return false;
     }
-    !opaque_hit_lines(&file, &needles_of(minuses))
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
 /// N-site `&`-strip totality: `&recv.method(args)` with token-equal args
@@ -178,6 +240,7 @@ pub(crate) fn strip_holds(
     method: &str,
     args: &[String],
     minuses: &[&str],
+    changed: &[usize],
 ) -> bool {
     let Some(file) = parse_pre(file_old) else {
         return file_old.is_none();
@@ -220,7 +283,7 @@ pub(crate) fn strip_holds(
     if s.count != n {
         return false;
     }
-    !opaque_hit_lines(&file, &needles_of(minuses))
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
 /// N-site slot totality: free `fn old` (file + inline mods) when
@@ -231,6 +294,7 @@ pub(crate) fn slot_holds(
     old: &str,
     minuses: &[&str],
     indented: bool,
+    changed: &[usize],
 ) -> bool {
     let Some(file) = parse_pre(file_old) else {
         return file_old.is_none();
@@ -279,14 +343,19 @@ pub(crate) fn slot_holds(
     if count != n {
         return false;
     }
-    !opaque_hit_lines(&file, &needles_of(minuses))
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
 /// N-site use-prefix totality: file + inline-mod `use` spans whose
 /// leading segments equal `old_prefix` occur exactly `minuses.len()`
 /// times (tails preserved; group members each count). Fn-body uses never
 /// match (SPEC 14.9) and are not counted.
-pub(crate) fn use_holds(file_old: Option<&str>, old_prefix: &[String], minuses: &[&str]) -> bool {
+pub(crate) fn use_holds(
+    file_old: Option<&str>,
+    old_prefix: &[String],
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
     let Some(file) = parse_pre(file_old) else {
         return file_old.is_none();
     };
@@ -348,7 +417,7 @@ pub(crate) fn use_holds(file_old: Option<&str>, old_prefix: &[String], minuses: 
     if count != n {
         return false;
     }
-    !opaque_hit_lines(&file, &needles_of(minuses))
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
 #[cfg(test)]
@@ -394,10 +463,51 @@ mod tests {
         );
     }
     #[test]
-    fn strip_totality_vetoes_same_line_in_string() {
+    fn call_totality_fires_past_unrelated_string_twin() {
+        // T411 line-aware: the string twin sits on line 4 while the hunk
+        // changes old lines 2-3, so it cannot hide a diff site — the
+        // sweep fires (the engine never matches inside literals).
         let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n");
         let pre = "fn m() {\n    foo(1);\n    foo(1);\n    let s = \"foo(1);\";\n}\n";
-        assert!(!infer(&raw, pre).contains("rule="), "string twin must veto");
+        assert!(
+            infer(&raw, pre).contains("rule=calls_foo_to_bar"),
+            "got: {}",
+            infer(&raw, pre)
+        );
+    }
+    #[test]
+    fn call_totality_vetoes_string_twin_on_changed_line() {
+        // T411: the string twin sits on old line 3, which the hunk changes
+        // (lines 2-3) — it could hide a diff site, so the sweep vetoes.
+        let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n");
+        let pre = "fn m() {\n    foo(1);\n    let s = \"foo(1);\";\n    foo(1);\n}\n";
+        assert!(
+            !infer(&raw, pre).contains("rule="),
+            "changed-line twin must veto"
+        );
+    }
+    #[test]
+    fn call_totality_fires_past_unrelated_macro_twin() {
+        // T411: the macro twin sits on line 4, untouched by the hunk —
+        // the engine leaves macro interiors alone, so the sweep fires.
+        let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n");
+        let pre = "fn m() {\n    foo(1);\n    foo(1);\n    g(m!(foo(1)));\n}\n";
+        assert!(
+            infer(&raw, pre).contains("rule=calls_foo_to_bar"),
+            "got: {}",
+            infer(&raw, pre)
+        );
+    }
+    #[test]
+    fn call_totality_vetoes_macro_twin_on_changed_line() {
+        // T411: `m!(foo(1))` on old line 3 (changed) could hide a diff
+        // site — the engine never matches inside macros, so veto.
+        let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n");
+        let pre = "fn m() {\n    foo(1);\n    g(m!(foo(1)));\n    foo(1);\n}\n";
+        assert!(
+            !infer(&raw, pre).contains("rule="),
+            "changed-line twin must veto"
+        );
     }
     #[test]
     fn slot_totality_fires_and_vetoes_extra() {
@@ -427,5 +537,25 @@ mod tests {
     fn unparseable_pre_vetoes() {
         let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n");
         assert!(!infer(&raw, "not rust {{{").contains("rule="));
+    }
+    #[test]
+    fn changed_old_lines_collects_minus_lines() {
+        let chunk =
+            "@@ -2,1 +2,1 @@\n ctx\n- old\n+ new\n ctx\n@@ -9,2 +10,3 @@\n-a\n-b\n+c\n+d\n+e\n";
+        assert_eq!(crate::totality::changed_old_lines(chunk), vec![3, 9, 10]);
+    }
+    #[test]
+    fn changed_old_lines_handles_elided_len_and_pure_addition() {
+        // `@@ -1 +1 @@` elides len 1; `@@ -5,0` holds no old lines.
+        let chunk = "@@ -1 +1 @@\n-a\n+b\n@@ -5,0 +6,3 @@\n+x\n+y\n+z\n";
+        assert_eq!(crate::totality::changed_old_lines(chunk), vec![1]);
+    }
+    #[test]
+    fn covers_changed_needs_a_covered_line() {
+        assert!(crate::totality::covers_changed(4, 4, &[])); // legacy veto-all
+        assert!(crate::totality::covers_changed(9, 9, &[2, 9]));
+        assert!(crate::totality::covers_changed(8, 10, &[9]));
+        assert!(!crate::totality::covers_changed(4, 4, &[2, 9]));
+        assert!(!crate::totality::covers_changed(2, 3, &[4]));
     }
 }

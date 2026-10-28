@@ -5894,7 +5894,8 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   (index blob for pending diffs, `rev` blob for staged/rev diffs):
   the stripped minus must occur as a sub-expression exactly
   group-size times, with zero occurrences inside opaque text (macro
-  bodies, string interiors — the engine never matches there).
+  bodies, string interiors — the engine never matches there; line-aware
+  (T411): a hit vetoes only when its span covers a changed old-side line).
   Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
   subterm and does not veto (probe-verified). Leftover balanced hunks
   retry the standard chain in place; the T375 guard applies to the
@@ -5903,8 +5904,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   (T409): matchable-unit count (calls/methods by callee+arity, strips by
   method+args, slots by fn ident free vs impl, uses by prefix) must equal
   the pair count, with zero stripped-minus hits in opaque text — precise
-  full-line needles (snippet callee checks over-vetoed 57140fe via
-  assert!/patch-string literals).
+  line-aware needles (T411: container spans must cover a changed old-side
+  line; snippet callee checks over-vetoed 57140fe via assert!/patch-string
+  literals).
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
   `&`-receiver sites, single-segment use prefixes, paths, macro

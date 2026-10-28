@@ -22,6 +22,7 @@ pub mod semantic;
 pub(crate) mod totality;
 
 use std::collections::HashMap;
+use syn::spanned::Spanned;
 use syn::visit::Visit;
 
 #[derive(Debug, thiserror::Error)]
@@ -265,7 +266,7 @@ fn flush(
     current.clear();
 }
 
-fn b_side_path(rest: &str) -> Option<String> {
+pub(crate) fn b_side_path(rest: &str) -> Option<String> {
     // Unquoted spaces rejoined via the shared splitter (T379); a
     // single-path header yields that path.
     rsmpl_patch::split_git_paths(rest).map(|parts| {
@@ -393,6 +394,11 @@ pub(crate) fn try_verbatim_sweep(
     file_old: Option<&str>,
 ) -> Option<String> {
     let (prelude, hunks) = split_verbatim_hunks(section);
+    // T411: per-hunk changed old-side lines for the line-aware opaque veto.
+    let hunk_changed: Vec<Vec<usize>> = hunks
+        .iter()
+        .map(|h| crate::totality::changed_old_lines(h))
+        .collect();
     if hunks.is_empty() {
         return None;
     }
@@ -474,15 +480,27 @@ pub(crate) fn try_verbatim_sweep(
                 continue;
             }
         }
-        // Subterm totality on the pre-image file (T403 soundness):
-        // the needle must occur as a sub-expression exactly
-        // group-size times, with zero occurrences inside opaque
-        // text (macro bodies, string interiors — the engine never
-        // matches there). Syntactic, not textual: `&s.p` inside
+        // Subterm totality on the pre-image file (T403 soundness),
+        // line-aware on opaque text (T411): the needle occurs as a
+        // sub-expression exactly group-size times; macro-body and
+        // string-interior occurrences veto only when their span covers
+        // a changed line of a hunk holding this group (unrelated twins
+        // round-trip untouched). Syntactic, not textual: `&s.p` inside
         // `&s.p.items` is a different subterm (probe-verified: the
         // `.items` site is left alone while bare sites rewrite).
         if let Some(Some(old)) = &old_file {
-            if !totality_holds(old, &minus_expr, *n) {
+            // Changed lines of the hunks holding this group's pairs.
+            let mut group_changed: Vec<usize> = Vec::new();
+            for (j, gm, gp) in pairs.iter() {
+                if gm == m && gp == p {
+                    for &c in &hunk_changed[*j] {
+                        if !group_changed.contains(&c) {
+                            group_changed.push(c);
+                        }
+                    }
+                }
+            }
+            if !totality_holds(old, &minus_expr, *n, &group_changed) {
                 continue;
             }
         }
@@ -527,9 +545,15 @@ pub(crate) fn try_verbatim_sweep(
             .filter(|(j, _, _)| *j == i)
             .map(|(_, _, p)| p.as_str())
             .collect();
-        if let Some(body) =
-            compress_balanced_pair_body(&ms, &ps, path, file_old, hunk.len(), used_rules)
-        {
+        if let Some(body) = compress_balanced_pair_body(
+            &ms,
+            &ps,
+            path,
+            file_old,
+            &hunk_changed[i],
+            hunk.len(),
+            used_rules,
+        ) {
             leftover_bodies.push((i, body));
         }
     }
@@ -723,14 +747,17 @@ fn is_general_supported(e: &syn::Expr) -> bool {
     )
 }
 
-/// Subterm totality (T403 soundness): the needle occurs as a
-/// sub-expression exactly `n` times in the pre-image file, with zero
-/// occurrences inside opaque text (macro bodies, string literals).
-fn totality_holds(old: &syn::File, needle: &syn::Expr, n: usize) -> bool {
+/// Subterm totality (T403 soundness), line-aware on opaque text (T411):
+/// the needle occurs as a sub-expression exactly `n` times in the
+/// pre-image file; macro-body and string-literal occurrences veto only
+/// when their span covers a changed old-side line (unrelated twins
+/// round-trip untouched).
+fn totality_holds(old: &syn::File, needle: &syn::Expr, n: usize, changed: &[usize]) -> bool {
     use quote::ToTokens;
     let needle_text = semantic::flat_ws(&needle.to_token_stream().to_string());
     let mut scan = TotalityScan {
         needle: needle_text,
+        changed: changed.to_vec(),
         subterms: 0,
         opaque_hits: 0,
     };
@@ -738,12 +765,14 @@ fn totality_holds(old: &syn::File, needle: &syn::Expr, n: usize) -> bool {
     scan.subterms == n && scan.opaque_hits == 0
 }
 
-/// One AST walk counting flat-ws-equal sub-expressions of the needle,
-/// skipping macro bodies (opaque to the engine — a changed line inside
-/// one would under-match, so any needle text there vetoes) and
-/// string-literal interiors (never match, T360 — same veto logic).
+/// One AST walk counting flat-ws-equal sub-expressions of the needle;
+/// macro-body occurrences (the engine never matches inside one) and
+/// string-literal interiors (never match, T360) veto only when their
+/// span covers a changed line (T411 line-aware: unrelated twins
+/// round-trip untouched).
 struct TotalityScan {
     needle: String,
+    changed: Vec<usize>,
     subterms: usize,
     opaque_hits: usize,
 }
@@ -757,13 +786,22 @@ impl<'ast> syn::visit::Visit<'ast> for TotalityScan {
         syn::visit::visit_expr(self, node);
     }
     fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
-        self.opaque_hits += semantic::count_occurrences(
-            &semantic::flat_ws(&node.mac.tokens.to_string()),
-            &self.needle,
-        );
+        let hay = semantic::flat_ws(&node.mac.tokens.to_string());
+        if semantic::count_occurrences(&hay, &self.needle) > 0 {
+            let span = node.span();
+            if crate::totality::covers_changed(span.start().line, span.end().line, &self.changed) {
+                self.opaque_hits += 1;
+            }
+        }
     }
     fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
-        self.opaque_hits += semantic::count_occurrences(&semantic::flat_ws(&node.value()), &self.needle);
+        let hay = semantic::flat_ws(&node.value());
+        if semantic::count_occurrences(&hay, &self.needle) > 0 {
+            let span = node.span();
+            if crate::totality::covers_changed(span.start().line, span.end().line, &self.changed) {
+                self.opaque_hits += 1;
+            }
+        }
     }
 }
 
@@ -779,6 +817,7 @@ pub(crate) fn compress_balanced_pair_body(
     pluses: &[&str],
     path: &str,
     file_old: Option<&str>,
+    changed: &[usize],
     hunk_len: usize,
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
@@ -789,27 +828,27 @@ pub(crate) fn compress_balanced_pair_body(
     let full = if minuses.len() == 1 {
         semantic::try_item_rename(minuses[0], pluses[0], path, used_rules)
     } else if let Some(slot) =
-        semantic::try_fn_slot_sweep(minuses, pluses, path, file_old, used_rules)
+        semantic::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(slot)
     } else if let Some(m2f) =
-        semantic::try_method_to_fn_sweep(minuses, pluses, path, file_old, used_rules)
+        semantic::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(m2f)
     } else if let Some(m2m) =
-        semantic::try_method_to_method_sweep(minuses, pluses, path, file_old, used_rules)
+        semantic::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(m2m)
     } else if let Some(strip) =
-        semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, used_rules)
+        semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(strip)
     } else if let Some(uses) =
-        semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, used_rules)
+        semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some(uses)
     } else {
-        semantic::try_call_sweep(minuses, pluses, path, file_old, used_rules)
+        semantic::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
     };
     match full {
         Some(f) => {
@@ -1285,12 +1324,27 @@ mod tests {
         assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
     }
     #[test]
-    fn verbatim_sweep_totality_vetoes_opaque_string_hit() {
-        // A needle inside a string literal never matches (engine-blind), so
-        // any occurrence there vetoes — the changed line might be the
-        // literal-interior one (under-match) or a twin elsewhere (over-match).
+    fn verbatim_sweep_totality_fires_past_unrelated_string_twin() {
+        // T411 line-aware: the literal twin sits on line 4 while the hunks
+        // change old lines 2 and 9 — it cannot hide a diff site, so the
+        // group compresses (the engine never matches inside literals).
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &cand.body_text,\n+        slice(&cand.body_text),\n@@ -9,1 +10,1 @@\n-        &cand.body_text,\n+        slice(&cand.body_text),\n";
         let pre = "fn f(c: C) {\n    g(&cand.body_text);\n    g(&cand.body_text);\n    l(\"use &cand.body_text here\");\n}\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("f.rs".to_string(), pre.to_string());
+        let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
+        assert!(
+            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            "got: {}",
+            out.rsmpl
+        );
+    }
+    #[test]
+    fn verbatim_sweep_totality_vetoes_string_twin_on_changed_line() {
+        // T411: the literal twin sits on old line 9, changed by the second
+        // hunk — it could hide a diff site, so the group stays ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &cand.body_text,\n+        slice(&cand.body_text),\n@@ -9,1 +10,1 @@\n-        &cand.body_text,\n+        slice(&cand.body_text),\n";
+        let pre = "fn f(c: C) {\n    g(&cand.body_text);\n    g(&cand.body_text);\n    h();\n    h();\n    h();\n    h();\n    h();\n    l(\"use &cand.body_text here\");\n}\n";
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
