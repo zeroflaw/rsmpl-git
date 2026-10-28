@@ -19,8 +19,9 @@
 //! order, the rest ride ordinary),
 //! cut-file pre-image required with flat-ws uniqueness (twin veto; legacy
 //! no-pre path skips), minus paired runs with exactly one blank between
-//! runs (a cut absorbs exactly one following blank; multi-pair hunks whose
-//! last run has no following blank cap to N-1 pairs, the last run staying
+//! runs (a cut absorbs exactly one following blank; multi-cut hunks (distinct
+//! items; fan-out pastes of one item need no cap) whose last run has no
+//! following blank cap to N-1 cuts, the last run staying
 //! an ordinary trailing leftover; a single item with a blank-ending prefix
 //! and no following blank trims the absorbed blank from the prefix leftover
 //! hunk (prefix-trim, f09edcd);
@@ -609,12 +610,18 @@ fn minus_last_cut_sound(
 ) -> bool {
     let mut lo = usize::MAX;
     let mut hi = 0usize;
-    let mut n = 0usize;
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     for p in pairs.iter().filter(|p| p.minus_hunk_key == (msi, mhi)) {
         lo = lo.min(p.item.first);
         hi = hi.max(p.item.last);
-        n += 1;
+        let span = (p.item.first, p.item.last);
+        if !spans.contains(&span) {
+            spans.push(span);
+        }
     }
+    // Fan-out shares one cut across N pastes: soundness counts distinct
+    // minus items (T438), not pairs.
+    let n = spans.len();
     if n == 0 {
         return false;
     }
@@ -1376,6 +1383,46 @@ mod tests {
         ]);
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("fan-out must fire");
+        let text = out.join("");
+        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=paste_big_2\n"), "got:\n{text}");
+        assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
+        assert!(
+            !text.contains("-fn big()"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn big()"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_single_item_fanout_at_eof_fires() {
+        // T438: one minus item fanning out to two pastes at EOF. Only one
+        // cut exists, so the no-following-blank path counts distinct items
+        // (1, with lo == 0) and stays sound; the old pair count (2) vetoed.
+        let big = big_fn("big");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let mk_plus = || big.lines().map(|l| format!("+{l}\n")).collect::<String>();
+        let b = format!(
+            "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{}",
+            mk_plus()
+        );
+        let c = format!(
+            "diff --git c.rs\n--- a/c.rs\n+++ b/c.rs\n@@ -2,0 +3,42 @@\n{}",
+            mk_plus()
+        );
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{big}")),
+            ("b.rs", "use x;\n"),
+            ("c.rs", "use y;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("EOF fan-out must fire");
         let text = out.join("");
         assert!(text.contains("rule=move_big\n"), "got:\n{text}");
         assert!(text.contains("rule=paste_big\n"), "got:\n{text}");

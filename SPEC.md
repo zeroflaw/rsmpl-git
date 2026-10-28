@@ -5912,8 +5912,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   uncovered prefix/trailing plus lines stay as rewritten ordinary hunks around
   the pastes), new-file pastes and deleted-file cuts allowed (T432d; the
   rebuilt prelude keeps the deletion, so the file still goes away), rename
-  sections skipped, multi-pair hunks whose last run has no following blank
-  cap to N-1 pairs (the last run stays an ordinary trailing leftover; a
+  sections skipped, multi-cut hunks (distinct minus items; fan-out pastes of
+  one item need no cap) whose last run has no following blank cap to N-1 cuts
+  (the last run stays an ordinary trailing leftover; a
   single item with a blank-ending prefix and no following blank trims the
   absorbed blank from the prefix leftover hunk), and a global T375 byte-win
   guard. Mixed-hunk input is unreachable (the source always runs
