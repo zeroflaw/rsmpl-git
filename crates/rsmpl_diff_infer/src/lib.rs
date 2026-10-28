@@ -932,25 +932,21 @@ mod tests {
         // `Expr::Let`, but complete single-line `let` statements take
         // the `Stmt` path — the engine matches concrete lets
         // structurally (probe-verified `applyrs --check` clean), so the
-        // identical pair compresses.
+        // identical pair compresses. T449: the `let` unwrap in
+        // `parse_call_expr` promotes this hetero-callee pair to the
+        // call sweep (same shape class as bare statements now; chain
+        // order tries call sweeps before verbatim — sizes tie within
+        // a byte); verbatim keeps pairs no call shape can express.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n@@ -9,1 +10,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=calls_run_to_run2\n"),
             "got: {}",
             out.rsmpl
         );
-        assert!(
-            out.rsmpl.contains("- let out = run(a);\n"),
-            "got: {}",
-            out.rsmpl
-        );
-        assert!(
-            out.rsmpl.contains("+ let out = run2(a);\n"),
-            "got: {}",
-            out.rsmpl
-        );
-        rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim let hunk must parse");
+        assert!(out.rsmpl.contains("- run(E0)\n"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("+ run2(E0)\n"), "got: {}", out.rsmpl);
+        rsmpl_patch::parse_patch(&out.rsmpl).expect("call sweep hunk must parse");
     }
     #[test]
     fn verbatim_sweep_macro_minus_stays_passthrough() {

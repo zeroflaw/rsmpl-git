@@ -1062,6 +1062,50 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "26-call-literal-cross-hunk" {
+            // T449: spaced `let` sites split across singleton `-U0`
+            // hunks (a pure addition vetoes whole-section balance, the
+            // 7025a14 shape) group into one literal sweep via the
+            // cross-hunk section driver; the addition stays ordinary
+            // in place, and hetero-trailing b.rs stays ordinary.
+            assert!(
+                semantic.contains("rule=calls_make_call_literal"),
+                "literal cross-hunk sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- make_call(E0, E1, false)"),
+                "literal minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ make_call(E0, E1, \"100644\")"),
+                "literal plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    let a = make_call(\"alpha\", first_count, false);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    let a = make_call(\"alpha\", first_count, \"100644\");"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    let cached = extra();"),
+                "pure-addition leftover must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    let c = make_call(\"gamma\", third_count, true);"),
+                "hetero-trailing minus lines must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    let d = make_call(\"delta\", fourth_count, symlink);"),
+                "hetero-trailing plus lines must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }

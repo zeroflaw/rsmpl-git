@@ -5878,7 +5878,14 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   classes stay for the tighter verbatim sweep (peel precedent, T422).
   Pre-image totality keys on callee + trailing old literal
   (`call_literal_holds`, T420-style): same-arity sites with a
-  different trailing literal never match and never veto.
+  different trailing literal never match and never veto. Call sites
+  inside `let` inits unwrap to their init call (the whole line parses
+  as a `Stmt`, declined as `Expr::Let`; the emission stays a bare-call
+  pattern and the engine rewrites the call sub-expression in place).
+  Cross-hunk classes compress non-whole sections (T449: singleton
+  `-U0` hunks split by distance or pure additions elsewhere, e.g.
+  spaced `let` sites — peel-driver precedent); all-identical classes
+  stay for verbatim and the emitted bodies are invisible to it.
 - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds

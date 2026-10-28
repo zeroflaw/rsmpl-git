@@ -222,6 +222,18 @@ const CASES: &[Case] = &[
         // real-apply).
         expect_sem: 1,
     },
+    Case {
+        commit: "7025a14263350fff4cfba7dd39519ac360315954",
+        rev: None,
+        root: false,
+        // T449 literal cross-hunk prize: the two spaced `let`
+        // `new_file_section(…false)` -> `… "100644")` sites sit in
+        // singleton `-U0` hunks inside an unbalanced section (pure
+        // additions elsewhere), so only the section driver can claim
+        // them — one `calls_new_file_section_literal` hunk; the
+        // hetero `true` -> `"120000"` singleton stays ordinary.
+        expect_sem: 1,
+    },
     // Root commit via the empty tree (3 new-file sections).
     Case {
         commit: "acd1c1eef9758629edc74dfce2920d760114beb9",

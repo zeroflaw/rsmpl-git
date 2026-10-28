@@ -19,7 +19,7 @@ mod moves;
 mod peel;
 mod verbatim;
 
-pub(crate) use literal::try_call_literal_sweep;
+pub(crate) use literal::{try_call_literal_section, try_call_literal_sweep};
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,
@@ -162,23 +162,34 @@ fn compress_section(
         // T441: hetero-arg peel cross-hunk sweep before verbatim
         // (claims hetero classes; pure-identical classes stay for the
         // tighter verbatim sweep, which ignores the single-pair peel
-        // bodies — pinned by `peel_body_verbatim_still_fires`). A peel
-        // rewrite already compresses, so it is kept even when verbatim
-        // and per-hunk find nothing further (returning `None` here
-        // would discard the rewrite).
+        // bodies — pinned by `peel_body_verbatim_still_fires`). T449:
+        // same-callee trailing-literal cross-hunk sweep between peel
+        // and verbatim (claims hetero literal classes split across
+        // singleton hunks, e.g. 7025a14's spaced `let` prize pair;
+        // all-identical classes stay for verbatim, T422 precedent).
+        // Each rewrite composes on the previous one and is kept even
+        // when later stages find nothing (returning `None` here
+        // would discard it); downstream stages group the single-pair
+        // bodies at n=1 (skipped) and pass them through unchanged.
+        let mut rewritten: Option<String> = None;
         if let Some(peeled) = try_call_peel_section(section, &path, used_rules, file_old) {
-            if let Some(verbatim) =
-                verbatim::try_verbatim_sweep(&peeled, &path, used_rules, file_old)
-            {
-                return Some(verbatim);
-            }
-            return Some(peeled);
+            rewritten = Some(peeled);
         }
-        // T403: non-whole sections try the cross-hunk verbatim sweep
-        // before per-hunk (whole-section detectors need balance).
-        if let Some(verbatim) = verbatim::try_verbatim_sweep(section, &path, used_rules, file_old) {
+        let after_peel = rewritten.as_deref().unwrap_or(section);
+        if let Some(lit) = try_call_literal_section(after_peel, &path, used_rules, file_old) {
+            rewritten = Some(lit);
+        }
+        let after_lit = rewritten.as_deref().unwrap_or(section);
+        if let Some(verbatim) = verbatim::try_verbatim_sweep(after_lit, &path, used_rules, file_old)
+        {
             return Some(verbatim);
         }
+        if let Some(r) = rewritten {
+            return Some(r);
+        }
+        // T403: non-whole sections try the cross-hunk verbatim sweep
+        // before per-hunk (whole-section detectors need balance) —
+        // already attempted above on the unmodified section.
         return compress_section_per_hunk(section, &path, file_old, used_rules);
     }
     // N >= 2 heterogeneous fn/method renames compress to one slot
@@ -970,7 +981,32 @@ fn parse_call_expr(line: &str) -> Option<syn::Expr> {
     if let Some(stripped) = text.strip_suffix(';') {
         text = stripped.trim_end();
     }
-    syn::parse_str::<syn::Expr>(text).ok()
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
+        // A `let` scrutinee parses as `Expr::Let` — decline it here;
+        // the `Stmt` unwrap below extracts the init call instead
+        // (verbatim takes the same `Let`-declines-`Expr` split, T440).
+        if !matches!(expr, syn::Expr::Let(_)) {
+            return Some(expr);
+        }
+    }
+    // T449: call sites inside `let` inits (`let a = f(x);`) — the
+    // whole line parses as a `Stmt`, not an `Expr`. Unwrap the init
+    // (peel `peel_init` precedent; the `Stmt` parse needs the
+    // semicolon `text` just lost, so retry on the trimmed line); the
+    // emission stays a bare-call pattern and the engine rewrites the
+    // call sub-expression in place (probe-verified `applyrs --check`
+    // green). `let-else` never qualifies (the engine never moves
+    // into diverge targets).
+    match syn::parse_str::<syn::Stmt>(line.trim()) {
+        Ok(syn::Stmt::Local(local)) => {
+            let init = local.init?;
+            if init.diverge.is_some() {
+                return None;
+            }
+            Some(*init.expr)
+        }
+        _ => None,
+    }
 }
 
 /// Bare single-segment call callee + args; rejects method calls,

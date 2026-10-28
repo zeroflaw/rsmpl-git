@@ -1,7 +1,248 @@
 //! Same-callee trailing-literal-delta call sweep (T448, split from
-//! `super` for the 2000-line hygiene gate — peel.rs precedent).
+//! `super` for the 2000-line hygiene gate — peel.rs precedent) plus
+//! its cross-hunk section driver (T449: singleton `-U0` hunks in an
+//! unbalanced section group by literal class, peel precedent).
 
 use super::{call_parts, flat_ws, parse_call_expr, unique_rule};
+
+/// One hetero trailing-literal-delta class (T449): shared callee,
+/// uniform arity `k + 1`, token-equal trailing old/new literals.
+/// Leading args bind positionally per site (hetero values are the
+/// point); the trailing pair replays verbatim.
+#[derive(Debug, PartialEq, Eq)]
+struct LiteralClass {
+    cal: String,
+    prefix: usize,
+    old_lit: String,
+    new_lit: String,
+}
+
+/// Parse one `-`/`+` line pair as a trailing-literal-delta call
+/// migration: same callee, same arity `k + 1`, per-site leading `k`
+/// args token-equal minus-vs-plus, trailing old/new token-equal with
+/// a real delta. `let`-init sites unwrap to their call init (T449:
+/// `parse_call_expr` handles the `Stmt::Local` form); the class key
+/// carries only the shared parts.
+fn parse_literal_pair(old_line: &str, new_line: &str) -> Option<LiteralClass> {
+    use quote::ToTokens;
+    let tok = |e: &syn::Expr| e.to_token_stream().to_string();
+    let (o_cal, o_args) = call_parts(&parse_call_expr(old_line)?)?;
+    let (n_cal, n_args) = call_parts(&parse_call_expr(new_line)?)?;
+    if o_cal != n_cal || o_args.len() != n_args.len() || o_args.is_empty() {
+        return None;
+    }
+    if !o_args[..o_args.len() - 1]
+        .iter()
+        .zip(n_args[..n_args.len() - 1].iter())
+        .all(|(a, b)| tok(a) == tok(b))
+    {
+        return None;
+    }
+    let (o_last, n_last) = (
+        tok(&o_args[o_args.len() - 1]),
+        tok(&n_args[n_args.len() - 1]),
+    );
+    if o_last == n_last {
+        return None;
+    }
+    Some(LiteralClass {
+        cal: o_cal,
+        prefix: o_args.len() - 1,
+        old_lit: o_last,
+        new_lit: n_last,
+    })
+}
+
+/// Cross-hunk literal driver for non-whole sections (T449): mirrors
+/// the `try_call_peel_section` skeleton — group balanced-hunk pairs
+/// by literal class, emit one hunk per passing hetero class, leave
+/// everything else ordinary for verbatim + per-hunk to retry.
+/// Literal bodies are `@@ -1,1 @@` single-pattern hunks, so the later
+/// verbatim pass groups them at n=1 (skipped) and passes them through
+/// unchanged.
+pub(crate) fn try_call_literal_section(
+    section: &str,
+    _path: &str,
+    used_rules: &mut Vec<String>,
+    file_old: Option<&str>,
+) -> Option<String> {
+    let (prelude, hunks) = split_section_hunks(section);
+    if hunks.is_empty() {
+        return None;
+    }
+    let hunk_changed: Vec<Vec<usize>> = hunks
+        .iter()
+        .map(|h| crate::totality::changed_old_lines(h))
+        .collect();
+    // Balanced-hunk pairs in order; unbalanced hunks stay leftovers.
+    let mut pairs: Vec<(usize, String, String)> = Vec::new();
+    let mut hunk_balanced = vec![false; hunks.len()];
+    for (i, hunk) in hunks.iter().enumerate() {
+        let mut minuses = Vec::new();
+        let mut pluses = Vec::new();
+        for line in hunk.lines().skip(1) {
+            if line.starts_with('-') && !line.starts_with("---") {
+                minuses.push(line[1..].to_string());
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                pluses.push(line[1..].to_string());
+            }
+        }
+        if minuses.len() == pluses.len() && !minuses.is_empty() {
+            hunk_balanced[i] = true;
+            pairs.extend(minuses.into_iter().zip(pluses).map(|(m, p)| (i, m, p)));
+        }
+    }
+    // Group pair indices by literal class, first-occurrence order.
+    let mut classes: Vec<(LiteralClass, Vec<usize>)> = Vec::new();
+    for (idx, (.., m, p)) in pairs.iter().enumerate() {
+        let Some(c) = parse_literal_pair(m, p) else {
+            continue;
+        };
+        match classes.iter_mut().find(|(k, _)| *k == c) {
+            Some((_, members)) => members.push(idx),
+            None => classes.push((c, vec![idx])),
+        }
+    }
+    let checkpoint = used_rules.len();
+    // Fire at most one hunk per hetero class (all-identical classes
+    // stay for verbatim, which is tighter there — T422 precedent).
+    let mut passing: Vec<(usize, String)> = Vec::new();
+    let mut covered_pair = vec![false; pairs.len()];
+    for (class, members) in &classes {
+        if members.len() < 2 {
+            continue;
+        }
+        let first = &pairs[members[0]];
+        if members.iter().all(|&idx| {
+            flat_ws(&pairs[idx].1) == flat_ws(&first.1)
+                && flat_ws(&pairs[idx].2) == flat_ws(&first.2)
+        }) {
+            continue;
+        }
+        let ms: Vec<&str> = members.iter().map(|&idx| pairs[idx].1.as_str()).collect();
+        let mut group_changed: Vec<usize> = Vec::new();
+        for &idx in members {
+            for &l in &hunk_changed[pairs[idx].0] {
+                if !group_changed.contains(&l) {
+                    group_changed.push(l);
+                }
+            }
+        }
+        if !crate::totality::call_literal_holds(
+            file_old,
+            &class.cal,
+            class.prefix + 1,
+            &class.old_lit,
+            &ms,
+            &group_changed,
+        ) {
+            continue;
+        }
+        let rule = unique_rule(used_rules, &format!("calls_{}_literal", class.cal));
+        let mut vars = Vec::new();
+        for i in 0..class.prefix {
+            vars.push(format!("E{i}"));
+        }
+        let head = vars.join(", ");
+        let (minus_call, plus_call) = if head.is_empty() {
+            (
+                format!("{}({})", class.cal, class.old_lit),
+                format!("{}({})", class.cal, class.new_lit),
+            )
+        } else {
+            (
+                format!("{}({head}, {})", class.cal, class.old_lit),
+                format!("{}({head}, {})", class.cal, class.new_lit),
+            )
+        };
+        let mut head_directives = String::new();
+        for v in &vars {
+            head_directives.push_str(&format!("# expr {v}\n"));
+        }
+        let body = format!(
+            "@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n{head_directives}- {minus_call}\n+ {plus_call}\n"
+        );
+        for &idx in members {
+            covered_pair[idx] = true;
+        }
+        passing.push((members[0], body));
+    }
+    if passing.is_empty() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // A hunk is covered iff balanced and every pair sits in a passing
+    // class; leftover hunks stay ordinary in place.
+    let covered_hunk: Vec<bool> = hunk_balanced
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            *b && pairs
+                .iter()
+                .enumerate()
+                .filter(|(_, (j, _, _))| *j == i)
+                .all(|(idx, _)| covered_pair[idx])
+        })
+        .collect();
+    // T375 over the literal-covered set: the leftover retry is
+    // fallback-identical, so the section beats the fallback exactly
+    // when the literal bodies beat the covered ordinary hunks.
+    let covered_len: usize = hunks
+        .iter()
+        .zip(&covered_hunk)
+        .filter(|(_, b)| **b)
+        .map(|(h, _)| h.len())
+        .sum();
+    if passing.iter().map(|(_, b)| b.len()).sum::<usize>() >= covered_len {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    let mut out = prelude;
+    let mut emitted = vec![false; passing.len()];
+    for (i, hunk) in hunks.iter().enumerate() {
+        if covered_hunk[i] {
+            for (gi, (first_idx, body)) in passing.iter().enumerate() {
+                if !emitted[gi] && pairs[*first_idx].0 == i {
+                    out.push_str(body);
+                    emitted[gi] = true;
+                }
+            }
+            continue;
+        }
+        out.push_str(hunk);
+    }
+    Some(out)
+}
+
+/// Split a section into its prelude lines and native hunks (the same
+/// split the per-hunk fallback uses; each part keeps trailing newlines).
+fn split_section_hunks(section: &str) -> (String, Vec<String>) {
+    let mut prelude = String::new();
+    let mut hunks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in section.lines() {
+        if line.starts_with("@@") {
+            if let Some(h) = current.take() {
+                hunks.push(h);
+            }
+            current = Some(String::new());
+        }
+        match current.as_mut() {
+            Some(h) => {
+                h.push_str(line);
+                h.push('\n');
+            }
+            None => {
+                prelude.push_str(line);
+                prelude.push('\n');
+            }
+        }
+    }
+    if let Some(h) = current.take() {
+        hunks.push(h);
+    }
+    (prelude, hunks)
+}
 
 /// N-site (N >= 2) same-callee same-arity trailing-literal-delta call
 /// sweep (T448): every pair parses as a bare single-seg no-turbofish
@@ -255,6 +496,154 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    make_widget(alpha, 1, false);\n-    make_widget(beta, 2, false);\n+    make_widget(alpha, 1, false);\n+    make_widget(beta, 2, false);\n }\n",
+        );
+        assert!(crate::semantic::infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_literal_let_init_whole_fires() {
+        // T449: call sites inside `let` inits take the whole-section
+        // path once `parse_call_expr` unwraps `Stmt::Local`; the
+        // emission stays a bare-call pattern and the engine rewrites
+        // the call sub-expression in place.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = make_widget(alpha, 1, false);\n-    let b = make_widget(beta, 2, false);\n+    let a = make_widget(alpha, 1, \"100644\");\n+    let b = make_widget(beta, 2, \"100644\");\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = make_widget(alpha, 1, false);\n    let b = make_widget(beta, 2, false);\n}\n",
+        )]);
+        let out =
+            crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("rule=calls_make_widget_literal\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
+        assert!(
+            out.contains("+ make_widget(E0, E1, \"100644\")\n"),
+            "got: {out}"
+        );
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn call_literal_let_init_cross_hunk_fires() {
+        // T449 prize miniature: two singleton `-U0` hunks (spaced
+        // `let` sites) plus a pure-addition hunk that vetoes
+        // whole-section balance — the section driver groups the
+        // singletons into one sweep; the addition stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = make_widget(alpha, 1, false);\n+    let a = make_widget(alpha, 1, \"100644\");\n@@ -9 +9 @@\n-    let b = make_widget(beta, 2, false);\n+    let b = make_widget(beta, 2, \"100644\");\n@@ -20,0 +21,1 @@\n+    let cached = extra();\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = make_widget(alpha, 1, false);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    let b = make_widget(beta, 2, false);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n}\n",
+        )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("must compress");
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("rule=calls_make_widget_literal\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
+        assert!(
+            out.contains("+ make_widget(E0, E1, \"100644\")\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+    let cached = extra();\n"),
+            "addition stays, got: {out}"
+        );
+        assert!(
+            !out.contains("-    let a = make_widget(alpha, 1, false);"),
+            "native minus consumed, got: {out}"
+        );
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn call_literal_cross_hunk_single_member_stays_ordinary() {
+        // T449: a lone singleton class (N < 2) has no token win — the
+        // section stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = make_widget(alpha, 1, false);\n+    let a = make_widget(alpha, 1, \"100644\");\n@@ -20,0 +21,1 @@\n+    let cached = extra();\n",
+        );
+        assert!(crate::semantic::infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_literal_cross_hunk_line_hetero_call_homo_fires() {
+        // T449: `let a` vs `let b` lines are hetero, so verbatim can
+        // never group them — but the call migration is one homo
+        // class, and the zero-prefix literal sweep (no `# expr`
+        // directives) rewrites both inits in place. Engine-checked.
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = make_widget(false);\n+    let a = make_widget(\"100644\");\n@@ -9 +9 @@\n-    let b = make_widget(false);\n+    let b = make_widget(\"100644\");\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = make_widget(false);\n    x();\n    x();\n    x();\n    x();\n    x();\n    x();\n    let b = make_widget(false);\n}\n",
+        )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("must compress");
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("rule=calls_make_widget_literal\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- make_widget(false)\n"), "got: {out}");
+        assert!(out.contains("+ make_widget(\"100644\")\n"), "got: {out}");
+        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn call_literal_cross_hunk_all_identical_stays_for_verbatim() {
+        // T449 + T422: a line-identical cross-hunk class compresses
+        // tighter without metavars (`rule=verbatim` beats the longer
+        // literal rule on byte-identical bodies), so the section
+        // driver declines and verbatim claims it.
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    make_widget(false);\n+    make_widget(\"100644\");\n@@ -9 +9 @@\n-    make_widget(false);\n+    make_widget(\"100644\");\n",
+        );
+        let out =
+            crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
+        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+        assert!(!out.contains("calls_make_widget_literal"), "got: {out}");
+    }
+
+    #[test]
+    fn call_literal_cross_hunk_extra_same_literal_vetoes() {
+        // T449 tuple totality across hunks: an unchanged third
+        // same-trailing call in the pre-image over-counts (3 != 2).
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = make_widget(alpha, 1, false);\n+    let a = make_widget(alpha, 1, \"100644\");\n@@ -9 +9 @@\n-    let b = make_widget(beta, 2, false);\n+    let b = make_widget(beta, 2, \"100644\");\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = make_widget(alpha, 1, false);\n    let b = make_widget(beta, 2, false);\n    let c = make_widget(gamma, 3, false);\n}\n",
+        )]);
+        assert!(
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn call_let_init_changed_prefix_vetoes() {
+        // T449 guard: a leading arg rewritten in transit is not a
+        // literal delta, through the `let` unwrap too.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = make_widget(alpha, 1, false);\n-    let b = make_widget(beta, 2, false);\n+    let a = make_widget(alpha, 9, \"100644\");\n+    let b = make_widget(beta, 2, \"100644\");\n }\n",
         );
         assert!(crate::semantic::infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
