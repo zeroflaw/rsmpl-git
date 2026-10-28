@@ -664,6 +664,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "13-slot-sweep" {
+            assert!(
+                semantic.contains("rule=rename_old_function_name_to_new_function_name"),
+                "slot sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- V Q fn old_function_name G (...) W {"),
+                "slot sweep minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ V Q fn new_function_name G (...) W {"),
+                "slot sweep plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn old_function_name("),
+                "renamed lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn new_function_name("),
+                "renamed lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
