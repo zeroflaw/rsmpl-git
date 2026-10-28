@@ -417,6 +417,45 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "08-move-eof-cap" {
+            assert!(
+                semantic.contains("rule=move_one"),
+                "eof-cap move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_one"),
+                "eof-cap move must paste, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("rule=move_two"),
+                "second pair must cap, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("rule=paste_two"),
+                "second pair must cap, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn one("),
+                "paired lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn one("),
+                "paired lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-fn two() {"),
+                "capped run must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+fn two() {"),
+                "capped run must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
