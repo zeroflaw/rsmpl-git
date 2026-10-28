@@ -1,0 +1,21 @@
+fn m() {
+    validated(&text);
+    x();
+    x();
+    x();
+    x();
+    x();
+    x();
+    validated(&text);
+    x();
+    x();
+    x();
+    x();
+    x();
+    x();
+    x();
+    x();
+    x();
+    x();
+    validated(&text);
+}

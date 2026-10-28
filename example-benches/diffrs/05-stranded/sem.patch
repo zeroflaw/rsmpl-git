@@ -1,0 +1,12 @@
+diff --git src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,1 @@ rule=verbatim
+# allow=many
+# scope=file
+- validated(&text)
++ validated_live(&text, &pre)
+@@ -20,0 +21,3 @@
++    let done = extra();
++
++    done();

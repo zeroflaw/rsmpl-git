@@ -1,0 +1,20 @@
+diff --git src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,1 @@ rule=calls_make_call_literal
+# allow=many
+# scope=file
+# expr E0
+# expr E1
+- make_call(E0, E1, false)
++ make_call(E0, E1, "100644")
+@@ -5,0 +6 @@
++    let cached = extra();
+diff --git src/b.rs
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -2,2 +2,2 @@
+-    let c = make_call("gamma", third_count, true);
+-    let d = make_call("delta", fourth_count, false);
++    let c = make_call("gamma", third_count, "120000");
++    let d = make_call("delta", fourth_count, symlink);

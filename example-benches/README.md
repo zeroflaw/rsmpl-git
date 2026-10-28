@@ -51,6 +51,8 @@ machine-checked counts in the JSON report) at ~zero token premium.
 | 02-ordinary-edit (1 line, stays ordinary) | 89 B / 6 ln | 72 B / 6 ln | 19% |
 | 03-move (same-file reorder, cut+paste) | 1857 B / 89 ln | 128 B / 10 ln | 93% |
 | 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 548 B / 25 ln | 46% |
+| 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 214 B / 12 ln | 39% |
+| 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 518 B / 20 ln | 24% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

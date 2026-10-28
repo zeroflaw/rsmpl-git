@@ -1,0 +1,19 @@
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -2 +2 @@ fn m() {
+-    let a = make_call("alpha", first_count, false);
++    let a = make_call("alpha", first_count, "100644");
+@@ -4 +4 @@ fn m() {
+-    let b = make_call("beta", second_count, false);
++    let b = make_call("beta", second_count, "100644");
+@@ -5,0 +6 @@ fn m() {
++    let cached = extra();
+diff --git a/src/b.rs b/src/b.rs
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -2,2 +2,2 @@ fn n() {
+-    let c = make_call("gamma", third_count, true);
+-    let d = make_call("delta", fourth_count, false);
++    let c = make_call("gamma", third_count, "120000");
++    let d = make_call("delta", fourth_count, symlink);
