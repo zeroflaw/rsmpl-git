@@ -5930,6 +5930,14 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   b-side path, which would seed from the wrong file, so differing
   `a/old b/new` sides stay ordinary passthrough, T377) stays
   ordinary-hunk passthrough.
+  Pure deletions/additions stay ordinary by design (T424 verdict — no
+  separate negative/positive sweep vocabulary): positive fan-out is
+  engine-impossible (a pure insertion anchors at one point, with no
+  minus pattern for `# allow=many` to multiply over — probe-verified),
+  and minus-only call sweeps lower to `;` litter (Section 18.2) while
+  the whole-line negative shapes (let/item/use) have zero all-identical
+  pure-hunk exhibits in history. Ordinary 0-context hunks already show
+  each removed/added line at one line per site — the minimal view.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —
