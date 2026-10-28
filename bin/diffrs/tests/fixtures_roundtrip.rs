@@ -358,6 +358,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "06-move-prefix-leftover" {
+            assert!(
+                semantic.contains("rule=move_big"),
+                "prefix-leftover move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big"),
+                "prefix-leftover move must paste, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn big("),
+                "minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn big("),
+                "plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-fn gone() {"),
+                "prefix leftover must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
