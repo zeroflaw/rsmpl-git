@@ -952,6 +952,41 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "23-macro-veto" {
+            // T445: both probed veto shapes stay ordinary — the
+            // format!-interior sites (33a8cbb miniature, engine-blind
+            // macro bodies) and the env!-in-init lets (e06313c
+            // miniature, verbatim_init_ok macro gate). No rule= lines;
+            // passthrough is exactly normalized native.
+            assert!(
+                !semantic.contains("rule="),
+                "macro-gate shapes must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-        header = rsmpl_patch::collapse_git_header(&format!(\"diff --git a/{path} b/{path}\"))"),
+                "macro-interior minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+        header = super::git_header(path)"),
+                "macro-interior plus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains(
+                    "-    let out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));"
+                ),
+                "macro-init minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains(
+                    "+    let out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));"
+                ),
+                "macro-init plus lines must be preserved, got: {semantic}"
+            );
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
