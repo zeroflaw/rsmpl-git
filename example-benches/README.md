@@ -59,6 +59,8 @@ machine-checked counts in the JSON report) at ~zero token premium.
 | 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 197 B / 7 ln | 49% |
 | 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 204 B / 8 ln | 36% |
 | 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 142 B / 8 ln | 29% |
+| 13-verbatim-return (2 sites, Return-arm verbatim sweep) | 266 B / 9 ln | 165 B / 8 ln | 38% |
+| 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 145 B / 8 ln | 48% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

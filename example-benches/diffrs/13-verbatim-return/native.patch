@@ -1,0 +1,9 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -6 +6 @@ fn alpha() -> i32 {
+-    return make_widget("a", 1);
++    return make_widget("a", 2);
+@@ -9 +9 @@ fn beta() -> i32 {
+-    return make_widget("a", 1);
++    return make_widget("a", 2);
