@@ -494,6 +494,43 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "10-move-same-hunk-fanout" {
+            assert!(
+                semantic.contains("rule=move_big"),
+                "same-hunk fan-out move must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big"),
+                "same-hunk fan-out move must paste, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_big_2"),
+                "same-hunk fan-out second paste must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("+ M1\n").count(),
+                2,
+                "both same-hunk pastes share the bind, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=paste_big").count(),
+                2,
+                "exactly two pastes in one hunk, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn big("),
+                "minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn big("),
+                "plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
