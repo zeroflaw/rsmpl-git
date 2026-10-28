@@ -63,6 +63,8 @@ machine-checked counts in the JSON report) at ~zero token premium.
 | 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 145 B / 8 ln | 48% |
 | 15-verbatim-unary (2 sites, Unary-arm verbatim sweep) | 219 B / 9 ln | 142 B / 8 ln | 35% |
 | 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 415 B / 16 ln | 24% |
+| 17-macro-veto (6 sites, macro gates stay ordinary) | 1208 B / 24 ln | 1040 B / 24 ln | 14% |
+| 18-macro-invocation-veto (2 sites + pure addition, stays ordinary) | 378 B / 14 ln | 308 B / 14 ln | 19% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

@@ -1,0 +1,14 @@
+diff --git src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -9 +9 @@
+-    assert_eq!(out.rsmpl, TEXT_SECTION);
++    assert_eq!(out.rsmpl, TEXT_STRIPPED);
+@@ -13 +13,6 @@
+-    assert_eq!(out.rsmpl, TEXT_SECTION);
++    assert_eq!(out.rsmpl, TEXT_STRIPPED);
++}
++
++#[test]
++fn extra_probe() {
++    assert!(true);

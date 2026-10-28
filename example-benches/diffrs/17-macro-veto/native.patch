@@ -1,0 +1,24 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -4 +4 @@ fn render(path: &str) -> String {
+-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
++        header = super::git_header(path)
+@@ -8 +8 @@ fn render(path: &str) -> String {
+-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
++        header = super::git_header(path)
+@@ -12 +12 @@ fn render(path: &str) -> String {
+-        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
++        header = super::git_header(path)
+diff --git a/src/tool.rs b/src/tool.rs
+--- a/src/tool.rs
++++ b/src/tool.rs
+@@ -2 +2 @@ fn one() {
+-    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")));
++    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")));
+@@ -7 +7 @@ fn two() {
+-    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")));
++    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")));
+@@ -12 +12 @@ fn three() {
+-    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")));
++    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")));
