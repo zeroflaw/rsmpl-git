@@ -799,6 +799,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "18-ref-strip" {
+            assert!(
+                semantic.contains("rule=calls_join_strip"),
+                "ref-strip sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- &Receiver.join(\"repo\")"),
+                "ref-strip minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ Receiver"),
+                "ref-strip plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    copy_tree(&a.join(\"repo\"), x);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    copy_tree(a, x);"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
