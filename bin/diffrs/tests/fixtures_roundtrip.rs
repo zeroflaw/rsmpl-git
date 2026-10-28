@@ -772,6 +772,33 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "17-same-literal" {
+            assert!(
+                semantic.contains("rule=calls_contains_literal"),
+                "same-literal sweep must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- Receiver.contains(\"skills/rsmpl-git/SKILL.md\")"),
+                "same-literal minus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ Receiver.contains(\"skills/gitrs/SKILL.md\")"),
+                "same-literal plus pattern must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    agents.contains(\"skills/rsmpl-git/SKILL.md\");"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+    agents.contains(\"skills/gitrs/SKILL.md\");"),
+                "rewritten lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
