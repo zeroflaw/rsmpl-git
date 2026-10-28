@@ -977,3 +977,82 @@ fn staged_mode_flip_with_crlf_content_round_trips_byte_exact() {
         "exec-bit flip must survive"
     );
 }
+
+// T403: pending worktree change with two identical `&state.parsed,` sites
+// plus an interleaved pure addition and a subterm-distinct `.items` site.
+// The pair compresses to one verbatim hunk (subterm totality holds on
+// the index-blob pre-image); the addition stays ordinary. Stash-to-HEAD
+// then real-apply must rebuild the pending tree byte-exact.
+#[test]
+fn verbatim_sweep_pending_change_round_trips() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    let base = "fn f(state: &S) -> i32 {\n    let t = compute(\n        &state.parsed,\n        x);\n    let u = other(\n        &state.parsed,\n        y);\n    let v = items(\n        &state.parsed.items,\n        z);\n    w();\n}\n";
+    let changed = "fn f(state: &S) -> i32 {\n    let t = compute(\n        parsed,\n        x);\n    let u = other(\n        parsed,\n        y);\n    let v = items(\n        &state.parsed.items,\n        z);\n    let cached = state.parsed;\n    w();\n}\n";
+    write(dir.path(), "a.rs", base);
+    commit_all(dir.path());
+    write(dir.path(), "a.rs", changed);
+
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(patch.matches("@@ -1,1 @@ rule=verbatim\n").count(), 1, "got: {patch}");
+    assert!(patch.contains("- &state.parsed\n"), "got: {patch}");
+    assert!(patch.contains("+    let cached = state.parsed;"), "got: {patch}");
+
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(checked.status.code(), Some(0));
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        changed
+    );
+}
+
+// T403: an unchanged `&cand.body_text` subterm (a `!=` guard) shares the
+// needle text — subterm totality fails, so the section stays ordinary.
+// Without this veto the sweep would silently rewrite the guard (the
+// 712ad9d live over-match). Round-trips byte-exact either way.
+#[test]
+fn verbatim_sweep_guard_occurrence_stays_ordinary() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    let base = "fn f(c: &C) {\n    let a = wrap(\n        &cand.body_text,\n        1);\n    let b = wrap(\n        &cand.body_text,\n        2);\n    if x != &cand.body_text {}\n}\n";
+    let changed = "fn f(c: &C) {\n    let a = wrap(\n        slice(&cand.body_text),\n        1);\n    let b = wrap(\n        slice(&cand.body_text),\n        2);\n    if x != &cand.body_text {}\n}\n";
+    write(dir.path(), "a.rs", base);
+    commit_all(dir.path());
+    write(dir.path(), "a.rs", changed);
+
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(!patch.contains("rule="), "got: {patch}");
+
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(checked.status.code(), Some(0));
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        changed
+    );
+}

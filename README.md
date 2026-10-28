@@ -88,7 +88,10 @@ fan-outs (`recv.old(args)` → `new_fn(recv, args)` → one `# allow=many`
 hunk), and N-site `&`-receiver strips (`&recv.m(lits)` → `recv` → one
 `# allow=many` general-expr hunk), and N-site use-path prefix
 renames (`use P::Old::T` → `use P::New::T` → one `# allow=many`
-hunk) into semantic hunks — whole-file
+hunk), and N-site verbatim identical-line sweeps (identical
+single-line pairs → one `# allow=many` hunk with literal lines,
+ subterm-totality checked against the pre-image file, T403)
+ into semantic hunks — whole-file
 first, then per balanced
 hunk (T349); unrecognized runs stay 0-context ordinary hunks (no
 untouched lines, still round-trip).

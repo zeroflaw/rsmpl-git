@@ -23,11 +23,22 @@
 /// compressed patch, or `None` when no section compressed (caller
 /// keeps the ordinary passthrough).
 pub fn infer_semantic(sections: &[String]) -> Option<String> {
+    infer_semantic_with_pre_images(sections, &std::collections::HashMap::new())
+}
+
+/// `infer_semantic` with pre-image file contents (T403 totality):
+/// `pre` maps collapsed b-side paths to the old file text (assembled
+/// by the caller, which owns the repo). Legacy `infer_semantic` passes
+/// an empty map (section-visible evidence only).
+pub fn infer_semantic_with_pre_images(
+    sections: &[String],
+    pre: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     let mut out = String::new();
     let mut used_rules: Vec<String> = Vec::new();
     let mut compressed_any = false;
     for section in sections {
-        match compress_section(section, &mut used_rules) {
+        match compress_section(section, &mut used_rules, pre) {
             Some(semantic) => {
                 compressed_any = true;
                 out.push_str(&semantic);
@@ -42,7 +53,11 @@ pub fn infer_semantic(sections: &[String]) -> Option<String> {
     }
 }
 
-fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<String> {
+fn compress_section(
+    section: &str,
+    used_rules: &mut Vec<String>,
+    pre: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     let header = section.lines().next()?;
     // T385: CRLF content stays ordinary passthrough — detectors strip
     // `\r` via `str::lines` and would emit hunks that cannot match
@@ -60,6 +75,9 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
     if !path.ends_with(".rs") {
         return None;
     }
+    // T403 totality input: the pre-image text for this path, if the
+    // caller supplied it (None = section-visible evidence only).
+    let file_old = pre.get(&path).map(String::as_str);
     // Group changed lines per `@@` hunk: unified diff lists each
     // hunk's `-` block before its `+` block, so global order pairing
     // is only sound when every hunk is a pure modification.
@@ -120,6 +138,11 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
         return compress_section_per_hunk(section, &path, used_rules);
     }
     if !whole {
+        // T403: non-whole sections try the cross-hunk verbatim sweep
+        // before per-hunk (whole-section detectors need balance).
+        if let Some(verbatim) = super::try_verbatim_sweep(section, &path, used_rules, file_old) {
+            return Some(verbatim);
+        }
         return compress_section_per_hunk(section, &path, used_rules);
     }
     // N >= 2 heterogeneous fn/method renames compress to one slot
@@ -163,17 +186,12 @@ fn compress_section(section: &str, used_rules: &mut Vec<String>) -> Option<Strin
         }
         used_rules.truncate(checkpoint);
     }
-    // Per-hunk fallback (T349): the whole-section detectors above need
-    // every pair in the file to share one shape, so one doc tweak, one
-    // pure addition, or one divergent pair anywhere vetoes compression
-    // of unrelated sweep runs in other hunks. Retry hunk by hunk with
-    // the same detectors: git hunks of one file are pairwise disjoint
-    // in original coordinates, so a compressed hunk's changed lines
-    // never overlap a leftover hunk's ranges (SPEC 10.6 option-1
-    // merge by construction). Residual best-effort risk, same as the
-    // whole-section path: a sweep pattern can also match unchanged
-    // sites elsewhere — verify with the D.3 round-trip before trusting
-    // a compression.
+    if let Some(verbatim) = super::try_verbatim_sweep(section, &path, used_rules, file_old) {
+        return Some(verbatim);
+    }
+    // T403: verbatim sweep after the whole-section detectors fail.
+    // Per-hunk fallback (T349): pairwise-disjoint hunks merge by
+    // construction (SPEC 10.6 option-1).
     compress_section_per_hunk(section, &path, used_rules)
 }
 
@@ -227,55 +245,15 @@ fn compress_section_per_hunk(
                 pluses.push(&line[1..]);
             }
         }
-        let checkpoint = used_rules.len();
-        let semantic = if minuses.len() == pluses.len() && !minuses.is_empty() {
-            if minuses.len() == 1 {
-                try_item_rename(minuses[0], pluses[0], path, used_rules)
-            } else if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, path, used_rules) {
-                Some(slot)
-            } else if let Some(m2f) = try_method_to_fn_sweep(&minuses, &pluses, path, used_rules) {
-                Some(m2f)
-            } else if let Some(m2m) =
-                try_method_to_method_sweep(&minuses, &pluses, path, used_rules)
-            {
-                Some(m2m)
-            } else if let Some(strip) =
-                try_ref_method_strip_sweep(&minuses, &pluses, path, used_rules)
-            {
-                Some(strip)
-            } else if let Some(uses) = try_use_prefix_sweep(&minuses, &pluses, path, used_rules) {
-                Some(uses)
-            } else {
-                try_call_sweep(&minuses, &pluses, path, used_rules)
+        // One balanced hunk through the shared detector chain
+        // (`compress_balanced_pair_body` — same shapes the verbatim
+        // sweep retries leftovers with); ordinary hunks pass through.
+        match super::compress_balanced_pair_body(&minuses, &pluses, path, hunk.len(), used_rules) {
+            Some(body) => {
+                compressed_any = true;
+                out.push_str(&body);
             }
-        } else {
-            None
-        };
-        match semantic {
-            Some(full) => {
-                // Detectors return a full `diff --git` section; keep
-                // only the hunk body (everything after the header
-                // line) so the reassembled section keeps one header.
-                // T375: the body must beat the ordinary hunk it
-                // replaces (prelude is shared either way); else the
-                // hunk stays ordinary and the rule name is released.
-                let body = full.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-                if body.len() < hunk.len() {
-                    compressed_any = true;
-                    out.push_str(body);
-                } else {
-                    used_rules.truncate(checkpoint);
-                    out.push_str(hunk);
-                }
-            }
-            None => {
-                // A failed detector may have reserved a rule name
-                // (`try_item_rename` names before its column-0 and
-                // generics guards); release it so later hunks in the
-                // same file keep tight names.
-                used_rules.truncate(checkpoint);
-                out.push_str(hunk);
-            }
+            None => out.push_str(hunk),
         }
     }
     if compressed_any {
@@ -289,7 +267,7 @@ fn compress_section_per_hunk(
 /// kind/prefix/suffix, idents differ. Column-0 (top-level) is
 /// enforced: indented lines are methods or block items a bare
 /// pattern cannot match.
-fn try_item_rename(
+pub(crate) fn try_item_rename(
     old_line: &str,
     new_line: &str,
     path: &str,
@@ -416,7 +394,7 @@ fn contains_word(haystack: &str, word: &str) -> bool {
 /// sites). Column-0 sites emit the free-fn slot sweep (T329 shape);
 /// uniformly indented sites emit the `impl Svc` advisory-context
 /// sweep (T337 shape); mixed indent stays passthrough.
-fn try_fn_slot_sweep(
+pub(crate) fn try_fn_slot_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
@@ -553,7 +531,7 @@ fn is_ident_char(c: char) -> bool {
 /// method→method pairs stay passthrough. Emits one `# allow=many` +
 /// `# scope=file` hunk (`# expr Receiver` + `# expr E{i}` per arg;
 /// arity 0 needs only `Receiver`).
-fn try_method_to_fn_sweep(
+pub(crate) fn try_method_to_fn_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
@@ -667,7 +645,7 @@ fn parse_method_to_fn_pair(old_line: &str, new_line: &str) -> Option<(String, St
 /// same-method pairs stay passthrough. Emits one `# allow=many` +
 /// `# scope=file` hunk (`# expr Receiver` + `# expr E{i}` per arg;
 /// arity 0 needs only `Receiver`).
-fn try_method_to_method_sweep(
+pub(crate) fn try_method_to_method_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
@@ -784,7 +762,7 @@ fn parse_method_to_method_pair(old_line: &str, new_line: &str) -> Option<(String
 /// hunk (`# expr Receiver` only); a lone site stays ordinary (no token
 /// win), as do turbofish, `&mut`, explicit-lifetime, divergent, and
 /// plus-is-not-receiver pairs.
-fn try_ref_method_strip_sweep(
+pub(crate) fn try_ref_method_strip_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
@@ -895,7 +873,7 @@ fn collect_ref_strips(expr: &syn::Expr, out: &mut Vec<RefStripHit>) {
 /// Strip one trailing statement/arg terminator (`;`, else `,`) for
 /// shape parsing; the emitted hunk matches sub-expressions, so the
 /// terminator never reaches the pattern.
-fn strip_one_terminator(text: &str) -> Option<&str> {
+pub(crate) fn strip_one_terminator(text: &str) -> Option<&str> {
     if text.is_empty() {
         return None;
     }
@@ -910,11 +888,11 @@ fn strip_one_terminator(text: &str) -> Option<&str> {
 
 /// Whitespace-insensitive text for detection-time containment and
 /// replacement checks (the engine re-verifies structurally at apply).
-fn flat_ws(s: &str) -> String {
+pub(crate) fn flat_ws(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-fn count_occurrences(haystack: &str, needle: &str) -> usize {
+pub(crate) fn count_occurrences(haystack: &str, needle: &str) -> usize {
     if needle.is_empty() {
         return 0;
     }
@@ -934,7 +912,7 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// (`- use P_old` / `+ use P_new`, no metavars). Single-segment
 /// shared prefixes (`use crate`), unequal prefix lengths, divergent
 /// parents/tails, and lone pairs stay ordinary passthrough.
-fn try_use_prefix_sweep(
+pub(crate) fn try_use_prefix_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
@@ -1052,7 +1030,7 @@ fn common_prefix(paths: &[Vec<String>]) -> Vec<String> {
 /// every pair parses as `Old(args)` → `New(args)` with identical
 /// old/new callees, uniform arity, and per-site textually identical
 /// args. Emits one `# allow=many` + `# scope=file` hunk.
-fn try_call_sweep(
+pub(crate) fn try_call_sweep(
     minuses: &[&str],
     pluses: &[&str],
     path: &str,
@@ -1155,7 +1133,7 @@ fn call_parts(expr: &syn::Expr) -> Option<(String, Vec<syn::Expr>)> {
     None
 }
 
-fn unique_rule(used: &mut Vec<String>, base: &str) -> String {
+pub(crate) fn unique_rule(used: &mut Vec<String>, base: &str) -> String {
     if !used.iter().any(|r| r == base) {
         used.push(base.to_string());
         return base.to_string();

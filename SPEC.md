@@ -5880,6 +5880,23 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   last segment, with per-site textually identical non-empty tails
   (plain/grouped/glob/`as` tails may mix) → one `# allow=many` hunk
   (`- use <parent>::Old` / `+ use <parent>::New`, no metavars).
+- Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
+  single-line (`-`/`+`) pairs shared across a section's hunks (pure
+  additions elsewhere veto whole-section balance but not this sweep)
+  compress to one `# allow=many` hunk per group, with literal pattern
+  lines and no metavars. Both sides strip one terminator and parse as
+  `syn::Expr`; `let` scrutinees, macro invocations on either side
+  (SPEC 21), bare-ident/literal minus sides, and `?`-applied calls
+  wrapping a closure (minus side) are rejected — each failed loud
+  in-corpus. Soundness is subterm totality on the pre-image file
+  (index blob for pending diffs, `rev` blob for staged/rev diffs):
+  the stripped minus must occur as a sub-expression exactly
+  group-size times, with zero occurrences inside opaque text (macro
+  bodies, string interiors — the engine never matches there).
+  Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
+  subterm and does not veto (probe-verified). Leftover balanced hunks
+  retry the standard chain in place; the T375 guard applies to the
+  verbatim-covered set as a whole.
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks, turbofish sites, non-strip
   `&`-receiver sites, single-segment use prefixes, paths, macro

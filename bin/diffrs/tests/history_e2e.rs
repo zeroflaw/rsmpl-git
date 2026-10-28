@@ -120,6 +120,56 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 0,
     },
+    // T403 verbatim sweep pins: 50d4a49 (`&state.parsed,` x11 -> `parsed,`)
+    // and 3e0b9bc (`cur.push(c)` x2 -> `push_str_byte(&mut cur, c)`) compress
+    // to one literal hunk each; 712ad9d (extra `&cand.body_text` guard
+    // occurrence), 33a8cbb (macro interior), a2fc9b3 (`?` over closure) and
+    // 05de4d1 (`let` statements) stay ordinary by design — totality and
+    // shape gates with live corpus evidence.
+    Case {
+        commit: "50d4a498d3e88c3d4f70c0e809106af993bd8cdf",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    Case {
+        commit: "3e0b9bcccc2eabdb66f2fc4bf4d9fc8930dd4084",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    Case {
+        commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",
+        rev: None,
+        root: false,
+        // T403 totality veto: an unchanged `&cand.body_text` guard
+        // subterm would be rewritten by a sweep — stays ordinary.
+        expect_sem: 0,
+    },
+    Case {
+        commit: "33a8cbbe7d3936411f96895437b5eac5e1478918",
+        rev: None,
+        root: false,
+        // T403 macro gate: `&format!(...)` interior patterns are
+        // engine-illegal (SPEC 21) — stays ordinary.
+        expect_sem: 0,
+    },
+    Case {
+        commit: "a2fc9b3966312b60439e56e40030f8a3dc88d92a",
+        rev: None,
+        root: false,
+        // T403 Try-over-closure gate: the combination matches
+        // nothing (probe-bisected) — stays ordinary.
+        expect_sem: 0,
+    },
+    Case {
+        commit: "05de4d15bdbe2e44ea2628c8d990ad2a2512e841",
+        rev: None,
+        root: false,
+        // T403 let gate: hetero-arg `let` sweeps need engine
+        // arg-restructuring (T404) — stays ordinary.
+        expect_sem: 0,
+    },
     // Root commit via the empty tree (3 new-file sections).
     Case {
         commit: "acd1c1eef9758629edc74dfce2920d760114beb9",
@@ -336,7 +386,11 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
             case.expect_sem
         ));
     }
-    if case.expect_sem > 0 && !(patch.contains("rule=rename_") || patch.contains("rule=calls_")) {
+    if case.expect_sem > 0
+        && !(patch.contains("rule=rename_")
+            || patch.contains("rule=calls_")
+            || patch.contains("rule=verbatim"))
+    {
         failures.push(format!(
             "{short}: expected rename/sweep compression, got none"
         ));
