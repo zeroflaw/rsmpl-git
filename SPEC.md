@@ -5898,7 +5898,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   plus `# use` paste hunks spliced after the rewritten pure-plus hunk (1b8993a:
   four fns move files, 873 ordinary lines -> 117). v1 gates: named items only
   (ident-less impl/use/macro stay ordinary),
-  global 1-minus + N-plus pairing (one cut, N pastes sharing one bind), cut-file pre-image flat-ws uniqueness (twin
+  global N-minus + M-plus pairing (one cut per surviving minus item sharing
+  its bind across its pastes; duplicate plus-run claims dedup to the first
+  pair in document order, the rest stay ordinary), cut-file pre-image flat-ws uniqueness (twin
   veto), minus paired runs anywhere with exactly one blank between runs (a cut
   absorbs exactly one following blank; the last run needs a following blank
   in the file — without one a multi-pair last cut or a blank-ending
@@ -5914,9 +5916,11 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   cap to N-1 pairs (the last run stays an ordinary trailing leftover; a
   single item with a blank-ending prefix and no following blank trims the
   absorbed blank from the prefix leftover hunk), and a global T375 byte-win
-  guard. Everything else stays ordinary (T432 remainder: mixed-hunk partial
-  consumption, inter-run gap relaxation, N-to-1 (many-minus-to-one-plus)
-  dedup, vis-evolution sweeps).
+  guard. Mixed-hunk input is unreachable (the source always runs
+  `git diff --unified=0`, so declining mixed hunks is defensive only);
+  inter-run gap relaxation stays vetoed (the same-anchor paste join
+  restores exactly one blank); vis-evolution needs engine move+evolve
+  support and stays deferred. Everything else stays ordinary.
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

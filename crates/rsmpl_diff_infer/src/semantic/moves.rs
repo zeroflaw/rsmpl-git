@@ -11,9 +11,12 @@
 //! shape is engine-legal — `diffrs` just never emitted it.
 //!
 //! v1 fires only on the probe-proven shape; everything else stays
-//! ordinary by design (T432 remainder): named items, pure-minus /
-//! pure-plus `-U0` hunks only (never mixed-hunk surgery), global 1-minus/N-plus
-//! pairing (one cut + N pastes sharing one bind; 2-to-1 duplicate-plus veto),
+//! ordinary by design: named items, pure-minus / pure-plus `-U0`
+//! hunks only (mixed-hunk surgery unreachable - the source always
+//! runs `git diff --unified=0`), global N-minus/M-plus pairing (one
+//! cut per surviving minus item sharing its bind across its pastes;
+//! duplicate plus-run claims dedup to the first pair in document
+//! order, the rest ride ordinary),
 //! cut-file pre-image required with flat-ws uniqueness (twin veto; legacy
 //! no-pre path skips), minus paired runs with exactly one blank between
 //! runs (a cut absorbs exactly one following blank; multi-pair hunks whose
@@ -29,7 +32,7 @@
 //! the rebuilt prelude keeps the deletion), rename sections skipped,
 //! and a global T375 byte-win guard.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use syn::spanned::Spanned;
 
 /// Try the whole-patch move pre-pass: returns the rebuilt section list
@@ -82,10 +85,13 @@ pub(crate) fn try_move_sweep(
     if minus_items.is_empty() || plus_hunks.is_empty() {
         return None;
     }
-    // Global 1-to-N pairing by exact item text (T432 fan-out): one
-    // minus item may match N plus runs; each pair shares the minus
-    // cut bind downstream (one cut, N pastes). Two minus items sharing
-    // one plus run still vetoes via the plus gate (duplicate runs).
+    // Global N-minus/M-plus pairing by exact item text (T432 fan-out,
+    // T432 dedup): one minus item may match N plus runs; each pair
+    // shares the minus cut bind downstream (one cut, N pastes). N
+    // distinct minus items may also claim one plus run (byte-identical
+    // twins across files - same-file twins never reach here, the
+    // uniqueness gate vetoes count != 1); each run needs exactly one
+    // paste, so only the first claim survives below.
     let mut pairs: Vec<MovePair> = Vec::new();
     for (msi, mhi, items) in &minus_items {
         for item in items {
@@ -118,6 +124,25 @@ pub(crate) fn try_move_sweep(
     if pairs.is_empty() {
         return None;
     }
+    // Plus-run claim dedup (2-to-1): keep the first pair per plus
+    // run in document order (pairs build in index order, so this is
+    // deterministic); dropped claims re-enter the gates below with
+    // no pair, leaving their minus hunks ordinary. Same span
+    // implies same text - runs are exact text matches - so the run
+    // key alone groups identical claims.
+    let mut seen_runs: HashSet<(usize, usize, usize, usize)> = HashSet::new();
+    let mut deduped: Vec<MovePair> = Vec::new();
+    for p in pairs {
+        if seen_runs.insert((
+            p.plus_hunk_key.0,
+            p.plus_hunk_key.1,
+            p.plus_first,
+            p.plus_last,
+        )) {
+            deduped.push(p);
+        }
+    }
+    let pairs = deduped;
     // Minus-hunk gate: whole-hunk drop only — every non-blank line must
     // belong to a paired item, no leading blank, no blank runs (a cut
     // absorbs exactly one following blank).
@@ -1363,6 +1388,83 @@ mod tests {
         assert!(
             !text.contains("+fn big()"),
             "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_two_to_one_dedup_fires() {
+        // T432 dedup: byte-identical twins in a.rs and b.rs consolidate
+        // into one c.rs copy - first claim wins the cut+paste, the
+        // other minus hunk stays ordinary (still deleted, byte-exact).
+        let big = big_fn("big");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let c_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let c = format!("diff --git c.rs\n--- a/c.rs\n+++ b/c.rs\n@@ -2,0 +3,42 @@\n{c_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep_a() {{}}\n{big}")),
+            ("b.rs", &format!("fn keep_b() {{}}\n{big}")),
+            ("c.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("dedup must fire");
+        let text = out.join("");
+        assert_eq!(text.matches("rule=move_big\n").count(), 1, "got:\n{text}");
+        assert_eq!(text.matches("rule=paste_big\n").count(), 1, "got:\n{text}");
+        assert_eq!(text.matches("+ M1\n").count(), 1, "got:\n{text}");
+        assert!(
+            text.contains("@@ -2,42 +2,0 @@\n-fn big()"),
+            "losing twin stays ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_two_to_two_cross_dedup_fires() {
+        // T432 dedup, general rule: two twins consolidate into two
+        // copies - one cut (first claim wins both runs), two pastes,
+        // the losing minus hunk stays ordinary.
+        let big = big_fn("big");
+        let mk_minus = || big.lines().map(|l| format!("-{l}\n")).collect::<String>();
+        let mk_plus = || big.lines().map(|l| format!("+{l}\n")).collect::<String>();
+        let a = format!(
+            "diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{}",
+            mk_minus()
+        );
+        let b = format!(
+            "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,42 +2,0 @@\n{}",
+            mk_minus()
+        );
+        let c = format!(
+            "diff --git c.rs\n--- a/c.rs\n+++ b/c.rs\n@@ -2,0 +3,42 @@\n{}",
+            mk_plus()
+        );
+        let d = format!(
+            "diff --git d.rs\n--- a/d.rs\n+++ b/d.rs\n@@ -2,0 +3,42 @@\n{}",
+            mk_plus()
+        );
+        let pre = pre_map(&[
+            (
+                "a.rs",
+                &format!("fn keep_a() {{}}\n{big}\nfn keep2_a() {{}}"),
+            ),
+            (
+                "b.rs",
+                &format!("fn keep_b() {{}}\n{big}\nfn keep2_b() {{}}"),
+            ),
+            ("c.rs", "use x;\n"),
+            ("d.rs", "use y;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b, c, d], &pre, &mut used).expect("cross dedup must fire");
+        let text = out.join("");
+        assert_eq!(text.matches("rule=move_big\n").count(), 1, "got:\n{text}");
+        assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
+        assert!(
+            text.contains("@@ -2,42 +2,0 @@\n-fn big()"),
+            "losing twin stays ordinary, got:\n{text}"
         );
         validated_live(&text, &pre);
     }
