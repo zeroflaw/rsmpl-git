@@ -997,11 +997,12 @@ fn verbatim_sweep_pending_change_round_trips() {
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     assert_eq!(
-        patch.matches("@@ -1,1 @@ rule=r1\n").count(),
+        patch.matches("@@ -3,4 @@ rule=r1\n").count(),
         1,
         "got: {patch}"
     );
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert!(patch.contains("# allow=many\n"), "got: {patch}");
+    assert!(!patch.contains("# scope=file"), "got: {patch}");
     assert!(patch.contains("- &state.parsed\n"), "got: {patch}");
     assert!(
         patch.contains("+    let cached = state.parsed;"),

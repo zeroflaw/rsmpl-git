@@ -18,7 +18,7 @@ struct PeelClass {
 }
 
 /// N-site (N ≥ 2) hetero-arg array-head-peel call migration (T441):
-/// one `# allow=many` + `# scope=file` hunk per class. Whole-section
+/// one tight-range `# allow=many` hunk per class. Whole-section
 /// and per-hunk callers pass their full pair lists (exactly one class
 /// must hold, mirroring `try_call_sweep`); the cross-hunk section
 /// driver passes one class's pairs. All-identical classes stay for the
@@ -67,10 +67,7 @@ pub(crate) fn try_call_peel_sweep(
         used_rules,
         &format!("calls_{}_to_{}_peel", c.old_cal, c.new_cal),
     );
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = crate::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     let mut tails = Vec::new();
     for i in 0..c.tails {
         let v = format!("T{i}");
@@ -113,6 +110,7 @@ pub(crate) fn try_call_peel_section(
         .collect();
     // Balanced-hunk pairs in order; unbalanced hunks stay leftovers.
     let mut pairs: Vec<(usize, String, String)> = Vec::new();
+    let mut pair_old: Vec<usize> = Vec::new();
     let mut hunk_balanced = vec![false; hunks.len()];
     for (i, hunk) in hunks.iter().enumerate() {
         let mut minuses = Vec::new();
@@ -126,7 +124,11 @@ pub(crate) fn try_call_peel_section(
         }
         if minuses.len() == pluses.len() && !minuses.is_empty() {
             hunk_balanced[i] = true;
-            pairs.extend(minuses.into_iter().zip(pluses).map(|(m, p)| (i, m, p)));
+            for (k, (m, p)) in minuses.into_iter().zip(pluses).enumerate() {
+                let old_line = hunk_changed[i].get(k).copied().unwrap_or(0);
+                pairs.push((i, m, p));
+                pair_old.push(old_line);
+            }
         }
     }
     // Group pair indices by peel class, first-occurrence order.
@@ -143,7 +145,7 @@ pub(crate) fn try_call_peel_section(
     let checkpoint = used_rules.len();
     // Fire at most one hunk per hetero class (all-identical classes
     // stay for verbatim, which is tighter there).
-    let mut passing: Vec<(usize, String)> = Vec::new();
+    let mut passing: Vec<(usize, String, Vec<usize>, String)> = Vec::new();
     let mut covered_pair = vec![false; pairs.len()];
     for (class, members) in &classes {
         if members.len() < 2 {
@@ -180,7 +182,6 @@ pub(crate) fn try_call_peel_section(
             used_rules,
             &format!("calls_{}_to_{}_peel", class.old_cal, class.new_cal),
         );
-        let mut body = format!("@@ -1,1 @@ rule={rule}\n# sweep\n");
         let mut tails = Vec::new();
         for i in 0..class.tails {
             let v = format!("T{i}");
@@ -192,21 +193,67 @@ pub(crate) fn try_call_peel_section(
         } else {
             format!("M, {tail_list}")
         };
-        body.push_str(&format!(
+        let tail = format!(
             "- {f}(D, &[{h}, {minus_inner}])\n+ {g}(D, M, &[{tail_list}])\n",
             f = class.old_cal,
             g = class.new_cal,
             h = class.head_text,
-        ));
+        );
+        // WI-1b: precise emission sites are the member old lines.
+        let sites: Vec<usize> = members.iter().map(|&idx| pair_old[idx]).collect();
         for &idx in members {
             covered_pair[idx] = true;
         }
-        passing.push((members[0], body));
+        passing.push((members[0], tail, sites, rule));
     }
     if passing.is_empty() {
         used_rules.truncate(checkpoint);
         return None;
     }
+    // WI-1b: ranged bodies per group when spans are disjoint and ≤64;
+    // overlapping groups share the sweep dummy (SPEC 10.6).
+    let mut spans: Vec<Option<(usize, usize)>> = Vec::new();
+    for (_, _, sites, _) in &passing {
+        if sites.contains(&0) {
+            spans.push(None);
+            continue;
+        }
+        let min = sites.iter().min().copied().unwrap_or(0);
+        let max = sites.iter().max().copied().unwrap_or(0);
+        if min >= 1 && max.saturating_sub(min).saturating_add(1) <= 64 {
+            spans.push(Some((min, max)));
+        } else {
+            spans.push(None);
+        }
+    }
+    let mut overlap = vec![false; passing.len()];
+    for a in 0..spans.len() {
+        for b in (a + 1)..spans.len() {
+            if let (Some((a0, a1)), Some((b0, b1))) = (spans[a], spans[b]) {
+                if a0 <= b1 && b0 <= a1 {
+                    overlap[a] = true;
+                    overlap[b] = true;
+                }
+            }
+        }
+    }
+    let bodies: Vec<String> = passing
+        .iter()
+        .enumerate()
+        .map(|(gi, (_, tail, sites, rule))| {
+            if overlap[gi] || spans[gi].is_none() {
+                format!("@@ -1,1 @@ rule={rule}\n# sweep\n{tail}")
+            } else {
+                format!("{}{tail}", crate::emission_body(rule, sites))
+            }
+        })
+        .collect();
+    let passing_idx: Vec<(usize, String)> = passing
+        .iter()
+        .enumerate()
+        .map(|(gi, (first, _, _, _))| (*first, bodies[gi].clone()))
+        .collect();
+    let passing = passing_idx;
     // A hunk is covered iff balanced and every pair sits in a passing
     // class; leftover hunks stay ordinary in place.
     let covered_hunk: Vec<bool> = hunk_balanced

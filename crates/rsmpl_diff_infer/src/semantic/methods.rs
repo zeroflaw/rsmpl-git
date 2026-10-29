@@ -14,7 +14,7 @@ use super::{call_parts, count_occurrences, flat_ws, ident_len, strip_one_termina
 /// differ per site — `Receiver` binds per site like the engine).
 /// Turbofish sites, `&`-led receivers (general-expr routing), and
 /// method→method pairs stay passthrough. Emits one `# allow=many` +
-/// `# scope=file` hunk (`# expr Receiver` + `# expr E{i}` per arg;
+/// tight-range hunk (`# expr Receiver` + `# expr E{i}` per arg;
 /// arity 0 needs only `Receiver`).
 pub(crate) fn try_method_to_fn_sweep(
     minuses: &[&str],
@@ -50,10 +50,7 @@ pub(crate) fn try_method_to_fn_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = crate::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
     for i in 0..arity {
         let v = format!("E{i}");
@@ -132,7 +129,7 @@ fn parse_method_to_fn_pair(old_line: &str, new_line: &str) -> Option<(String, St
 /// sites — `Receiver` binds per site like the engine). Turbofish on
 /// either side, `&`-led receivers (general-expr routing), and
 /// same-method pairs stay passthrough. Emits one `# allow=many` +
-/// `# scope=file` hunk (`# expr Receiver` + `# expr E{i}` per arg;
+/// tight-range hunk (`# expr Receiver` + `# expr E{i}` per arg;
 /// arity 0 needs only `Receiver`).
 pub(crate) fn try_method_to_method_sweep(
     minuses: &[&str],
@@ -171,10 +168,7 @@ pub(crate) fn try_method_to_method_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = crate::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
     for i in 0..arity {
         let v = format!("E{i}");
@@ -247,7 +241,7 @@ fn parse_method_to_method_pair(old_line: &str, new_line: &str) -> Option<(String
 /// ident, uniform arity (at least 1), per-site token-equal receivers,
 /// cross-site token-equal old-arg and new-arg tuples, and a real old/new
 /// delta. Turbofish on either side, `&`-led receivers, and identical arg
-/// tuples stay passthrough. Emits one `# allow=many` + `# scope=file` hunk
+/// tuples stay passthrough. Emits one tight-range `# allow=many` hunk
 /// with concrete literal spellings (`# expr Receiver` only: backtick
 /// literals are ident-only per SPEC 15.4, and a plus-only `E` would be
 /// unbound). Rule `calls_{method}_literal`.
@@ -290,10 +284,10 @@ pub(crate) fn try_method_same_literal_sweep(
     let rule = unique_rule(used_rules, &format!("calls_{method}_literal"));
     let old = old_args.join(", ");
     let new = new_args.join(", ");
-    let hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n- Receiver.{method}({old})\n+ Receiver.{method}({new})\n",
-        header = crate::git_header(path),
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!(
+        "- Receiver.{method}({old})\n+ Receiver.{method}({new})\n"
+    ));
     Some(hunk)
 }
 
@@ -389,10 +383,8 @@ pub(crate) fn try_ref_method_strip_sweep(
     }
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
     let argv = args.join(", ");
-    let hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n- &Receiver.{method}({argv})\n+ Receiver\n",
-        header = crate::git_header(path),
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!("- &Receiver.{method}({argv})\n+ Receiver\n"));
     Some(hunk)
 }
 
@@ -507,11 +499,12 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
         assert!(out.contains("+ new_function(Receiver, E0)\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -602,11 +595,12 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -2,4 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.new_method(E0)\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -624,12 +618,13 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- Receiver.old_operation(E0)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.new_operation(E0)\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -732,8 +727,9 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=r1"), "got: {out}");
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(!out.contains("# expr E"), "got: {out}");
         assert!(
@@ -744,7 +740,8 @@ mod tests {
             out.contains("+ Receiver.contains(\"skills/gitrs/SKILL.md\")\n"),
             "got: {out}"
         );
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -770,7 +767,8 @@ mod tests {
             out.contains("+ Receiver.route(\"skills/gitrs/SKILL.md\", false)\n"),
             "got: {out}"
         );
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -2,2 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -823,8 +821,9 @@ mod tests {
             "@@ -1,4 +1,4 @@\n fn m() {\n-    a.f(\"x\");\n-    b.f(\"x\");\n+    a.f(\"y\");\n+    b.f(\"y\");\n }\n",
         );
         let out = infer_semantic(std::slice::from_ref(&raw)).expect("diet wins T375");
-        assert!(out.contains("rule=r1\n"), "got: {out}");
-        assert!(out.contains("# sweep\n"), "got: {out}");
+        assert!(out.contains("@@ -2,2 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -861,12 +860,13 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(!out.contains("# expr E"), "got: {out}");
         assert!(out.contains("- &Receiver.join(\"\")\n"), "got: {out}");
         assert!(out.contains("+ Receiver\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -885,7 +885,8 @@ mod tests {
         validated_live(&out, &pre);
         assert!(out.contains("- &Receiver.join(\"repo\")\n"), "got: {out}");
         assert!(out.contains("+ Receiver\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -2,2 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]

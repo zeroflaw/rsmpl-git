@@ -1,7 +1,7 @@
 diff --git src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -6,4 @@ rule=r1
+# allow=many
 - return make_widget("a", 1)
 + return make_widget("a", 2)

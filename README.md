@@ -157,26 +157,26 @@ context would be larger, so these are lower bounds.)
 
 | bench | native | semantic | saved |
 |---|---|---|---|
-| 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 69 B / 5 ln | 83% |
+| 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 75 B / 5 ln | 82% |
 | 02-ordinary-edit (1 line, stays ordinary) | 89 B / 6 ln | 72 B / 6 ln | 19% |
 | 03-move (same-file reorder, cut+paste) | 1857 B / 89 ln | 106 B / 9 ln | 94% |
-| 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 414 B / 18 ln | 59% |
-| 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 190 B / 11 ln | 46% |
-| 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 459 B / 17 ln | 32% |
-| 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 85 B / 5 ln | 60% |
-| 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 141 B / 7 ln | 74% |
-| 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 290 B / 13 ln | 41% |
-| 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 143 B / 5 ln | 63% |
-| 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 180 B / 7 ln | 44% |
-| 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 118 B / 7 ln | 41% |
-| 13-verbatim-return (2 sites, Return-arm verbatim sweep) | 266 B / 9 ln | 141 B / 7 ln | 47% |
-| 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 121 B / 7 ln | 57% |
-| 15-verbatim-unary (2 sites, Unary-arm verbatim sweep) | 219 B / 9 ln | 118 B / 7 ln | 46% |
-| 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 356 B / 13 ln | 35% |
+| 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 425 B / 18 ln | 58% |
+| 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 196 B / 11 ln | 44% |
+| 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 464 B / 17 ln | 32% |
+| 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 90 B / 5 ln | 58% |
+| 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 146 B / 7 ln | 73% |
+| 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 295 B / 13 ln | 40% |
+| 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 148 B / 5 ln | 62% |
+| 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 185 B / 7 ln | 42% |
+| 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 123 B / 7 ln | 38% |
+| 13-verbatim-return (2 sites, Return-arm verbatim sweep) | 266 B / 9 ln | 146 B / 7 ln | 45% |
+| 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 127 B / 7 ln | 55% |
+| 15-verbatim-unary (2 sites, Unary-arm verbatim sweep) | 219 B / 9 ln | 123 B / 7 ln | 44% |
+| 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 361 B / 13 ln | 34% |
 | 17-macro-veto (6 sites, macro gates stay ordinary) | 1208 B / 24 ln | 1040 B / 24 ln | 14% |
 | 18-macro-invocation-veto (2 sites + pure addition, stays ordinary) | 378 B / 14 ln | 308 B / 14 ln | 19% |
-| 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 81 B / 5 ln | 81% |
-| 20-method-to-function (3 sites, method-to-function sweep) | 237 B / 10 ln | 104 B / 5 ln | 56% |
+| 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 86 B / 5 ln | 80% |
+| 20-method-to-function (3 sites, method-to-function sweep) | 237 B / 10 ln | 109 B / 5 ln | 54% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

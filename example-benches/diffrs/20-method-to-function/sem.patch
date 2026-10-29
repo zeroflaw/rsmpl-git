@@ -1,5 +1,5 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -2,3 @@ rule=r1
+# allow=many
 - Receiver.old_method(E0)
 + new_function(Receiver, E0)

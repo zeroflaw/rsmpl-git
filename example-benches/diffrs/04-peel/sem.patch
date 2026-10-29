@@ -5,12 +5,12 @@ diff --git src/lib.rs
 +fn helper() -> String {
 +    String::new()
 +}
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -9,3 @@ rule=r1
+# allow=many
 - run(D, &["--patch", M])
 + run_stdin(D, M, &[])
-@@ -1,1 @@ rule=r2
-# sweep
+@@ -13,2 @@ rule=r2
+# allow=many
 - run(D, &["--patch", M, T0])
 + run_stdin(D, M, &[T0])
 @@ -16 +19 @@

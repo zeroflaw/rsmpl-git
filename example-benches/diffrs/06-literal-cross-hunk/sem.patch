@@ -1,8 +1,8 @@
 diff --git src/a.rs
 --- a/src/a.rs
 +++ b/src/a.rs
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -2,3 @@ rule=r1
+# allow=many
 - make_call(E0, E1, false)
 + make_call(E0, E1, "100644")
 @@ -5,0 +6 @@

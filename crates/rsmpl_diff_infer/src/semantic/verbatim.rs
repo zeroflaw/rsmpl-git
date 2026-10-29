@@ -17,11 +17,12 @@ struct VerbatimGroup {
     minus: String,
     plus: String,
     rule: String,
+    sites: Vec<usize>,
 }
 
 /// N-site verbatim identical-line sweep (T403): groups of identical
 /// balanced single-line (minus, plus) pairs shared across a section's
-/// hunks compress to one `# allow=many` + `# scope=file` hunk each,
+/// hunks compress to one tight-range `# allow=many` hunk each,
 /// with literal pattern lines and no metavars (the T363 use-prefix
 /// precedent; probe-verified against `applyrs --check`). A stranded
 /// identical pair inside an unbalanced hunk joins its group instead
@@ -65,6 +66,7 @@ pub(crate) fn try_verbatim_sweep(
     // Balanced-hunk pairs in order; unbalanced hunks can only be leftovers.
     // Every old-side line (minus + context) feeds the uniqueness gate.
     let mut pairs: Vec<(usize, String, String)> = Vec::new();
+    let mut pair_old: Vec<usize> = Vec::new();
     let mut old_lines: Vec<String> = Vec::new();
     let mut hunk_balanced = vec![false; hunks.len()];
     // Per-hunk bodies for the stranded join (T441 slice): an unbalanced
@@ -96,13 +98,16 @@ pub(crate) fn try_verbatim_sweep(
         old_lines.extend(minuses.iter().cloned());
         if minuses.len() == pluses.len() && !minuses.is_empty() {
             hunk_balanced[i] = true;
-            pairs.extend(
-                minuses
-                    .iter()
-                    .cloned()
-                    .zip(pluses.iter().cloned())
-                    .map(|(m, p)| (i, m, p)),
-            );
+            for (k, (m, p)) in minuses
+                .iter()
+                .cloned()
+                .zip(pluses.iter().cloned())
+                .enumerate()
+            {
+                let old_line = hunk_changed[i].get(k).copied().unwrap_or(0);
+                pairs.push((i, m, p));
+                pair_old.push(old_line);
+            }
         }
         hunk_pure[i] = pure;
         hunk_minuses.push(minuses);
@@ -274,12 +279,32 @@ pub(crate) fn try_verbatim_sweep(
                 continue;
             }
         }
+        // WI-1b: precise emission sites are the member pair old lines
+        // plus joined stranded old lines for this group.
+        let mut sites: Vec<usize> = Vec::new();
+        for (idx, (_j, gm, gp)) in pairs.iter().enumerate() {
+            if gm == m && gp == p {
+                let old_line = pair_old.get(idx).copied().unwrap_or(0);
+                if !sites.contains(&old_line) {
+                    sites.push(old_line);
+                }
+            }
+        }
+        for (j, claim) in joined.iter().enumerate() {
+            if claim.as_ref().is_some_and(|(gm, gp)| gm == m && gp == p) {
+                let old_line = hunk_changed[j].first().copied().unwrap_or(0);
+                if !sites.contains(&old_line) {
+                    sites.push(old_line);
+                }
+            }
+        }
         passing.push(VerbatimGroup {
             minus_trim: m.clone(),
             plus_trim: p.clone(),
             minus: emit_minus,
             plus: emit_plus,
             rule: unique_rule(used_rules, "verbatim"),
+            sites,
         });
     }
     if passing.is_empty() {
@@ -365,13 +390,50 @@ pub(crate) fn try_verbatim_sweep(
         .filter(|(i, _)| split_leftovers[*i].is_some())
         .map(|(_, h)| h.len())
         .sum();
+    // WI-1b: ranged bodies per group when spans are disjoint and ≤64;
+    // overlapping groups share the sweep dummy (SPEC 10.6).
+    let mut spans: Vec<Option<(usize, usize)>> = Vec::new();
+    for g in &passing {
+        if g.sites.contains(&0) {
+            spans.push(None);
+            continue;
+        }
+        let min = g.sites.iter().min().copied().unwrap_or(0);
+        let max = g.sites.iter().max().copied().unwrap_or(0);
+        if min >= 1 && max.saturating_sub(min).saturating_add(1) <= 64 {
+            spans.push(Some((min, max)));
+        } else {
+            spans.push(None);
+        }
+    }
+    let mut overlap = vec![false; passing.len()];
+    for a in 0..spans.len() {
+        for b in (a + 1)..spans.len() {
+            if let (Some((a0, a1)), Some((b0, b1))) = (spans[a], spans[b]) {
+                if a0 <= b1 && b0 <= a1 {
+                    overlap[a] = true;
+                    overlap[b] = true;
+                }
+            }
+        }
+    }
     let bodies: Vec<String> = passing
         .iter()
-        .map(|g| {
-            format!(
-                "@@ -1,1 @@ rule={}\n# sweep\n- {}\n+ {}\n",
-                g.rule, g.minus, g.plus
-            )
+        .enumerate()
+        .map(|(gi, g)| {
+            if overlap[gi] || spans[gi].is_none() {
+                format!(
+                    "@@ -1,1 @@ rule={}\n# sweep\n- {}\n+ {}\n",
+                    g.rule, g.minus, g.plus
+                )
+            } else {
+                format!(
+                    "{}- {}\n+ {}\n",
+                    crate::emission_body(&g.rule, &g.sites),
+                    g.minus,
+                    g.plus
+                )
+            }
         })
         .collect();
     let leftover_len: usize = split_leftovers

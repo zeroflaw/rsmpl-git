@@ -5906,16 +5906,20 @@ cross-hunk sweeps); otherwise each balanced native hunk retries the
 same detectors independently (T349) and leftovers stay ordinary in
 original order — native hunks are pairwise disjoint in original
 coordinates, so a compressed hunk never overlaps a leftover hunk
-(Section 10.6 option-1 merge by construction). Every emission uses
-the `# scope=file` +
-`@@ -1,1 @@` dummy (Section 17.3); rule names derive from the
-rewritten idents (`rename_old_to_new`, `calls_old_to_new`, suffixed
-on collision). Emission range rule (canonical SHOULD, Section D.5):
-when all sites of one detector class lie within one contiguous
-original range of at most 64 lines, emit that real range with
-`# allow=many` and no `# scope=file`; otherwise emit `# sweep`.
-`# sweep` is always canonical-legal, so sweep-only emission already
-conforms; the real-range form is a byte-saving tightening.
+(Section 10.6 option-1 merge by construction). Emission range rule
+(enforced, Section D.5): when all sites of one detector class lie
+within one contiguous original range of at most 64 lines, emit that
+tight real range with `# allow=many` and no `# scope=file`; otherwise
+emit the `# scope=file` + `@@ -1,1 @@` dummy (Section 17.3).
+Expression/line detectors (call, method, use-prefix, verbatim,
+peel/literal section drivers) cite the changed minus lines directly —
+their matches are single-line, so the minus span is the match span.
+Item-shape detectors (item rename, slot sweep) match whole multi-line
+items, so a header-line range could never contain the match: they emit
+the covering item range (smallest `syn` item spans containing the
+sites, attrs/docs included) when the caller supplies a parseable
+pre-image, else the dummy. Moves and deletes keep today's real
+ranges/anchors. Rule names are `r1…` in canonical hunk order.
 Sections carrying `old mode`/`new mode` skip the
 whole-section attempt and go straight per-hunk — whole-section
 emissions rebuild only the `diff --git` header and would silently

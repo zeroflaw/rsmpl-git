@@ -76,6 +76,7 @@ pub(crate) fn try_call_literal_section(
         .collect();
     // Balanced-hunk pairs in order; unbalanced hunks stay leftovers.
     let mut pairs: Vec<(usize, String, String)> = Vec::new();
+    let mut pair_old: Vec<usize> = Vec::new();
     let mut hunk_balanced = vec![false; hunks.len()];
     for (i, hunk) in hunks.iter().enumerate() {
         let mut minuses = Vec::new();
@@ -89,7 +90,11 @@ pub(crate) fn try_call_literal_section(
         }
         if minuses.len() == pluses.len() && !minuses.is_empty() {
             hunk_balanced[i] = true;
-            pairs.extend(minuses.into_iter().zip(pluses).map(|(m, p)| (i, m, p)));
+            for (k, (m, p)) in minuses.into_iter().zip(pluses).enumerate() {
+                let old_line = hunk_changed[i].get(k).copied().unwrap_or(0);
+                pairs.push((i, m, p));
+                pair_old.push(old_line);
+            }
         }
     }
     // Group pair indices by literal class, first-occurrence order.
@@ -106,7 +111,7 @@ pub(crate) fn try_call_literal_section(
     let checkpoint = used_rules.len();
     // Fire at most one hunk per hetero class (all-identical classes
     // stay for verbatim, which is tighter there — T422 precedent).
-    let mut passing: Vec<(usize, String)> = Vec::new();
+    let mut passing: Vec<(usize, String, Vec<usize>, String)> = Vec::new();
     let mut covered_pair = vec![false; pairs.len()];
     for (class, members) in &classes {
         if members.len() < 2 {
@@ -155,16 +160,55 @@ pub(crate) fn try_call_literal_section(
                 format!("{}({head}, {})", class.cal, class.new_lit),
             )
         };
-        let body = format!("@@ -1,1 @@ rule={rule}\n# sweep\n- {minus_call}\n+ {plus_call}\n");
+        let tail = format!("- {minus_call}\n+ {plus_call}\n");
+        let sites: Vec<usize> = members.iter().map(|&idx| pair_old[idx]).collect();
         for &idx in members {
             covered_pair[idx] = true;
         }
-        passing.push((members[0], body));
+        passing.push((members[0], tail, sites, rule));
     }
     if passing.is_empty() {
         used_rules.truncate(checkpoint);
         return None;
     }
+    // WI-1b: ranged bodies per group when spans are disjoint and ≤64;
+    // overlapping groups share the sweep dummy (SPEC 10.6).
+    let mut spans: Vec<Option<(usize, usize)>> = Vec::new();
+    for (_, _, sites, _) in &passing {
+        if sites.contains(&0) {
+            spans.push(None);
+            continue;
+        }
+        let min = sites.iter().min().copied().unwrap_or(0);
+        let max = sites.iter().max().copied().unwrap_or(0);
+        if min >= 1 && max.saturating_sub(min).saturating_add(1) <= 64 {
+            spans.push(Some((min, max)));
+        } else {
+            spans.push(None);
+        }
+    }
+    let mut overlap = vec![false; passing.len()];
+    for a in 0..spans.len() {
+        for b in (a + 1)..spans.len() {
+            if let (Some((a0, a1)), Some((b0, b1))) = (spans[a], spans[b]) {
+                if a0 <= b1 && b0 <= a1 {
+                    overlap[a] = true;
+                    overlap[b] = true;
+                }
+            }
+        }
+    }
+    let bodies: Vec<String> = passing
+        .iter()
+        .enumerate()
+        .map(|(gi, (_, tail, sites, rule))| {
+            if overlap[gi] || spans[gi].is_none() {
+                format!("@@ -1,1 @@ rule={rule}\n# sweep\n{tail}")
+            } else {
+                format!("{}{tail}", crate::emission_body(rule, sites))
+            }
+        })
+        .collect();
     // A hunk is covered iff balanced and every pair sits in a passing
     // class; leftover hunks stay ordinary in place.
     let covered_hunk: Vec<bool> = hunk_balanced
@@ -187,15 +231,20 @@ pub(crate) fn try_call_literal_section(
         .filter(|(_, b)| **b)
         .map(|(h, _)| h.len())
         .sum();
-    if passing.iter().map(|(_, b)| b.len()).sum::<usize>() >= covered_len {
+    if bodies.iter().map(|b| b.len()).sum::<usize>() >= covered_len {
         used_rules.truncate(checkpoint);
         return None;
     }
+    let passing_idx: Vec<(usize, String)> = passing
+        .iter()
+        .enumerate()
+        .map(|(gi, (first, _, _, _))| (*first, bodies[gi].clone()))
+        .collect();
     let mut out = prelude;
-    let mut emitted = vec![false; passing.len()];
+    let mut emitted = vec![false; passing_idx.len()];
     for (i, hunk) in hunks.iter().enumerate() {
         if covered_hunk[i] {
-            for (gi, (first_idx, body)) in passing.iter().enumerate() {
+            for (gi, (first_idx, body)) in passing_idx.iter().enumerate() {
                 if !emitted[gi] && pairs[*first_idx].0 == i {
                     out.push_str(body);
                     emitted[gi] = true;
@@ -318,10 +367,7 @@ pub(crate) fn try_call_literal_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{cal}_literal"));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = crate::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
     for i in 0..k {
         let v = format!("E{i}");
@@ -379,14 +425,15 @@ mod tests {
         let out =
             crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
         validated_live(&out, &pre);
-        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("@@ -2,2 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
         assert!(
             out.contains("+ make_widget(E0, E1, \"100644\")\n"),
             "got: {out}"
         );
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -504,13 +551,13 @@ mod tests {
         let out =
             crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
         validated_live(&out, &pre);
-        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("@@ -2,2 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
         assert!(
             out.contains("+ make_widget(E0, E1, \"100644\")\n"),
             "got: {out}"
         );
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -544,7 +591,8 @@ mod tests {
             !out.contains("-    let a = make_widget(alpha, 1, false);"),
             "native minus consumed, got: {out}"
         );
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -2,8 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -575,10 +623,11 @@ mod tests {
         let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("must compress");
         validated_live(&out, &pre);
-        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("@@ -2,8 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(out.contains("- make_widget(false)\n"), "got: {out}");
         assert!(out.contains("+ make_widget(\"100644\")\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]

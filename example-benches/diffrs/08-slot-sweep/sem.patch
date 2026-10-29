@@ -1,6 +1,6 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -1,6 @@ rule=r1
+# allow=many
 - V Q fn old_function_name G (...) W {
 + V Q fn new_function_name G (...) W {
       ...

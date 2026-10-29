@@ -290,6 +290,53 @@ pub(crate) fn git_header(path: &str) -> String {
     );
     rsmpl_patch::collapse_git_header(&raw)
 }
+
+/// WI-1b ranged-vs-sweep emission (SPEC D.4/D.5): `sites` are the
+/// 1-based old-side minus lines a detector class covers (the existing
+/// `totality::changed_old_lines` output, already threaded as `changed`).
+/// Empty (unparseable header), any `0` (new-file `@@ -0,0`), or a span
+/// (`max - min + 1`) over 64 lines emits the canonical sweep dummy
+/// `@@ -1,1 @@` + `# sweep`; otherwise the tight original range
+/// `@@ -min,span @@` + `# allow=many` (no `# scope=file`).
+pub(crate) fn emission_header(path: &str, rule: &str, sites: &[usize]) -> String {
+    let header = git_header(path);
+    if sites.is_empty() || sites.contains(&0) {
+        return format!("{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n");
+    }
+    let min = sites.iter().min().copied().unwrap_or(0);
+    let max = sites.iter().max().copied().unwrap_or(0);
+    if min < 1 {
+        return format!("{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n");
+    }
+    let span = max.saturating_sub(min).saturating_add(1);
+    if span <= 64 {
+        format!("{header}\n@@ -{min},{span} @@ rule={rule}\n# allow=many\n")
+    } else {
+        format!("{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n")
+    }
+}
+
+/// WI-1b body-only variant for section drivers (`try_call_peel_section`,
+/// `try_call_literal_section`, `verbatim::try_verbatim_sweep`): the file
+/// header lives in the section prelude, so only the hunk header is
+/// emitted. Same ≤64 rule; overlapping groups are resolved by callers
+/// (disjoint ranged, else sweep).
+pub(crate) fn emission_body(rule: &str, sites: &[usize]) -> String {
+    if sites.is_empty() || sites.contains(&0) {
+        return format!("@@ -1,1 @@ rule={rule}\n# sweep\n");
+    }
+    let min = sites.iter().min().copied().unwrap_or(0);
+    let max = sites.iter().max().copied().unwrap_or(0);
+    if min < 1 {
+        return format!("@@ -1,1 @@ rule={rule}\n# sweep\n");
+    }
+    let span = max.saturating_sub(min).saturating_add(1);
+    if span <= 64 {
+        format!("@@ -{min},{span} @@ rule={rule}\n# allow=many\n")
+    } else {
+        format!("@@ -1,1 @@ rule={rule}\n# sweep\n")
+    }
+}
 /// Drop git's trailing `@@ … @@ <title>` section titles on
 /// two-sided (native ordinary) hunk headers.
 fn strip_hunk_titles(section: &str) -> String {
@@ -377,7 +424,7 @@ pub(crate) fn compress_balanced_pair_body(
     }
     let checkpoint = used_rules.len();
     let full = if minuses.len() == 1 {
-        semantic::try_item_rename(minuses[0], pluses[0], path, used_rules)
+        semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
     } else if let Some(slot) =
         semantic::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
@@ -735,7 +782,7 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -9,1 +10,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -20,0 +21,1 @@\n+let cached = state.parsed;\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -750,23 +797,32 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
-        assert_eq!(
-            out.rsmpl.matches("@@ -1,1 @@").count(),
-            1,
-            "got: {}",
-            out.rsmpl
-        );
+        assert_eq!(out.rsmpl.matches("rule=").count(), 1, "got: {}", out.rsmpl);
         rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
     }
 
     #[test]
     fn verbatim_sweep_tiny_pairs_fire_as_diet() {
-        // WI-1e diet (`# sweep`): the tiny verbatim pair now wins T375
-        // (byte-guard flip pinned).
+        // WI-1b ranged (`# allow=many`, no `# scope=file`): the tiny
+        // verbatim pair wins T375 with its tight `@@ -2,8 @@` range.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-&a,\n+a,\n@@ -9,1 +10,1 @@\n-&a,\n+a,\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(out.rsmpl.contains("rule=r1\n"), "got: {}", out.rsmpl);
-        assert!(out.rsmpl.contains("# sweep\n"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("# allow=many\n"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("# scope=file"), "got: {}", out.rsmpl);
+    }
+
+    #[test]
+    fn emission_header_range_rule_boundaries() {
+        // WI-1b: span ≤ 64 → tight range + `# allow=many`; span 65+,
+        // empty, or new-file `0` → sweep dummy.
+        assert!(emission_header("f.rs", "r1", &[1, 64]).contains("@@ -1,64 @@ rule=r1\n"));
+        assert!(emission_header("f.rs", "r1", &[1, 64]).contains("# allow=many\n"));
+        let wide = emission_header("f.rs", "r1", &[1, 65]);
+        assert!(wide.contains("@@ -1,1 @@ rule=r1\n"), "got: {wide}");
+        assert!(wide.contains("# sweep\n"), "got: {wide}");
+        assert!(emission_header("f.rs", "r1", &[]).contains("# sweep\n"));
+        assert!(emission_header("f.rs", "r1", &[0]).contains("# sweep\n"));
     }
 
     #[test]
@@ -813,7 +869,7 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -9,1 +10,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -20,1 +21,1 @@\n-        timeout_secs,\n+        timeout_secs.max(1),\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -824,12 +880,7 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
-        assert_eq!(
-            out.rsmpl.matches("@@ -1,1 @@").count(),
-            1,
-            "got: {}",
-            out.rsmpl
-        );
+        assert_eq!(out.rsmpl.matches("rule=").count(), 1, "got: {}", out.rsmpl);
         rsmpl_patch::parse_patch(&out.rsmpl).expect("mixed output must parse");
     }
 
@@ -847,7 +898,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,19 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -877,12 +928,7 @@ mod tests {
             "native plus must be consumed, got: {}",
             out.rsmpl
         );
-        assert_eq!(
-            out.rsmpl.matches("@@ -1,1 @@").count(),
-            1,
-            "got: {}",
-            out.rsmpl
-        );
+        assert_eq!(out.rsmpl.matches("rule=").count(), 1, "got: {}", out.rsmpl);
         let parsed = rsmpl_patch::parse_patch(&out.rsmpl).expect("sweep must parse");
         let mut files = map.clone();
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("sweep must apply cleanly");
@@ -942,7 +988,7 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n@@ -9,1 +10,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -978,7 +1024,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -999,7 +1045,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,3 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1015,12 +1061,7 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
-        assert_eq!(
-            out.rsmpl.matches("@@ -1,1 @@").count(),
-            1,
-            "got: {}",
-            out.rsmpl
-        );
+        assert_eq!(out.rsmpl.matches("rule=").count(), 1, "got: {}", out.rsmpl);
         rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim hunk must parse");
     }
     #[test]
@@ -1035,7 +1076,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1068,7 +1109,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1109,7 +1150,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1"),
             "got: {}",
             out.rsmpl
         );
@@ -1126,7 +1167,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1143,7 +1184,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1161,7 +1202,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1"),
             "got: {}",
             out.rsmpl
         );
@@ -1204,7 +1245,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1225,12 +1266,7 @@ mod tests {
             "got: {}",
             out.rsmpl
         );
-        assert_eq!(
-            out.rsmpl.matches("@@ -1,1 @@").count(),
-            1,
-            "got: {}",
-            out.rsmpl
-        );
+        assert_eq!(out.rsmpl.matches("rule=").count(), 1, "got: {}", out.rsmpl);
         rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim let hunk must parse");
     }
     #[test]
@@ -1294,7 +1330,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
+            out.rsmpl.contains("@@ -2,8 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );

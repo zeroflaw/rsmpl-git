@@ -7,7 +7,7 @@ use super::{call_parts, parse_call_expr, unique_rule};
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:
 /// every pair parses as `Old(args)` → `New(args)` with identical
 /// old/new callees, uniform arity, and per-site textually identical
-/// args. Emits one `# allow=many` + `# scope=file` hunk.
+/// args. Emits one `# allow=many` hunk (tight original range, SPEC D.5).
 pub(crate) fn try_call_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -45,10 +45,7 @@ pub(crate) fn try_call_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = crate::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
     for i in 0..arity {
         let v = format!("E{i}");
@@ -118,10 +115,7 @@ pub(crate) fn try_call_arg_add_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("calls_{cal}_add_{}", tail.len()));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = crate::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
     for i in 0..k {
         let v = format!("E{i}");

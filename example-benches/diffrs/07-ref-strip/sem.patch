@@ -1,5 +1,5 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -2,2 @@ rule=r1
+# allow=many
 - &Receiver.join("repo")
 + Receiver

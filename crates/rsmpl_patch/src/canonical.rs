@@ -341,6 +341,20 @@ mod tests {
     }
 
     #[test]
+    fn wi1b_ranged_sweep_is_fixed_point() {
+        // WI-1b emission: tight range + `# allow=many`, inferred
+        // metavars, no `# scope=file` — canonicalizes to itself.
+        let text =
+            "diff --git src/lib.rs\n@@ -2,3 @@ rule=r9\n# allow=many\n- foo(E0)\n+ bar(E0)\n";
+        let got = canon(text);
+        assert!(
+            got.contains("@@ -2,3 @@ rule=r1\n# allow=many\n- foo(E0)\n+ bar(E0)\n"),
+            "got:\n{got}"
+        );
+        assert_eq!(got, canon(&got));
+    }
+
+    #[test]
     fn idempotent_and_reparseable() {
         let text = "diff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -9,2 @@ rule=b\n# expr E\n# sweep\n- foo(E)\n+ bar(E)\ndiff --git a/src/a.rs b/src/a.rs\nindex 111..222 100644\n@@ -1,1 +1,1 @@\n-x\n+y\n";
         let once = canon(text);

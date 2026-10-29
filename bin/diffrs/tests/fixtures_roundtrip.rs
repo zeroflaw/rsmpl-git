@@ -947,7 +947,7 @@ fn native_to_semantic_to_native_round_trip() {
             );
         } else if name == "22-verbatim-stranded" {
             assert!(
-                semantic.contains("@@ -1,1 @@ rule=r1"),
+                semantic.contains("@@ -2,19 @@ rule=r1"),
                 "stranded verbatim sweep must fire, got: {semantic}"
             );
             assert!(

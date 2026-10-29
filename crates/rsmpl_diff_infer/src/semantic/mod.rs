@@ -11,7 +11,7 @@
 //! Pure detectors over a binary-stripped diff. Whole-file first (cross-hunk
 //! sweeps); else per balanced hunk (T349), leftovers ordinary in order
 //! (pairwise-disjoint, SPEC 10.6 option-1). Every per-hunk emission uses
-//! `# scope=file` + `@@ -1,1 @@`; probe-verified via `applyrs --check`.
+//! tight original range + `# allow=many` (SPEC D.5, WI-1b); probe-verified via `applyrs --check`.
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
 mod calls;
@@ -28,6 +28,87 @@ pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,
 };
+
+/// WI-1b: covering item span for item-shape detectors (item rename,
+/// slot sweep). Item patterns (`- fn Old`, slot headers with `...`
+/// bodies) match whole multi-line items, so a 1-line site range can
+/// never match under Contained scope — the range must cover every
+/// item containing a site line. Returns the tight
+/// `(start, end)` over the smallest covering items, or `None` when
+/// the pre-image is absent/unparseable or a site sits outside any
+/// item (callers keep `# sweep`). Spans come from `syn` (which
+/// includes attrs/docs) via the workspace `span-locations` probe.
+pub(crate) fn covering_item_span(
+    file_old: Option<&str>,
+    sites: &[usize],
+) -> Option<(usize, usize)> {
+    let file: syn::File = syn::parse_str(file_old?).ok()?;
+    fn push(sp: proc_macro2::Span, out: &mut Vec<(usize, usize)>) {
+        let (s, e) = (sp.start().line, sp.end().line);
+        if s >= 1 && e >= s {
+            out.push((s, e));
+        }
+    }
+    fn walk(items: &[syn::Item], out: &mut Vec<(usize, usize)>) {
+        use syn::spanned::Spanned;
+        for it in items {
+            push(it.span(), out);
+            match it {
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, out);
+                    }
+                }
+                syn::Item::Impl(imp) => {
+                    for i in &imp.items {
+                        push(i.span(), out);
+                    }
+                }
+                syn::Item::Trait(tr) => {
+                    for i in &tr.items {
+                        push(i.span(), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    walk(&file.items, &mut spans);
+    let mut start = usize::MAX;
+    let mut end = 0usize;
+    for &site in sites {
+        let mut best: Option<(usize, usize)> = None;
+        for &(s, e) in &spans {
+            if s <= site && site <= e && best.is_none_or(|(bs, be)| e - s < be - bs) {
+                best = Some((s, e));
+            }
+        }
+        let (s, e) = best?;
+        start = start.min(s);
+        end = end.max(e);
+    }
+    if end == 0 {
+        return None;
+    }
+    Some((start, end))
+}
+
+/// WI-1b: item-shape emission header. `sites` are the changed header
+/// lines; the emitted range covers their items when provable, else
+/// the sweep dummy (a 1-line header range could never contain the
+/// multi-line match).
+pub(crate) fn item_emission_header(
+    path: &str,
+    rule: &str,
+    file_old: Option<&str>,
+    sites: &[usize],
+) -> String {
+    match covering_item_span(file_old, sites) {
+        Some((s, e)) => crate::emission_header(path, rule, &[s, e]),
+        None => crate::emission_header(path, rule, &[]),
+    }
+}
 pub(crate) use peel::{try_call_peel_section, try_call_peel_sweep};
 
 /// Try to compress binary-stripped `sections` (one full
@@ -159,7 +240,9 @@ fn compress_section(
         // Single pair: fn/item rename only (a lone call rewrite has
         // no token win over the ordinary hunk; a lone heterogeneous
         // fn header likewise costs more as a slot hunk than ordinary).
-        if let Some(rename) = try_item_rename(minuses[0], pluses[0], &path, used_rules) {
+        if let Some(rename) =
+            try_item_rename(minuses[0], pluses[0], &path, file_old, &changed, used_rules)
+        {
             if rename.len() < section.len() {
                 return Some(rename);
             }
@@ -393,6 +476,8 @@ pub(crate) fn try_item_rename(
     old_line: &str,
     new_line: &str,
     path: &str,
+    file_old: Option<&str>,
+    sites: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
     let old = old_line.trim_end();
@@ -406,10 +491,7 @@ pub(crate) fn try_item_rename(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = super::git_header(path)
-    );
+    let mut hunk = item_emission_header(path, &rule, file_old, sites);
     if old_kind == "fn" {
         // WI-1e diet terse: `- fn Old` / `+ fn New` (params/return/
         // generics/where unconstrained, SPEC 14.1.1). Plain top-level
@@ -559,10 +641,7 @@ pub(crate) fn try_fn_slot_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = super::git_header(path)
-    );
+    let mut hunk = item_emission_header(path, &rule, file_old, changed);
     if all_indented {
         hunk.push_str(&format!(
             "  impl Svc {{\n      ...\n-     V Q fn {old_name} G (...) W {{\n+     V Q fn {new_name} G (...) W {{\n          ...\n      }}\n  }}\n"
@@ -706,7 +785,7 @@ pub(crate) fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// normalized away (the engine ignores them, so mixed `use`/`pub use`
 /// sites share one hunk, probe-verified); tails may be heterogeneous
 /// across sites (plain, grouped, glob, `as` — the engine preserves
-/// them). Emits one `# allow=many` + `# scope=file` hunk
+/// them). Emits one `# allow=many` hunk (tight original range)
 /// (`- use P_old` / `+ use P_new`, no metavars). Single-segment
 /// shared prefixes (`use crate`), unequal prefix lengths, divergent
 /// parents/tails, and lone pairs stay ordinary passthrough.
@@ -757,10 +836,7 @@ pub(crate) fn try_use_prefix_sweep(
         used_rules,
         &format!("use_{}_to_{}", old_prefix[k - 1], new_prefix[k - 1]),
     );
-    let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
-        header = super::git_header(path)
-    );
+    let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!(
         "- use {}\n+ use {}\n",
         old_prefix.join("::"),
@@ -980,6 +1056,50 @@ mod tests {
     }
 
     #[test]
+    fn item_rename_with_pre_image_emits_covering_range() {
+        // WI-1b: with a parseable pre-image the single rename emits the
+        // covering item range (the 3-line fn), not the sweep dummy — a
+        // 1-line header range could never contain the multi-line match.
+        // Without a pre-image the same shape stays sweep (legacy path,
+        // pinned by `fn_rename_compresses`).
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n1\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("must compress");
+        validated_live(&out, &pre);
+        assert!(out.contains("@@ -1,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
+    }
+
+    #[test]
+    fn call_sweep_scattered_beyond_64_lines_stays_sweep() {
+        // WI-1b: sites 99 lines apart exceed the 64-line rule — the
+        // sweep dummy keeps one hunk where a ranged hunk would
+        // over-claim original coordinates.
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-    foo(alpha);\n+    bar(alpha);\n@@ -100,1 +100,1 @@\n-    foo(beta);\n+    bar(beta);\n",
+        );
+        let mut body = String::from("fn m() {\n    foo(alpha);\n");
+        for i in 0..97 {
+            body.push_str(&format!("    filler{i}();\n"));
+        }
+        body.push_str("    foo(beta);\n}\n");
+        let pre = pre_map(&[("f.rs", body.as_str())]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
+        validated_live(&out, &pre);
+        assert!(out.contains("@@ -1,1 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# sweep\n"), "got: {out}");
+    }
+
+    #[test]
     fn fn_rename_compresses() {
         // Long-signature rename: the `fn …(...)` pattern lines are far
         // shorter than the ordinary lines, so the semantic hunk wins
@@ -1071,11 +1191,13 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+ bar(E0)\n"), "got: {out}");
         // One hunk for all three sites.
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert_eq!(out.matches("@@ -2,3 @@ rule=r1\n").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -1113,13 +1235,18 @@ mod tests {
             "f.rs",
             "@@ -1,2 +1,2 @@\n-    old_function(first_argument);\n+    new_function(first_argument);\n@@ -9,2 +9,2 @@\n-    old_function(second_argument);\n+    new_function(second_argument);\n",
         );
+        // WI-1b: the ranged hunk `@@ -1,9 @@` must be covered by the
+        // pre-image (sweep dummies never needed this); filler lines
+        // carry no `old_function` sites.
         let pre = pre_map(&[(
             "f.rs",
-            "fn m() {\n    old_function(first_argument);\n    old_function(second_argument);\n}\n",
+            "fn m() {\n    old_function(first_argument);\n    filler_one();\n    filler_two();\n    filler_three();\n    filler_four();\n    filler_five();\n    filler_six();\n    old_function(second_argument);\n}\n",
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -1,9 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -1164,9 +1291,11 @@ mod tests {
         validated_live(&out, &pre);
         assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1)\n"), "got: {out}");
         assert!(out.contains("+ make_widget(E0, E1, false)\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -1269,9 +1398,11 @@ mod tests {
         assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(!out.contains("# expr T0"), "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(out.contains("- run(D, &[\"--patch\", M])\n"), "got: {out}");
         assert!(out.contains("+ run_stdin(D, M, &[])\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
         // Native sites consumed into the pattern.
         assert!(
             !out.contains("run_stdin(dir.path(), patch, &[])"),
@@ -1413,7 +1544,7 @@ mod tests {
         );
         let pre = pre_map(&[(
             "f.rs",
-            "fn m() {\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    let c = run(dir.path(), &[\"--patch\", patch, \"--check\"]);\n    let d = run(dir.path(), &[\"--patch\", other, \"--check\"]);\n}\n",
+            "fn m() {\n    let f0 = 0;\n    let f1 = 0;\n    let f2 = 0;\n    let f3 = 0;\n    let f4 = 0;\n    let f5 = 0;\n    let f6 = 0;\n    let f7 = 0;\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    let g0 = 0;\n    let g1 = 0;\n    let g2 = 0;\n    let g3 = 0;\n    let g4 = 0;\n    let g5 = 0;\n    let g6 = 0;\n    let g7 = 0;\n    let c = run(dir.path(), &[\"--patch\", patch, \"--check\"]);\n    let d = run(dir.path(), &[\"--patch\", other, \"--check\"]);\n}\n",
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
@@ -1424,7 +1555,10 @@ mod tests {
         );
         assert!(out.contains("+ run_stdin(D, M, &[])\n"), "got: {out}");
         assert!(out.contains("+ run_stdin(D, M, &[T0])\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 2, "got: {out}");
+        // WI-1b: one ranged hunk per class, disjoint spans.
+        assert!(out.contains("@@ -10,2 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("@@ -20,2 @@ rule=r2\n"), "got: {out}");
+        assert!(!out.contains("# sweep\n"), "got: {out}");
         // The pure addition stays ordinary in place.
         assert!(out.contains("+// marker"), "got: {out}");
     }
@@ -1440,7 +1574,7 @@ mod tests {
         );
         let pre = pre_map(&[(
             "f.rs",
-            "fn m() {\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    compute(some_long_state_value);\n    compute(some_long_state_value);\n}\n",
+            "fn m() {\n    let f0 = 0;\n    let f1 = 0;\n    let f2 = 0;\n    let f3 = 0;\n    let f4 = 0;\n    let f5 = 0;\n    let f6 = 0;\n    let f7 = 0;\n    let a = run(dir.path(), &[\"--patch\", patch]);\n    let b = run(dir.path(), &[\"--patch\", \"\"]);\n    let g0 = 0;\n    let g1 = 0;\n    let g2 = 0;\n    let g3 = 0;\n    let g4 = 0;\n    let g5 = 0;\n    let g6 = 0;\n    let g7 = 0;\n    compute(some_long_state_value);\n    compute(some_long_state_value);\n}\n",
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
@@ -1628,7 +1762,8 @@ mod tests {
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+ bar(E0)\n"), "got: {out}");
         assert!(out.contains("@@ -10,3 +10,3 @@\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -1647,7 +1782,8 @@ mod tests {
         validated_live(&out, &pre);
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+fn added() {}\n"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -2,3 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -1673,9 +1809,10 @@ mod tests {
         assert!(out.contains("rule=r1"), "got: {out}");
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
-        assert!(out.contains("# sweep"), "got: {out}");
+        assert!(out.contains("@@ -1,2 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 
     #[test]
@@ -1696,7 +1833,8 @@ mod tests {
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
         assert!(!out.contains('{'), "pattern must stay bare, got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -1,5 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]
@@ -1713,8 +1851,9 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=r1"), "got: {out}");
-        assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
+        assert!(out.contains("@@ -1,3 @@ rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# scope=file"), "got: {out}");
     }
 
     #[test]

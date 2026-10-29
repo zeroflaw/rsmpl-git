@@ -93,6 +93,14 @@ fn check_with_applyrs(dir: &Path, patch: &str) -> std::process::Output {
         .unwrap()
 }
 
+/// WI-1b: ranged-sweep pin — tight original range + `# allow=many`,
+/// never `# scope=file`.
+fn assert_ranged(patch: &str, header: &str) {
+    assert!(patch.contains(header), "got: {patch}");
+    assert!(patch.contains("# allow=many\n"), "got: {patch}");
+    assert!(!patch.contains("# scope=file"), "got: {patch}");
+}
+
 #[test]
 fn unstaged_edit_round_trips_through_applyrs() {
     assert!(sibling_applyrs().exists(), "sibling applyrs missing");
@@ -400,8 +408,7 @@ fn fn_rename_compresses_to_semantic_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("rule=r1\n"), "got: {patch}");
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert_ranged(&patch, "@@ -1,3 @@ rule=r1\n");
     assert!(patch.contains("- fn foo\n"), "got: {patch}");
     assert!(!patch.contains("- fn foo(...)"), "got: {patch}");
 
@@ -435,11 +442,11 @@ fn call_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert_ranged(&patch, "@@ -2,3 @@ rule=r1\n");
     assert!(!patch.contains("# expr"), "got: {patch}");
     assert!(patch.contains("- foo(E0)"), "got: {patch}");
     assert_eq!(
-        patch.matches("@@ -1,1 @@").count(),
+        patch.matches("@@ -2,3 @@ rule=r1\n").count(),
         1,
         "one hunk for three sites, got: {patch}"
     );
@@ -615,11 +622,10 @@ fn free_slot_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert_ranged(&patch, "@@ -1,15 @@ rule=r1\n");
     assert!(!patch.contains("# visibility"), "got: {patch}");
     assert!(patch.contains("- V Q fn foo G (...) W {"), "got: {patch}");
     assert!(patch.contains("+ V Q fn bar G (...) W {"), "got: {patch}");
-    assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = Command::new(sibling_applyrs())
@@ -724,11 +730,10 @@ fn method_to_method_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert_ranged(&patch, "@@ -2,3 @@ rule=r1\n");
     assert!(!patch.contains("# expr"), "got: {patch}");
     assert!(patch.contains("- Receiver.foo(E0)"), "got: {patch}");
     assert!(patch.contains("+ Receiver.bar(E0)"), "got: {patch}");
-    assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = Command::new(sibling_applyrs())
@@ -774,14 +779,18 @@ fn method_to_fn_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert_ranged(&patch, "@@ -2,3 @@ rule=r1\n");
     assert!(!patch.contains("# expr"), "got: {patch}");
     assert!(patch.contains("- Receiver.old_method(E0)"), "got: {patch}");
     assert!(
         patch.contains("+ new_function(Receiver, E0)"),
         "got: {patch}"
     );
-    assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
+    assert_eq!(
+        patch.matches("@@ -2,3 @@ rule=r1\n").count(),
+        1,
+        "got: {patch}"
+    );
 
     git(dir.path(), &["stash", "-q"]);
     let checked = Command::new(sibling_applyrs())
@@ -829,9 +838,9 @@ fn mixed_file_compresses_sweep_hunk_and_round_trips() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_ranged(&patch, "@@ -2,3 @@ rule=r1\n");
     assert!(patch.contains("- foo(E0)"), "got: {patch}");
     assert!(patch.contains("+ bar(E0)"), "got: {patch}");
-    assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
     assert!(patch.contains("-    1\n"), "got: {patch}");
     assert!(patch.contains("+    2\n"), "got: {patch}");
 
@@ -994,14 +1003,9 @@ fn use_prefix_sweep_compresses_to_one_hunk() {
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(patch.contains("rule=r1\n"), "got: {patch}");
-    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert_ranged(&patch, "@@ -1,5 @@ rule=r1\n");
     assert!(patch.contains("- use crate::old\n"), "got: {patch}");
     assert!(patch.contains("+ use crate::new\n"), "got: {patch}");
-    assert_eq!(
-        patch.matches("@@ -1,1 @@").count(),
-        1,
-        "one hunk for five imports, got: {patch}"
-    );
 
     git(dir.path(), &["stash", "-q"]);
     let checked = Command::new(sibling_applyrs())
