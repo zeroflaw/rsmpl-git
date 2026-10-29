@@ -12,10 +12,10 @@ use super::prov::{commit_prov, push_section_prov};
 use super::HunkProvenance;
 
 /// Ordered pair-sweep chain, tightest first (existing order,
-/// unchanged): slot → method-to-fn → method-to-method →
+/// unchanged; WI-4a appends one shape at the end): slot → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
-/// call-literal → call-peel. Returns the winning semantic section
+/// call-literal → call-peel → let-type-add. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -104,6 +104,15 @@ pub(crate) fn run_pair_chain(
         super::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((peel, "call_peel"));
+    }
+    // WI-4a: let type-addition (`let P = E` → `let P: T = E`, P/E
+    // hetero across sites, uniform concrete T) — after the call-shape
+    // chain (those ignore the `let` wrapper and cannot express an
+    // ascription delta), before the verbatim stage in the caller.
+    if let Some(let_sweep) =
+        super::try_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((let_sweep, "let_type_add"));
     }
     None
 }

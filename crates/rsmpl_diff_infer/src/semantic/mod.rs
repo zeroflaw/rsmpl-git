@@ -14,9 +14,11 @@
 //! tight original range + `# allow=many` (SPEC D.5, WI-1b); probe-verified via `applyrs --check`.
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
+pub(crate) mod antiunify;
 mod calls;
 pub(crate) mod chain;
 mod deletes;
+mod generalized;
 mod literal;
 mod macros;
 mod methods;
@@ -120,6 +122,7 @@ pub(crate) fn item_emission_header(
         None => crate::emission_header(path, rule, &[]),
     }
 }
+pub(crate) use generalized::try_let_sweep;
 pub(crate) use peel::try_call_peel_sweep;
 
 /// Try to compress binary-stripped `sections` (one full

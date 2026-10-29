@@ -10,7 +10,9 @@
 //! renames (bare/qualified/method calls with `::<…>`, at most one
 //! varying turbo position bound as `T`), N-site macro renames
 //! (`old!(…)` → `new!(…)` under `# macro=token_tree`), N-site use-path
-//! prefix renames (`use P::Old::T` → `use P::New::T`), and N-site
+//! prefix renames (`use P::Old::T` → `use P::New::T`), N-site let
+//! type-addition (`let P = E` → `let P: T = E`, P/E hetero across sites,
+//! uniform concrete T), and N-site
 //! call rewrites (same callee/arity delta → one `# allow=many`
 //! hunk), and whole-item 1-to-1 moves (byte-identical fn deleted here,
 //! added there → `# item I` + `# bind` cut / `# use` paste, T430) into

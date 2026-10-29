@@ -536,6 +536,45 @@ pub(crate) fn slot_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// N-site let type-addition totality (WI-4a): untyped with-init
+/// no-diverge `Stmt::Local` statements occur exactly `minuses.len()`
+/// times. The emitted minus template `let P0 = E0;` matches every such
+/// statement (ascription agreement is strict — already-typed lets
+/// never match, `match_local` — and `E0` requires an init), so the
+/// count is exactly the template's match domain. Same opaque handling
+/// as the other counters.
+pub(crate) fn let_untyped_holds(
+    file_old: Option<&str>,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct L {
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for L {
+        fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
+            if let syn::Stmt::Local(local) = node {
+                if !matches!(local.pat, syn::Pat::Type(_))
+                    && local.init.as_ref().is_some_and(|i| i.diverge.is_none())
+                {
+                    self.count += 1;
+                }
+            }
+            syn::visit::visit_stmt(self, node);
+        }
+    }
+    let mut l = L { count: 0 };
+    l.visit_file(&file);
+    if l.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
 /// N-site use-prefix totality: file + inline-mod `use` spans whose
 /// leading segments equal `old_prefix` occur exactly `minuses.len()`
 /// times (tails preserved; group members each count). Fn-body uses never

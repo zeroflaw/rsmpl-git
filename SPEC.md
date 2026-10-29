@@ -5980,7 +5980,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`). `totality` is
 `"pre-image"` when the section had pre-image text to count against,
@@ -6054,9 +6054,22 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   tighter verbatim sweep). Pre-image totality keys on callee + exact
   array length with the unescaped head (other arities/lengths never
   match and never count). Cross-hunk classes compress non-whole
-  sections (pure additions elsewhere veto whole-section balance but
-  not this sweep); the emitted single-pattern bodies are invisible to
-  the later verbatim pass.
+   sections (pure additions elsewhere veto whole-section balance but
+   not this sweep); the emitted single-pattern bodies are invisible to
+   the later verbatim pass.
+- Let type-addition sweep (WI-4a, first anti-unification shape): N ≥ 2
+  `-`/`+` pairs, each a complete single-line `let PAT = INIT;` →
+  `let PAT: T = INIT;` — the pattern and initializer token-equal per
+  site and hetero across sites (bound as inferred `P0`/`E0`, no
+  declarations, SPEC 15.8), with one uniform concrete type `T` across
+  all sites (a varying type would need an unbound plus-side `T0`,
+  T442-illegal, so it stays ordinary). Per-site pattern/init deltas,
+  `let-else`, macro/closure/unsupported inits, and all-identical
+  classes (verbatim stays the tighter winner, T422 precedent) stay
+  ordinary. Pre-image totality counts every untyped with-init
+  no-diverge `let` (`let_untyped_holds`): the minus template matches
+  exactly that domain (ascription agreement is strict, so typed twins
+  never match and never count), and the count must equal N.
 - Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
   single-segment call whose first arg token-equals the receiver and
