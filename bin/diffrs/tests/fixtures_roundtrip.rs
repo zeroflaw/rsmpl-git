@@ -1293,6 +1293,68 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "33-nested-partial-delete" {
+            // T474: nested partial-file item deletion (b0da138/T466
+            // prize-shape miniature) -- two mod-tests fns out, minus
+            // hunk starting with a separator blank the engine never
+            // absorbs: one shrunk-range delete_items hunk plus an
+            // ordinary minus-blank leftover ahead of it.
+            assert!(
+                semantic.contains("rule=delete_items"),
+                "nested partial delete sweep must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=delete_items").count(),
+                1,
+                "exactly one delete hunk, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    fn first"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    fn second"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("\n-\n"),
+                "leading blank rides an ordinary leftover, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "34-eof-touch-delete" {
+            // T474: EOF-touching item deletion (3baecc1/a2fc9b3/T472
+            // prize-shape miniature) -- trailing helper out through EOF,
+            // separator blank absorbed inside the minus range: one
+            // real-range delete_items hunk, no ordinary leftover.
+            assert!(
+                semantic.contains("rule=delete_items"),
+                "EOF-touch delete sweep must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=delete_items").count(),
+                1,
+                "exactly one delete hunk, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("\n@@ ").count(),
+                1,
+                "no ordinary leftover hunks, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn stale_helper"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
