@@ -180,3 +180,53 @@ fn wi4a_let_type_add_extra_site_stays_ordinary() {
         "native minus must survive, got: {semantic}"
     );
 }
+
+#[test]
+fn wi4b_type_sweep_fires() {
+    // Fixture 71: two `let X: Vec<..> = ..;` sites with hetero inner
+    // types gain one `# allow=many` general-type hunk with an inferred
+    // `T0` hole (no `# type` declaration, SPEC 15.8).
+    let (native_input, semantic) = convert_fixture("71-type-sweep-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "type sweep must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# scope=file"),
+        "ranged hunk, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- Vec<T0>\n"),
+        "minus template missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ Box<[T0]>\n"),
+        "plus template missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    let alpha_value"),
+        "typed minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "type sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi4b_type_sweep_extra_site_stays_ordinary() {
+    // Fixture 72: a third untouched `Vec<..>` ascription in the
+    // pre-image breaks engine-count totality (3 != 2) — the sweep
+    // would silently rewrite it, so the section stays ordinary.
+    let (_native_input, semantic) = convert_fixture("72-type-sweep-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "extra Vec site must veto, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    let alpha_value: Vec<u32> = compute_first(input);"),
+        "native minus must survive, got: {semantic}"
+    );
+}

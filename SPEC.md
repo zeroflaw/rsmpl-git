@@ -5980,7 +5980,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`). `totality` is
 `"pre-image"` when the section had pre-image text to count against,
@@ -6070,6 +6070,30 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   no-diverge `let` (`let_untyped_holds`): the minus template matches
   exactly that domain (ascription agreement is strict, so typed twins
   never match and never count), and the count must equal N.
+- Type rewrite sweep (WI-4b, second anti-unification shape): N ≥ 2
+  `-`/`+` pairs, each a complete single-line `let PAT: T = INIT;` →
+  `let PAT: T′ = INIT;` — the pattern and initializer token-equal per
+  site (a per-site init/pattern delta is a let-statement template, not
+  a type template), while the ascribed types anti-unify across sites
+  to one template pair with shared inferred `T0…` holes (e.g.
+  `- Vec < T0 >` / `+ Box < [T0] >`, no declarations, SPEC 15.8;
+  all-identical classes stay for the tighter verbatim sweep, T422
+  precedent). Guards: same `syn::Type` variant at every generalized
+  node (the root constructor is the literal anchor); holes only in
+  `Type` positions at depth ≤ 2 (deeper variation coarsens to the
+  shallowest varying level); lifetimes, const-generic args,
+  mutability and all other non-`Type` slots must agree across sites (a
+  varying lifetime would mis-rewrite — the engine wildcards pattern
+  lifetimes while the plus side would emit the first site's spelling);
+  hole correspondence is pairwise (an unbound plus-side hole is
+  T442-illegal; dropped or reordered holes stay ordinary). Only
+  `let`-ascription pairs qualify (bare-type full lines never occur in
+  `-U0` diffs of valid Rust, so no bare-`Type` path exists).
+  Pre-image totality is the generic engine-count check: the emitted
+  minus template must match exactly N type subterms in the pre-image
+  (macro/string twins never count — the engine never enters them;
+  nested matches count outer-only, exactly like the real sweep
+  rewrites). Detector name `type_sweep`.
 - Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
   single-segment call whose first arg token-equals the receiver and

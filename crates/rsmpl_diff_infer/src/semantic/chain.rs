@@ -12,10 +12,10 @@ use super::prov::{commit_prov, push_section_prov};
 use super::HunkProvenance;
 
 /// Ordered pair-sweep chain, tightest first (existing order,
-/// unchanged; WI-4a appends one shape at the end): slot → method-to-fn → method-to-method →
+/// unchanged; WI-4a appends one shape at the end, WI-4b one more): slot → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
-/// call-literal → call-peel → let-type-add. Returns the winning semantic section
+/// call-literal → call-peel → let-type-add → type-sweep. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -113,6 +113,15 @@ pub(crate) fn run_pair_chain(
         super::try_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((let_sweep, "let_type_add"));
+    }
+    // WI-4b: type rewrite (`Vec<T>` → `Box<[T]>`, T hetero across
+    // sites) — after the let-shape chain (those own whole-statement
+    // templates with init/pattern holes; this owns sub-line type
+    // templates), before the verbatim stage in the caller.
+    if let Some(type_sweep) =
+        super::try_type_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((type_sweep, "type_sweep"));
     }
     None
 }

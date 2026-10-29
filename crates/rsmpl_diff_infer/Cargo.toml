@@ -7,9 +7,11 @@ license.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 rsmpl_patch = { workspace = true }
+# WI-4b: the generic template counter (`totality::template_type_holds`)
+# counts engine matches of the emitted minus template over the
+# pre-image (IMPROVE.md WI-4). No cycle: the engine never depends on
+# inference (it only consumes `rsmpl_patch` + `rsmpl_pattern`).
+rsmpl_engine = { workspace = true }
 syn = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
-
-[dev-dependencies]
-rsmpl_engine = { workspace = true }

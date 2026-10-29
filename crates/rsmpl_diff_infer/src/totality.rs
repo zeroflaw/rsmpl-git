@@ -575,6 +575,44 @@ pub(crate) fn let_untyped_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// Generic template totality (WI-4b): the emitted minus type template
+/// `minus_template` (e.g. `Vec<T0>`) matches exactly `n` type subterms
+/// in the pre-image file. Counted by the engine itself, not by a
+/// hand-rolled syntactic walk: a `# sweep` self-rewrite probe (`- M` /
+/// `+ M`, which parses and compiles exactly like the real emission) is
+/// applied to a scratch tree and its match count must equal `n`
+/// (IMPROVE.md WI-4). `None` pre-image keeps the legacy allow;
+/// probe parse/apply failure vetoes. Opaque positions need no extra
+/// veto: the engine never matches inside macros or string literals, so
+/// hidden twins never count; nested matches count outer-only
+/// (contained skips), exactly like the real sweep rewrites.
+pub(crate) fn template_type_holds(
+    path: &str,
+    file_old: Option<&str>,
+    minus_template: &str,
+    n: usize,
+) -> bool {
+    if n == 0 || minus_template.contains('\n') {
+        return false;
+    }
+    let Some(pre) = file_old else {
+        return true;
+    };
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {minus_template}\n+ {minus_template}\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+}
+
 /// N-site use-prefix totality: file + inline-mod `use` spans whose
 /// leading segments equal `old_prefix` occur exactly `minuses.len()`
 /// times (tails preserved; group members each count). Fn-body uses never
@@ -1117,6 +1155,61 @@ mod tests {
         );
         let pre2 = "use crate::old::A;\nuse crate::old::B;\nuse crate::old::C;\n";
         assert!(!infer(&raw, pre2).contains("rule="), "extra use must veto");
+    }
+    #[test]
+    fn template_type_counts_engine_matches() {
+        let pre = "fn m() {\n    let a: Vec<u32> = foo();\n    let b: Vec<String> = bar();\n    let c: u32 = baz();\n}\n";
+        assert!(crate::totality::template_type_holds(
+            "f.rs",
+            Some(pre),
+            "Vec<T0>",
+            2
+        ));
+        assert!(!crate::totality::template_type_holds(
+            "f.rs",
+            Some(pre),
+            "Vec<T0>",
+            3
+        ));
+        // A narrower literal template counts only its own sites.
+        assert!(crate::totality::template_type_holds(
+            "f.rs",
+            Some(pre),
+            "Vec<u32>",
+            1
+        ));
+    }
+    #[test]
+    fn template_type_nested_counts_outer_only() {
+        // Contained inner matches skip, exactly like the real sweep
+        // rewrites (probed): two `Vec<Vec<u32>>` sites count 2, not 4.
+        let pre =
+            "fn m() {\n    let a: Vec<Vec<u32>> = foo();\n    let b: Vec<Vec<u32>> = bar();\n}\n";
+        assert!(crate::totality::template_type_holds(
+            "f.rs",
+            Some(pre),
+            "Vec<T0>",
+            2
+        ));
+    }
+    #[test]
+    fn template_type_none_pre_allows_and_garbage_vetoes() {
+        assert!(crate::totality::template_type_holds(
+            "f.rs", None, "Vec<T0>", 2
+        ));
+        let pre = "fn m() {}\n";
+        assert!(!crate::totality::template_type_holds(
+            "f.rs",
+            Some(pre),
+            "Vec<",
+            2
+        ));
+        assert!(!crate::totality::template_type_holds(
+            "f.rs",
+            Some(pre),
+            "Vec<T0>",
+            0
+        ));
     }
     #[test]
     fn unparseable_pre_vetoes() {

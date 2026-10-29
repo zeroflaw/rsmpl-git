@@ -2,6 +2,7 @@
 //! `let` statements + T441 slice stranded-unbalanced join). Split from the
 //! crate root to hold the 2000-line hygiene gate (peel.rs precedent).
 
+use super::shape::{init_ok, probe_expr};
 use super::{count_occurrences, flat_ws, strip_field_label, strip_one_terminator, unique_rule};
 use crate::compress_balanced_pair_body;
 use crate::totality::{changed_old_lines, covers_changed};
@@ -610,13 +611,11 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     // (T414 veto removed by T415: leading `!`/`-` now bypasses to `Raw`
     // in `classify_call_pattern` and skips the macro pre-route, so the
     // general matcher handles unary structurally. `&` precedent is T252.)
-    let mut m = ShapeProbe::default();
-    m.visit_expr(minus);
+    let m = probe_expr(minus);
     if m.macros > 0 || m.lets > 0 || (m.trys > 0 && m.closures > 0) {
         return false;
     }
-    let mut p = ShapeProbe::default();
-    p.visit_expr(plus);
+    let p = probe_expr(plus);
     if p.macros > 0 || p.lets > 0 {
         return false;
     }
@@ -636,71 +635,9 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     true
 }
 
-/// One AST walk collecting engine-relevant shape flags (T403 gates).
-#[derive(Default)]
-struct ShapeProbe {
-    macros: usize,
-    lets: usize,
-    closures: usize,
-    trys: usize,
-    /// Nodes outside the engine general matcher's bounded variant set
-    /// (T412): anything not in `is_general_supported` falls to
-    /// `_ => false` in `match_expr` and never matches.
-    unsupported: usize,
-}
-
-impl<'ast> syn::visit::Visit<'ast> for ShapeProbe {
-    fn visit_expr(&mut self, node: &'ast syn::Expr) {
-        if !is_general_supported(node) {
-            self.unsupported += 1;
-        }
-        syn::visit::visit_expr(self, node);
-    }
-    fn visit_expr_macro(&mut self, _node: &'ast syn::ExprMacro) {
-        self.macros += 1;
-    }
-    fn visit_expr_let(&mut self, node: &'ast syn::ExprLet) {
-        self.lets += 1;
-        syn::visit::visit_expr_let(self, node);
-    }
-    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
-        self.closures += 1;
-        syn::visit::visit_expr_closure(self, node);
-    }
-    fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
-        self.trys += 1;
-        syn::visit::visit_expr_try(self, node);
-    }
-}
-
-/// The engine general matcher's bounded variant set (`match_expr` in
-/// `matcher_general.rs` handles exactly these — everything else falls
-/// to `_ => false` and never matches, T412).
-fn is_general_supported(e: &syn::Expr) -> bool {
-    matches!(
-        e,
-        syn::Expr::Path(_)
-            | syn::Expr::Lit(_)
-            | syn::Expr::Binary(_)
-            | syn::Expr::Unary(_)
-            | syn::Expr::Cast(_)
-            | syn::Expr::Reference(_)
-            | syn::Expr::Paren(_)
-            | syn::Expr::Group(_)
-            | syn::Expr::Call(_)
-            | syn::Expr::MethodCall(_)
-            | syn::Expr::Assign(_)
-            | syn::Expr::Field(_)
-            | syn::Expr::Index(_)
-            | syn::Expr::Array(_)
-            | syn::Expr::Tuple(_)
-            | syn::Expr::Struct(_)
-            | syn::Expr::Range(_)
-            | syn::Expr::Await(_)
-            | syn::Expr::Try(_)
-            | syn::Expr::Return(_)
-    )
-}
+// Engine-shape truth lives in `super::shape` (WI-4b debt): the probe
+// struct, the bounded `match_expr` variant set, and the strict init
+// gate are shared with `antiunify.rs` (agreement by construction).
 
 /// Complete-`let` pair gate (T440): both trimmed lines parse as
 /// `syn::Stmt::Local` (a successful `Stmt` parse already implies the
@@ -744,24 +681,7 @@ fn verbatim_let_shape(m: &str, p: &str) -> Option<()> {
 /// `_ => false`, so a pattern containing them matches nothing and
 /// the sweep would fail loud.
 fn verbatim_init_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
-    let mut m = ShapeProbe::default();
-    m.visit_expr(minus);
-    if m.macros > 0 || m.lets > 0 || m.closures > 0 || m.unsupported > 0 {
-        return false;
-    }
-    // The try+closure combination matches nothing (a2fc9b3 precedent).
-    if m.trys > 0 && m.closures > 0 {
-        return false;
-    }
-    let mut p = ShapeProbe::default();
-    p.visit_expr(plus);
-    if p.macros > 0 || p.lets > 0 || p.closures > 0 || p.unsupported > 0 {
-        return false;
-    }
-    if p.trys > 0 && p.closures > 0 {
-        return false;
-    }
-    true
+    init_ok(minus) && init_ok(plus)
 }
 
 /// Statement totality (T440 soundness): the needle (flat-ws full
