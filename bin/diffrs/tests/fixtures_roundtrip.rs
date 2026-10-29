@@ -1506,6 +1506,50 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "39-tiny-move-stays-ordinary" {
+            // T480: T375 tiny-move veto full-cycle miniature (3-line
+            // `fn m` a.rs->b.rs with a short `f();` body) — cut+paste
+            // costs more than 6 ordinary lines, so no rule= hunks:
+            // pure ordinary passthrough, still shorter via 0-context.
+            assert!(
+                !semantic.contains("rule="),
+                "tiny move must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "40-tiny-move-fires" {
+            // T480: the same 3-line shape with a longer body fires —
+            // emitted cut+paste is ~constant (the item rides a
+            // metavar, never respelled) while replaced ordinary grows
+            // with content, so the byte guard clears: no fixed line
+            // threshold. First sub-4-line firing-move cover.
+            assert!(
+                semantic.contains("rule=move_m"),
+                "tiny move cut must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_m"),
+                "tiny move paste must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn m() {"),
+                "moved minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn m() {"),
+                "moved plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "tiny firing move must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }

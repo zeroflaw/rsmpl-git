@@ -5966,8 +5966,11 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   single item with a blank-ending prefix and no following blank trims the
   absorbed blank from the prefix leftover hunk), and a global T375 byte-win
   guard (strict `emitted < replaced`, ties stay ordinary — e.g. a 3-line
-  fn, 6 ordinary lines, costs more as cut+paste and stays ordinary by
-  design). Mixed-hunk input is unreachable (the source always runs
+  fn with short lines, 6 ordinary lines, costs more as cut+paste and
+  stays ordinary by design; emitted cut+paste is ~constant (the item
+  rides a metavar, never respelled) while replaced ordinary grows with
+  content, so the same 3-line shape with a longer body fires — no fixed
+  line threshold). Mixed-hunk input is unreachable (the source always runs
   `git diff --unified=0`, so declining mixed hunks is defensive only);
   inter-run gap relaxation stays vetoed (the same-anchor paste join
   restores exactly one blank); vis-evolution needs engine move+evolve
