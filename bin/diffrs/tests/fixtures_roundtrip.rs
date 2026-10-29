@@ -1786,6 +1786,42 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "53-single-let-stays-ordinary" {
+            // T487: single let-sweep site veto miniature --
+            // one `let out = run(dir.path(), &["--patch", patch]);` ->
+            // `let out = run_stdin(dir.path(), patch, &[]);` costs more
+            // as a semantic hunk than the ordinary hunk it replaces:
+            // pure ordinary passthrough (veto side of fixture 20,
+            // the 2-site let fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single let edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "54-single-call-peel-stays-ordinary" {
+            // T487: single call-peel site veto miniature --
+            // one `let a = run(dir, &["--patch", patch]);` ->
+            // `let a = run_stdin(dir, patch, &[]);` costs more as a
+            // semantic hunk than the ordinary hunk it replaces: pure
+            // ordinary passthrough (veto side of fixture 21, the
+            // multi-site peel fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single call-peel edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
