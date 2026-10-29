@@ -1915,6 +1915,63 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "59-hetero-m2f-stays-ordinary" {
+            // T490: hetero-delta m2f veto miniature --
+            // `a.old_method(1);` -> `new_function(a, 1);` plus
+            // `b.old_method(2);` -> `brand_new(b, 2);`: different new
+            // callees share no (old, new) class, so the m2f sweep
+            // declines with no per-site singles (call sweeps need one
+            // shared delta -- the contrast to fixture 55, where hetero
+            // slot deltas fire one single rule per site). Veto side of
+            // fixture 14 (homo multi-site m2f fire).
+            assert!(
+                !semantic.contains("rule="),
+                "hetero-delta m2f edit must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    a.old_method(1);"),
+                "hetero minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    brand_new(b, 2);"),
+                "hetero plus lines must be preserved, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "60-hetero-samelit-stays-ordinary" {
+            // T490: hetero-delta same-literal veto miniature --
+            // two identical `agents.contains("skills/rsmpl-git/...");`
+            // sites rewrite to DIFFERENT new literals (`gitrs` /
+            // `other`): no shared (old, new) literal pair, so the
+            // same-literal sweep declines with no per-site singles
+            // (same shared-delta gate as fixtures 58/59 -- the contrast
+            // to fixture 55, where hetero slot deltas fire per-site
+            // singles). Veto side of fixture 17 (homo multi-site
+            // same-literal fire).
+            assert!(
+                !semantic.contains("rule="),
+                "hetero-delta same-literal edit must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    agents.contains(\"skills/rsmpl-git/SKILL.md\");"),
+                "hetero minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    agents.contains(\"skills/other/SKILL.md\");"),
+                "hetero plus lines must be preserved, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
