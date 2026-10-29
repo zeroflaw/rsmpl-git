@@ -127,9 +127,16 @@ mod tests {
         assert!(is_terse(&p));
         assert!(p.body_ellipsis);
         // Long-form shapes never produce `Any` generics.
-        let long =
-            crate::fn_pattern::parse_fn_pattern("fn foo(...) { ... }", &[], &[], &[], &[], false)
-                .unwrap();
+        let long = crate::fn_pattern::parse_fn_pattern(
+            "fn foo(...) { ... }",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(!is_terse(&long));
     }
 
@@ -150,25 +157,42 @@ mod tests {
         // WI-1b: `parse_fn_pattern` returns the terse pattern once no tokens
         // remain after the name; any slot text keeps the long form.
         for shape in ["fn foo", "pub fn foo", "pub(crate) async unsafe fn foo"] {
-            let p = crate::fn_pattern::parse_fn_pattern(shape, &[], &[], &[], &[], false).unwrap();
+            let p =
+                crate::fn_pattern::parse_fn_pattern(shape, &[], &[], &[], &[], &[], false).unwrap();
             assert!(is_terse(&p), "unexpected: {shape}");
         }
         // Slot/body text still routes long (and then enforces long rules —
         // `fn foo()` parses as a concrete-empty-params long shape, never terse).
         assert!(
-            crate::fn_pattern::parse_fn_pattern("fn foo(...) { ... }", &[], &[], &[], &[], false)
-                .unwrap()
-                .generics
+            crate::fn_pattern::parse_fn_pattern(
+                "fn foo(...) { ... }",
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                false
+            )
+            .unwrap()
+            .generics
                 != crate::fn_pattern::GenericPat::Any
         );
         assert!(!is_terse(
-            &crate::fn_pattern::parse_fn_pattern("fn foo()", &[], &[], &[], &[], false).unwrap()
+            &crate::fn_pattern::parse_fn_pattern("fn foo()", &[], &[], &[], &[], &[], false)
+                .unwrap()
         ));
         // Leading attribute lines peel before the terse check, so an
         // attributed bare line is still terse (attrs preserved by default).
-        let attr =
-            crate::fn_pattern::parse_fn_pattern("#[inline]\nfn foo", &[], &[], &[], &[], false)
-                .unwrap();
+        let attr = crate::fn_pattern::parse_fn_pattern(
+            "#[inline]\nfn foo",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(is_terse(&attr));
         assert_eq!(attr.attrs_written.len(), 1);
     }
@@ -178,7 +202,7 @@ mod tests {
         // WI-1b: a bare fn line plus body/context lines is neither terse
         // nor long — the needle names the fix, not the missing parens.
         for shape in ["fn foo { ... }", "fn foo\n...\n}", "fn foo;"] {
-            let err = crate::fn_pattern::parse_fn_pattern(shape, &[], &[], &[], &[], false)
+            let err = crate::fn_pattern::parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(

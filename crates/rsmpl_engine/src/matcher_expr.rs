@@ -1371,13 +1371,19 @@ mod tests {
     #[test]
     fn turbofish_const_arg_compares_rendered() {
         // T145 REVIEW: const generic args compare token-normalized, not
-        // structurally — concrete `3` matches, undeclared `N` fails safe.
+        // structurally — concrete `3` matches. WI-1c diet: undeclared `N`
+        // in turbofish position now infers `# type N` and binds, so it
+        // matches `3`; a backticked literal `` `N` `` keeps the old
+        // fail-safe.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo::<3>(E)\n+ bar::<3>(E)\n";
         let src = "fn a() {\n    let a = foo::<3>(x);\n}\n";
         let out = apply(patch, src).unwrap();
         assert!(out.contains("bar::<3>(x);"), "got: {out}");
         let miss = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo::<N>(E)\n+ bar::<N>(E)\n";
-        assert!(apply(miss, src).is_err());
+        let out = apply(miss, src).unwrap();
+        assert!(out.contains("bar::<3>(x);"), "got: {out}");
+        let lit = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo::<`N`>(E)\n+ bar::<`N`>(E)\n";
+        assert!(apply(lit, src).is_err());
     }
 
     #[test]

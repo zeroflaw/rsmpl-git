@@ -132,7 +132,7 @@ pub fn apply_impl_context_hunk(
         // Match methods inside (same slot-evolution semantics as free
         // functions, via the shared planner).
         let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
-        let (pvis, pqual, pgen, pwh) = slot_metas(compiled);
+        let (pvis, pqual, pgen, pwh, pty) = slot_metas(compiled);
         let full_plus_all: String = hunk
             .lines
             .iter()
@@ -146,6 +146,7 @@ pub fn apply_impl_context_hunk(
             &pqual,
             &pgen,
             &pwh,
+            &pty,
             false,
         )
         .map_err(|e| e.with_rule(&rule))?;

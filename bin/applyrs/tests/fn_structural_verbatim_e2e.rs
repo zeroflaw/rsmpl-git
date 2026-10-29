@@ -194,7 +194,9 @@ fn leading_block_comment_needle() {
 
 #[test]
 fn unterminated_return_type_needle() {
-    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn f(...) -> T\n-     ...\n- }\n+ fn g(...) -> T\n+     ...\n+ }\n";
+    // NOTE (WI-1c diet): bare `T` now infers `# type T`, so the concrete-
+    // return needle uses `i32` to keep testing the literal path.
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn f(...) -> i32\n-     ...\n- }\n+ fn g(...) -> i32\n+     ...\n+ }\n";
     fail_both(
         patch,
         "a.rs",

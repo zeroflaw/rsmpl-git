@@ -2718,6 +2718,66 @@ In a `+` pattern, each occurrence of a bound metavariable inserts the same captu
 
 If any repeated occurrence is inconsistent with the first binding, the candidate match is rejected rather than partially bound.
 
+### 15.8 Inferred metavariables (diet)
+
+An undeclared identifier matching `[A-Z][A-Za-z0-9_]*` (a single
+uppercase letter or a leading-uppercase word) in a metavariable
+position infers its kind from that position — no `# expr E` line is
+required. Explicit declarations remain legal and must agree with the
+inferred kind; disagreement and ambiguous positions fail fast with
+`RSMPL_PATTERN_CONFLICT`.
+
+Kind by position:
+
+| Position | Inferred kind |
+|---|---|
+| `- I` alone (single-token minus) | `item` (`# root=` forces `type`/`expr`/`stmt` for that token) |
+| fn-header `G` (between name and `(`) | `generic_params` |
+| fn-header `W` (after params/return) | `where_clause` |
+| fn-header `-> T` (single preserved return) | `type` (only when `T` occurs on both sides; one-sided `-> String` stays a concrete literal) |
+| two pre-`fn` tokens (`V Q fn`) | first `visibility`, second `qualifier_list` |
+| one pre-`fn` token (`V fn`) | ambiguous (`visibility` vs `qualifier_list`) — declare explicitly |
+| `let P: T = E;` | pattern `pat`, `: T` region `type`, `= E` region `expr` |
+| call/method callee, receiver, method, bare args | `expr` (macro `!` bodies never infer; `use`-paths and item-rename names never infer) |
+| type argument interiors (`Vec<T>`, `Box<[T]>`) | `type` for the inner names only; the leading constructor (`Vec`, `Box`) stays literal, as do one-sided concrete additions (`+ Send`) |
+| otherwise (`# root=type/expr`) | the forced kind; unforced general text follows `try_general` routing (type-parseable → `type`, else `expr`) |
+
+Rules:
+
+- Backtick quoting is unchanged: `` `E` `` is always the literal token
+  and never infers. String literals and attribute/doc-comment lines
+  never infer either.
+- Sigiled mode (`# metavars=sigiled`) is unchanged: only `$Name`
+  counts; bare `Name` is literal.
+- `# symbol` names never infer (they are bound by declaration).
+- One name in two kinds is `RSMPL_PATTERN_CONFLICT` naming both
+  (`metavariable `E` occurs in incompatible positions (expr vs type)`);
+  an explicit declaration naming a different kind than the inferred
+  one is the same conflict (`metavariable `T` declared as expr but
+  used as type`). An explicit declaration disambiguates the single
+  pre-`fn` case (`# visibility V` + `V fn` is `visibility`).
+
+Engine-verbatim (both exit 2; `rule:`/`file:` lines; text omits the
+null `range:`/`suggestion:` lines, JSON carries explicit nulls):
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: metavariable `E` occurs in incompatible positions (expr vs type)
+```
+
+```text
+RSMPL_PATTERN_CONFLICT
+rule: r
+file: src/lib.rs
+reason: metavariable `T` declared as expr but used as type
+```
+
+Diet patches still need one `#` directive line for hunk detection
+until WI-1d (e.g. `# lang=rust` as the marker or `# allow=many`);
+only the per-metavariable declaration lines are elided.
+
 
 ---
 

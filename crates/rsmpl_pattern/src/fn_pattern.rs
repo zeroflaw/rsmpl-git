@@ -245,6 +245,7 @@ pub fn parse_fn_pattern(
     qual_metas: &[String],
     generic_metas: &[String],
     where_metas: &[String],
+    type_metas: &[String],
     returns_none: bool,
 ) -> Result<FnPattern, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg);
@@ -509,7 +510,10 @@ pub fn parse_fn_pattern(
     let mut ret = RetPat::Any;
     if i < toks.len() && toks[i] == "->" {
         i += 1;
-        if i < toks.len() && generic_metas.contains(&toks[i]) {
+        // WI-1c: a single-token return hole may be declared as
+        // `# generic_params G` (historic) or inferred/declared as
+        // `# type T`; both bind the return type as a metavariable.
+        if i < toks.len() && (generic_metas.contains(&toks[i]) || type_metas.contains(&toks[i])) {
             ret = RetPat::Meta(toks[i].clone());
             i += 1;
         } else {
@@ -692,7 +696,7 @@ mod tests {
     use super::*;
 
     fn parse(t: &str) -> FnPattern {
-        parse_fn_pattern(t, &[], &[], &[], &[], false).unwrap()
+        parse_fn_pattern(t, &[], &[], &[], &[], &[], false).unwrap()
     }
 
     #[test]
@@ -813,7 +817,7 @@ mod tests {
             "fn foo(T, ..., c: i32) { ... }",
             "fn foo(c: i32, ...) { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("must stand alone"), "unexpected: {err}");
@@ -831,9 +835,17 @@ mod tests {
         // T160: `{ ..., foo(); }` slipped through the must-be-`...`
         // gates (any-rule) and the written statements were silently
         // never verified; bodies are always preserved.
-        let err = parse_fn_pattern("fn foo(...) { ..., foo(); }", &[], &[], &[], &[], false)
-            .unwrap_err()
-            .to_string();
+        let err = parse_fn_pattern(
+            "fn foo(...) { ..., foo(); }",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("exactly `...`"), "unexpected: {err}");
         assert!(parse("fn foo(...) { ... }").body_ellipsis);
         assert!(parse("fn foo(...) {...}").body_ellipsis);
@@ -849,6 +861,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             false,
         )
         .unwrap_err()
@@ -856,6 +869,7 @@ mod tests {
         assert!(err.contains("block comments"), "unexpected: {err}");
         let err = parse_fn_pattern(
             "/** Multi\nline. */\nfn foo(...) { ... }",
+            &[],
             &[],
             &[],
             &[],
@@ -868,6 +882,7 @@ mod tests {
         // Single-line block doc normalizes and parses (T156).
         let pat = parse_fn_pattern(
             "/** Block doc. */\nfn foo(...) { ... }",
+            &[],
             &[],
             &[],
             &[],
@@ -888,7 +903,7 @@ mod tests {
             "fn foo<T, ...>(...) { ... }",
             "fn foo<..., T>(...) { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("generic parameter"), "unexpected: {err}");
@@ -897,7 +912,7 @@ mod tests {
             "fn bar(...) -> ... { ... }",
             "fn bar(...) -> ... where T: Clone { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("return type"), "unexpected: {err}");
@@ -907,7 +922,7 @@ mod tests {
             "fn foo<T>(...) where T: Clone, ... { ... }",
             "fn foo<T>(...) where ..., T: Clone { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("where clause"), "unexpected: {err}");
@@ -927,6 +942,7 @@ mod tests {
             &[],
             &["G".into()],
             &[],
+            &[],
             false,
         )
         .unwrap();
@@ -937,6 +953,7 @@ mod tests {
             &[],
             &[],
             &["W".into()],
+            &[],
             false,
         )
         .unwrap();
@@ -952,7 +969,7 @@ mod tests {
             ("fn rtest(...) -> i32\n...\n}", "`->` return type"),
             ("fn wtest<T>(...)\nwhere T: Clone\n...\n}", "`where` clause"),
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("missing its opening"), "unexpected: {err}");
@@ -960,7 +977,7 @@ mod tests {
         }
         // Terminated `...` slots still hit the T161 content gates; `;`
         // declarations and bare `W`-meta tails still parse.
-        let err = parse_fn_pattern("fn bar(...) -> ... { ... }", &[], &[], &[], &[], false)
+        let err = parse_fn_pattern("fn bar(...) -> ... { ... }", &[], &[], &[], &[], &[], false)
             .unwrap_err()
             .to_string();
         assert!(err.contains("return type"), "unexpected: {err}");
@@ -971,6 +988,7 @@ mod tests {
             &[],
             &["G".into()],
             &["W".into()],
+            &[],
             false,
         )
         .unwrap();

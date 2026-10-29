@@ -6,6 +6,7 @@
 
 mod expr_pattern;
 mod fn_pattern;
+mod infer;
 mod item_rename;
 mod metavar;
 mod pattern;

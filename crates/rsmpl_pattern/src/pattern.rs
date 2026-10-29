@@ -199,6 +199,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         validate_quoting(line)?;
     }
 
+    // WI-1c: inferred metavariables (SPEC 15.8). Undeclared
+    // `[A-Z][A-Za-z0-9_]*` in a metavar position infers its kind;
+    // explicit declarations must agree; ambiguity fails fast.
+    let table = crate::infer::infer_table(table, &minus_raw, &plus_raw, root.as_deref())?;
+
     let minus_bindings = table.bound_in_text(&minus_raw);
     let mut bound: HashSet<String> = minus_bindings.clone();
     // `# use=Name` imports a capture as bound for the plus side.
@@ -606,13 +611,14 @@ fn classify(
 
     // Function patterns (minus starts with fn-ish, possibly with vis/attrs).
     if looks_like_fn(m, table) && looks_like_fn(p, table) {
-        let (vis_metas, qual_metas, gen_metas, where_metas) = slot_metas(table);
+        let (vis_metas, qual_metas, gen_metas, where_metas, type_metas) = slot_metas(table);
         let minus_fn = parse_fn_pattern(
             &first_fn_block(m),
             &vis_metas,
             &qual_metas,
             &gen_metas,
             &where_metas,
+            &type_metas,
             hunk.returns_none(),
         )?;
         let plus_fn = parse_fn_pattern(
@@ -621,6 +627,7 @@ fn classify(
             &qual_metas,
             &gen_metas,
             &where_metas,
+            &type_metas,
             false,
         )?;
         // WI-1b: terse rename is both-sides-or-neither. A terse minus with
@@ -1018,21 +1025,32 @@ fn is_single_meta(text: &str, table: &MetavarTable) -> bool {
     single_line && !t.contains(char::is_whitespace) && *t != *"..." && table.is_meta(t)
 }
 
-fn slot_metas(table: &MetavarTable) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+/// Visibility / qualifier / generic / where / type slot metas for fn parsing.
+type SlotMetas = (
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+);
+
+fn slot_metas(table: &MetavarTable) -> SlotMetas {
     let mut vis = Vec::new();
     let mut qual = Vec::new();
     let mut gen = Vec::new();
     let mut wh = Vec::new();
+    let mut ty = Vec::new();
     for (kind, name) in &table.declared {
         match kind {
             MetavarKind::Visibility => vis.push(name.clone()),
             MetavarKind::Qualifier | MetavarKind::QualifierList => qual.push(name.clone()),
             MetavarKind::GenericParams => gen.push(name.clone()),
             MetavarKind::WhereClause => wh.push(name.clone()),
+            MetavarKind::Type => ty.push(name.clone()),
             _ => {}
         }
     }
-    (vis, qual, gen, wh)
+    (vis, qual, gen, wh, ty)
 }
 
 fn looks_like_fn(text: &str, table: &MetavarTable) -> bool {

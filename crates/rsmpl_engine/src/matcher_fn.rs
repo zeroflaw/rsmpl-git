@@ -161,7 +161,7 @@ pub(crate) fn minus_fn_pattern(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
 ) -> Result<FnPattern, StructuredError> {
-    let (vis, qual, gen, wh) = slot_metas(compiled);
+    let (vis, qual, gen, wh, ty) = slot_metas(compiled);
     // Rebuild full minus text (removals + context) as the pattern crate does.
     let full: String = hunk
         .lines
@@ -176,7 +176,7 @@ pub(crate) fn minus_fn_pattern(
         }
         _ => full,
     };
-    rsmpl_pattern::parse_fn_pattern(&block, &vis, &qual, &gen, &wh, hunk.returns_none())
+    rsmpl_pattern::parse_fn_pattern(&block, &vis, &qual, &gen, &wh, &ty, hunk.returns_none())
 }
 
 /// Extract the first function block from text that may be prefixed by
@@ -276,24 +276,33 @@ pub(crate) fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
     lines[s..end].join("\n")
 }
 
-pub(crate) fn slot_metas(
-    compiled: &CompiledPattern,
-) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+/// Visibility / qualifier / generic / where / type slot metas for fn parsing.
+type SlotMetas = (
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+);
+
+pub(crate) fn slot_metas(compiled: &CompiledPattern) -> SlotMetas {
     use rsmpl_patch::MetavarKind;
     let mut vis = Vec::new();
     let mut qual = Vec::new();
     let mut gen = Vec::new();
     let mut wh = Vec::new();
+    let mut ty = Vec::new();
     for (kind, name) in &compiled.table.declared {
         match kind {
             MetavarKind::Visibility => vis.push(name.clone()),
             MetavarKind::Qualifier | MetavarKind::QualifierList => qual.push(name.clone()),
             MetavarKind::GenericParams => gen.push(name.clone()),
             MetavarKind::WhereClause => wh.push(name.clone()),
+            MetavarKind::Type => ty.push(name.clone()),
             _ => {}
         }
     }
-    (vis, qual, gen, wh)
+    (vis, qual, gen, wh, ty)
 }
 
 /// Byte range of `span` in the original text, or `None` when the span
@@ -866,8 +875,8 @@ pub fn apply_fn_hunk(
         .map(|l| l.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let (vis, qual, gen, wh) = slot_metas(compiled);
-    let plus_pat = rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, false)
+    let (vis, qual, gen, wh, ty) = slot_metas(compiled);
+    let plus_pat = rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, &ty, false)
         .map_err(|e| e.with_rule(&rule))?;
 
     // Bodies are preserved, never rewritten: both sides must be `...`

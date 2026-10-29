@@ -118,8 +118,9 @@ fn detects_unbound_plus() {
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -40,8 +40,8 @@ rule=x\n# lang=rust\n# expr E\n- foo(E)\n+ bar(Q)\n",
     );
     let c = compile(&h).unwrap();
-    // Q undeclared => not tracked as metavar at all.
-    assert!(c.unbound_plus.is_empty());
+    // WI-1c diet: undeclared `Q` in argument position infers `expr`, so a
+    // plus-only hole is tracked as unbound (was literal before inference).
+    assert_eq!(c.unbound_plus, vec!["Q".to_string()]);
 }
 
 #[test]
