@@ -5,5 +5,4 @@ diff --git src/lib.rs
 -
 @@ -5,9 +3,0 @@ rule=delete_items
 # allow=many
-# item I
 - I

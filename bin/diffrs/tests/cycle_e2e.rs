@@ -213,34 +213,42 @@ fn commit_all(dir: &Path, what: &str) {
 }
 
 /// Semantic cases whose re-inference is canonically lossless today:
-/// `canonicalize(S′) == canonicalize(S)`. Empty for the applyrs
-/// corpus: every authored fixture predates canonical diet (sweep
-/// dummies, long decls, illustrative ranges) — WI-1d re-authors them
-/// here as they are fixed.
-const CYCLE_OK: &[&str] = &[];
+/// `canonicalize(S′) == canonicalize(S)`. WI-1d re-authored the diet
+/// family to canonical ranged diet, so each entry below asserts the
+/// fixed point with an already-canonical authored S.
+const CYCLE_OK: &[&str] = &[
+    "02-rename-calls",
+    "03-move-fn",
+    "15-use-rename",
+    "17-scope-file",
+    "20-returns-none",
+    "23-slot-sweep",
+    "28-attrs-sweep",
+    "29-impl-sweep",
+    "31-delete-items",
+    "32-new-file-move",
+    "33-move-evolved-composition",
+    "34-verbatim-sweep",
+    "35-return-sweep",
+    "36-verbatim-call-sweep",
+    "37-verbatim-unary-sweep",
+    "38-method-to-method-sweep",
+];
 
-/// Divergent cases pinned with one-line reasons (WI-1d exclusion seed:
-/// re-author to canonical ranged diet, fix the detector, or move to
-/// the D.5 exclusion list). The harness asserts the divergence
-/// persists, so a fix must move the entry instead of silently passing.
+/// Divergent cases pinned with one-line reasons (the SPEC D.5
+/// exclusion list is the normative review surface; each reason names
+/// the family and the owning follow-up). The harness asserts the
+/// divergence persists, so a fix must move the entry to CYCLE_OK
+/// instead of silently passing.
 ///
 /// Families: `t375` single-site demoted to ordinary by the byte-guard;
-/// `diet` same sites/template, authored long/sweep form vs canonical
-/// ranged diet (mechanical WI-1d re-author); `nodet` multi-site shape
-/// with no detector yet (names the owning WI); `hetero` sites differ
-/// structurally so no template fires; `empty` zero-edit re-diff.
+/// `nodet` multi-site shape with no detector yet (names the owning WI);
+/// `hetero` sites differ structurally so no template fires (WI-4/7);
+/// `empty` zero-edit re-diff (05).
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "01-rename-fn",
         "t375: single-site fn rename re-infers ordinary",
-    ),
-    (
-        "02-rename-calls",
-        "diet: authored sweep+# lang+# expr E vs ranged diet E0",
-    ),
-    (
-        "03-move-fn",
-        "diet: authored # lang+Helper+# item I+context hunk vs M1/inferred/minimal",
     ),
     ("04-mixed", "t375: two single-site edits re-infer ordinary"),
     (
@@ -277,19 +285,11 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "14-item-rename",
-        "hetero: 8 renames re-infer as 1 semantic + 6 ordinary (grouping is WI-7)",
-    ),
-    (
-        "15-use-rename",
-        "diet: authored range 1,7 vs site-exact 1,5",
+        "hetero: 8 renames re-infer as 1 semantic + 7 ordinary (grouping is WI-7)",
     ),
     (
         "16-repeat-fold",
         "nodet: nested Box::new stays ordinary (no general repeat-fold detector)",
-    ),
-    (
-        "17-scope-file",
-        "diet: authored sweep+# expr E vs ranged diet E0",
     ),
     (
         "18-general-expr",
@@ -299,18 +299,10 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "19-trait-rename",
         "t375: single trait method re-infers ordinary",
     ),
-    (
-        "20-returns-none",
-        "diet: authored plain rename+# returns=none vs inferred allow=many slot sweep",
-    ),
     ("21-attrs-preserve", "t375: single fn re-infers ordinary"),
     (
         "22-attrs-strip",
         "t375: single attributed fn re-infers ordinary",
-    ),
-    (
-        "23-slot-sweep",
-        "diet: authored sweep vs ranged diet slot sweep",
     ),
     (
         "24-pat-sweep",
@@ -326,51 +318,11 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "27-call-sweep",
-        "hetero: two-calls-per-line sites stay ordinary",
-    ),
-    (
-        "28-attrs-sweep",
-        "diet: authored sweep vs ranged diet slot sweep",
-    ),
-    (
-        "29-impl-sweep",
-        "diet: authored concrete impl-method vs inferred VQGW slot sweep",
+        "hetero: two-calls-per-line sites stay ordinary (line-oriented call totality; WI-3/WI-4)",
     ),
     (
         "30-trait-sweep",
         "hetero: decl/def trait shapes stay ordinary",
-    ),
-    (
-        "31-delete-items",
-        "diet: authored declared # item I vs inferred I",
-    ),
-    (
-        "32-new-file-move",
-        "diet: authored declared # item I vs inferred I",
-    ),
-    (
-        "33-move-evolved-composition",
-        "diet: authored declared # item I (x2) vs inferred I",
-    ),
-    (
-        "34-verbatim-sweep",
-        "diet: authored sweep vs ranged diet verbatim sweep",
-    ),
-    (
-        "35-return-sweep",
-        "diet: authored sweep vs ranged diet return sweep",
-    ),
-    (
-        "36-verbatim-call-sweep",
-        "diet: authored sweep vs ranged diet verbatim sweep",
-    ),
-    (
-        "37-verbatim-unary-sweep",
-        "diet: authored sweep vs ranged diet unary sweep",
-    ),
-    (
-        "38-method-to-method-sweep",
-        "diet: authored sweep+declared metavars vs ranged diet inferred",
     ),
 ];
 

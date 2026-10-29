@@ -1,9 +1,5 @@
-diff --git a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -5,5 +5,5 @@ rule=rename_calls
-# lang=rust
+diff --git src/lib.rs
+@@ -6,2 @@ rule=rename_calls
 # allow=many
-# expr E
-- foo(E)
-+ bar(E)
+- foo(E0)
++ bar(E0)

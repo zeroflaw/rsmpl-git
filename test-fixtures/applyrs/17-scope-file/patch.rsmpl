@@ -1,7 +1,5 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=sweep_legacy
-# scope=file
+@@ -2,4 @@ rule=sweep_legacy
 # allow=many
-# expr E
-- legacy(E)
-+ modern(E)
+- legacy(E0)
++ modern(E0)

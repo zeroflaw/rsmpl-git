@@ -1,7 +1,5 @@
 diff --git src/lib.rs
 @@ -1,3 @@ rule=rename_unit
-# returns=none
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-  }
+# allow=many
+- fn foo
++ fn bar

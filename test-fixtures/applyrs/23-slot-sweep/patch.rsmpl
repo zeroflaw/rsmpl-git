@@ -1,11 +1,6 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=sweep_slots
-# scope=file
+@@ -1,27 @@ rule=sweep_slots
 # allow=many
-# visibility V
-# qualifier_list Q
-# generic_params G
-# where_clause W
 - V Q fn foo G (...) W {
 + V Q fn bar G (...) W {
       ...

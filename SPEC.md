@@ -6269,4 +6269,27 @@ Corpus in scope: all applyrs fixtures (38), all diffrs fixtures
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
 
+Exclusions (WI-1d — canonical divergence the `cycle_e2e` harness
+pins, not bugs in the cycle itself): single-site semantic shapes
+demote to ordinary under the T375 byte-win guard (`01`, `04`, `06`,
+`08`–`11`, `13`, `18`, `19`, `21`, `22`); multi-site shapes with no
+detector yet stay ordinary (`16` repeat-fold, `25` qualified-path
+calls, `26` macro renames — owned by WI-3/WI-4); heterogeneous sites
+no template fires on stay ordinary (`12` statement sequences, `14`
+ungrouped cross-hunk renames, `24` divergent `let` shapes, `27`
+two-calls-per-line sites under line-oriented call totality, `30`
+trait decl/def pairs — owned by WI-4/WI-7); zero-edit optional
+(`05`) re-diffs to empty, which `canonicalize` rejects as
+unparseable. These are the only non-canonical cycles; every other
+corpus case is canonically lossless, and one further iteration is a
+byte-identical fixed point (`S″ == S′`) within a single diff mode.
+
+Cross-mode section order: pending mode appends untracked new-file
+sections after tracked ones while staged/rev flows are git-sorted
+(probed `38-new-file-move`), so raw byte-identity (`S″ == S′`) is
+only defined within one mode — pending/pending or staged/staged.
+Canonical form sorts files and is the cross-mode comparator: the
+same pre/post trees yield byte-identical canonical patches
+regardless of the mode that produced each side.
+
 ---

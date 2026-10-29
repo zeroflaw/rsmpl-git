@@ -1,8 +1,7 @@
 diff --git src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,1 @@ rule=verbatim
+@@ -14,6 @@ rule=verbatim
 # allow=many
-# scope=file
 - make_text(sub)
 + make_text_new(sub)

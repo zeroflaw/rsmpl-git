@@ -1,20 +1,14 @@
-diff --git a/src/old.rs b/src/old.rs
---- a/src/old.rs
-+++ b/src/old.rs
-@@ -3,5 +3,0 @@ rule=cut_helper
-# lang=rust
-# item I
-# bind=Helper
-- I
-
-diff --git a/src/new.rs b/src/new.rs
+diff --git src/new.rs
 --- a/src/new.rs
 +++ b/src/new.rs
-@@ -1,1 +1,2 @@
- use crate::common;
+@@ -1,0 +2,1 @@
 +use crate::old_dependency;
-
-@@ -1,0 +1,0 @@ rule=paste_helper
-# lang=rust
-# use=Helper
-+ Helper
+@@ -1,0 @@ rule=paste_helper
+# use=M1
++ M1
+diff --git src/old.rs
+--- a/src/old.rs
++++ b/src/old.rs
+@@ -3,5 @@ rule=cut_helper
+# bind=M1
+- I

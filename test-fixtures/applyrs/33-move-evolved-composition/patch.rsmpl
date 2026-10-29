@@ -21,10 +21,8 @@ diff --git src/old.rs
 @@ -2,1 +1,0 @@
 -
 @@ -3,12 @@ rule=move_parse_pair
-# item I
 # bind=M1
 - I
 @@ -16,7 +1,0 @@ rule=delete_items
 # allow=many
-# item I
 - I
