@@ -1513,7 +1513,9 @@ fn native_to_semantic_to_native_round_trip() {
 #[test]
 fn example_bench_readme_table_matches_recomputed() {
     // T435 (T328-equivalent for diffrs): pin committed native.patch /
-    // sem.patch freshness + bench-table numbers against rot. Recompute
+    // sem.patch freshness + bench-table numbers against rot. Staged
+    // collection (add -A + diff --cached + diffrs --staged) so added files
+    // are covered. Recompute
     // each bench hermetically (tmpdir, never rewriting the bench dir)
     // with the same byte/line/pct formula as example-benches/run.sh,
     // then assert the stored files are byte-identical and both READMEs
@@ -1556,9 +1558,16 @@ fn example_bench_readme_table_matches_recomputed() {
             &name,
         );
         copy_tree(&dir.join("after"), tmp.path());
+        git_ok(tmp.path(), &["add", "-A"], &name);
         let native = git(
             tmp.path(),
-            &["diff", "--unified=0", "--no-color", "--no-ext-diff"],
+            &[
+                "diff",
+                "--cached",
+                "--unified=0",
+                "--no-color",
+                "--no-ext-diff",
+            ],
         );
         assert!(native.status.success(), "[{name}] git diff failed");
         let fresh_native: String = String::from_utf8_lossy(&native.stdout)
@@ -1569,6 +1578,7 @@ fn example_bench_readme_table_matches_recomputed() {
         let out = Command::new(binary())
             .arg("--repo")
             .arg(tmp.path())
+            .arg("--staged")
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(0), "[{name}] diffrs failed");
