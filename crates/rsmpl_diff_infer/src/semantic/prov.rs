@@ -22,6 +22,11 @@ pub struct HunkProvenance {
     pub sites: Vec<usize>,
     pub totality: &'static str,
     pub saved_bytes: usize,
+    /// WI-7a cross-file intent label: `""` when ungrouped, else
+    /// `rename_Old_to_New` shared with every hunk of the same
+    /// single-delta intent across files. Provenance-only (patch bytes
+    /// stay canonical `r1…`); WI-7b owns the shared-`rule=` re-emission.
+    pub group: String,
 }
 
 /// WI-2 totality label (SPEC D.2): `"pre-image"` when the section had
@@ -132,6 +137,7 @@ pub(crate) fn commit_prov(
             sites: covered_sites(&ranges, &rule, changed),
             totality: totality_label(file_old),
             saved_bytes: saved,
+            group: String::new(),
         });
     }
 }

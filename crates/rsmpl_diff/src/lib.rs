@@ -34,6 +34,7 @@ fn pre_images(
     staged: bool,
     rev: Option<&str>,
     files: &[String],
+    raw: &str,
 ) -> HashMap<String, String> {
     // Index blob (`:path`) for pending worktree diffs — exact whether or
     // not the index is layered; the `rev` blob otherwise.
@@ -60,6 +61,45 @@ fn pre_images(
                 }
             }
         }
+        // WI-7a: rename sections cite the new path in `files` (b-side), but
+        // the new path does not exist at base — the hunks apply against the
+        // OLD file's content (applyrs seeds the new-side entry from it).
+        // Fetch `base:<old>` under the NEW-path key so detectors get
+        // pre-image totality instead of section-visible fallback. The
+        // `rename from/to` lines are authoritative (the parser prefers them
+        // over the `diff --git` halves for spaced/quoted paths).
+        let mut rename_old: Option<String> = None;
+        let mut rename_new: Option<String> = None;
+        let mut flush_rename = |old: &mut Option<String>, new: &mut Option<String>| {
+            if let (Some(o), Some(n)) = (old.take(), new.take()) {
+                if n.ends_with(".rs") && !out.contains_key(&n) {
+                    let spec = format!("{base}:{o}");
+                    if let Ok(got) = Command::new("git")
+                        .arg("-C")
+                        .arg(repo)
+                        .args(["show", &spec])
+                        .output()
+                    {
+                        if got.status.success() {
+                            if let Ok(text) = String::from_utf8(got.stdout) {
+                                out.insert(n, text);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        for line in raw.lines() {
+            if let Some(rest) = line.strip_prefix("diff --git ") {
+                flush_rename(&mut rename_old, &mut rename_new);
+                let _ = rest;
+            } else if let Some(from) = line.strip_prefix("rename from ") {
+                rename_old = Some(from.to_string());
+            } else if let Some(to) = line.strip_prefix("rename to ") {
+                rename_new = Some(to.to_string());
+            }
+        }
+        flush_rename(&mut rename_old, &mut rename_new);
     }
     out
 }
@@ -95,7 +135,7 @@ pub fn compress(
         rev: rev.map(str::to_string),
     };
     let collected: CollectedDiff = source.collect()?;
-    let pre = pre_images(repo, staged, rev, &collected.files);
+    let pre = pre_images(repo, staged, rev, &collected.files, &collected.raw);
     let inferred: InferredPatch =
         rsmpl_diff_infer::infer_rsmpl_with_pre_images(&collected.raw, &pre)?;
     let files = rsmpl_diff_source::files_in_diff(&inferred.rsmpl);

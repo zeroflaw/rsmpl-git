@@ -6057,7 +6057,7 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
 [{path}], "patch": "<RSmPL-Git patch>", "hunks": [...]}` to stdout
 (text mode prints only the patch). Each `hunks` entry carries per-hunk
 provenance for one emitted semantic hunk (empty when fully ordinary):
-`{rule, file, detector, sites, totality, saved_bytes}`. `detector` is
+`{rule, file, detector, sites, totality, saved_bytes, group}`. `detector` is
 the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_to_fn`, `method_to_method`, `method_same_literal`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
@@ -6069,7 +6069,14 @@ range (anchor-only move pastes report `[]`). `totality` is
 `"pre-image"` when the section had pre-image text to count against,
 else `"section-visible"`. `saved_bytes` is the hunk's byte win vs the
 ordinary text it replaced (multi-hunk section rewrites split the
-section total equally so entries sum to the section delta). `version`
+section total equally so entries sum to the section delta). `group` is
+the WI-7a cross-file intent label: `""` when ungrouped, else
+`rename_Old_to_New` shared with every hunk of the same single-delta
+intent across files (rename-like detectors only — same-callee,
+template, verbatim, delete, and move hunks never group; single-file
+repeats and divergent deltas never group). Grouping is
+provenance-only: patch bytes stay canonical `r1…` (shared-`rule=`
+re-emission is WI-7b). `version`
 stays `1` (additive, per D.2 rules). Budget (bytes beyond `patch`):
 ≈100 B fixed + ≈130 B per `hunks[]` entry + ≈5 B per covered site
 (`sites` arrays grow with matches — evidence, not overhead).
@@ -6403,11 +6410,15 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   non-`.rs` files, unbalanced hunks (whole-item moves pair pure-minus/pure-plus
   twins instead — see above; verbatim stranded-join pairs excepted),
   leading-`::`/qself call sites, non-strip
-  `&`-receiver sites, single-segment use prefixes, macro
-  interiors (same-name body rewrites), rename sections — detectors key emissions to the
-  b-side path, which would seed from the wrong file, so differing
-  `a/old b/new` sides stay ordinary passthrough, T377) stays
-  ordinary-hunk passthrough.
+   `&`-receiver sites, single-segment use prefixes, macro
+   interiors (same-name body rewrites), headers-only rename sections
+   and renames with no compressible content (WI-7a: rename sections
+   whose content hunks compress under any existing detector emit the
+   semantic hunks against the new path inside the preserved rename
+   section — the engine seeds rename content from the old side, SPEC
+   6/T377 — with pre-image totality read from the old path; a rename
+   with no compressible content stays passthrough byte-for-byte, T377) stays
+   ordinary-hunk passthrough.
   Pure deletions/additions stay ordinary by design (T424 verdict — no
   separate negative/positive sweep vocabulary): positive fan-out is
   engine-impossible (a pure insertion anchors at one point, with no
@@ -6532,7 +6543,8 @@ demote to ordinary under the T375 byte-win guard (`01`, `04`, `06`,
 detector yet stay ordinary (`16` repeat-fold, `25` qualified-path
 calls, `26` macro renames — owned by WI-3/WI-4); heterogeneous sites
 no template fires on stay ordinary (`12` statement sequences, `14`
-ungrouped cross-hunk renames, `24` divergent `let` shapes, `27`
+cross-hunk renames — grouped via WI-7a provenance, shared-`rule=`
+re-emission owned by WI-7b, `24` divergent `let` shapes, `27`
 two-calls-per-line sites under line-oriented call totality, `30`
 trait decl/def pairs — owned by WI-4/WI-7); zero-edit optional
 (`05`) re-diffs to empty, which `canonicalize` rejects as

@@ -19,6 +19,7 @@ mod calls;
 pub(crate) mod chain;
 mod deletes;
 mod generalized;
+pub(crate) mod group;
 mod literal;
 mod macros;
 mod methods;
@@ -186,6 +187,9 @@ pub fn infer_semantic_with_provenance(
         }
     }
     if compressed_any {
+        // WI-7a: provenance-only grouping (no byte change, so the
+        // fixed-point and canonical `r1…` contract hold).
+        group::assign_groups(prov, &out);
         Some(out)
     } else {
         None
@@ -490,17 +494,60 @@ mod tests {
 
     #[test]
     fn rename_sections_stay_ordinary_passthrough() {
-        // T377: rename sections never compress -- detectors key
-        // emissions to the b-side path, which would seed from the
-        // wrong file. The content below is the `fn_rename_compresses`
-        // shape (a proven winner), yet the rename header vetoes it.
-        let raw = "diff --git a/old.rs b/new.rs\nsimilarity index 89%\nrename from old.rs\nrename to new.rs\n--- a/old.rs\n+++ b/new.rs\n@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n";
+        // T377 headers-only renames stay passthrough (no content to
+        // compress); WI-7a: renames WITH compressible content compress
+        // (pinned by `rename_section_content_compresses` below).
+        let raw = "diff --git a/old.rs b/new.rs\nsimilarity index 100%\nrename from old.rs\nrename to new.rs\n";
         assert!(infer_semantic(&[raw.to_string()]).is_none());
         assert!(is_rename_header("diff --git a/old.rs b/new.rs"));
         assert!(!is_rename_header("diff --git a/f.rs b/f.rs"));
         assert!(!is_rename_header(
             "diff --git a/gone.rs b/gone.rs\ndeleted file mode 100644"
         ));
+    }
+
+    #[test]
+    fn rename_section_with_modes_goes_per_hunk() {
+        // WI-7a: a mode-carrying rename with compressible content goes
+        // per-hunk (T401 precedent) — modes survive in the prelude and
+        // the content hunk compresses.
+        let raw = "diff --git a/old.rs b/new.rs\nold mode 100644\nnew mode 100755\nsimilarity index 89%\nrename from old.rs\nrename to new.rs\n--- a/old.rs\n+++ b/new.rs\n@@ -2,4 +2,4 @@\n fn m() {\n-    old_handler_name(first_argument_with_a_long_name_aaa);\n-    old_handler_name(second_argument_with_a_long_name_bbb);\n+    new_handler_name(first_argument_with_a_long_name_aaa);\n+    new_handler_name(second_argument_with_a_long_name_bbb);\n }\n";
+        let out = infer_semantic(&[raw.to_string()]).expect("mode rename must compress");
+        assert!(out.contains("old mode 100644\n"), "got: {out}");
+        assert!(out.contains("new mode 100755\n"), "got: {out}");
+        assert!(out.contains("rename from old.rs\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        rsmpl_patch::parse_patch(&out).expect("mode rename must parse");
+    }
+
+    #[test]
+    fn rename_section_content_compresses() {
+        // WI-7a: the `fn_rename_compresses` shape inside a rename section
+        // compresses — the engine seeds the new-side entry from the old
+        // file, so old-side ranges apply; the lowering rebuilds
+        // `rename from/to`. The rename prelude is preserved byte-exact.
+        let raw = "diff --git a/old.rs b/new.rs\nsimilarity index 89%\nrename from old.rs\nrename to new.rs\n--- a/old.rs\n+++ b/new.rs\n@@ -1,3 +1,3 @@\n-fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n+fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n     1\n }\n";
+        let out = infer_semantic(&[raw.to_string()]).expect("rename content must compress");
+        assert!(out.contains("rename from old.rs\n"), "got: {out}");
+        assert!(out.contains("rename to new.rs\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("- fn foo\n"), "got: {out}");
+        assert!(out.contains("+ fn bar\n"), "got: {out}");
+        // Round-trip through the engine with old-file seeding (the
+        // applyrs rename path): new-side entry seeded from old content.
+        let parsed = rsmpl_patch::parse_patch(&out).expect("rename sweep must parse");
+        assert!(parsed.files[0].is_rename());
+        let mut files = HashMap::new();
+        files.insert(
+            "new.rs".to_string(),
+            "fn foo(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n1\n}\n".to_string(),
+        );
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("rename sweep must apply cleanly");
+        assert_eq!(
+            files["new.rs"],
+            "fn bar(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n1\n}\n"
+        );
     }
 
     #[test]

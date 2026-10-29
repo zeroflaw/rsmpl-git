@@ -155,7 +155,8 @@ fn run() -> Result<(), CliError> {
             "patch": patch.rsmpl,
             "hunks": patch.hunks.iter().map(|h| serde_json::json!({
                 "rule": h.rule, "file": h.file, "detector": h.detector,
-                "sites": h.sites, "totality": h.totality, "saved_bytes": h.saved_bytes
+                "sites": h.sites, "totality": h.totality, "saved_bytes": h.saved_bytes,
+                "group": h.group
             })).collect::<Vec<_>>(),
         });
         println!(
