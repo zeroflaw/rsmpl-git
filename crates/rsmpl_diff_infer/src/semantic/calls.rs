@@ -52,7 +52,11 @@ pub(crate) fn try_call_sweep(
         vars.push(v);
     }
     let args = vars.join(", ");
-    hunk.push_str(&format!("- {old_cal}({args})\n+ {new_cal}({args})\n"));
+    // WI-7b: uppercase constructor callees ride backticks (literal),
+    // else the engine infers them as `expr` holes (unbound plus).
+    let old_lit = super::shape::literal_callee(&old_cal);
+    let new_lit = super::shape::literal_callee(&new_cal);
+    hunk.push_str(&format!("- {old_lit}({args})\n+ {new_lit}({args})\n"));
     Some(hunk)
 }
 
@@ -123,10 +127,13 @@ pub(crate) fn try_call_arg_add_sweep(
     }
     let head = vars.join(", ");
     let grown = tail.join(", ");
+    // WI-7b: same literal-callee rule as the delta sweep — an uppercase
+    // same callee would otherwise infer as an `expr` hole and over-match.
+    let lit = super::shape::literal_callee(&cal);
     let (minus_call, plus_call) = if head.is_empty() {
-        (format!("{cal}()"), format!("{cal}({grown})"))
+        (format!("{lit}()"), format!("{lit}({grown})"))
     } else {
-        (format!("{cal}({head})"), format!("{cal}({head}, {grown})"))
+        (format!("{lit}({head})"), format!("{lit}({head}, {grown})"))
     };
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
     Some(hunk)

@@ -105,6 +105,29 @@ pub(crate) fn supported_expr(e: &syn::Expr) -> bool {
     )
 }
 
+/// Render a concrete call callee literal-safe (WI-7b): a leading-uppercase
+/// callee is a diet candidate (SPEC 15.8 — mirrors
+/// `rsmpl_pattern::infer::is_candidate`, keep in sync) and would infer
+/// as an `expr` hole, so a concrete uppercase callee (tuple-struct and
+/// enum-variant constructors) must ride backticks to stay literal
+/// (SPEC 15.4 — a backticked callee is concrete, never a bind). Without
+/// this, a renamed-constructor sweep emits an unappliable patch (plus
+/// side `New` unbound) or silently over-matches (same-callee hole
+/// matching any callee). Lowercase callees pass through untouched.
+pub(crate) fn literal_callee(callee: &str) -> String {
+    let mut chars = callee.chars();
+    let upper = matches!(chars.next(), Some(c) if c.is_ascii_uppercase());
+    if upper
+        && callee
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        format!("`{callee}`")
+    } else {
+        callee.to_string()
+    }
+}
+
 /// Strict single-expression gate shared by the `let`-init paths: the
 /// engine `Stmt` path matches inits structurally via `match_expr`, so a
 /// pattern containing macros or unsupported nodes matches nothing and
@@ -185,5 +208,18 @@ mod tests {
         assert!(init_ok(&expr("x?")));
         assert!(init_ok(&expr("(|| x)?")));
         assert!(!init_ok(&expr("m!(x)?")));
+    }
+
+    #[test]
+    fn literal_callee_backticks_only_uppercase() {
+        // Lowercase passes through (zero churn on every existing pin).
+        assert_eq!(literal_callee("foo"), "foo");
+        assert_eq!(literal_callee("old_function"), "old_function");
+        assert_eq!(literal_callee("crate"), "crate");
+        // Leading-uppercase infers as a hole — backticks pin literal.
+        assert_eq!(literal_callee("Old"), "`Old`");
+        assert_eq!(literal_callee("New"), "`New`");
+        assert_eq!(literal_callee("Some"), "`Some`");
+        assert_eq!(literal_callee("A1_b2"), "`A1_b2`");
     }
 }

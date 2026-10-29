@@ -81,8 +81,9 @@ pub(crate) fn try_call_peel_sweep(
     };
     hunk.push_str(&format!(
         "- {f}(D, &[{h}, {minus_inner}])\n+ {g}(D, M, &[{tail_list}])\n",
-        f = c.old_cal,
-        g = c.new_cal,
+        // WI-7b: uppercase constructor callees ride backticks (literal).
+        f = super::shape::literal_callee(&c.old_cal),
+        g = super::shape::literal_callee(&c.new_cal),
         h = c.head_text,
     ));
     Some(hunk)
@@ -198,8 +199,9 @@ pub(crate) fn try_call_peel_section(
         };
         let tail = format!(
             "- {f}(D, &[{h}, {minus_inner}])\n+ {g}(D, M, &[{tail_list}])\n",
-            f = class.old_cal,
-            g = class.new_cal,
+            // WI-7b: uppercase constructor callees ride backticks (literal).
+            f = super::shape::literal_callee(&class.old_cal),
+            g = super::shape::literal_callee(&class.new_cal),
             h = class.head_text,
         );
         // WI-1b: precise emission sites are the member old lines.

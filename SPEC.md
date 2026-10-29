@@ -6070,13 +6070,19 @@ range (anchor-only move pastes report `[]`). `totality` is
 else `"section-visible"`. `saved_bytes` is the hunk's byte win vs the
 ordinary text it replaced (multi-hunk section rewrites split the
 section total equally so entries sum to the section delta). `group` is
-the WI-7a cross-file intent label: `""` when ungrouped, else
+the WI-7 cross-file intent label: `""` when ungrouped, else
 `rename_Old_to_New` shared with every hunk of the same single-delta
 intent across files (rename-like detectors only — same-callee,
 template, verbatim, delete, and move hunks never group; single-file
-repeats and divergent deltas never group). Grouping is
-provenance-only: patch bytes stay canonical `r1…` (shared-`rule=`
-re-emission is WI-7b). `version`
+repeats and divergent deltas never group). Grouped hunks share one
+`rule=<group>` name in patch bytes (WI-7b): the re-emission renames
+each grouped hunk from its positional `rN` to the shared
+`rename_Old_to_New` and orders file sections definition-first
+(item/fn-header renames before call/use/macro sites, stable otherwise;
+ungrouped sections never move). Per-group T375 re-basis: the shared
+name must cost strictly less than the group's `saved_bytes` sum, else
+that group falls back to positional `rN` names while keeping the
+`group` label. `version`
 stays `1` (additive, per D.2 rules). Budget (bytes beyond `patch`):
 ≈100 B fixed + ≈130 B per `hunks[]` entry + ≈5 B per covered site
 (`sites` arrays grow with matches — evidence, not overhead).
@@ -6129,7 +6135,13 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
   one `# allow=many` hunk (`# expr E0…` per arity position;
-  arity 0 needs no metavars).
+  arity 0 needs no metavars). A leading-uppercase concrete callee
+  (tuple-struct and enum-variant constructors) emits backticked
+  (`` `Old`(E0) `` → `` `New`(E0) ``, SPEC 15.4): bare `Old` would
+  otherwise infer as an `expr` hole (SPEC 15.8), failing loud on the
+  plus side when the callee changes and over-matching when it does
+  not. The same rule covers the trailing-arg-addition,
+  trailing-literal, and head-peel sweeps below.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
@@ -6476,8 +6488,8 @@ envelope family (same as `applyrs`, Section D.2). JSON shape:
 
 Canonical RSmPL is what `diffrs` emits and what cycle comparisons
 compare: diet spelling (`# sweep`, inferred metavariables, terse
-renames), directives in fixed order, files sorted by path with hunks
-in document order, one hunk per detector class per file. Hunks keep
+renames), directives in fixed order, files in canonical order with
+hunks in document order, one hunk per detector class per file. Hunks keep
 document order rather than range-sorting: an insertion anchor at a
 range edge applies in document order (Section 20.2 — a paste at
 `(1,0)` plus an edit of `[1,1]` yields different trees when swapped,
@@ -6487,17 +6499,26 @@ range rule: if all sites of a class lie within one contiguous
 original range of at most 64 lines, emit that real range with
 `# allow=many` (no `# scope=file`); otherwise `# sweep`. Moves and
 deletes keep today's real ranges/anchors. Rule ids are `r1…` in
-canonical hunk order, making the form deterministic: the same
+canonical hunk order, except cross-file shared intents
+`rename_Old_to_New` (WI-7b), which keep their descriptive names —
+making the form deterministic: the same
 pre/post trees yield a byte-identical canonical patch.
 
 Concretely (`rsmpl_patch::canonicalize`, parse → re-emit):
 
-- Files sorted by target path; hunks within a file keep document
+- Files in canonical order: path-sorted, then per shared `rename_*`
+  group (a rule name occurring in ≥2 hunks) the containing file
+  subsequence is stable-sorted definitions-first — a file whose grouped
+  hunk minus line is an item header (`fn`/`struct`/`enum`/`trait`/
+  `type`/`mod`/`union`/`const`/`static`/`impl`/`pub`/`V`/`Q`) before
+  call/use/macro-site files, ties by path; ungrouped-only patches
+  reduce to path-sort. Hunks within a file keep document
   order (insertion anchors at a range edge are order-sensitive,
   Section 20.2 — range-sorting is not application-safe). Ranges cite
   original pre-patch coordinates (Section 10).
 - Semantic rules renumbered `r1…` in canonical order (one global
-  counter, matching the `diffrs` emitter convention).
+  counter, matching the `diffrs` emitter convention), except shared
+  `rename_*` names, which are preserved verbatim and consume no counter.
 - Directives in fixed order: `# sweep` (fused exactly when effective
   `allow == many` and `scope == file`, else the explicit non-default
   `allow`/`scope` lines); `# optional`; `# repeat`; `# lang=rust`;
@@ -6543,8 +6564,9 @@ demote to ordinary under the T375 byte-win guard (`01`, `04`, `06`,
 detector yet stay ordinary (`16` repeat-fold, `25` qualified-path
 calls, `26` macro renames — owned by WI-3/WI-4); heterogeneous sites
 no template fires on stay ordinary (`12` statement sequences, `14`
-cross-hunk renames — grouped via WI-7a provenance, shared-`rule=`
-re-emission owned by WI-7b, `24` divergent `let` shapes, `27`
+divergent single-file renames — cross-file shared deltas group under
+one `rename_Old_to_New` rule (WI-7b) with provenance `group`; divergent
+deltas and single-file repeats never share a rule, `24` divergent `let` shapes, `27`
 two-calls-per-line sites under line-oriented call totality, `30`
 trait decl/def pairs — owned by WI-4/WI-7); zero-edit optional
 (`05`) re-diffs to empty, which `canonicalize` rejects as

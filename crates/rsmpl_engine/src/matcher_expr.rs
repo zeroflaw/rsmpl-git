@@ -1264,6 +1264,14 @@ fn try_callee_only_rewrite(
     if minus_callee.contains("__RSMPL") || plus_callee.contains("__RSMPL") {
         return None;
     }
+    // WI-7b: the raw plus callee may ride backticks (a concrete uppercase
+    // constructor, SPEC 15.4); splice the de-quoted literal, never the
+    // quotes — otherwise the rewritten file carries backticks and fails
+    // the reparse. Unquotable text falls back to full substitution.
+    let plus_callee = match rsmpl_pattern::strip_literal_quotes(plus_callee) {
+        Ok((s, _)) => s,
+        Err(_) => return None,
+    };
     let pat_segs: Vec<&str> = minus_callee.split("::").collect();
     if pat_segs.contains(&"...") {
         return None; // path ellipsis: fall back to full substitution
@@ -1278,7 +1286,7 @@ fn try_callee_only_rewrite(
         return None;
     }
     let mut out = String::new();
-    out.push_str(plus_callee);
+    out.push_str(&plus_callee);
     out.push_str(&slice[paren_off..]);
     Some(out)
 }

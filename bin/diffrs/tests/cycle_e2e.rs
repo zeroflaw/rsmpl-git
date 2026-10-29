@@ -193,6 +193,25 @@ fn diffrs_pending(repo: &Path, what: &str) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
+fn diffrs_staged(repo: &Path, what: &str) -> String {
+    // Staged (index-vs-HEAD) mode: renames between a deleted path and an
+    // added path surface as `rename from/to` sections (pending mode
+    // cannot — the added path is untracked there, invisible to git).
+    let out = Command::new(binary())
+        .arg("--staged")
+        .arg("--repo")
+        .arg(repo)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "[{what}] diffrs staged failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
 fn commit_all(dir: &Path, what: &str) {
     git(dir, &["add", "-A"], what);
     git(
@@ -442,6 +461,120 @@ fn applyrs_corpus_sns_cycle() {
         covered,
         failures.len(),
         failures.join("\n")
+    );
+}
+
+#[test]
+fn grouped_rename_cycles_fixed_point() {
+    // WI-7b: cross-file shared intent (struct definition + call sites,
+    // one Old→New delta) raises one shared rule definition-first and
+    // cycles losslessly; a file rename with compressible content raises
+    // a semantic hunk inside the preserved rename section and cycles.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    // (a) Grouped cross-file rename. The use file sorts first by path,
+    // so definition-first reordering is pinned as well.
+    let work = tempfile::tempdir().unwrap();
+    let w = work.path().join("w");
+    std::fs::create_dir_all(w.join("src")).unwrap();
+    std::fs::write(w.join("src/z_def.rs"), "struct Old(i32);\n").unwrap();
+    std::fs::write(
+        w.join("src/a_use.rs"),
+        "fn m() {\n    Old(1);\n    Old(2);\n}\n",
+    )
+    .unwrap();
+    git(&w, &["init", "-q"], "grouped");
+    commit_all(&w, "grouped");
+    std::fs::write(w.join("src/z_def.rs"), "struct New(i32);\n").unwrap();
+    std::fs::write(
+        w.join("src/a_use.rs"),
+        "fn m() {\n    New(1);\n    New(2);\n}\n",
+    )
+    .unwrap();
+    let s = diffrs_pending(&w, "grouped");
+    assert!(!s.trim().is_empty(), "grouped change must infer");
+    assert_eq!(
+        s.matches("rule=rename_Old_to_New").count(),
+        2,
+        "one shared rule in both files:\n{s}"
+    );
+    let z = s.find("z_def").expect("def file present");
+    let a = s.find("a_use").expect("use file present");
+    assert!(z < a, "definition-first file order:\n{s}");
+    // S→N leg on a fresh pre-tree, then tree equality.
+    let work2 = tempfile::tempdir().unwrap();
+    let pre2 = work2.path().join("pre2");
+    std::fs::create_dir_all(pre2.join("src")).unwrap();
+    std::fs::write(pre2.join("src/z_def.rs"), "struct Old(i32);\n").unwrap();
+    std::fs::write(
+        pre2.join("src/a_use.rs"),
+        "fn m() {\n    Old(1);\n    Old(2);\n}\n",
+    )
+    .unwrap();
+    git(&pre2, &["init", "-q"], "grouped");
+    commit_all(&pre2, "grouped");
+    apply_patch(&pre2, &s, "grouped");
+    let diffs = compare_trees(&pre2, &w);
+    assert!(
+        diffs.is_empty(),
+        "grouped S→N post tree differs: {}",
+        diffs.join("; ")
+    );
+    // Fixed point + canonical equality.
+    let s2 = diffrs_pending(&pre2, "grouped");
+    assert_eq!(
+        s2, s,
+        "grouped cycle must be a fixed point:\n--- S ---\n{s}\n--- S2 ---\n{s2}"
+    );
+    assert_eq!(
+        canonical_of(&s, "grouped", "S"),
+        canonical_of(&s2, "grouped", "S2")
+    );
+    // (b) Rename-with-content: a file move whose content hunks compress
+    // inside the preserved rename section. Staged mode: git only emits
+    // `rename from/to` for tracked (staged) pairs — pending mode leaves
+    // the added path untracked and git shows delete + new-file halves.
+    let work3 = tempfile::tempdir().unwrap();
+    let w3 = work3.path().join("w3");
+    std::fs::create_dir_all(w3.join("src")).unwrap();
+    let old_body = "fn helper() {\n    1\n}\nfn extra() {\n    2\n}\nfn m() {\n    old_fn(1);\n    old_fn(2);\n    old_fn(3);\n}\n";
+    let new_body = "fn helper() {\n    1\n}\nfn extra() {\n    2\n}\nfn m() {\n    new_fn(1);\n    new_fn(2);\n    new_fn(3);\n}\n";
+    std::fs::write(w3.join("src/old_tool.rs"), old_body).unwrap();
+    git(&w3, &["init", "-q"], "rename-content");
+    commit_all(&w3, "rename-content");
+    std::fs::remove_file(w3.join("src/old_tool.rs")).unwrap();
+    std::fs::write(w3.join("src/new_tool.rs"), new_body).unwrap();
+    git(&w3, &["add", "-A"], "rename-content");
+    let r = diffrs_staged(&w3, "rename-content");
+    assert!(!r.trim().is_empty(), "rename must infer");
+    assert!(
+        r.contains("rename from"),
+        "file move must stay a rename section:\n{r}"
+    );
+    assert!(
+        r.contains("rule="),
+        "rename content must compress semantically:\n{r}"
+    );
+    let work4 = tempfile::tempdir().unwrap();
+    let pre4 = work4.path().join("pre4");
+    std::fs::create_dir_all(pre4.join("src")).unwrap();
+    std::fs::write(pre4.join("src/old_tool.rs"), old_body).unwrap();
+    git(&pre4, &["init", "-q"], "rename-content");
+    commit_all(&pre4, "rename-content");
+    apply_patch(&pre4, &r, "rename-content");
+    let diffs = compare_trees(&pre4, &w3);
+    assert!(
+        diffs.is_empty(),
+        "rename-content S→N post tree differs: {}",
+        diffs.join("; ")
+    );
+    // The applyrs `.history/` audit write is tool output, not cycle
+    // content — drop it before staging the re-diff tree.
+    std::fs::remove_dir_all(pre4.join(".history")).ok();
+    git(&pre4, &["add", "-A"], "rename-content");
+    let r2 = diffrs_staged(&pre4, "rename-content");
+    assert_eq!(
+        r2, r,
+        "rename-content cycle must be a fixed point:\n--- R ---\n{r}\n--- R2 ---\n{r2}"
     );
 }
 

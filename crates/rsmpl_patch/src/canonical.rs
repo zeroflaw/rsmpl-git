@@ -1,8 +1,10 @@
 //! WI-1a (IMPROVE.md): canonical RSmPL form (SPEC D.5).
 //!
 //! `canonicalize` parses a patch and re-emits it in canonical form:
-//! files sorted by target path, semantic rules renumbered `r1…` in
-//! canonical order, directives in fixed order (`# sweep` fused when
+//! files sorted by target path (WI-7b: shared `rename_Old_to_New` intents
+//! order definition-first), semantic rules renumbered `r1…` except
+//! shared `rename_*` names occurring in ≥2 hunks (preserved verbatim),
+//! directives in fixed order (`# sweep` fused when
 //! effective), RSmPL headers with the new side elided (SPEC 10.4), and
 //! `index …` metadata dropped (T374).
 //! The re-emission is semantics-preserving: effective directive values,
@@ -30,6 +32,62 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
     patch
         .files
         .sort_by(|a, b| a.target_path.cmp(&b.target_path));
+    // WI-7b: shared descriptive intents (`rename_Old_to_New` in ≥2 hunks)
+    // keep their names verbatim; everything else renumbers `r1…`.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for sec in &patch.files {
+        for hunk in &sec.hunks {
+            if let Hunk::Rsmpl(r) = hunk {
+                if let Some(rule) = r.header.rule.as_deref() {
+                    if rule.starts_with("rename_") {
+                        *counts.entry(rule.to_string()).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+    let shared: std::collections::HashSet<String> = counts
+        .into_iter()
+        .filter(|(_, n)| *n >= 2)
+        .map(|(r, _)| r)
+        .collect();
+    // WI-7b definition-first file order for shared groups: path-sort,
+    // then per shared label (sorted) stable-sort the containing file
+    // subsequence definitions-first (item-header minus → definition).
+    let mut labels: Vec<&String> = shared.iter().collect();
+    labels.sort();
+    for label in labels {
+        let mut involved: Vec<usize> = Vec::new();
+        for (idx, sec) in patch.files.iter().enumerate() {
+            if file_contains_rule(sec, label) {
+                involved.push(idx);
+            }
+        }
+        if involved.len() < 2 {
+            continue;
+        }
+        let mut sorted = involved.clone();
+        sorted.sort_by_key(|&i| {
+            let def = patch.files[i]
+                .hunks
+                .iter()
+                .filter_map(|h| match h {
+                    Hunk::Rsmpl(r) if r.header.rule.as_deref() == Some(label.as_str()) => {
+                        Some(is_definition_hunk(r))
+                    }
+                    _ => None,
+                })
+                .any(|d| d);
+            ((!def) as u8, patch.files[i].target_path.clone())
+        });
+        if sorted == involved {
+            continue;
+        }
+        let snapshot = patch.files.clone();
+        for (slot, src) in involved.iter().zip(sorted.iter()) {
+            patch.files[*slot] = snapshot[*src].clone();
+        }
+    }
     let mut out = String::new();
     if let Some(v) = &patch.version {
         out.push_str(&format!("#{v}\n"));
@@ -53,6 +111,12 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
             match hunk {
                 Hunk::Ordinary(o) => emit_ordinary(&mut out, o),
                 Hunk::Rsmpl(r) => {
+                    if let Some(rule) = r.header.rule.as_deref() {
+                        if shared.contains(rule) {
+                            emit_rsmpl_named(&mut out, r, rule);
+                            continue;
+                        }
+                    }
                     rule_seq += 1;
                     emit_rsmpl(&mut out, r, rule_seq);
                 }
@@ -60,6 +124,31 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
         }
     }
     Ok(out)
+}
+
+/// True when file section `sec` holds an RSmPL hunk named `rule`.
+fn file_contains_rule(sec: &FileSection, rule: &str) -> bool {
+    sec.hunks.iter().any(|h| match h {
+        Hunk::Rsmpl(r) => r.header.rule.as_deref() == Some(rule),
+        _ => false,
+    })
+}
+
+/// WI-7b definition heuristic from hunk bytes alone (no detector info):
+/// an item-header minus line (`fn`/`struct`/…/`pub`/`V`/`Q`/`impl`)
+/// is a definition; calls, uses, and macros are use sites.
+fn is_definition_hunk(r: &RsmplHunk) -> bool {
+    const PREFIXES: &[&str] = &[
+        "fn ", "struct ", "enum ", "trait ", "type ", "mod ", "union ", "const ", "static ",
+        "impl ", "pub", "V ", "Q ",
+    ];
+    for line in &r.lines {
+        if line.is_removal() {
+            let t = line.text.trim_start();
+            return PREFIXES.iter().any(|p| t.starts_with(p));
+        }
+    }
+    false
 }
 
 /// `diff --git` header line: single-path when both halves agree,
@@ -104,6 +193,26 @@ fn emit_rsmpl(out: &mut String, r: &RsmplHunk, rule_seq: u32) {
     };
     // The RSmPL new side is ignored by the lowering (SPEC 10.4).
     out.push_str(&format!("@@ -{start},{len} @@ rule=r{rule_seq}\n"));
+    for d in canonical_directives(r) {
+        out.push_str(&d);
+        out.push('\n');
+    }
+    for line in &r.lines {
+        out.push(line.prefix);
+        out.push_str(&line.text);
+        out.push('\n');
+    }
+}
+
+/// WI-7b: emit an RSmPL hunk under its preserved shared name.
+fn emit_rsmpl_named(out: &mut String, r: &RsmplHunk, rule: &str) {
+    let h = &r.header;
+    let (start, len) = if r.scope() == Scope::File && h.old_len != 0 {
+        (1, 1)
+    } else {
+        (h.old_start, h.old_len)
+    };
+    out.push_str(&format!("@@ -{start},{len} @@ rule={rule}\n"));
     for d in canonical_directives(r) {
         out.push_str(&d);
         out.push('\n');
@@ -376,5 +485,35 @@ mod tests {
         parse_patch(&once).expect("canonical output must re-parse");
         let twice = canon(&once);
         assert_eq!(once, twice, "canonical form must be a fixed point");
+    }
+
+    #[test]
+    fn singleton_rename_name_still_renumbers() {
+        // WI-7b: a lone `rename_*` rule (one hunk) is not a shared
+        // intent — it renumbers to positional `r1` as before.
+        let text =
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=rename_foo\n# lang=rust\n- fn foo\n+ fn bar\n";
+        let got = canon(text);
+        assert!(got.contains("rule=r1\n"), "got:\n{got}");
+        assert!(!got.contains("rename_foo"), "got:\n{got}");
+        assert_eq!(got, canon(&got));
+    }
+
+    #[test]
+    fn shared_rename_name_preserved_and_definition_first() {
+        // WI-7b canonical decision: a `rename_*` rule in ≥2 hunks keeps
+        // its name, and files order definition-first (z.rs def after
+        // a.rs use in input → z.rs leads), fixed-point stable.
+        let text = "diff --git src/a.rs\n@@ -1,1 @@ rule=rename_Old_to_New\n# allow=many\n- Old(E0)\n+ New(E0)\ndiff --git src/z.rs\n@@ -1,1 @@ rule=rename_Old_to_New\n# lang=rust\n- struct Old\n+ struct New\n";
+        let got = canon(text);
+        assert_eq!(
+            got.matches("rule=rename_Old_to_New").count(),
+            2,
+            "got:\n{got}"
+        );
+        let z = got.find("diff --git src/z.rs").expect("z.rs present");
+        let a = got.find("diff --git src/a.rs").expect("a.rs present");
+        assert!(z < a, "definition z.rs must lead:\n{got}");
+        assert_eq!(got, canon(&got), "shared-rule form must be fixed-point");
     }
 }

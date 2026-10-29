@@ -152,15 +152,18 @@ pub(crate) fn try_call_literal_section(
             vars.push(format!("E{i}"));
         }
         let head = vars.join(", ");
+        // WI-7b: uppercase same callee rides backticks (literal), else it
+        // infers as an `expr` hole and over-matches.
+        let lit = super::shape::literal_callee(&class.cal);
         let (minus_call, plus_call) = if head.is_empty() {
             (
-                format!("{}({})", class.cal, class.old_lit),
-                format!("{}({})", class.cal, class.new_lit),
+                format!("{}({})", lit, class.old_lit),
+                format!("{}({})", lit, class.new_lit),
             )
         } else {
             (
-                format!("{}({head}, {})", class.cal, class.old_lit),
-                format!("{}({head}, {})", class.cal, class.new_lit),
+                format!("{}({head}, {})", lit, class.old_lit),
+                format!("{}({head}, {})", lit, class.new_lit),
             )
         };
         let tail = format!("- {minus_call}\n+ {plus_call}\n");
@@ -377,12 +380,14 @@ pub(crate) fn try_call_literal_sweep(
         vars.push(v);
     }
     let head = vars.join(", ");
+    // WI-7b: uppercase same callee rides backticks (literal).
+    let lit = super::shape::literal_callee(&cal);
     let (minus_call, plus_call) = if head.is_empty() {
-        (format!("{cal}({old_lit})"), format!("{cal}({new_lit})"))
+        (format!("{lit}({old_lit})"), format!("{lit}({new_lit})"))
     } else {
         (
-            format!("{cal}({head}, {old_lit})"),
-            format!("{cal}({head}, {new_lit})"),
+            format!("{lit}({head}, {old_lit})"),
+            format!("{lit}({head}, {new_lit})"),
         )
     };
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));

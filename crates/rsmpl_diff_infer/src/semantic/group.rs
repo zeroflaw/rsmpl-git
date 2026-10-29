@@ -1,12 +1,13 @@
-//! WI-7a patch-level grouping (provenance-only).
+//! WI-7a patch-level grouping (provenance) + WI-7b shared-rule re-emission.
 //!
 //! After per-section inference, hunks sharing one single-ident delta
 //! (`Old` → `New`) across files are one cross-file intent (a rename
 //! whose definition sits in one file and whose uses sit in others).
-//! This pass labels them with a shared [`HunkProvenance::group`]
-//! (`rename_Old_to_New`) and changes no patch bytes: rules stay
-//! canonical `r1…`, order untouched, so cycles stay fixed-point and
-//! the T375 guard is unaffected. Shared-`rule=` re-emission is WI-7b.
+//! `assign_groups` labels them with [`HunkProvenance::group`]
+//! (`rename_Old_to_New`). `apply_shared_rules` (WI-7b) re-emits those
+//! hunks under the shared `rule=<group>` name, definition-first, with a
+//! per-group T375 re-basis (a group that cannot pay its own rename cost
+//! falls back to positional `rN`, keeping the `group` label).
 //!
 //! Groupable detectors are exactly those emitting one single-delta
 //! pair per hunk: `item_rename`, `fn_slot_sweep`, `sig_evolution`,
@@ -101,6 +102,204 @@ pub(crate) fn assign_groups(prov: &mut [HunkProvenance], patch: &str) {
             prov[i].group = label.clone();
         }
     }
+}
+
+/// WI-7b: re-emit grouped hunks under their shared `rule=<group>` name.
+///
+/// Call after [`assign_groups`]. For each non-empty `group`, every hunk
+/// whose `prov` entry carries it is renamed from its positional `rN` to
+/// the shared name (header `rule=` token only), and `prov[].rule` follows.
+/// Per-group T375 re-basis: `extra = Σ(len(group) − len(old))` must be
+/// strictly smaller than `Σ(saved_bytes)` for the group, else that group
+/// reverts to its `rN` names (patch + prov) while keeping the `group`
+/// label (WI-7a fallback state). File sections are then reordered
+/// definition-first per group (minimal stable displacement; ungrouped
+/// sections never move). Fail-open: any inconsistency leaves `out`
+/// byte-identical.
+pub(crate) fn apply_shared_rules(prov: &mut [HunkProvenance], out: &mut String) {
+    if !prov.iter().any(|p| !p.group.is_empty()) {
+        return;
+    }
+    // Group label → member indices (prov order).
+    let mut order: Vec<String> = Vec::new();
+    let mut members: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, p) in prov.iter().enumerate() {
+        if p.group.is_empty() {
+            continue;
+        }
+        members.entry(p.group.clone()).or_default().push(i);
+        if !order.contains(&p.group) {
+            order.push(p.group.clone());
+        }
+    }
+    order.sort();
+    // Per-group rename (with T375 fallback), tracking old names for the
+    // revert path.
+    let mut renamed: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    for label in &order {
+        let Some(ixs) = members.get(label) else {
+            continue;
+        };
+        let mut olds: Vec<(usize, String)> = Vec::new();
+        let mut extra: usize = 0;
+        let mut saved: usize = 0;
+        for &i in ixs {
+            let old = prov[i].rule.clone();
+            olds.push((i, old.clone()));
+            extra += label.len().saturating_sub(old.len());
+            saved += prov[i].saved_bytes;
+        }
+        if extra >= saved {
+            continue;
+        }
+        for (i, old) in &olds {
+            rename_rule_in_patch(out, old, label);
+            prov[*i].rule = label.clone();
+        }
+        renamed.insert(label.clone(), olds);
+    }
+    if renamed.is_empty() {
+        return;
+    }
+    reorder_sections_definition_first(prov, out, &renamed);
+}
+
+/// Replace the `rule=old` token with `rule=new` on RSmPL header lines
+/// (`@@ … @@ rule=old`) only. Body lines never start with `@@`, so a
+/// body occurrence of the token text cannot misfire.
+fn rename_rule_in_patch(patch: &mut String, old: &str, new: &str) {
+    let needle = format!("rule={old}");
+    let replacement = format!("rule={new}");
+    let mut lines: Vec<String> = Vec::new();
+    let mut changed = false;
+    for line in patch.lines() {
+        if line.starts_with("@@") && line.contains(needle.as_str()) {
+            lines.push(line.replacen(needle.as_str(), replacement.as_str(), 1));
+            changed = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if changed {
+        *patch = lines.join("\n");
+        patch.push('\n');
+    }
+}
+
+/// Definition-first section reorder for renamed groups.
+///
+/// For each renamed group (sorted label order), the subsequence of file
+/// sections containing that group is stable-sorted definitions-first
+/// (`item_rename` / `fn_slot_sweep` / `sig_evolution` detectors, else
+/// path) and spliced back into the same slots, so ungrouped sections
+/// never move. `prov` is re-sorted to match the new section order
+/// (stable within a file). Conflicting multi-group constraints resolve
+/// by label order (documented limitation).
+fn reorder_sections_definition_first(
+    prov: &mut [HunkProvenance],
+    out: &mut String,
+    renamed: &HashMap<String, Vec<(usize, String)>>,
+) {
+    let mut sections = split_sections(out);
+    if sections.len() < 2 {
+        return;
+    }
+    let mut labels: Vec<&String> = renamed.keys().collect();
+    labels.sort();
+    for label in labels {
+        let Some(ixs) = renamed.get(label) else {
+            continue;
+        };
+        let paths: Vec<String> = sections.iter().map(|s| section_path(s)).collect();
+        let mut file_section: HashMap<&str, usize> = HashMap::new();
+        for (idx, p) in paths.iter().enumerate() {
+            file_section.entry(p.as_str()).or_insert(idx);
+        }
+        // Sections containing this group (dedup, keep first occurrence).
+        let mut involved: Vec<usize> = Vec::new();
+        for (i, _) in ixs {
+            let file = prov[*i].file.as_str();
+            if let Some(&s) = file_section.get(file) {
+                if !involved.contains(&s) {
+                    involved.push(s);
+                }
+            }
+        }
+        if involved.len() < 2 {
+            continue;
+        }
+        let mut sorted = involved.clone();
+        sorted.sort_by_key(|&s| {
+            let def = ixs.iter().any(|(i, _)| {
+                prov[*i].file == paths[s] && is_definition_detector(prov[*i].detector)
+            });
+            ((!def) as u8, paths[s].clone())
+        });
+        if sorted == involved {
+            continue;
+        }
+        // Splice the sorted sections back into the same slots.
+        let snapshot = sections.clone();
+        for (slot, sec) in involved.iter().zip(sorted.iter()) {
+            sections[*slot] = snapshot[*sec].clone();
+        }
+    }
+    // Rebuild path list from the (possibly) reordered sections.
+    let new_paths: Vec<String> = sections.iter().map(|s| section_path(s)).collect();
+    // Stable prov reorder to match section order.
+    let mut pos: HashMap<&str, usize> = HashMap::new();
+    for (idx, p) in new_paths.iter().enumerate() {
+        pos.entry(p.as_str()).or_insert(idx);
+    }
+    let mut idxs: Vec<usize> = (0..prov.len()).collect();
+    idxs.sort_by_key(|&i| {
+        (
+            pos.get(prov[i].file.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+            i,
+        )
+    });
+    let reordered_prov: Vec<HunkProvenance> = idxs.iter().map(|&i| prov[i].clone()).collect();
+    prov.clone_from_slice(&reordered_prov);
+    *out = sections.join("");
+}
+
+/// Split a patch into `diff --git …` sections (each retaining its
+/// trailing newline content).
+fn split_sections(patch: &str) -> Vec<String> {
+    let mut sections = Vec::new();
+    let mut current = String::new();
+    for line in patch.lines() {
+        if line.starts_with("diff --git ") && !current.is_empty() {
+            sections.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.is_empty() {
+        sections.push(current);
+    }
+    sections
+}
+
+/// Best-effort b-side path of one `diff --git …` section.
+fn section_path(section: &str) -> String {
+    let header = section.lines().next().unwrap_or("");
+    let rest = header.strip_prefix("diff --git ").unwrap_or(header);
+    if let Some(parts) = rsmpl_patch::split_git_paths(rest) {
+        if parts.len() == 2 {
+            let new = parts[1].strip_prefix("b/").unwrap_or(&parts[1]);
+            return new.to_string();
+        }
+    }
+    rest.to_string()
+}
+
+/// True for definition detectors (item/fn-header renames); all other
+/// groupable detectors are use sites.
+fn is_definition_detector(detector: &str) -> bool {
+    matches!(detector, "item_rename" | "fn_slot_sweep" | "sig_evolution")
 }
 
 /// One hunk's ident delta, or `None` when the pair carries none (same
@@ -200,9 +399,12 @@ enum CallShape {
 }
 
 /// Callee (last path segment, turbofish ignored) or method ident of
-/// one call-pattern side.
+/// one call-pattern side. Backticked concrete callees (WI-7b uppercase
+/// constructors, SPEC 15.4) strip to their literal ident first — `syn`
+/// cannot parse backticks.
 fn call_expr(line: &str) -> Option<CallShape> {
-    let mut text = line.trim();
+    let stripped = line.trim().replace('`', "");
+    let mut text = stripped.trim();
     text = text.strip_suffix(';').map(str::trim_end).unwrap_or(text);
     text = text.strip_suffix(',').map(str::trim_end).unwrap_or(text);
     let expr: syn::Expr = syn::parse_str(text).ok()?;
@@ -235,7 +437,8 @@ fn macro_delta(minus: &str, plus: &str) -> Option<(String, String)> {
 }
 
 fn macro_head(line: &str) -> Option<String> {
-    let text = line.trim();
+    let text = line.trim().replace('`', "");
+    let text = text.trim();
     let (head, _) = text.split_once('!')?;
     let last = head.split("::").last()?.trim();
     if last.is_empty() || !last.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
@@ -255,7 +458,8 @@ fn use_delta(minus: &str, plus: &str) -> Option<(String, String)> {
 }
 
 fn use_last(line: &str) -> Option<String> {
-    let text = line.trim().strip_prefix("use ")?.trim();
+    let text = line.trim().replace('`', "");
+    let text = text.trim().strip_prefix("use ")?.trim();
     let text = text.strip_suffix(';').map(str::trim).unwrap_or(text);
     Some(plain_ident(text.split("::").last()?.trim()))
 }
@@ -291,6 +495,82 @@ mod tests {
         assert_eq!(prov[1].group, "rename_Old_to_New", "prov: {prov:?}");
         let text = out.unwrap();
         rsmpl_patch::parse_patch(&text).expect("grouped patch must parse");
+    }
+
+    #[test]
+    fn shared_rule_reemitted_for_group() {
+        // WI-7b: grouped hunks share `rule=rename_Old_to_New` in bytes,
+        // and prov rules follow (parseable, fixed-point input).
+        let sections = sections_pair("Old", "New");
+        let (out, prov) = run(&sections);
+        let text = out.expect("both singles must compress");
+        assert_eq!(
+            text.matches("rule=rename_Old_to_New").count(),
+            2,
+            "text:\n{text}"
+        );
+        assert!(!text.contains("rule=r1"), "text:\n{text}");
+        assert!(
+            prov.iter().all(|p| p.rule == "rename_Old_to_New"),
+            "prov: {prov:?}"
+        );
+        rsmpl_patch::parse_patch(&text).expect("shared-rule patch must parse");
+    }
+
+    #[test]
+    fn t375_fallback_keeps_positional_names() {
+        // WI-7b re-basis: a very long ident makes the shared name cost
+        // more than the win, so hunks keep `rN` while `group` stays.
+        let long_old = "O".repeat(60);
+        let long_new = "N".repeat(60);
+        let mk = |name: &str, old: &str, new: &str| {
+            format!(
+                "diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n@@ -1,3 +1,3 @@\n-struct {old} {{\n+struct {new} {{\n     x: i32,\n }}\n"
+            )
+        };
+        let sections = vec![
+            mk("a.rs", &long_old, &long_new),
+            mk("b.rs", &long_old, &long_new),
+        ];
+        let (out, prov) = run(&sections);
+        let text = out.expect("singles must compress");
+        assert!(prov.iter().all(|p| !p.group.is_empty()), "prov: {prov:?}");
+        assert!(
+            !text.contains("rule=rename_"),
+            "long shared name must fall back to rN:\n{text}"
+        );
+        assert!(text.contains("rule=r1"), "text:\n{text}");
+        rsmpl_patch::parse_patch(&text).expect("fallback patch must parse");
+    }
+
+    #[test]
+    fn definition_first_reorders_sections() {
+        // WI-7b: use-file `a.rs` (call sweep) + def-file `z.rs` (item
+        // rename), one shared delta — the definition section leads and
+        // ungrouped sections never move.
+        let uses = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n-    Old(argument1);\n-    Old(argument2);\n+    New(argument1);\n+    New(argument2);\n"
+            .to_string();
+        let def = "diff --git a/z.rs b/z.rs\n--- a/z.rs\n+++ b/z.rs\n@@ -1,3 +1,3 @@\n-struct Old {\n+struct New {\n     x: i32,\n }\n"
+            .to_string();
+        let plain = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-old_line\n+new_line\n"
+            .to_string();
+        // Input order buries the definition last among grouped files.
+        // (Emission collapses headers to single-path `diff --git a.rs`.)
+        let (out, prov) = run(&[uses, plain, def]);
+        let text = out.expect("grouped sections must compress");
+        let a = text.find("diff --git a.rs").expect("a.rs present");
+        let z = text.find("diff --git z.rs").expect("z.rs present");
+        assert!(z < a, "definition z.rs must lead use a.rs:\n{text}");
+        assert_eq!(
+            text.matches("rule=rename_Old_to_New").count(),
+            2,
+            "both grouped hunks share the rule:\n{text}"
+        );
+        assert!(
+            prov.iter().any(|p| p.rule == "rename_Old_to_New"),
+            "prov: {prov:?}"
+        );
+        rsmpl_patch::parse_patch(&text).expect("reordered patch must parse");
     }
 
     #[test]
@@ -342,6 +622,17 @@ mod tests {
             call_delta("E.old_m(E0)", "new_fn(E, E0)"),
             Some(("old_m".to_string(), "new_fn".to_string()))
         );
+    }
+
+    #[test]
+    fn backticked_callees_strip_to_literal_delta() {
+        // WI-7b: uppercase constructor sweeps emit backticked callees
+        // (SPEC 15.4); grouping strips to the literal ident.
+        assert_eq!(
+            call_delta("`Old`(E0)", "`New`(E0)"),
+            Some(("Old".to_string(), "New".to_string()))
+        );
+        assert_eq!(call_delta("`Old`(E0)", "`Old`(E1)"), None);
     }
 
     #[test]

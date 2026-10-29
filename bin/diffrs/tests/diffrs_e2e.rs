@@ -475,8 +475,8 @@ fn call_sweep_compresses_to_one_hunk() {
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(3), "got: {v}");
 }
 
-// T341: sweeps in two files share one patch (rule names stay unique,
-// `# expr` reuse across hunks parses) and round-trip together.
+// T341/WI-7b: same-delta sweeps in two files raise one shared rule and
+// round-trip together.
 #[test]
 fn call_sweep_two_files_round_trip() {
     let dir = init_repo();
@@ -505,8 +505,8 @@ fn call_sweep_two_files_round_trip() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("rule=r1\n"), "got: {patch}");
-    assert!(patch.contains("rule=r2\n"), "got: {patch}");
+    let shared = "rule=rename_old_function_to_new_function";
+    assert_eq!(patch.matches(shared).count(), 2, "one shared rule: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);

@@ -187,9 +187,10 @@ pub fn infer_semantic_with_provenance(
         }
     }
     if compressed_any {
-        // WI-7a: provenance-only grouping (no byte change, so the
-        // fixed-point and canonical `r1…` contract hold).
+        // WI-7a provenance grouping + WI-7b shared-rule re-emission
+        // (definition-first, per-group T375 re-basis with `rN` fallback).
         group::assign_groups(prov, &out);
+        group::apply_shared_rules(prov, &mut out);
         Some(out)
     } else {
         None
@@ -1238,6 +1239,8 @@ mod tests {
 
     #[test]
     fn rule_names_unique_across_files() {
+        // WI-7b: same-delta hunks across files share one descriptive
+        // rule (one cross-file intent); divergent deltas keep unique rN.
         let a = section(
             "a.rs",
             "@@ -1,4 +1,4 @@\n-    old_function(argument1);\n-    old_function(argument2);\n-    old_function(argument3);\n+    new_function(argument1);\n+    new_function(argument2);\n+    new_function(argument3);\n",
@@ -1252,8 +1255,32 @@ mod tests {
         ]);
         let out = infer_semantic(&[a, b]).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=r1\n"), "got: {out}");
-        assert!(out.contains("rule=r2\n"), "got: {out}");
+        assert!(
+            out.contains("rule=rename_old_function_to_new_function\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("rule=r2\n"), "got: {out}");
+    }
+
+    #[test]
+    fn uppercase_constructor_sweep_backticks_and_applies() {
+        // WI-7b: concrete uppercase callees (tuple-struct/enum-variant
+        // constructors) emit backticked (SPEC 15.4) — bare `Old(E0)` would
+        // infer `Old` as an `expr` hole and fail loud (plus-side `New`
+        // unbound) at apply.
+        let a = section(
+            "a.rs",
+            "@@ -1,4 +1,4 @@\n-    Old(argument1);\n-    Old(argument2);\n-    Old(argument3);\n+    New(argument1);\n+    New(argument2);\n+    New(argument3);\n",
+        );
+        let pre = pre_map(&[(
+            "a.rs",
+            "fn m() {\n    Old(argument1);\n    Old(argument2);\n    Old(argument3);\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(&[a], &pre).unwrap();
+        assert!(out.contains("- `Old`(E0)\n"), "got: {out}");
+        assert!(out.contains("+ `New`(E0)\n"), "got: {out}");
+        validated_live(&out, &pre);
     }
 
     #[test]
