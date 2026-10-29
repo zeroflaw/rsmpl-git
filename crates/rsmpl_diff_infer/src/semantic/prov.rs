@@ -75,6 +75,13 @@ pub(crate) fn covered_sites(
     changed: &[usize],
 ) -> Vec<usize> {
     match ranges.iter().find(|(r, _, _)| r == rule) {
+        // File-scope sweep dummy (`@@ -1,1 @@` + `# sweep`, SPEC 17.3):
+        // the emitted range covers the whole file by construction, so
+        // every changed line is a site. A ranged hunk always spans its
+        // own sites, so an exact (1,1) range over changed lines outside
+        // [1,1] can only be a dummy — never a ranged under-report
+        // (WI-2 sweep triage: verbatim r7 cited zero sites).
+        Some((_, 1, 1)) => changed.to_vec(),
         Some((_, start, len)) if *start >= 1 => {
             let end = start.saturating_add(len.saturating_sub(1));
             changed
@@ -221,4 +228,26 @@ pub(crate) fn push_section_prov(
         changed,
         file_old,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweep_dummy_covers_whole_changed() {
+        // WI-2 sweep triage: a file-scope sweep dummy (`@@ -1,1 @@`)
+        // cites every changed line (verbatim r7 cited none).
+        let ranges = vec![("r7".to_string(), 1, 1)];
+        assert_eq!(
+            covered_sites(&ranges, "r7", &[297, 342, 396]),
+            vec![297, 342, 396]
+        );
+        // Ranged hunks still intersect.
+        let ranges = vec![("r1".to_string(), 290, 10)];
+        assert_eq!(covered_sites(&ranges, "r1", &[297, 342, 396]), vec![297]);
+        // Missing headers fall back to whole changed.
+        let ranges: Vec<(String, usize, usize)> = vec![];
+        assert_eq!(covered_sites(&ranges, "r9", &[5]), vec![5]);
+    }
 }

@@ -298,20 +298,26 @@ fn is_call_trailer(rest: &str) -> bool {
     t.is_empty() || t == ";"
 }
 
-/// Byte index of the last `.` outside `"..."` string literals
-/// (escape-aware), or `None` when every dot sits inside a string.
+/// Byte indexes of method-split candidate dots: every `.` outside `"..."`
+/// string literals (escape-aware) at paren-depth 0, in source order.
 ///
-/// The method-call split must not see dots inside string args: `sub`
-/// is pattern text, so `Receiver.contains("a.b")` would otherwise split
-/// at the string's dot and misroute to a dotted-callee `Call` that never
-/// matches (T419 — same router-precision family as T144's
-/// `balanced_close` string-skipping). `'` char literals are deliberately
-/// NOT skipped: a `'` may open a lifetime (`&'a`), so treating it as a
-/// char literal would swallow real dots — `R.m('.')` keeps today's
-/// fail-safe no-match, mirroring T144's `foo(')')` limitation note.
-fn rfind_dot_outside_strings(sub: &str) -> Option<usize> {
+/// The method-call split must not see dots inside string args (T419:
+/// `Receiver.contains("a.b")` split at the string's dot and misrouted to
+/// a dotted-callee `Call` that never matches) NOR dots inside the
+/// argument list itself: `order.push(rel.clone())` split at `rel.clone`'s
+/// dot, failed the call-trailer gate, and fell through to a dotted-callee
+/// `Call` that never matches (WI-2 sweep triage: verbatim r7 over
+/// `changed.push((rel.clone(), ...))` raised a correct patch the engine
+/// could not apply). Callers try candidates innermost-last; the first dot
+/// whose following `(` balances with a valid trailer wins.
+/// `'` char literals are deliberately NOT skipped: a `'` may open a
+/// lifetime (`&'a`), so treating it as a char literal would swallow real
+/// dots — `R.m('.')` keeps today's fail-safe no-match, mirroring T144's
+/// `foo(')')` limitation note.
+fn method_split_dots(sub: &str) -> Vec<usize> {
     let bytes = sub.as_bytes();
-    let mut last = None;
+    let mut dots = Vec::new();
+    let mut depth = 0usize;
     let mut i = 0;
     let mut in_str = false;
     let mut escaped = false;
@@ -327,12 +333,16 @@ fn rfind_dot_outside_strings(sub: &str) -> Option<usize> {
             }
         } else if b == b'"' {
             in_str = true;
-        } else if b == b'.' {
-            last = Some(i);
+        } else if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth = depth.saturating_sub(1);
+        } else if b == b'.' && depth == 0 {
+            dots.push(i);
         }
         i += 1;
     }
-    last
+    dots
 }
 
 /// Byte index of a macro-invocation `!`, or `None` when the text holds no
@@ -492,9 +502,12 @@ pub fn classify_call_pattern(
     // containing whitespace is not a method call; fall through. The call
     // must consume the whole pattern (T144 router-precision fix): trailing
     // text such as `+ 1` falls through to the general matcher. The dot
-    // split skips `"..."` string literals (T419): a dot inside a string
-    // arg (`Receiver.contains("a.b")`) never splits receiver from method.
-    if let Some(dot) = rfind_dot_outside_strings(&sub) {
+    // split skips `"..."` string literals (T419) and dots nested inside
+    // the arg list (depth 0 only): a dot inside a string arg
+    // (`Receiver.contains("a.b")`) or inside an argument
+    // (`order.push(rel.clone())`) never splits receiver from method —
+    // candidates are tried innermost-last, first valid trailer wins.
+    for dot in method_split_dots(&sub).into_iter().rev() {
         if let Some(paren_rel) = sub[dot..].find('(') {
             let open = dot + paren_rel;
             if let Some(close) = balanced_close(&sub, open) {
@@ -955,5 +968,51 @@ mod tests {
         // Whole-slot metas still route method/call (engine resolves them).
         let (kind, _, _) = classify_call_pattern("Receiver.m(E)", &table()).unwrap();
         assert!(matches!(kind, ExprPatternKind::MethodCall { .. }));
+    }
+
+    #[test]
+    fn method_dot_inside_args_splits_at_receiver() {
+        // WI-2 sweep triage: `order.push(rel.clone())` split at the
+        // arg's dot (`rel.clone`) and misrouted to a dotted-callee
+        // `Call` that never matches — the raised verbatim r7 hunk over
+        // `changed.push((rel.clone(), ...))` was correct but unappliable.
+        // Dots nested in the arg list never split receiver from method.
+        for text in [
+            "order.push(rel.clone())",
+            "changed.push((rel.clone(), added, removed))",
+            "order.push(rel.clone());",
+            "E.push(F.clone())",
+        ] {
+            let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
+            assert!(
+                matches!(kind, ExprPatternKind::MethodCall { .. }),
+                "{text:?} got: {kind:?}"
+            );
+        }
+        let (kind, _, _) =
+            classify_call_pattern("changed.push((rel.clone(), added, removed))", &table()).unwrap();
+        let ExprPatternKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } = kind
+        else {
+            panic!("tuple-arg method misrouted");
+        };
+        assert_eq!(receiver, "changed");
+        assert_eq!(method, "push");
+        assert_eq!(args.len(), 1);
+        // Outer-call shapes around dotted args keep routing.
+        let (kind, _, _) = classify_call_pattern("foo(a.b(c))", &table()).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::Call { .. }),
+            "nested-call arg misrouted: {kind:?}"
+        );
+        // A parenthesized receiver still splits after its group.
+        let (kind, _, _) = classify_call_pattern("(a.b).c(d)", &table()).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::MethodCall { .. }),
+            "grouped receiver misrouted: {kind:?}"
+        );
     }
 }
