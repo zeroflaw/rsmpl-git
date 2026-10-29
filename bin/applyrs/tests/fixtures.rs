@@ -104,25 +104,30 @@ fn fixtures_apply_through_binary() {
 
 #[test]
 fn no_rust_file_exceeds_2000_lines() {
+    // T469: enforce over tracked files (`git ls-files`) so untracked
+    // scratch never trips the gate and fixtures/benches stay covered.
     let root = workspace_root();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "-z", "*.rs"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git ls-files failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let mut files: Vec<&str> = stdout.split('\0').filter(|s| !s.is_empty()).collect();
+    assert!(!files.is_empty(), "git ls-files returned no .rs files");
+    files.sort_unstable();
     let mut over = Vec::new();
-    let mut stack = vec![root.join("bin"), root.join("crates")];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).unwrap() {
-            let entry = entry.unwrap();
-            let p = entry.path();
-            if entry.file_type().unwrap().is_dir() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name == "target" {
-                    continue;
-                }
-                stack.push(p);
-            } else if p.extension().map(|e| e == "rs").unwrap_or(false) {
-                let lines = fs::read_to_string(&p).unwrap().lines().count();
-                if lines > 2000 {
-                    over.push(format!("{} ({lines} lines)", p.display()));
-                }
-            }
+    for rel in files {
+        let p = root.join(rel);
+        let lines = fs::read_to_string(&p).unwrap().lines().count();
+        if lines > 2000 {
+            over.push(format!("{rel} ({lines} lines)"));
         }
     }
     assert!(over.is_empty(), "files over 2000 LOC: {over:#?}");
