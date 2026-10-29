@@ -72,6 +72,8 @@ counts in the JSON report).
 | 22-turbofish (6 sites, turbofish sweep with T hole) | 801 B / 16 ln | 105 B / 5 ln | 87% |
 | 23-macro-rename (5 sites, macro-rename sweep) | 671 B / 14 ln | 125 B / 6 ln | 81% |
 | 24-sig-evolution (3 sites, rename + return evolution, `impl` framing) | 383 B / 12 ln | 155 B / 10 ln | 60% |
+| 25-let-type-add (3 sites, let type-addition with P0/E0 holes, `impl` framing) | 458 B / 12 ln | 90 B / 5 ln | 80% |
+| 26-type-sweep (3 sites, type sweep with T hole, `impl` framing) | 513 B / 12 ln | 77 B / 5 ln | 85% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -7 +7 @@ impl Alpha {
+-        let alpha_value: Vec<u32> = compute_first(input);
++        let alpha_value: Box<[u32]> = compute_first(input);
+@@ -14 +14 @@ impl Beta {
+-        let beta_value: Vec<String> = compute_second(other);
++        let beta_value: Box<[String]> = compute_second(other);
+@@ -21 +21 @@ impl Gamma {
+-        let gamma_value: Vec<u8> = compute_third(extra);
++        let gamma_value: Box<[u8]> = compute_third(extra);

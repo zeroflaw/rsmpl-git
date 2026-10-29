@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -7,15 @@ rule=r1
+# allow=many
+- Vec<T0>
++ Box<[T0]>
