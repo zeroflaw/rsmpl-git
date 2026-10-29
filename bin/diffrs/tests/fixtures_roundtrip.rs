@@ -219,11 +219,25 @@ fn native_to_semantic_to_native_round_trip() {
         // (full-tree fixture convention; identical sets are a no-op).
         sync_expected_deletions(work.path(), &dir.join("repo"), &dir.join("expected"));
 
-        // 2. Native input: zero-context git diff, `index` lines stripped
-        // (diffrs never emits them, T374 — strip for a fair byte count).
+        // T477: stage the post-state so new-file additions ride the index:
+        // unstaged `git diff` never shows untracked files (and plain
+        // `git stash` leaves them behind for --check/--output), while
+        // `git diff --cached` + `diffrs --staged` cover them.
+        git_ok(work.path(), &["add", "-A"], &name);
+
+        // 2. Native input: zero-context staged git diff, `index` lines
+        // stripped (diffrs never emits them, T374 — strip for a fair byte
+        // count). `--cached` (T477) so new-file additions are included —
+        // unstaged `git diff` never shows untracked files.
         let native = git(
             work.path(),
-            &["diff", "--unified=0", "--no-color", "--no-ext-diff"],
+            &[
+                "diff",
+                "--cached",
+                "--unified=0",
+                "--no-color",
+                "--no-ext-diff",
+            ],
         );
         assert!(native.status.success(), "[{name}] git diff failed");
         let native_input: String = String::from_utf8_lossy(&native.stdout)
@@ -233,10 +247,14 @@ fn native_to_semantic_to_native_round_trip() {
             .collect();
         assert!(!native_input.is_empty(), "[{name}] fixture has no change");
 
-        // 3. Semantic compression.
+        // 3. Semantic compression, through the index (T477): after the
+        // `add -A` the worktree==index, so `--staged` sees exactly the
+        // post-state including new files (T392: staged scope skips the
+        // untracked path, but nothing is untracked anymore).
         let out = Command::new(binary())
             .arg("--repo")
             .arg(work.path())
+            .arg("--staged")
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(0), "[{name}] diffrs failed");
@@ -244,6 +262,8 @@ fn native_to_semantic_to_native_round_trip() {
         assert!(!semantic.trim().is_empty(), "[{name}] diffrs is empty");
 
         // 4. Back to the pre-change tree: semantic must check clean.
+        // `stash` restores HEAD including staged new files (T477), so
+        // pastes lower against the true pre-state (missing-file path).
         git_ok(work.path(), &["stash", "-q"], &name);
         let checked = Command::new(sibling_applyrs())
             .arg("--patch")
@@ -1445,6 +1465,44 @@ fn native_to_semantic_to_native_round_trip() {
             assert!(
                 semantic.len() < native_input.len(),
                 "composition must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "38-new-file-move" {
+            // T477: verbatim cross-file move to a NEW file (the shape the
+            // old unstaged harness could not host: untracked `new.rs`
+            // never appeared in `git diff`, and plain `stash` left it
+            // behind for --check/--output). Staged collection covers it:
+            // one `move_parse_pair` cut + one `paste_parse_pair` new-file
+            // paste, every minus/plus line consumed, no ordinary leftover.
+            assert!(
+                semantic.contains("rule=move_parse_pair"),
+                "new-file move cut must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_parse_pair"),
+                "new-file move paste must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("rule=delete_items"),
+                "verbatim move needs no delete sweep, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("\n@@ ").count(),
+                2,
+                "no ordinary leftover hunks, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn parse_pair"),
+                "moved minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn parse_pair"),
+                "moved plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "new-file move must beat native bytes ({} vs {})",
                 semantic.len(),
                 native_input.len()
             );
