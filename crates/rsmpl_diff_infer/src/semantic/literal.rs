@@ -65,6 +65,7 @@ pub(crate) fn try_call_literal_section(
     _path: &str,
     used_rules: &mut Vec<String>,
     file_old: Option<&str>,
+    fired: &mut Vec<(String, &'static str)>,
 ) -> Option<String> {
     let (prelude, hunks) = split_section_hunks(section);
     if hunks.is_empty() {
@@ -144,6 +145,8 @@ pub(crate) fn try_call_literal_section(
             continue;
         }
         let rule = unique_rule(used_rules, &format!("calls_{}_literal", class.cal));
+        // WI-2: exact detector record (commit filters by presence).
+        fired.push((rule.clone(), "call_literal_section"));
         let mut vars = Vec::new();
         for i in 0..class.prefix {
             vars.push(format!("E{i}"));

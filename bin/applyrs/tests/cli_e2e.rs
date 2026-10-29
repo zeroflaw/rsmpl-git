@@ -830,7 +830,18 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
     assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
     assert_eq!(
         v["files"],
-        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2, "post_sha": "accccd852858f3efbe60dc4eaaf8acc679499125a742f5a24259309e3ebaf1ea"}]),
+        "got: {v}"
+    );
+    // WI-2: bindings + verified envelope.
+    assert_eq!(
+        v["rules"][0]["bindings"],
+        serde_json::json!({"E": "1"}),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["verified"],
+        serde_json::json!({"reparse": true, "untouched_outside_spans": true}),
         "got: {v}"
     );
     // T54: `files_changed` removed (duplicated `files[].path`); the single
@@ -951,7 +962,7 @@ fn json_default_report_carries_files_and_untruncated() {
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
     assert_eq!(
         v["files"],
-        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2, "post_sha": "accccd852858f3efbe60dc4eaaf8acc679499125a742f5a24259309e3ebaf1ea"}]),
         "got: {v}"
     );
     // T54: `files_changed` removed (duplicated `files[].path`); the single
@@ -1258,7 +1269,7 @@ fn json_lowering_is_zero_context_stats_stay_exact() {
     // ... but stats stay exact (computed from full contents, not hunks).
     assert_eq!(
         v["files"],
-        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2}]),
+        serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2, "post_sha": "accccd852858f3efbe60dc4eaaf8acc679499125a742f5a24259309e3ebaf1ea"}]),
         "got: {v}"
     );
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
@@ -1817,5 +1828,173 @@ fn ordinary_all_minus_hunk_truncates_but_keeps_file() {
     assert!(
         read(dir.path(), "src/old.rs").is_empty(),
         "file must be empty"
+    );
+}
+
+#[test]
+fn json_report_shows_extra_span_of_over_broad_patch() {
+    // WI-2: an over-broad authored sweep matches 3 sites, not the 2 the
+    // author aimed at — the JSON report exposes every span plus the
+    // first-match bindings, so the agent rejects before apply.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\nfn b() {\n    foo(3);\n}\n",
+    );
+    let sweep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run_stdin(
+        dir.path(),
+        sweep,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["rules"][0]["spans"],
+        serde_json::json!([[2, 2], [3, 3], [6, 6]]),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["bindings"],
+        serde_json::json!({"E": "1"}),
+        "got: {v}"
+    );
+    // --check applied nothing: the agent decides from the report alone.
+    assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+fn cargo_crate(dir: &std::path::Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"wicrate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "pub fn plus_one(x: i32) -> i32 {\n    x + 1\n}\n",
+    );
+}
+
+#[test]
+fn verify_build_passes_on_compiling_crate() {
+    // WI-2 `--verify build`: a clean post-apply tree checks quietly.
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=rename_plus\n# lang=rust\n- pub fn plus_one(...) {\n+ pub fn plus_two(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--verify", "build"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path(), "src/lib.rs").contains("fn plus_two"));
+}
+
+#[test]
+fn verify_build_fails_on_broken_crate() {
+    // WI-2 `--verify build`: the patch lands via `git apply`, then the
+    // failed `cargo check` exits 2 with the first error line (never silent).
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@\n-    x + 1\n+    undefined_fn(x)\n";
+    let out = run_stdin(dir.path(), patch, &["--verify", "build"]);
+    assert!(!out.status.success(), "expected failure");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("--verify build"),
+        "first diagnostic on stderr, got: {stderr}"
+    );
+    // The lowering applied; verification failure does not roll it back.
+    assert!(read(dir.path(), "src/lib.rs").contains("undefined_fn"));
+}
+
+#[test]
+fn verify_build_skipped_under_check() {
+    // WI-2: `--verify` never runs under `--check` — a broken tree still
+    // reports clean when only the lowering is verified.
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@\n-    x + 1\n+    undefined_fn(x)\n";
+    let out = run_stdin(dir.path(), patch, &["--check", "--verify", "build"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path(), "src/lib.rs").contains("x + 1"));
+}
+
+#[test]
+fn verify_unknown_mode_is_usage_error() {
+    // WI-2: only `build` exists; anything else fails fast in both modes.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
+    let out = run_stdin(
+        dir.path(),
+        two_call_patch(),
+        &["--format", "json", "--check", "--verify", "nope"],
+    );
+    assert!(!out.status.success(), "expected failure");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_IO_CONFLICT"),
+        "got: {v}"
+    );
+}
+
+#[test]
+fn json_bindings_truncate_and_omit_empty() {
+    // WI-2 token bounds: values cut at 80 chars (ASCII here, so chars
+    // == bytes), and shapes that bind nothing omit both keys.
+    let dir = init_repo();
+    let long_arg = "a".repeat(100);
+    write(
+        dir.path(),
+        "src/lib.rs",
+        &format!("fn foo() {{}}\nfn m() {{\n    foo({long_arg});\n    foo({long_arg});\n}}\n"),
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let bound = v["rules"][0]["bindings"]["E"].as_str().unwrap();
+    assert_eq!(bound.chars().count(), 80, "got: {v}");
+    assert_eq!(
+        v["rules"][0]["bindings_truncated"],
+        serde_json::json!(0),
+        "got: {v}"
+    );
+
+    // A definition-only rename binds nothing: both keys are absent.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert!(v["rules"][0].get("bindings").is_none(), "got: {v}");
+    assert!(
+        v["rules"][0].get("bindings_truncated").is_none(),
+        "got: {v}"
     );
 }

@@ -56,6 +56,7 @@ pub(crate) fn try_verbatim_sweep(
     path: &str,
     used_rules: &mut Vec<String>,
     file_old: Option<&str>,
+    fired: &mut Vec<(String, &'static str)>,
 ) -> Option<String> {
     let (prelude, hunks) = split_verbatim_hunks(section);
     // T411: per-hunk changed old-side lines for the line-aware opaque veto.
@@ -298,12 +299,17 @@ pub(crate) fn try_verbatim_sweep(
                 }
             }
         }
+        // WI-2: record the group rule with its detector; failures below
+        // truncate `used_rules`, and commit filters by presence in the
+        // final text, so stale records never surface.
+        let rule = unique_rule(used_rules, "verbatim");
+        fired.push((rule.clone(), "verbatim"));
         passing.push(VerbatimGroup {
             minus_trim: m.clone(),
             plus_trim: p.clone(),
             minus: emit_minus,
             plus: emit_plus,
-            rule: unique_rule(used_rules, "verbatim"),
+            rule,
             sites,
         });
     }
@@ -361,7 +367,7 @@ pub(crate) fn try_verbatim_sweep(
             .filter(|(j, _, _)| *j == i)
             .map(|(_, _, p)| p.as_str())
             .collect();
-        if let Some(body) = compress_balanced_pair_body(
+        if let Some((body, detector)) = compress_balanced_pair_body(
             &ms,
             &ps,
             path,
@@ -370,6 +376,9 @@ pub(crate) fn try_verbatim_sweep(
             hunk.len(),
             used_rules,
         ) {
+            if let Some(rule) = used_rules.last().cloned() {
+                fired.push((rule, detector));
+            }
             leftover_bodies.push((i, body));
         }
     }

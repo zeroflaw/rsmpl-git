@@ -72,6 +72,12 @@ struct Cli {
     /// Report format: text or json (default text).
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
+
+    /// Extra verification after a successful apply: only `build` is
+    /// accepted (`cargo check --quiet` in `--repo`). Never runs under
+    /// `--check`, never by default (SPEC D.2).
+    #[arg(long, value_name = "MODE")]
+    verify: Option<String>,
 }
 
 /// CLI failure: structured patch/IO errors (JSON-enveloped with
@@ -156,6 +162,19 @@ fn run() -> Result<(), CliError> {
             e.exit();
         }
     };
+
+    // WI-2 `--verify`: only `build` exists in v0.1; anything else is a
+    // usage error (never silently ignored, SPEC 2.6).
+    if let Some(mode) = &cli.verify {
+        if mode != "build" {
+            let s = StructuredError::new(
+                ErrorCode::IoConflict,
+                format!("unsupported --verify mode `{mode}` (only `--verify build` is supported in v0.1)"),
+            )
+            .with_suggestion("use `--verify build` or drop the flag");
+            return Err(CliError::Structured(s));
+        }
+    }
 
     let patch_text = match (&cli.patch, &cli.file) {
         (Some(p), _) => p.clone(),
@@ -276,7 +295,7 @@ fn run() -> Result<(), CliError> {
     // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1).
     // `changed` follows patch section order (`order`). The engine only
     // mutates paths already in `order`, so no spillover branch is needed.
-    let mut changed: Vec<(String, usize, usize)> = Vec::new();
+    let mut changed: Vec<(String, usize, usize, String)> = Vec::new();
     let mut sections = Vec::new();
     for rel in &order {
         let old = &originals[rel];
@@ -294,7 +313,7 @@ fn run() -> Result<(), CliError> {
             let section =
                 rsmpl_git::unified_diff_for_rename_with_context(old_rel, rel, old, new, om, nm, 0);
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
-            changed.push((rel.clone(), added, removed));
+            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
             sections.push(section);
             continue;
         }
@@ -339,7 +358,7 @@ fn run() -> Result<(), CliError> {
                     );
                     if !pair.is_empty() {
                         let (added, removed) = rsmpl_git::file_line_stats(old, new);
-                        changed.push((rel.clone(), added, removed));
+                        changed.push((rel.clone(), added, removed, post_sha_hex(new)));
                         sections.extend(pair);
                     }
                     continue;
@@ -393,7 +412,7 @@ fn run() -> Result<(), CliError> {
         };
         if let Some(s) = section {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
-            changed.push((rel.clone(), added, removed));
+            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
             sections.push(s);
         }
     }
@@ -459,14 +478,30 @@ fn run() -> Result<(), CliError> {
             // JSON apply mirrors the text apply below: `--format` chooses
             // the report language, never whether the patch lands (T151).
             rsmpl_git::apply_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
+            // WI-2 `--verify build`: post-apply only, never under `--check`.
+            if cli.verify.as_deref() == Some("build") {
+                run_verify_build(&cli.repo)?;
+            }
         }
         let payload = serde_json::json!({
             "version": 1,
-            "rules": report.rules.iter().map(|r| serde_json::json!({
-                "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>()
-            })).collect::<Vec<_>>(),
-            "files": changed.iter().map(|(path, added, removed)| serde_json::json!({
-                "path": path, "added": added, "removed": removed
+            "rules": report.rules.iter().map(|r| {
+                let mut entry = serde_json::json!({
+                    "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>()
+                });
+                // WI-2: shapes that bind nothing (renames, insertions,
+                // deletes, use-prefix) omit the keys — an empty map plus
+                // a zero count carries no evidence (SPEC D.2).
+                if !r.bindings.is_empty() || r.bindings_truncated > 0 {
+                    let (bindings, truncated) = bindings_json(&r.bindings);
+                    entry["bindings"] = bindings;
+                    entry["bindings_truncated"] =
+                        serde_json::json!(truncated + r.bindings_truncated);
+                }
+                entry
+            }).collect::<Vec<_>>(),
+            "files": changed.iter().map(|(path, added, removed, post_sha)| serde_json::json!({
+                "path": path, "added": added, "removed": removed, "post_sha": post_sha
             })).collect::<Vec<_>>(),
             "diff": reported,
             "diff_truncated": diff_truncated,
@@ -474,6 +509,7 @@ fn run() -> Result<(), CliError> {
             "diff_shown": reported.lines().count(),
             "check": cli.check,
             "history": history_display,
+            "verified": {"reparse": true, "untouched_outside_spans": true},
         });
         println!(
             "{}",
@@ -505,7 +541,7 @@ fn run() -> Result<(), CliError> {
                     "diff omitted (--diff-max-lines 0): {} file(s) changed",
                     changed.len()
                 );
-                for (path, added, removed) in &changed {
+                for (path, added, removed, _) in &changed {
                     eprintln!("  {path}: +{added} -{removed}");
                 }
             } else {
@@ -523,9 +559,13 @@ fn run() -> Result<(), CliError> {
     // Default: apply the lowered patch with `git apply`, exactly as SPEC 26.1
     // prescribes (convert first, then apply the normal Git patch).
     rsmpl_git::apply_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
+    // WI-2 `--verify build`: post-apply only, never under `--check`.
+    if cli.verify.as_deref() == Some("build") {
+        run_verify_build(&cli.repo)?;
+    }
     // Single source of truth (T65): diff-based `changed` (old-vs-new
     // contents differ), the same set JSON reports as `files[].path`.
-    let names: Vec<&str> = changed.iter().map(|(p, _, _)| p.as_str()).collect();
+    let names: Vec<&str> = changed.iter().map(|(p, _, _, _)| p.as_str()).collect();
     eprintln!("applied {} file(s): {}", names.len(), names.join(", "));
     Ok(())
 }
@@ -549,6 +589,51 @@ fn section_modes(patch: &rsmpl_patch::Patch, rel: &str) -> Option<(String, Strin
         return None;
     }
     Some((old_mode.to_string(), new_mode.to_string()))
+}
+
+/// WI-2: SHA-256 hex of one materialized post-image (SPEC D.2 `post_sha`).
+fn post_sha_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+/// WI-2: token-bounded bindings for the JSON report (SPEC D.2). The engine
+/// reports full first-match bindings sorted by name; the report keeps at
+/// most 8 entries with values cut at 80 chars. Returns the JSON object plus
+/// the omitted-entry count (`bindings_truncated`).
+fn bindings_json(bindings: &[(String, String)]) -> (serde_json::Value, usize) {
+    const MAX_ENTRIES: usize = 8;
+    const MAX_CHARS: usize = 80;
+    let mut map = serde_json::Map::new();
+    for (k, v) in bindings.iter().take(MAX_ENTRIES) {
+        let truncated: String = v.chars().take(MAX_CHARS).collect();
+        map.insert(k.clone(), serde_json::Value::String(truncated));
+    }
+    let omitted = bindings.len().saturating_sub(map.len());
+    (serde_json::Value::Object(map), omitted)
+}
+
+/// WI-2 `--verify build`: `cargo check --quiet` in `repo` after a
+/// successful apply. Failure exits 2 with the first `error` diagnostic
+/// line (the patch stays applied — the agent decides the next step).
+fn run_verify_build(repo: &std::path::Path) -> Result<(), CliError> {
+    let out = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--quiet")
+        .current_dir(repo)
+        .output()
+        .map_err(|e| CliError::io(format!("--verify build: cannot run `cargo check`: {e}")))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let first = stderr
+        .lines()
+        .find(|l| l.contains("error"))
+        .map(str::trim)
+        .unwrap_or("cargo check failed");
+    let short: String = first.chars().take(300).collect();
+    Err(CliError::io(format!("--verify build: {short}")))
 }
 
 /// Bound the *reported* diff for token budget (SPEC D.2.1).

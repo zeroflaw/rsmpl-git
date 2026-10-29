@@ -153,6 +153,10 @@ fn run() -> Result<(), CliError> {
             "version": 1,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
+            "hunks": patch.hunks.iter().map(|h| serde_json::json!({
+                "rule": h.rule, "file": h.file, "detector": h.detector,
+                "sites": h.sites, "totality": h.totality, "saved_bytes": h.saved_bytes
+            })).collect::<Vec<_>>(),
         });
         println!(
             "{}",

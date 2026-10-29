@@ -217,6 +217,8 @@ pub fn apply_with_captures(
                     file: path.clone(),
                     matches: 1,
                     spans: vec![(sl, el)],
+                    bindings: Vec::new(),
+                    bindings_truncated: 0,
                 },
             ));
         }
@@ -253,8 +255,9 @@ pub fn apply_with_captures(
                         rh.header.old_start + rh.header.old_len
                     );
                     let edits_before = edits.len();
-                    let found = apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
-                        .map_err(|e| e.with_file(path))?;
+                    let (found, first_bindings) =
+                        apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
+                            .map_err(|e| e.with_file(path))?;
                     // T249: record capture-paste edits for blank-join. A
                     // paste hunk pushes exactly one insertion at
                     // `edits_before`, so its index is stable.
@@ -317,6 +320,10 @@ pub fn apply_with_captures(
                         &range_desc,
                         ZeroMatchHint { wide, preview },
                     )?;
+                    // WI-2: first-match bindings, sorted by name for a
+                    // deterministic report (the CLI bounds tokens, SPEC D.2).
+                    let mut bindings: Vec<(String, String)> = first_bindings.into_iter().collect();
+                    bindings.sort_by(|a, b| a.0.cmp(&b.0));
                     rule_order.push((
                         (sec_idx, hunk_idx),
                         RuleReport {
@@ -324,6 +331,8 @@ pub fn apply_with_captures(
                             file: path.clone(),
                             matches: found,
                             spans,
+                            bindings,
+                            bindings_truncated: 0,
                         },
                     ));
                 }
@@ -384,7 +393,13 @@ pub fn apply_with_captures(
         // other overlap pair still fails in `check_overlaps` below.
         let edits = coalesce_deletes(edits);
         check_overlaps(&edits, path)?;
-        let updated = apply_edits(&state.original, edits).map_err(|e| e.with_file(path))?;
+        // WI-2 untouched-outside-spans evidence (SPEC 24.6): re-derive the
+        // file from the original plus only the recorded edits and
+        // byte-compare. A mismatch is an engine bug — fail loud, never a
+        // warning. (Materialization is a pure function of original+edits,
+        // so this pins "nothing outside the reported spans changed".)
+        let updated = apply_edits(&state.original, edits.clone()).map_err(|e| e.with_file(path))?;
+        check_untouched(&state.original, &updated, &edits, path)?;
         if state.parsed.is_some() {
             syn::parse_str::<syn::File>(&updated).map_err(|e| {
                 StructuredError::new(
@@ -413,11 +428,14 @@ fn apply_rsmpl_hunk(
     compiled: &rsmpl_pattern::CompiledPattern,
     captures: &CaptureStore,
     edits: &mut Vec<TextEdit>,
-) -> Result<usize, StructuredError> {
+) -> Result<(usize, HashMap<String, String>), StructuredError> {
     let rule = rh.rule_name();
     let parsed = state.parsed.as_ref().expect(
         "T137: RSmPL hunk on a file with no parsed AST (ordinary-only files carry no semantic hunks)",
     );
+    // WI-2: shapes without metavariables report empty bindings; call /
+    // general-expr / macro shapes thread their first-match map through.
+    let empty = || HashMap::new();
     match &compiled.kind {
         PatternKind::Fn { .. } => matcher_fn::apply_fn_hunk(
             parsed,
@@ -426,7 +444,8 @@ fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
-        ),
+        )
+        .map(|n| (n, empty())),
         PatternKind::Expr {
             minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
             ..
@@ -453,7 +472,8 @@ fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
-        ),
+        )
+        .map(|n| (n, empty())),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,
@@ -461,7 +481,8 @@ fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
-        ),
+        )
+        .map(|n| (n, empty())),
         PatternKind::General { .. } => matcher_general::apply_general_hunk(
             parsed,
             &state.original,
@@ -477,7 +498,8 @@ fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
-        ),
+        )
+        .map(|n| (n, empty())),
         PatternKind::Insertion { use_name, .. } => match use_name {
             Some(name) => {
                 paste_capture(
@@ -489,10 +511,11 @@ fn apply_rsmpl_hunk(
                     path,
                     edits,
                 )?;
-                Ok(1)
+                Ok((1, empty()))
             }
             None => {
                 matcher_fn::apply_insertion(&state.original, &state.index, rh, compiled, edits)
+                    .map(|n| (n, empty()))
             }
         },
         PatternKind::ImplContext { .. } => matcher_impl::apply_impl_context_hunk(
@@ -502,7 +525,8 @@ fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
-        ),
+        )
+        .map(|n| (n, empty())),
         PatternKind::Macro { .. } => matcher_macro::apply_macro_hunk(
             parsed,
             &state.original,
@@ -552,6 +576,7 @@ fn probe_whole_file(
         &mut probe_edits,
     )
     .ok()
+    .map(|(n, _)| n)
 }
 
 /// T67 candidate preview: nearest same-kind item header (or nearest
@@ -969,6 +994,26 @@ fn check_overlaps(edits: &[TextEdit], path: &str) -> Result<(), StructuredError>
     Ok(())
 }
 
+/// WI-2 untouched-outside-spans evidence (SPEC 24.6): re-derive
+/// `updated` from `original` plus only `edits` and byte-compare.
+/// A mismatch is an engine bug — fail loud, never a warning.
+pub(crate) fn check_untouched(
+    original: &str,
+    updated: &str,
+    edits: &[TextEdit],
+    path: &str,
+) -> Result<(), StructuredError> {
+    let rederived = apply_edits(original, edits.to_vec()).map_err(|e| e.with_file(path))?;
+    if rederived != updated {
+        return Err(StructuredError::new(
+            ErrorCode::ParseConflict,
+            "rewritten file failed untouched verification (engine bug: materialization is not a pure function of original plus reported spans)",
+        )
+        .with_file(path));
+    }
+    Ok(())
+}
+
 fn range_err(rule: &str, file: &str, line: u32) -> StructuredError {
     StructuredError::new(
         ErrorCode::RangeConflict,
@@ -1345,6 +1390,25 @@ mod tests {
         assert_eq!(out.matches("fn one() {}").count(), 1);
         assert_eq!(out.matches("fn two() {}").count(), 1);
         assert_eq!(out.matches("fn three() {}").count(), 1);
+    }
+
+    #[test]
+    fn untouched_check_fires_on_tampered_post_image() {
+        // WI-2: `check_untouched` re-derives the file from the original
+        // plus only the recorded edits — a post-image with bytes no edit
+        // produced fails loud (engine-bug signal, never a warning).
+        let original = "fn a() {}\n";
+        let edits = vec![crate::edits::TextEdit::new(0, 0, "use x;\n".to_string())];
+        let good = "use x;\nfn a() {}\n";
+        super::check_untouched(original, good, &edits, "src/lib.rs").expect("clean");
+        let tampered = "use x;\nfn a() {}\n// sneaked in\n";
+        let err = super::check_untouched(original, tampered, &edits, "src/lib.rs").unwrap_err();
+        let rendered = err.render();
+        assert!(rendered.contains("RSMPL_PARSE_CONFLICT"), "got: {rendered}");
+        assert!(
+            rendered.contains("untouched verification"),
+            "got: {rendered}"
+        );
     }
 
     #[test]

@@ -34,3 +34,4 @@ quote = "1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 similar = "2"
 serde_json = "1"
+sha2 = "0.10"

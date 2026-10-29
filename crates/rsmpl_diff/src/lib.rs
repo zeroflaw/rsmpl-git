@@ -12,7 +12,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::process::Command;
 
-pub use rsmpl_diff_infer::{InferError, InferredPatch};
+pub use rsmpl_diff_infer::{HunkProvenance, InferError, InferredPatch};
 pub use rsmpl_diff_source::{CollectedDiff, GitSource, SourceError};
 
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +79,9 @@ pub struct CompressedPatch {
     /// Untracked directory entries skipped during collection
     /// (warned on stderr, never embedded).
     pub skipped_untracked_dirs: Vec<String>,
+    /// WI-2 per-hunk provenance (one entry per emitted semantic hunk;
+    /// empty when fully ordinary), backing `diffrs --format json`.
+    pub hunks: Vec<HunkProvenance>,
 }
 
 pub fn compress(
@@ -103,5 +106,6 @@ pub fn compress(
         stripped_gitlink: inferred.stripped_gitlink,
         skipped_history: collected.skipped_history,
         skipped_untracked_dirs: collected.skipped_untracked_dirs,
+        hunks: inferred.hunks,
     })
 }

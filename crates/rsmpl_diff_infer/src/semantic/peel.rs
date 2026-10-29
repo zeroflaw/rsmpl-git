@@ -99,6 +99,7 @@ pub(crate) fn try_call_peel_section(
     _path: &str,
     used_rules: &mut Vec<String>,
     file_old: Option<&str>,
+    fired: &mut Vec<(String, &'static str)>,
 ) -> Option<String> {
     let (prelude, hunks) = split_section_hunks(section);
     if hunks.is_empty() {
@@ -182,6 +183,8 @@ pub(crate) fn try_call_peel_section(
             used_rules,
             &format!("calls_{}_to_{}_peel", class.old_cal, class.new_cal),
         );
+        // WI-2: exact detector record (commit filters by presence).
+        fired.push((rule.clone(), "call_peel_section"));
         let mut tails = Vec::new();
         for i in 0..class.tails {
             let v = format!("T{i}");

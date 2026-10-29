@@ -45,6 +45,10 @@ pub struct RuleReport {
     /// no match); signature-evolution replacements emit one span per edit
     /// (delete+insert pairs). Insertions report `[anchor, anchor]`.
     pub spans: Vec<(u32, u32)>,
+    /// First-match metavariable bindings (SPEC D.2).
+    pub bindings: Vec<(String, String)>,
+    /// Omitted-entry count when the CLI truncates the report (SPEC D.2).
+    pub bindings_truncated: usize,
 }
 
 /// Result of applying a patch to an in-memory file tree.

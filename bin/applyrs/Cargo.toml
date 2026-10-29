@@ -15,6 +15,7 @@ rsmpl_pattern = { workspace = true }
 rsmpl_engine = { workspace = true }
 rsmpl_git = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

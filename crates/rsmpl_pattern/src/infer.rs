@@ -106,8 +106,11 @@ fn blank_strings(line: &str) -> String {
                 out.push('"');
             }
         } else if b == b'"' {
+            // Emit exactly one quote for the opener; the closer emits
+            // one more, so `"..."` blanks to `""` (WI-2: two pushes here
+            // left `"""`, an unbalanced string that broke `balanced_args`
+            // and silently un-inferred every metavar sharing the call).
             in_str = true;
-            out.push('"');
             out.push('"');
         } else {
             out.push(b as char);
@@ -1229,6 +1232,18 @@ mod tests {
     fn backtick_literal_never_infers() {
         let t = infer("foo(`E`)", "bar(`E`)");
         assert_eq!(t.kind_of("E"), None);
+    }
+
+    #[test]
+    fn metavar_beside_string_literal_still_infers() {
+        // WI-2: `blank_strings` once blanked `"old"` to `"""` (three
+        // quotes), leaving an unbalanced string that broke
+        // `balanced_args` — every metavar sharing the call silently
+        // stayed a concrete literal and the hunk never matched.
+        let t = infer("- run(E0, \"old\")", "+ run(E0, \"new\")");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+        let t = infer("- run(\"old\", E0)", "+ run(\"new\", E0)");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
     }
 
     #[test]

@@ -3992,6 +3992,18 @@ Reject if:
 
 Ordinary hunks must satisfy normal Git patch application rules.
 
+### 24.6 Trust validation (report evidence)
+
+Accept only if:
+
+1. every rewritten file re-parses as Rust (validation item 3,
+   Section 24.2; ordinary-only files are trivially true — they carry
+   no Rust parse);
+2. every rewritten file re-derives byte-identical from the original
+   plus only the recorded byte edits (untouched-outside-spans); a
+   mismatch fails with `RSMPL_PARSE_CONFLICT` (`rewritten file failed
+   untouched verification ...`), never a warning.
+
 ---
 
 ## 25. Conflict and Error Model
@@ -5550,14 +5562,15 @@ prints one JSON object to stdout:
 ```json
 {
   "version": 1,
-  "rules": [{"rule": "rename_foo", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]]}],
-  "files": [{"path": "src/lib.rs", "added": 1, "removed": 1}],
+  "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "bindings": {"E": "old_call"}, "bindings_truncated": 0}],
+  "files": [{"path": "src/lib.rs", "added": 1, "removed": 1, "post_sha": "<sha-256 hex of the post-image>"}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
   "diff_lines": 12,
   "diff_shown": 12,
   "check": true,
-  "history": "<repo>/.history/{id}.rsmpl"
+  "history": "<repo>/.history/{id}.rsmpl",
+  "verified": {"reparse": true, "untouched_outside_spans": true}
 }
 ```
 
@@ -5570,9 +5583,18 @@ prints one JSON object to stdout:
   (`spans.len() == matches`); signature-evolution replacements emit one
   span per edit (delete+insert pairs). Insertions report the anchor as
   `[L, L]`; an empty match set (optional no-match) reports `[]`.
-- `files` lists per-file `{path, added, removed}` line stats computed from
+  Each entry also carries `bindings` when the shape binds something:
+  the first accepted match's metavariable → matched source text map,
+  sorted by name. Renames, insertions, deletions, and use-prefix renames
+  bind nothing and omit both keys (an empty map plus a zero count
+  carries no evidence). Values truncate at 80 chars and entries at 8
+  (sorted order); `bindings_truncated` counts the omitted entries, so
+  the report stays token-bounded while an over-broad hunk still shows
+  its extra span before apply.
+- `files` lists per-file `{path, added, removed, post_sha}` computed from
   the full old/new contents, so counts stay exact even when `diff` is
-  truncated or omitted (see D.2.1). Empty when no changes. `files[].path`
+  truncated or omitted (see D.2.1). `post_sha` is the SHA-256 hex of the
+  materialized post-image. Empty when no changes. `files[].path`
   is the single source of changed paths (a former `files_changed` key that
   duplicated these paths was removed as pure report overhead). The text
   apply `applied N file(s): …` stderr summary reports this same
@@ -5588,8 +5610,20 @@ prints one JSON object to stdout:
   as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
 - `version` is the JSON report schema version (`1` = this contract:
   boolean `check`, no `files_changed`). Agents pin parsing on it; any
-  future breaking JSON change bumps it (additive keys like `history`
-  do not bump).
+  future breaking JSON change bumps it (additive keys like `history`,
+  `bindings`, `post_sha`, `verified` do not bump).
+- `verified` is the trust envelope: `{reparse: true,
+  untouched_outside_spans: true}` on every successful run. The engine
+  re-derives each touched file from the original plus only the recorded
+  edits and byte-compares (Section 24.6); a mismatch is an engine bug
+  and fails the run loud, never a warning. Failures never reach this
+  payload (exit 2 with the `{error}` envelope below).
+- `--verify build` (opt-in, never under `--check`, never by default)
+  additionally runs `cargo check --quiet` in `--repo` after a
+  successful apply. Failure exits 2 with the first `error` diagnostic
+  line in the reason; the patch stays applied (the agent decides the
+  next step). Any other `--verify` value is an `RSMPL_IO_CONFLICT`
+  usage error.
 - `history` is the `<repo>/.history/{id}.rsmpl` archive path of the raw
   patch input (`null` when archiving warned), reported alongside the
   stderr `history:` line (Section D.1).
@@ -5925,6 +5959,24 @@ whole-section attempt and go straight per-hunk — whole-section
 emissions rebuild only the `diff --git` header and would silently
 drop the mode flip, while the per-hunk prelude keeps the mode lines
 (T401).
+
+`diffrs --format json` (default `text`) prints `{"version": 1, "files":
+[{path}], "patch": "<RSmPL-Git patch>", "hunks": [...]}` to stdout
+(text mode prints only the patch). Each `hunks` entry carries per-hunk
+provenance for one emitted semantic hunk (empty when fully ordinary):
+`{rule, file, detector, sites, totality, saved_bytes}`. `detector` is
+the firing detector family (`item_rename`, `fn_slot_sweep`,
+`method_to_fn`, `method_to_method`, `method_same_literal`,
+`ref_strip`, `use_prefix`, `call_sweep`, `call_arg_add`,
+`call_literal`, `call_peel`, `call_peel_section`,
+`call_literal_section`, `verbatim`, `delete`, `move`). `sites` are
+the section's changed old-side lines covered by the hunk's emitted
+range (anchor-only move pastes report `[]`). `totality` is
+`"pre-image"` when the section had pre-image text to count against,
+else `"section-visible"`. `saved_bytes` is the hunk's byte win vs the
+ordinary text it replaced (multi-hunk section rewrites split the
+section total equally so entries sum to the section delta). `version`
+stays `1` (additive, per D.2 rules).
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain

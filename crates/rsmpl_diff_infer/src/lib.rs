@@ -31,14 +31,20 @@ pub enum InferError {
     Unparseable(String),
 }
 
+pub use semantic::HunkProvenance;
+
 /// The v1 inference result: the RSmPL patch plus which binary paths
 /// were stripped (the binary reports them as `warning:` lines).
+/// WI-2: `hunks` carries one [`HunkProvenance`] entry per emitted
+/// semantic hunk (empty when fully ordinary), backing
+/// `diffrs --format json` (SPEC D.2).
 pub struct InferredPatch {
     pub rsmpl: String,
     pub stripped_binary: Vec<String>,
     /// Submodule (gitlink, mode 160000) paths stripped during
     /// inference (T386; warned like binaries).
     pub stripped_gitlink: Vec<String>,
+    pub hunks: Vec<HunkProvenance>,
 }
 
 pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
@@ -69,6 +75,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             rsmpl: String::new(),
             stripped_binary: Vec::new(),
             stripped_gitlink: Vec::new(),
+            hunks: Vec::new(),
         });
     }
     let (kept, stripped, stripped_gitlink) = strip_unpatchable_sections(raw);
@@ -83,6 +90,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             rsmpl: String::new(),
             stripped_binary: stripped,
             stripped_gitlink,
+            hunks: Vec::new(),
         });
     }
     // Native hunks often carry git's `@@ -a,b +c,d @@ <funcname>`
@@ -108,13 +116,19 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
     rsmpl_patch::parse_patch(&passthrough)
         .map_err(|e| InferError::Unparseable(describe_parse_error(&e)))?;
     // Semantic compression first; any validation failure falls back
-    // to the (already validated) ordinary passthrough.
-    let candidate = semantic::infer_semantic_with_pre_images(&kept, pre).unwrap_or_default();
+    // to the (already validated) ordinary passthrough. WI-2: provenance
+    // is collected alongside; the fallback paths report no hunks (their
+    // reservations were released by truncation, so no rule exists to
+    // prove). A candidate that fails validation likewise reports none.
+    let mut prov = Vec::new();
+    let candidate =
+        semantic::infer_semantic_with_provenance(&kept, pre, &mut prov).unwrap_or_default();
     if candidate.is_empty() {
         return Ok(InferredPatch {
             rsmpl: passthrough,
             stripped_binary: stripped,
             stripped_gitlink,
+            hunks: Vec::new(),
         });
     }
     match rsmpl_patch::parse_patch(&candidate) {
@@ -122,11 +136,13 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             rsmpl: candidate,
             stripped_binary: stripped,
             stripped_gitlink,
+            hunks: prov,
         }),
         Err(_) => Ok(InferredPatch {
             rsmpl: passthrough,
             stripped_binary: stripped,
             stripped_gitlink,
+            hunks: Vec::new(),
         }),
     }
 }
@@ -408,8 +424,9 @@ fn collapse_git_headers(section: &str) -> String {
 /// strip / use-prefix / call sweeps in order. Detectors return full
 /// sections; only the hunk body is kept, and only when it beats the
 /// ordinary hunk (the T375 per-hunk guard, prelude shared either way).
-/// `None` on any failure — reserved rule names are released, so later
-/// hunks keep tight names.
+/// WI-2: the winning detector family travels with the body for per-hunk
+/// provenance. `None` on any failure — reserved rule names are released,
+/// so later hunks keep tight names.
 pub(crate) fn compress_balanced_pair_body(
     minuses: &[&str],
     pluses: &[&str],
@@ -418,57 +435,59 @@ pub(crate) fn compress_balanced_pair_body(
     changed: &[usize],
     hunk_len: usize,
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Option<(String, &'static str)> {
     if minuses.len() != pluses.len() || minuses.is_empty() {
         return None;
     }
     let checkpoint = used_rules.len();
-    let full = if minuses.len() == 1 {
+    let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
+            .map(|f| (f, "item_rename"))
     } else if let Some(slot) =
         semantic::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(slot)
+        Some((slot, "fn_slot_sweep"))
     } else if let Some(m2f) =
         semantic::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(m2f)
+        Some((m2f, "method_to_fn"))
     } else if let Some(m2m) =
         semantic::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(m2m)
+        Some((m2m, "method_to_method"))
     } else if let Some(same) = semantic::try_method_same_literal_sweep(
         minuses, pluses, path, file_old, changed, used_rules,
     ) {
-        Some(same)
+        Some((same, "method_same_literal"))
     } else if let Some(strip) =
         semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(strip)
+        Some((strip, "ref_strip"))
     } else if let Some(uses) =
         semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(uses)
+        Some((uses, "use_prefix"))
     } else if let Some(call) =
         semantic::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(call)
+        Some((call, "call_sweep"))
     } else if let Some(call) =
         semantic::try_call_arg_add_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(call)
+        Some((call, "call_arg_add"))
     } else if let Some(call) =
         semantic::try_call_literal_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
-        Some(call)
+        Some((call, "call_literal"))
     } else {
         semantic::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules)
+            .map(|f| (f, "call_peel"))
     };
     match full {
-        Some(f) => {
+        Some((f, detector)) => {
             let body = f.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() < hunk_len {
-                Some(body.to_string())
+                Some((body.to_string(), detector))
             } else {
                 used_rules.truncate(checkpoint);
                 None

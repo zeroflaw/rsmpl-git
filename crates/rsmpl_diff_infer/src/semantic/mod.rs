@@ -20,7 +20,13 @@ mod literal;
 mod methods;
 mod moves;
 mod peel;
+pub(crate) mod prefix;
+pub(crate) mod prov;
+mod slot;
 mod verbatim;
+
+pub(crate) use prefix::try_use_prefix_sweep;
+pub(crate) use slot::try_fn_slot_sweep;
 
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
 pub(crate) use literal::{try_call_literal_section, try_call_literal_sweep};
@@ -127,22 +133,42 @@ pub fn infer_semantic_with_pre_images(
     sections: &[String],
     pre: &std::collections::HashMap<String, String>,
 ) -> Option<String> {
+    let mut prov = Vec::new();
+    infer_semantic_with_provenance(sections, pre, &mut prov)
+}
+
+/// WI-2 provenance-collecting inference: as above, plus one
+/// [`HunkProvenance`] entry per emitted semantic hunk in `prov`.
+pub fn infer_semantic_with_provenance(
+    sections: &[String],
+    pre: &std::collections::HashMap<String, String>,
+    prov: &mut Vec<HunkProvenance>,
+) -> Option<String> {
     let mut out = String::new();
     let mut used_rules: Vec<String> = Vec::new();
     let mut compressed_any = false;
     // T430 whole-patch move pre-pass (cross-section bind/use pairs);
     // per-section detectors run on the rewritten sections below.
     let sections_owned: Vec<String>;
+    let move_rules_before = used_rules.len();
     let sections: &[String] = match moves::try_move_sweep(sections, pre, &mut used_rules) {
         Some(rewritten) => {
             compressed_any = true;
+            push_move_prov(
+                prov,
+                sections,
+                &rewritten,
+                pre,
+                move_rules_before,
+                &used_rules,
+            );
             sections_owned = rewritten;
             &sections_owned
         }
         None => sections,
     };
     for section in sections {
-        match compress_section(section, &mut used_rules, pre) {
+        match compress_section(section, &mut used_rules, pre, prov) {
             Some(semantic) => {
                 compressed_any = true;
                 out.push_str(&semantic);
@@ -161,6 +187,7 @@ fn compress_section(
     section: &str,
     used_rules: &mut Vec<String>,
     pre: &std::collections::HashMap<String, String>,
+    prov: &mut Vec<HunkProvenance>,
 ) -> Option<String> {
     let header = section.lines().next()?;
     // T385: CRLF content stays ordinary passthrough — detectors strip
@@ -181,7 +208,19 @@ fn compress_section(
     }
     // T464: whole-file item-deletion sweep (minus-only deletion sections
     // compress to one many-delete hunk + ordinary leftovers).
+    let delete_before = used_rules.len();
     if let Some(deleted) = deletes::try_delete_sweep(section, used_rules) {
+        push_section_prov(
+            prov,
+            &deleted,
+            section.len(),
+            &path,
+            "delete",
+            &crate::totality::changed_old_lines(section),
+            pre.get(&path).map(String::as_str),
+            delete_before,
+            used_rules,
+        );
         return Some(deleted);
     }
     // T403 totality input: the pre-image text for this path, if the
@@ -244,11 +283,22 @@ fn compress_section(
             try_item_rename(minuses[0], pluses[0], &path, file_old, &changed, used_rules)
         {
             if rename.len() < section.len() {
+                push_section_prov(
+                    prov,
+                    &rename,
+                    section.len(),
+                    &path,
+                    "item_rename",
+                    &changed,
+                    file_old,
+                    checkpoint,
+                    used_rules,
+                );
                 return Some(rename);
             }
             used_rules.truncate(checkpoint);
         }
-        return compress_section_per_hunk(section, &path, file_old, used_rules);
+        return compress_section_per_hunk(section, &path, file_old, used_rules, prov);
     }
     if !whole {
         // T441: hetero-arg peel cross-hunk sweep before verbatim
@@ -264,31 +314,62 @@ fn compress_section(
         // would discard it); downstream stages group the single-pair
         // bodies at n=1 (skipped) and pass them through unchanged.
         let mut rewritten: Option<String> = None;
-        if let Some(peeled) = try_call_peel_section(section, &path, used_rules, file_old) {
+        // WI-2: the section drivers below record every rule they reserve
+        // into `fired` with its exact detector (verbatim also records its
+        // leftover-retry rules with theirs); commit keeps only the rules
+        // present in the final composed text.
+        let mut fired: Vec<(String, &'static str)> = Vec::new();
+        if let Some(peeled) =
+            try_call_peel_section(section, &path, used_rules, file_old, &mut fired)
+        {
             rewritten = Some(peeled);
         }
         let after_peel = rewritten.as_deref().unwrap_or(section);
-        if let Some(lit) = try_call_literal_section(after_peel, &path, used_rules, file_old) {
+        if let Some(lit) =
+            try_call_literal_section(after_peel, &path, used_rules, file_old, &mut fired)
+        {
             rewritten = Some(lit);
         }
         let after_lit = rewritten.as_deref().unwrap_or(section);
-        if let Some(verbatim) = verbatim::try_verbatim_sweep(after_lit, &path, used_rules, file_old)
+        if let Some(verbatim) =
+            verbatim::try_verbatim_sweep(after_lit, &path, used_rules, file_old, &mut fired)
         {
+            commit_prov(
+                prov,
+                &verbatim,
+                section.len(),
+                &path,
+                &fired,
+                &changed,
+                file_old,
+            );
             return Some(verbatim);
         }
         if let Some(r) = rewritten {
+            commit_prov(prov, &r, section.len(), &path, &fired, &changed, file_old);
             return Some(r);
         }
         // T403: non-whole sections try the cross-hunk verbatim sweep
         // before per-hunk (whole-section detectors need balance) —
         // already attempted above on the unmodified section.
-        return compress_section_per_hunk(section, &path, file_old, used_rules);
+        return compress_section_per_hunk(section, &path, file_old, used_rules, prov);
     }
     // N >= 2 heterogeneous fn/method renames compress to one slot
     // sweep (T344); fall through to the call sweep otherwise.
     if let Some(slot) = try_fn_slot_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if slot.len() < section.len() {
+            push_section_prov(
+                prov,
+                &slot,
+                section.len(),
+                &path,
+                "fn_slot_sweep",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(slot);
         }
         used_rules.truncate(checkpoint);
@@ -300,6 +381,17 @@ fn compress_section(
         try_method_to_fn_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if m2f.len() < section.len() {
+            push_section_prov(
+                prov,
+                &m2f,
+                section.len(),
+                &path,
+                "method_to_fn",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(m2f);
         }
         used_rules.truncate(checkpoint);
@@ -308,6 +400,17 @@ fn compress_section(
         try_method_to_method_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if m2m.len() < section.len() {
+            push_section_prov(
+                prov,
+                &m2m,
+                section.len(),
+                &path,
+                "method_to_method",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(m2m);
         }
         used_rules.truncate(checkpoint);
@@ -316,6 +419,17 @@ fn compress_section(
         try_method_same_literal_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if same.len() < section.len() {
+            push_section_prov(
+                prov,
+                &same,
+                section.len(),
+                &path,
+                "method_same_literal",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(same);
         }
         used_rules.truncate(checkpoint);
@@ -324,6 +438,17 @@ fn compress_section(
         try_ref_method_strip_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if strip.len() < section.len() {
+            push_section_prov(
+                prov,
+                &strip,
+                section.len(),
+                &path,
+                "ref_strip",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(strip);
         }
         used_rules.truncate(checkpoint);
@@ -332,12 +457,34 @@ fn compress_section(
         try_use_prefix_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if uses.len() < section.len() {
+            push_section_prov(
+                prov,
+                &uses,
+                section.len(),
+                &path,
+                "use_prefix",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(uses);
         }
         used_rules.truncate(checkpoint);
     }
     if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules) {
         if sweep.len() < section.len() {
+            push_section_prov(
+                prov,
+                &sweep,
+                section.len(),
+                &path,
+                "call_sweep",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(sweep);
         }
         used_rules.truncate(checkpoint);
@@ -349,6 +496,17 @@ fn compress_section(
         try_call_arg_add_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if add.len() < section.len() {
+            push_section_prov(
+                prov,
+                &add,
+                section.len(),
+                &path,
+                "call_arg_add",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(add);
         }
         used_rules.truncate(checkpoint);
@@ -360,6 +518,17 @@ fn compress_section(
         try_call_literal_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if lit.len() < section.len() {
+            push_section_prov(
+                prov,
+                &lit,
+                section.len(),
+                &path,
+                "call_literal",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(lit);
         }
         used_rules.truncate(checkpoint);
@@ -371,17 +540,40 @@ fn compress_section(
         try_call_peel_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
         if peel.len() < section.len() {
+            push_section_prov(
+                prov,
+                &peel,
+                section.len(),
+                &path,
+                "call_peel",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
             return Some(peel);
         }
         used_rules.truncate(checkpoint);
     }
-    if let Some(verbatim) = verbatim::try_verbatim_sweep(section, &path, used_rules, file_old) {
+    let mut verb_fired: Vec<(String, &'static str)> = Vec::new();
+    if let Some(verbatim) =
+        verbatim::try_verbatim_sweep(section, &path, used_rules, file_old, &mut verb_fired)
+    {
+        commit_prov(
+            prov,
+            &verbatim,
+            section.len(),
+            &path,
+            &verb_fired,
+            &changed,
+            file_old,
+        );
         return Some(verbatim);
     }
     // T403: verbatim sweep after the whole-section detectors fail.
     // Per-hunk fallback (T349): pairwise-disjoint hunks merge by
     // construction (SPEC 10.6 option-1).
-    compress_section_per_hunk(section, &path, file_old, used_rules)
+    compress_section_per_hunk(section, &path, file_old, used_rules, prov)
 }
 
 /// Per-hunk fallback for `compress_section`: compress each balanced
@@ -393,6 +585,7 @@ fn compress_section_per_hunk(
     path: &str,
     file_old: Option<&str>,
     used_rules: &mut Vec<String>,
+    prov: &mut Vec<HunkProvenance>,
 ) -> Option<String> {
     // Split the prelude (`diff --git`/`index`/`---`/`+++`) from the
     // native hunks; a section without hunks has nothing to compress.
@@ -436,7 +629,19 @@ fn compress_section_per_hunk(
             }
         }
         // T465: partial item-deletion (whole-item minus-heavy hunks only).
+        let partial_before = used_rules.len();
         if let Some(d) = deletes::try_partial_delete_hunk(hunk, file_old, used_rules) {
+            push_section_prov(
+                prov,
+                &d,
+                hunk.len(),
+                path,
+                "delete",
+                &crate::totality::changed_old_lines(hunk),
+                file_old,
+                partial_before,
+                used_rules,
+            );
             compressed_any = true;
             out.push_str(&d);
             continue;
@@ -445,6 +650,7 @@ fn compress_section_per_hunk(
         // (`compress_balanced_pair_body` — same shapes the verbatim
         // sweep retries leftovers with); ordinary hunks pass through.
         let changed = crate::totality::changed_old_lines(hunk);
+        let pair_before = used_rules.len();
         match super::compress_balanced_pair_body(
             &minuses,
             &pluses,
@@ -454,7 +660,18 @@ fn compress_section_per_hunk(
             hunk.len(),
             used_rules,
         ) {
-            Some(body) => {
+            Some((body, detector)) => {
+                push_section_prov(
+                    prov,
+                    &body,
+                    hunk.len(),
+                    path,
+                    detector,
+                    &changed,
+                    file_old,
+                    pair_before,
+                    used_rules,
+                );
                 compressed_any = true;
                 out.push_str(&body);
             }
@@ -565,7 +782,7 @@ fn split_item(line: &str) -> Option<(String, String, String, String)> {
 }
 
 /// Length of a plain (non-raw) Rust ident prefix.
-fn ident_len(s: &str) -> Option<usize> {
+pub(crate) fn ident_len(s: &str) -> Option<usize> {
     let mut chars = s.char_indices();
     let (i, c) = chars.next()?;
     if c != '_' && !c.is_ascii_alphabetic() {
@@ -588,140 +805,7 @@ fn contains_word(haystack: &str, word: &str) -> bool {
         .any(|w| w == word)
 }
 
-/// N-site (N ≥ 2) heterogeneous fn/method rename with a
-/// callee-only delta: every pair is a single-line `{`-terminated
-/// fn header differing in exactly the fn ident (vis/qual/generics/
-/// params/return/where byte-equal per site, heterogeneous across
-/// sites). Column-0 sites emit the free-fn slot sweep (T329 shape);
-/// uniformly indented sites emit the `impl Svc` advisory-context
-/// sweep (T337 shape); mixed indent stays passthrough.
-pub(crate) fn try_fn_slot_sweep(
-    minuses: &[&str],
-    pluses: &[&str],
-    path: &str,
-    file_old: Option<&str>,
-    changed: &[usize],
-    used_rules: &mut Vec<String>,
-) -> Option<String> {
-    if minuses.len() < 2 {
-        return None;
-    }
-    let mut old_name: Option<String> = None;
-    let mut new_name: Option<String> = None;
-    for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n) = fn_rename_pair(m, p)?;
-        if old_name.as_ref().is_some_and(|c| *c != o) {
-            return None;
-        }
-        if new_name.as_ref().is_some_and(|c| *c != n) {
-            return None;
-        }
-        old_name = Some(o);
-        new_name = Some(n);
-    }
-    let (old_name, new_name) = (old_name?, new_name?);
-    if old_name == new_name {
-        return None;
-    }
-    let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
-    let all_col0 = minuses
-        .iter()
-        .all(|m| !m.is_empty() && !m.starts_with([' ', '\t']));
-    if !all_indented && !all_col0 {
-        return None;
-    }
-    let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
-    let plus_col0 = pluses
-        .iter()
-        .all(|p| !p.is_empty() && !p.starts_with([' ', '\t']));
-    if all_indented != plus_indented || all_col0 != plus_col0 {
-        return None;
-    }
-    if !crate::totality::slot_holds(file_old, &old_name, minuses, all_indented, changed) {
-        return None;
-    }
-    let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
-    let mut hunk = item_emission_header(path, &rule, file_old, changed);
-    if all_indented {
-        hunk.push_str(&format!(
-            "  impl Svc {{\n      ...\n-     V Q fn {old_name} G (...) W {{\n+     V Q fn {new_name} G (...) W {{\n          ...\n      }}\n  }}\n"
-        ));
-    } else {
-        hunk.push_str(&format!(
-            "- V Q fn {old_name} G (...) W {{\n+ V Q fn {new_name} G (...) W {{\n      ...\n  }}\n"
-        ));
-    }
-    Some(hunk)
-}
-
-/// A `-`/`+` line pair as a rename-only fn header: both trimmed
-/// lines end with `{`, both parse as fn-shaped (`ItemFn` or
-/// `ImplItemFn`), and they differ in exactly the fn ident.
-fn fn_rename_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
-    let o = old_line.trim();
-    let p = new_line.trim();
-    if o.is_empty() || p.is_empty() {
-        return None;
-    }
-    if !o.ends_with('{') || !p.ends_with('{') {
-        return None;
-    }
-    if !is_fn_shaped(o) || !is_fn_shaped(p) {
-        return None;
-    }
-    let (o_pre, o_ident, o_suf) = split_fn_ident(o)?;
-    let (p_pre, p_ident, p_suf) = split_fn_ident(p)?;
-    if o_pre != p_pre || o_suf != p_suf {
-        return None;
-    }
-    if o_ident == p_ident || o_ident.is_empty() || p_ident.is_empty() {
-        return None;
-    }
-    if o_suf.is_empty() {
-        return None;
-    }
-    let tail = o_suf.trim_start();
-    if !(tail.starts_with('(') || tail.starts_with('<')) {
-        return None;
-    }
-    Some((o_ident, p_ident))
-}
-
-fn is_fn_shaped(trimmed: &str) -> bool {
-    let probe = format!("{trimmed} }}");
-    syn::parse_str::<syn::ItemFn>(&probe).is_ok()
-        || syn::parse_str::<syn::ImplItemFn>(&probe).is_ok()
-}
-
-/// Split `... fn Ident<...>(...)` into (prefix-before-ident, ident,
-/// suffix-after-ident). The `fn` keyword must be word-bounded.
-fn split_fn_ident(text: &str) -> Option<(String, String, String)> {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i + 2 <= bytes.len() {
-        if bytes[i..i + 2] == *b"fn"
-            && (i == 0 || !is_ident_char(bytes[i - 1] as char))
-            && (i + 2 < bytes.len() && bytes[i + 2].is_ascii_whitespace())
-        {
-            let mut j = i + 2;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            let start = j;
-            let len = ident_len(&text[j..])?;
-            let end = start + len;
-            return Some((
-                text[..start].to_string(),
-                text[start..end].to_string(),
-                text[end..].to_string(),
-            ));
-        }
-        i += 1;
-    }
-    None
-}
-
-fn is_ident_char(c: char) -> bool {
+pub(crate) fn is_ident_char(c: char) -> bool {
     c == '_' || c.is_ascii_alphanumeric()
 }
 
@@ -774,135 +858,6 @@ pub(crate) fn count_occurrences(haystack: &str, needle: &str) -> usize {
         return 0;
     }
     haystack.match_indices(needle).count()
-}
-
-/// N-site (N ≥ 2) use-path prefix rename fan-out (T363, SPEC 14.9):
-/// every pair parses as `use <P_old>::<tail>` → `use <P_new>::<tail>`
-/// with per-site textually identical non-empty tails and one shared
-/// parent + one shared renamed last segment (the tight "one segment
-/// renamed" formulation — the direct analog of the call sweep's
-/// callee-only delta). Leading `pub…`/`::` and trailing `;` are
-/// normalized away (the engine ignores them, so mixed `use`/`pub use`
-/// sites share one hunk, probe-verified); tails may be heterogeneous
-/// across sites (plain, grouped, glob, `as` — the engine preserves
-/// them). Emits one `# allow=many` hunk (tight original range)
-/// (`- use P_old` / `+ use P_new`, no metavars). Single-segment
-/// shared prefixes (`use crate`), unequal prefix lengths, divergent
-/// parents/tails, and lone pairs stay ordinary passthrough.
-pub(crate) fn try_use_prefix_sweep(
-    minuses: &[&str],
-    pluses: &[&str],
-    path: &str,
-    file_old: Option<&str>,
-    changed: &[usize],
-    used_rules: &mut Vec<String>,
-) -> Option<String> {
-    if minuses.len() < 2 {
-        return None;
-    }
-    let mut minus_paths: Vec<Vec<String>> = Vec::new();
-    let mut plus_paths: Vec<Vec<String>> = Vec::new();
-    for (m, p) in minuses.iter().zip(pluses.iter()) {
-        minus_paths.push(parse_use_path(m)?);
-        plus_paths.push(parse_use_path(p)?);
-    }
-    let old_prefix = common_prefix(&minus_paths);
-    let new_prefix = common_prefix(&plus_paths);
-    // Tight formulation: equal lengths, at least two segments (a lone
-    // `use crate` matches too broadly to infer from N lines of
-    // evidence), shared parent, renamed last segment.
-    if old_prefix.len() != new_prefix.len() || old_prefix.len() < 2 {
-        return None;
-    }
-    let k = old_prefix.len();
-    if old_prefix[..k - 1] != new_prefix[..k - 1] {
-        return None;
-    }
-    if old_prefix[k - 1] == new_prefix[k - 1] {
-        return None;
-    }
-    for (m, p) in minus_paths.iter().zip(plus_paths.iter()) {
-        if m.len() <= k || p.len() <= k {
-            return None;
-        }
-        if m[k..] != p[k..] {
-            return None;
-        }
-    }
-    if !crate::totality::use_holds(file_old, &old_prefix, minuses, changed) {
-        return None;
-    }
-    let rule = unique_rule(
-        used_rules,
-        &format!("use_{}_to_{}", old_prefix[k - 1], new_prefix[k - 1]),
-    );
-    let mut hunk = crate::emission_header(path, &rule, changed);
-    hunk.push_str(&format!(
-        "- use {}\n+ use {}\n",
-        old_prefix.join("::"),
-        new_prefix.join("::")
-    ));
-    Some(hunk)
-}
-
-/// Parse one diff line as a `use` path: strip one trailing `;`,
-/// leading visibility, the `use` keyword, and one leading `::`; split
-/// the rest on `::`. The emitted pattern is the bare common prefix,
-/// which is what the engine requires (SPEC 14.9 rejects braces, globs,
-/// and `as` in the pattern — those may only appear in tails, where
-/// per-site equality keeps them verbatim).
-fn parse_use_path(line: &str) -> Option<Vec<String>> {
-    let mut text = line.trim();
-    if text.is_empty() {
-        return None;
-    }
-    if let Some(stripped) = text.strip_suffix(';') {
-        text = stripped.trim_end();
-    }
-    // Leading visibility (`pub`, `pub(…)`) is normalized away — the
-    // pattern carries none and the engine matches both sides.
-    if let Some(rest) = text.strip_prefix("pub") {
-        if rest.is_empty() || rest.starts_with([' ', '\t']) {
-            text = rest.trim_start();
-        } else if rest.starts_with('(') {
-            let end = rest.find(')')?;
-            let after = &rest[end + 1..];
-            if after.is_empty() || !after.starts_with([' ', '\t']) {
-                return None;
-            }
-            text = after.trim_start();
-        } else {
-            return None;
-        }
-    }
-    let mut text = text.strip_prefix("use")?;
-    // `use` must be the keyword, not an ident prefix (`useful::x`).
-    if text.is_empty() || !text.starts_with([' ', '\t']) {
-        return None;
-    }
-    text = text.trim_start();
-    // Tolerate one leading `::` (`use ::crate::old::Thing`).
-    if let Some(rest) = text.strip_prefix("::") {
-        text = rest.trim_start();
-    }
-    if text.is_empty() {
-        return None;
-    }
-    let segs: Vec<String> = text.split("::").map(|s| s.trim().to_string()).collect();
-    if segs.iter().any(|s| s.is_empty()) {
-        return None;
-    }
-    Some(segs)
-}
-
-/// Longest common leading segments across all paths.
-fn common_prefix(paths: &[Vec<String>]) -> Vec<String> {
-    let mut out = paths.first().cloned().unwrap_or_default();
-    for p in paths.iter().skip(1) {
-        let n = out.iter().zip(p.iter()).take_while(|(a, b)| a == b).count();
-        out.truncate(n);
-    }
-    out
 }
 
 fn parse_call_expr(line: &str) -> Option<syn::Expr> {
@@ -974,6 +929,10 @@ pub(crate) fn unique_rule(used: &mut Vec<String>, _base: &str) -> String {
     used.push(candidate.clone());
     candidate
 }
+
+pub use prov::HunkProvenance;
+
+use prov::{commit_prov, push_move_prov, push_section_prov};
 
 /// True when a `diff --git` header names a rename (differing real
 /// sides, T377) via the shared space-aware splitter.

@@ -517,7 +517,7 @@ pub fn apply_expr_hunk(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
-) -> Result<usize, StructuredError> {
+) -> Result<(usize, HashMap<String, String>), StructuredError> {
     let (minus, plus_raw, _ph, _lits, _has_path) = match &compiled.kind {
         PatternKind::Expr {
             minus,
@@ -599,6 +599,7 @@ pub fn apply_expr_hunk(
 
     let mut accepted: Vec<(usize, usize)> = Vec::new();
     let mut matched = 0;
+    let mut first_bindings: HashMap<String, String> = HashMap::new();
     for cand in &cands {
         // Outermost-wins: skip descendants of accepted matches.
         if accepted
@@ -665,12 +666,15 @@ pub fn apply_expr_hunk(
         };
         edits.push(TextEdit::new(cand.start, cand.end, replacement));
         accepted.push((cand.start, cand.end));
+        if matched == 0 {
+            first_bindings = bindings.clone();
+        }
         matched += 1;
         if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
             break;
         }
     }
-    Ok(matched)
+    Ok((matched, first_bindings))
 }
 
 /// Backstop for `# repeat` nesting. Bindings are strict sub-slices of the

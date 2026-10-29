@@ -202,7 +202,7 @@ pub fn apply_macro_hunk(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
-) -> Result<usize, StructuredError> {
+) -> Result<(usize, HashMap<String, String>), StructuredError> {
     let rule = hunk.rule_name();
     if hunk.macro_mode() == rsmpl_patch::MacroMode::Expanded {
         return Err(StructuredError::new(
@@ -300,6 +300,7 @@ pub fn apply_macro_hunk(
 
     let mut accepted: Vec<(usize, usize)> = Vec::new();
     let mut matched = 0;
+    let mut first_bindings: HashMap<String, String> = HashMap::new();
     for cand in &cands {
         if accepted
             .iter()
@@ -393,12 +394,15 @@ pub fn apply_macro_hunk(
         }
         edits.push(TextEdit::new(cand.start, cand.end, replacement));
         accepted.push((cand.start, cand.end));
+        if matched == 0 {
+            first_bindings = bindings.clone();
+        }
         matched += 1;
         if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
             break;
         }
     }
-    Ok(matched)
+    Ok((matched, first_bindings))
 }
 
 /// A lone body metavariable (`M!(TT)`) captures the entire macro body.
