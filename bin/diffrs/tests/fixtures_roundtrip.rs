@@ -543,8 +543,12 @@ fn native_to_semantic_to_native_round_trip() {
                 "single paste shares the bind once, got: {semantic}"
             );
             assert!(
-                semantic.contains("-fn big() {"),
-                "losing twin stays ordinary, got: {semantic}"
+                semantic.contains("rule=delete_items"),
+                "losing twin minus compresses (T472 EOF relaxation), got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn big("),
+                "losing twin minus lines must be consumed, got: {semantic}"
             );
             assert!(
                 !semantic.contains("+fn big("),

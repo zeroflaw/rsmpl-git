@@ -19,7 +19,10 @@
 //! plus one ordinary insertion leftover for the plus lines (with a
 //! compensating trailing `+` blank when the pre-image line after the
 //! range is blank — the last delete absorbs it). Balanced hunks keep
-//! their rename/call detectors (strictly minus-heavy only).
+//! their rename/call detectors (strictly minus-heavy only). EOF-touching
+//! ranges fire too when some contained item reaches EOF and the absorbed
+//! preceding blank is BOF-absent, non-blank, or itself a minus line (T472;
+//! a kept preceding blank, or trailing blanks no item reaches, stays vetoed).
 
 use super::unique_rule;
 use syn::spanned::Spanned;
@@ -164,7 +167,8 @@ pub(crate) fn try_delete_sweep(section: &str, used_rules: &mut Vec<String>) -> O
 /// insertion leftover for the plus lines. Returns `None` (caller keeps
 /// the ordinary hunk) when the hunk is already semantic, balanced or
 /// single-minus, carries context/no-newline lines, lacks a pre-image,
-/// has a minus line outside whole contained items, touches EOF, or loses
+/// has a minus line outside whole contained items, touches EOF with a kept
+/// preceding blank (or trailing in-range blanks no item reaches), or loses
 /// the per-hunk T375 byte-win guard.
 pub(crate) fn try_partial_delete_hunk(
     hunk: &str,
@@ -205,13 +209,8 @@ pub(crate) fn try_partial_delete_hunk(
     let old_text = file_old?;
     let file: syn::File = syn::parse_str(old_text).ok()?;
     let old_lines: Vec<&str> = old_text.lines().collect();
-    // EOF-touching regions vetoed: the last delete would absorb the
-    // preceding blank (delete_lines EOF rule), which no trailing
-    // insertion position can restore.
     let last = old_start + old_len.saturating_sub(1);
-    if last as usize >= old_lines.len() {
-        return None;
-    }
+    let nlines = old_lines.len();
     // Item spans (1-based, inclusive) from the pre-image; syn item spans
     // cover outer attrs, so attr lines need no separate accounting.
     let mut spans: Vec<(u32, u32)> = Vec::new();
@@ -227,6 +226,29 @@ pub(crate) fn try_partial_delete_hunk(
             return None;
         }
         spans.push((s, e));
+    }
+    // EOF-touching ranges: the EOF-reaching delete absorbs the blank line
+    // preceding its item (delete_lines EOF rule). Sound iff no kept blank
+    // is absorbed: some contained item must reach EOF (else trailing
+    // in-range blanks would survive the engine delete), and that item's
+    // preceding line must be BOF-absent, non-blank, or itself a minus
+    // line inside the range. An item starting exactly at the range start
+    // with a kept preceding blank stays vetoed (nothing could restore it).
+    if last as usize >= nlines {
+        let eof_start = spans
+            .iter()
+            .filter(|(s, e)| *s >= old_start && *e <= last && *e as usize >= nlines)
+            .map(|(s, _)| *s)
+            .max();
+        // The EOF-touching delete absorbs the preceding blank line; only
+        // a kept separator blank vetoes (its restore position is gone).
+        let s0 = eof_start?;
+        if s0 > 1 {
+            let prev = old_lines[(s0 as usize) - 2];
+            if prev.trim().is_empty() && s0 <= old_start {
+                return None;
+            }
+        }
     }
     if !spans.iter().any(|(s, e)| *s >= old_start && *e <= last) {
         return None;
@@ -628,6 +650,78 @@ mod tests {
         let hunk = "@@ -1,4 +1,0 @@\n-use a;\n-use b;\n-fn gone() {}\n-}\n";
         let mut used = Vec::new();
         assert!(try_partial_delete_hunk(hunk, None, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_eof_touch_in_range_blank_fires() {
+        // T472 (3baecc1 miniature): the range starts with the separator
+        // blank, so the EOF-absorbed preceding blank is itself a minus
+        // line — the engine delete lands exactly on the native deletion.
+        let old = format!("fn kept() {{}}\n\n{}", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[1..].to_vec();
+        let hunk = partial_native(2, &minus, &[], 2);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert_eq!(
+            out.lines().filter(|l| l.starts_with("@@")).count(),
+            1,
+            "got:\n{out}"
+        );
+        assert_eq!(partial_live(&out, &old), "fn kept() {}\n");
+    }
+
+    #[test]
+    fn partial_delete_eof_touch_with_plus_lines_fires() {
+        // Same EOF shape with plus lines: the insertion leftover anchors
+        // at old_start - 1, no compensation owed (nothing follows EOF).
+        let old = format!("fn kept() {{}}\n\n{}", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[1..].to_vec();
+        let hunk = partial_native(2, &minus, &["mod tail;"], 2);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(out.contains("@@ -1,0 +2,1 @@\n+mod tail;\n"), "got:\n{out}");
+        assert_eq!(partial_live(&out, &old), "fn kept() {}\nmod tail;\n");
+    }
+
+    #[test]
+    fn partial_delete_eof_touch_non_blank_preceding_fires() {
+        // Item starts exactly at the range start but the preceding line is
+        // code: the EOF rule absorbs nothing, so the delete is exact.
+        let old = format!("use std::fs;\n{}", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[1..].to_vec();
+        let hunk = partial_native(2, &minus, &[], 2);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert_eq!(partial_live(&out, &old), "use std::fs;\n");
+    }
+
+    #[test]
+    fn partial_delete_bof_to_eof_fires() {
+        // Single item spanning the whole kept file: no preceding line
+        // exists, so the EOF rule absorbs nothing.
+        let old = big_fn("gone");
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines.to_vec();
+        let hunk = partial_native(1, &minus, &[], 1);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert_eq!(partial_live(&out, &old), "");
+    }
+
+    #[test]
+    fn partial_delete_eof_touch_trailing_blanks_vetoes() {
+        // No contained item reaches EOF (trailing in-range blanks): the
+        // engine delete would leave them behind, so the hunk stays ordinary.
+        let old = format!("{}\n", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines.to_vec();
+        let hunk = partial_native(1, &minus, &[], 1);
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
         assert!(used.is_empty());
     }
 }

@@ -5989,7 +5989,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   trailing `+` blank when the pre-image line after the range is blank —
   the last delete absorbs it). Balanced hunks keep their rename/call
   detectors (strictly minus-heavy only); mid-item cuts, non-item code
-  lines, EOF-touching regions, and T375 losers stay ordinary.
+  lines, EOF-touching regions whose absorbed preceding blank is kept (T472:
+  EOF items preceded by BOF, code, or an in-range minus blank fire), and
+  T375 losers stay ordinary.
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

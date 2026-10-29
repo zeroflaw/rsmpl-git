@@ -205,9 +205,12 @@ const CASES: &[Case] = &[
         commit: "a2fc9b3966312b60439e56e40030f8a3dc88d92a",
         rev: None,
         root: false,
-        // T403 Try-over-closure gate: the combination matches
-        // nothing (probe-bisected) — stays ordinary.
-        expect_sem: 0,
+        // T403 Try-over-closure gate: the combination matches nothing
+        // (probe-bisected) — those sites stay ordinary. T472 EOF-touch
+        // relaxation: the 4-line render_parse_error deletion at EOF of
+        // main.rs (non-blank preceding line) compresses to one
+        // delete_items hunk (native 20458B -> sem 14908B, 27%).
+        expect_sem: 1,
     },
     Case {
         commit: "05de4d15bdbe2e44ea2628c8d990ad2a2512e841",
@@ -385,6 +388,16 @@ const CASES: &[Case] = &[
         rev: None,
         root: false,
         expect_sem: 3,
+    },
+    // 3baecc1 (T472): EOF-touch relaxation prize — 819-line
+    // `mod tests` deletion to EOF (range starts with the separator
+    // blank, so the absorbed preceding blank is a minus line);
+    // native 70213B -> sem 33642B (52%).
+    Case {
+        commit: "3baecc10df78834548603c60bd9471cfd5398138",
+        rev: None,
+        root: false,
+        expect_sem: 1,
     },
 ];
 
