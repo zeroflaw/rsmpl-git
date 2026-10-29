@@ -988,8 +988,9 @@ pub fn apply_fn_hunk(
 
 /// Find item targets (function or other items) for an item-capture hunk.
 ///
-/// v0.1 matches any item (fn, struct, mod, use, ...) by line-span
-/// containment; only functions are structurally verified elsewhere.
+/// v0.1 matches top-level items, fns nested in inline `mod`s, and
+/// `impl`/`trait` methods (T466) by line-span containment; only functions
+/// are structurally verified elsewhere.
 pub(crate) fn find_item_targets(
     parsed: &syn::File,
     scope: Scope,
@@ -1003,6 +1004,7 @@ pub(crate) fn find_item_targets(
         }
     }
     candidates.extend(collect_non_fn_item_spans(parsed, scope, old_start, old_len));
+    collect_impl_method_spans(&parsed.items, scope, old_start, old_len, &mut candidates);
     candidates.sort();
     candidates.dedup();
     candidates
@@ -1116,6 +1118,59 @@ fn collect_non_fn_item_spans(
         }
     }
     out
+}
+
+/// Associated-function spans inside `impl`/`trait` blocks (T466): top-level
+/// and inline-`mod`-nested. `Fn`-items only — the nested-deletion trigger
+/// shape; assoc consts/types stay ordinary (no corpus trigger).
+fn collect_impl_method_spans(
+    items: &[syn::Item],
+    scope: Scope,
+    old_start: u32,
+    old_len: u32,
+    out: &mut Vec<(u32, u32)>,
+) {
+    let end = old_start + old_len.saturating_sub(1);
+    let push = |out: &mut Vec<(u32, u32)>, s: u32, e: u32| {
+        let inside = match scope {
+            Scope::File => true,
+            Scope::Contained => s >= old_start && e <= end.max(old_start),
+            Scope::Anchor => s >= old_start && s <= end.max(old_start),
+            Scope::Overlap => s <= end.max(old_start) && e >= old_start,
+            Scope::Exact => old_len > 0 && s == old_start && e == end,
+        };
+        if inside {
+            out.push((s, e));
+        }
+    };
+    for it in items {
+        match it {
+            syn::Item::Impl(imp) => {
+                for item in &imp.items {
+                    if let syn::ImplItem::Fn(m) = item {
+                        let s = m.span().start().line as u32;
+                        let e = m.span().end().line as u32;
+                        push(out, s, e);
+                    }
+                }
+            }
+            syn::Item::Trait(t) => {
+                for item in &t.items {
+                    if let syn::TraitItem::Fn(f) = item {
+                        let s = f.span().start().line as u32;
+                        let e = f.span().end().line as u32;
+                        push(out, s, e);
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    collect_impl_method_spans(inner, scope, old_start, old_len, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Insert literal text at a zero-length anchor (SPEC 18.3, 10.5).
@@ -1303,6 +1358,44 @@ mod tests {
         assert!(out.contains("fn b"));
     }
 
+    #[test]
+    fn deletes_impl_method() {
+        // T466: `impl`-block methods are item targets too (previously
+        // top-level items only — b57d0f2's `inspect_usage` removal).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -5,2 +5,0 @@ rule=cut\n# lang=rust\n# item I\n- I\n";
+        let src = "struct S;\n\nimpl S {\n    fn keep(&self) {}\n    /// Docs for gone.\n    fn gone(&self) {}\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(!out.contains("gone"), "got: {out}");
+        assert!(out.contains("fn keep(&self)"), "got: {out}");
+    }
+
+    #[test]
+    fn deletes_trait_method() {
+        // T466: trait methods ride the same span path (parity with impl).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,1 +3,0 @@ rule=cut\n# lang=rust\n# item I\n- I\n";
+        let src = "trait T {\n    fn keep();\n    fn gone();\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out, "trait T {\n    fn keep();\n}\n", "got: {out}");
+    }
+
+    #[test]
+    fn deletes_mod_nested_impl_method() {
+        // T466: the method walk recurses into inline `mod`s.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -4,1 +4,0 @@ rule=cut\n# lang=rust\n# item I\n- I\n";
+        let src = "mod m {\n    struct S;\n    impl S {\n        fn gone(&self) {}\n    }\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(!out.contains("gone"), "got: {out}");
+        assert!(out.contains("impl S"), "got: {out}");
+    }
+
+    #[test]
+    fn partial_impl_method_cut_is_no_match() {
+        // T466: a range cutting inside a method body matches no whole
+        // item (mid-item-cut parity with top-level fns).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,0 @@ rule=cut\n# lang=rust\n# item I\n- I\n";
+        let src = "struct S;\n\nimpl S {\n    fn keep(&self) {}\n    fn gone(&self) {\n        let x = 1;\n    }\n}\n";
+        assert!(apply(patch, src).is_err());
+    }
     #[test]
     fn inserts_use_item() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 +1,1 @@ rule=ins\n# lang=rust\n+ use crate::new_module;\n";

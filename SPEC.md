@@ -5981,17 +5981,24 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   the shared separator — the union is still just a deletion), every other
   overlap pair still fails. Byte-win guarded (T375).
 - Partial-file item-deletion sweep (T465): a minus-heavy unbalanced
-  native hunk whose minus lines are whole top-level items in the
-  pre-image compresses to one real-range `@@ -O,L +N,0 @@
-  rule=delete_items_K` hunk (`# allow=many`, `# item I`, `- I` — default
-  Contained scope deletes exactly the items in the range) plus one
-  ordinary insertion leftover for the plus lines (with a compensating
-  trailing `+` blank when the pre-image line after the range is blank —
-  the last delete absorbs it). Balanced hunks keep their rename/call
-  detectors (strictly minus-heavy only); mid-item cuts, non-item code
-  lines, EOF-touching regions whose absorbed preceding blank is kept (T472:
-  EOF items preceded by BOF, code, or an in-range minus blank fire), and
-  T375 losers stay ordinary.
+  native hunk whose minus lines are whole items — top-level or nested
+  (mod-nested fns, `impl`/`trait` methods, T466; the engine `- I` delete
+  removes the same nested set, so every fire applies) — in the pre-image
+  compresses to one real-range `@@ -O,L +N,0 @@ rule=delete_items_K`
+  hunk (`# allow=many`, `# item I`, `- I` — default Contained scope
+  deletes exactly the items in the range) plus one ordinary insertion
+  leftover for the plus lines (with a compensating trailing `+` blank when
+  the pre-image line after the range is blank — the last delete absorbs
+  it). Edge-crossing items (an item straddling a range edge is edited,
+  not deleted) veto; strict containers (`mod tests`, `impl Foo` around a
+  nested delete) are fine. Leading in-range blanks ride an ordinary
+  deletion hunk ahead of the shrunk semantic range (the engine absorbs a
+  preceding blank only at EOF); two or more trailing in-range blanks veto
+  (conservative). Balanced hunks keep their rename/call detectors
+  (strictly minus-heavy only); mid-item cuts, non-item code lines,
+  EOF-touching regions whose absorbed preceding blank is kept (T472: EOF
+  items preceded by BOF, code, or an in-range minus blank fire), and T375
+  losers stay ordinary.
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

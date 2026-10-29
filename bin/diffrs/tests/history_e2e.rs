@@ -69,7 +69,9 @@ const CASES: &[Case] = &[
         // T465: +6 partial-file item deletions (cli_e2e 809-line +
         // main.rs 391-line shrinks tile whole items; --check green +
         // byte-identical round-trip).
-        expect_sem: 8,
+        // T466: +1 nested `impl CliError::inspect_usage` removal (leading
+        // blank rides ordinary ahead of the shrunk semantic range).
+        expect_sem: 9,
     },
     Case {
         commit: "12d70c6b4e3d027f22f52316243f05989afd6d55",
@@ -362,11 +364,30 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 1,
     },
-    // f2944c5 (T465): one partial-file item deletion — stale
-    // `unified_diff_for_file` dead-code removal (doc'd 3-line fn;
-    // nested-test-fn removal in the same file stays ordinary).
+    // f2944c5 (T465 + T466): two partial-file item deletions — stale
+    // `unified_diff_for_file` dead-code removal (doc'd 3-line fn) plus
+    // the nested `mod tests` test-fn removal (leading blank rides
+    // ordinary ahead of the shrunk semantic range).
     Case {
         commit: "f2944c52eff5d9b895906c3982eb5191c0a401ad",
+        rev: None,
+        root: false,
+        expect_sem: 2,
+    },
+    // b0da138 (T466): one partial-file nested deletion — the 69-line
+    // `mod tests` 6-test-fn purge as one shrunk-range delete hunk
+    // (leading blank rides ordinary).
+    Case {
+        commit: "b0da1388f0e524b38a6b657254c49316223ad63c",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // d426215 (T466): one partial-file nested deletion — `impl
+    // MetavarTable::lowercase_warnings` dead-code drop (leading blank
+    // rides ordinary ahead of the shrunk semantic range).
+    Case {
+        commit: "d4262156a3117773d5eef83813a24070717d3a18",
         rev: None,
         root: false,
         expect_sem: 1,

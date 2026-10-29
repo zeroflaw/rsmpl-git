@@ -12,17 +12,21 @@
 //! clears the T375 byte-win guard, else the ordinary passthrough stays.
 //!
 //! A partial deletion (file kept) renders as minus-heavy unbalanced
-//! hunks. When every minus line of such a hunk is a whole top-level item
-//! (or an absorbed separator blank) in the pre-image, the hunk compresses
-//! to one real-range `# allow=many` + `# item I` / `- I` hunk (default
-//! Contained scope: the engine deletes exactly the items in the range)
-//! plus one ordinary insertion leftover for the plus lines (with a
-//! compensating trailing `+` blank when the pre-image line after the
-//! range is blank — the last delete absorbs it). Balanced hunks keep
-//! their rename/call detectors (strictly minus-heavy only). EOF-touching
-//! ranges fire too when some contained item reaches EOF and the absorbed
-//! preceding blank is BOF-absent, non-blank, or itself a minus line (T472;
-//! a kept preceding blank, or trailing blanks no item reaches, stays vetoed).
+//! hunks. When every minus line of such a hunk is a whole item — top-level
+//! or nested (mod-nested fns, `impl`/`trait` methods, T466) — or an absorbed
+//! separator blank in the pre-image, the hunk compresses to one real-range
+//! `# allow=many` + `# item I` / `- I` hunk (default Contained scope: the
+//! engine deletes exactly the items in the range) plus one ordinary
+//! insertion leftover for the plus lines (with a compensating trailing `+`
+//! blank when the pre-image line after the range is blank — the last delete
+//! absorbs it). Balanced hunks keep their rename/call detectors (strictly
+//! minus-heavy only). EOF-touching ranges fire too when some contained item
+//! reaches EOF and the absorbed preceding blank is BOF-absent, non-blank,
+//! or itself a minus line (T472; a kept preceding blank, or trailing blanks
+//! no item reaches, stays vetoed).
+//! Leading in-range blanks ride an ordinary deletion hunk ahead of the
+//! shrunk semantic range (the engine absorbs a preceding blank only at
+//! EOF); two or more trailing in-range blanks veto (conservative).
 
 use super::unique_rule;
 use syn::spanned::Spanned;
@@ -211,21 +215,23 @@ pub(crate) fn try_partial_delete_hunk(
     let old_lines: Vec<&str> = old_text.lines().collect();
     let last = old_start + old_len.saturating_sub(1);
     let nlines = old_lines.len();
-    // Item spans (1-based, inclusive) from the pre-image; syn item spans
-    // cover outer attrs, so attr lines need no separate accounting.
-    let mut spans: Vec<(u32, u32)> = Vec::new();
-    for it in &file.items {
-        let s = it.span().start().line as u32;
-        let e = it.span().end().line as u32;
-        if s < 1 || e < s {
+    // Deletable spans (1-based, inclusive): top-level items plus the nested
+    // shapes the engine `- I` delete removes — mod-nested fns and
+    // `impl`/`trait` methods (T466). Syn spans cover outer attrs, so attr
+    // lines need no separate accounting.
+    let spans = nested_item_spans(&file);
+    // An item crossing a range edge is edited, not deleted — veto. A span
+    // strictly containing the range (`mod tests`, `impl Foo` around a
+    // nested delete) is fine: the minus-line check below proves every
+    // deleted line sits in a contained item.
+    for (s, e) in &spans {
+        if *s <= last
+            && *e >= old_start
+            && !(*s >= old_start && *e <= last)
+            && !(*s < old_start && *e > last)
+        {
             return None;
         }
-        // Any item overlapping the range must be fully contained —
-        // else the hunk edits (not deletes) that item.
-        if s <= last && e >= old_start && (s < old_start || e > last) {
-            return None;
-        }
-        spans.push((s, e));
     }
     // EOF-touching ranges: the EOF-reaching delete absorbs the blank line
     // preceding its item (delete_lines EOF rule). Sound iff no kept blank
@@ -253,6 +259,27 @@ pub(crate) fn try_partial_delete_hunk(
     if !spans.iter().any(|(s, e)| *s >= old_start && *e <= last) {
         return None;
     }
+    // First/last contained item (exists: checked above). Trailing
+    // in-range blanks beyond the one the last delete absorbs survive the
+    // engine delete — veto (conservative: no corpus trigger for more).
+    let first = spans
+        .iter()
+        .filter(|(s, e)| *s >= old_start && *e <= last)
+        .map(|(s, _)| *s)
+        .min()?;
+    let first_end = spans
+        .iter()
+        .filter(|(s, e)| *s >= old_start && *e <= last && *s == first)
+        .map(|(_, e)| *e)
+        .min()?;
+    let last_end = spans
+        .iter()
+        .filter(|(s, e)| *s >= old_start && *e <= last)
+        .map(|(_, e)| *e)
+        .max()?;
+    if last > last_end + 1 {
+        return None;
+    }
     // Every non-blank minus line must sit inside a contained item;
     // separator blanks ride delete absorption (union-merged).
     for (ln, text) in &minus {
@@ -273,8 +300,29 @@ pub(crate) fn try_partial_delete_hunk(
         .is_some_and(|l| l.trim().is_empty());
     let rule = unique_rule(used_rules, "delete_items");
     let mut out = String::new();
+    // Leading in-range blanks survive the engine delete (it absorbs a
+    // preceding blank only at EOF): shrink the semantic range to the first
+    // engine-removed line and emit the blanks as an ordinary deletion
+    // hunk — except the single EOF-absorbed blank (T472), which the last
+    // delete removes.
+    let absorbs_preceding = first_end as usize >= nlines
+        && first > 1
+        && old_lines[(first as usize) - 2].trim().is_empty()
+        && first > old_start;
+    let sem_start = if absorbs_preceding { first - 1 } else { first };
+    if sem_start > old_start {
+        let k = sem_start - old_start;
+        let new_anchor = old_start.saturating_sub(1);
+        out.push_str(&format!("@@ -{old_start},{k} +{new_anchor},0 @@\n"));
+        for ln in old_start..sem_start {
+            out.push('-');
+            out.push_str(old_lines[(ln as usize) - 1]);
+            out.push('\n');
+        }
+    }
+    let sem_len = old_start + old_len - sem_start;
     out.push_str(&format!(
-        "@@ -{old_start},{old_len} +{new_start},0 @@ rule={rule}\n# allow=many\n# item I\n- I\n"
+        "@@ -{sem_start},{sem_len} +{new_start},0 @@ rule={rule}\n# allow=many\n# item I\n- I\n"
     ));
     if !plus.is_empty() || compensate {
         let count = plus.len() + usize::from(compensate);
@@ -294,6 +342,70 @@ pub(crate) fn try_partial_delete_hunk(
     } else {
         used_rules.truncate(checkpoint);
         None
+    }
+}
+
+/// Deletable item spans for partial-delete totality (T466): every
+/// top-level item plus mod-nested fns and `impl`/`trait` methods at any
+/// depth — exactly the set the engine `- I` delete removes, so every fire
+/// applies. Nested non-fn items and assoc consts/types are excluded (no
+/// engine support, no corpus trigger): their lines veto via the
+/// minus-line check.
+fn nested_item_spans(file: &syn::File) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for it in &file.items {
+        let s = it.span().start().line as u32;
+        let e = it.span().end().line as u32;
+        if s >= 1 && e >= s {
+            out.push((s, e));
+        }
+    }
+    collect_nested_methods(&file.items, &mut out);
+    out
+}
+
+/// Mod-nested fns + `impl`/`trait` methods (T466): the only nested spans
+/// the engine removes. Top-level fns double-push here (already pushed
+/// above) — harmless, every span check is containment (`.any()`).
+fn collect_nested_methods(items: &[syn::Item], out: &mut Vec<(u32, u32)>) {
+    for it in items {
+        match it {
+            syn::Item::Fn(_) => {
+                let s = it.span().start().line as u32;
+                let e = it.span().end().line as u32;
+                if s >= 1 && e >= s {
+                    out.push((s, e));
+                }
+            }
+            syn::Item::Impl(imp) => {
+                for item in &imp.items {
+                    if let syn::ImplItem::Fn(m) = item {
+                        let s = m.span().start().line as u32;
+                        let e = m.span().end().line as u32;
+                        if s >= 1 && e >= s {
+                            out.push((s, e));
+                        }
+                    }
+                }
+            }
+            syn::Item::Trait(t) => {
+                for item in &t.items {
+                    if let syn::TraitItem::Fn(f) = item {
+                        let s = f.span().start().line as u32;
+                        let e = f.span().end().line as u32;
+                        if s >= 1 && e >= s {
+                            out.push((s, e));
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    collect_nested_methods(inner, out);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -719,6 +831,216 @@ mod tests {
         let old = format!("{}\n", big_fn("gone"));
         let old_lines: Vec<&str> = old.lines().collect();
         let minus: Vec<&str> = old_lines.to_vec();
+        let hunk = partial_native(1, &minus, &[], 1);
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_nested_mod_fn_fires() {
+        // T466 (f2944c5 miniature): a whole test fn inside `mod tests`
+        // deletes as one many-delete hunk; the `mod` container stays.
+        let body = big_fn("gone");
+        let indented = body
+            .lines()
+            .map(|l| format!("    {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let len = indented.lines().count();
+        let old =
+            format!("fn kept() {{}}\n\nmod tests {{\n{indented}\n\n    #[test]\n    fn kept_test() {{}}\n}}\n");
+        let old_lines: Vec<&str> = old.lines().collect();
+        // Deleted span: the nested fn (attr through closing brace).
+        let start = 4u32;
+        let minus: Vec<&str> = old_lines[(start as usize - 1)..(start as usize - 1 + len)].to_vec();
+        let hunk = partial_native(start, &minus, &[], start);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(
+            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
+            "got:\n{out}"
+        );
+        assert!(out.len() < hunk.len());
+        // Kept head + the absorbed separator blank + tail.
+        let mut expect = old_lines[..(start as usize - 1)].join("\n");
+        expect.push('\n');
+        expect.push_str(&old_lines[(start as usize - 1 + len)..].join("\n"));
+        expect.push('\n');
+        assert_eq!(partial_live(&out, &old), expect);
+    }
+
+    #[test]
+    fn partial_delete_impl_method_fires() {
+        // T466 (b57d0f2 miniature): a whole method inside `impl` deletes;
+        // the `impl` block stays.
+        let mut method = String::from("    /// Docs for gone.\n    fn gone(&self) {\n");
+        for i in 0..12 {
+            method.push_str(&format!("        let v{i} = {i};\n"));
+        }
+        method.push_str("    }\n");
+        let old = format!(
+            "struct S;\n\nimpl S {{\n    fn keep(&self) {{}}\n\n{method}}}\n\nfn main() {{}}\n"
+        );
+        let old_lines: Vec<&str> = old.lines().collect();
+        // Deleted span: the method (docs through closing brace).
+        let start = 6u32;
+        let span_end = (start as usize - 1) + method.lines().count();
+        let minus: Vec<&str> = old_lines[(start as usize - 1)..span_end].to_vec();
+        let hunk = partial_native(start, &minus, &[], start);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(
+            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
+            "got:\n{out}"
+        );
+        assert_eq!(
+            out.lines().filter(|l| l.starts_with("@@")).count(),
+            1,
+            "got:\n{out}"
+        );
+        let mut expect = old_lines[..(start as usize - 1)].join("\n");
+        expect.push('\n');
+        expect.push_str(&old_lines[span_end..].join("\n"));
+        expect.push('\n');
+        assert_eq!(partial_live(&out, &old), expect);
+    }
+
+    #[test]
+    fn partial_delete_mid_nested_item_cut_vetoes() {
+        // T466: statements inside a nested fn sit in no contained item —
+        // the mid-item-cut veto holds at nesting depth.
+        let old = "mod tests {\n    fn big() {\n        let a = 1;\n        let b = 2;\n        let c = 3;\n    }\n    fn kept() {}\n}\n";
+        let hunk = "@@ -3,2 +3,0 @@\n-        let a = 1;\n-        let b = 2;\n";
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(hunk, Some(old), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_nested_edge_cross_vetoes() {
+        // T466: a range covering the tail of one nested fn and the head
+        // of the next crosses item edges — edited, not deleted.
+        let old = "mod tests {\n    fn aaa() {\n        let a = 1;\n    }\n    fn bbb() {\n        let b = 2;\n    }\n}\n";
+        let hunk = "@@ -3,3 +3,0 @@\n-        let a = 1;\n-    }\n-    fn bbb() {\n";
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(hunk, Some(old), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_nested_non_item_vetoes() {
+        // T466: a nested struct is no deletable span (no engine support,
+        // no corpus trigger) — even beside a whole nested fn, its lines
+        // veto the hunk (the hunk is big enough to pass T375, so the
+        // minus-line gate is load-bearing).
+        let body = big_fn("gone");
+        let indented = body
+            .lines()
+            .map(|l| format!("    {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let old = format!("mod m {{\n    /// Docs.\n    struct S;\n{indented}\n}}\n");
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[1..(1 + 2 + indented.lines().count())].to_vec();
+        let hunk = partial_native(2, &minus, &[], 2);
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_leading_blank_to_ordinary_fires() {
+        // T466 (d426215 miniature): the native hunk opens with the
+        // separator blank, which the engine never absorbs mid-file — it
+        // rides an ordinary deletion hunk ahead of the shrunk semantic
+        // range.
+        let mut method = String::from("    /// Docs for gone.\n    fn gone(&self) {\n");
+        for i in 0..12 {
+            method.push_str(&format!("        let v{i} = {i};\n"));
+        }
+        method.push_str("    }\n");
+        let old = format!(
+            "struct S;\n\nimpl S {{\n    fn keep(&self) {{}}\n\n{method}}}\n\nfn main() {{}}\n"
+        );
+        let old_lines: Vec<&str> = old.lines().collect();
+        // Deleted span: the separator blank plus the method.
+        let start = 5u32;
+        let span_end = (start as usize - 1) + 1 + method.lines().count();
+        let minus: Vec<&str> = old_lines[(start as usize - 1)..span_end].to_vec();
+        let hunk = partial_native(start, &minus, &[], start);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(
+            out.contains("@@ -5,1 +4,0 @@\n-\n"),
+            "leading blank rides ordinary, got:\n{out}"
+        );
+        assert!(
+            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
+            "got:\n{out}"
+        );
+        assert!(out.len() < hunk.len());
+        let mut expect = old_lines[..(start as usize - 1)].join("\n");
+        expect.push('\n');
+        expect.push_str(&old_lines[span_end..].join("\n"));
+        expect.push('\n');
+        assert_eq!(partial_live(&out, &old), expect);
+    }
+
+    #[test]
+    fn partial_delete_nested_multi_fn_with_leading_blank_fires() {
+        // T466 (b0da138 miniature): leading blank plus two nested fns;
+        // the trailing separator sits past the range end, so compensation
+        // restores the one the last delete absorbs.
+        let mk = |name: &str| {
+            let mut s = format!("    /// Docs for {name}.\n    fn {name}() {{\n");
+            for i in 0..10 {
+                s.push_str(&format!("        let v{i} = {i};\n"));
+            }
+            s.push_str("    }\n");
+            s
+        };
+        let old = format!(
+            "mod tests {{\n\n{}{}\n    fn kept() {{}}\n}}\n",
+            mk("aaa"),
+            mk("bbb")
+        );
+        let old_lines: Vec<&str> = old.lines().collect();
+        // Deleted span: the leading blank through the second fn's close.
+        let start = 2u32;
+        let span_end = old_lines
+            .iter()
+            .position(|l| *l == "    fn kept() {}")
+            .expect("kept tail") as usize
+            - 1;
+        let minus: Vec<&str> = old_lines[(start as usize - 1)..span_end].to_vec();
+        let hunk = partial_native(start, &minus, &[], start);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(
+            out.contains("@@ -2,1 +1,0 @@\n-\n"),
+            "leading blank rides ordinary, got:\n{out}"
+        );
+        assert!(
+            out.contains("+\n"),
+            "compensation restores the separator, got:\n{out}"
+        );
+        assert!(out.len() < hunk.len());
+        let mut expect = old_lines[..(start as usize - 1)].join("\n");
+        expect.push('\n');
+        expect.push_str(&old_lines[span_end..].join("\n"));
+        expect.push('\n');
+        assert_eq!(partial_live(&out, &old), expect);
+    }
+
+    #[test]
+    fn partial_delete_trailing_double_blank_vetoes() {
+        // The last delete absorbs exactly one following blank; a second
+        // in-range trailing blank would survive the engine delete, so the
+        // hunk stays ordinary (conservative: no corpus trigger).
+        let old = format!("{}\n\n\nfn kept() {{}}\n", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[..(old_lines.len() - 1)].to_vec();
         let hunk = partial_native(1, &minus, &[], 1);
         let mut used = Vec::new();
         assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
