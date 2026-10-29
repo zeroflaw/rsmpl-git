@@ -1,0 +1,8 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=calls_old_method_to_new_method
+# allow=many
+# scope=file
+# expr Receiver
+# expr E0
+- Receiver.old_method(E0)
++ Receiver.new_method(E0)
