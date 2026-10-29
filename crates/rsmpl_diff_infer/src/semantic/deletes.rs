@@ -1,4 +1,6 @@
-//! Whole-file item-deletion sweep (T464).
+//! Whole-file item-deletion sweep (T464) plus partial-file
+//! item-deletion sweep (T465: minus-heavy unbalanced hunks whose minus
+//! lines are whole top-level items).
 //!
 //! A deleted `.rs` file renders natively as full-minus `-U0` hunks. When
 //! the deleted content parses as Rust, every top-level item compresses to
@@ -8,6 +10,16 @@
 //! blanks), while every non-item line (module docs, comments, stray
 //! blanks) stays an ordinary `@@ -s,l +0,0 @@` leftover hunk. The rewrite
 //! clears the T375 byte-win guard, else the ordinary passthrough stays.
+//!
+//! A partial deletion (file kept) renders as minus-heavy unbalanced
+//! hunks. When every minus line of such a hunk is a whole top-level item
+//! (or an absorbed separator blank) in the pre-image, the hunk compresses
+//! to one real-range `# allow=many` + `# item I` / `- I` hunk (default
+//! Contained scope: the engine deletes exactly the items in the range)
+//! plus one ordinary insertion leftover for the plus lines (with a
+//! compensating trailing `+` blank when the pre-image line after the
+//! range is blank — the last delete absorbs it). Balanced hunks keep
+//! their rename/call detectors (strictly minus-heavy only).
 
 use super::unique_rule;
 use syn::spanned::Spanned;
@@ -139,6 +151,124 @@ pub(crate) fn try_delete_sweep(section: &str, used_rules: &mut Vec<String>) -> O
     }
     if rewritten.len() < section.len() {
         Some(rewritten)
+    } else {
+        used_rules.truncate(checkpoint);
+        None
+    }
+}
+
+/// Try to compress one ordinary native hunk whose minus lines are whole
+/// top-level items (T465 partial-file deletion, file kept): emits one
+/// real-range `# allow=many` + `# item I` / `- I` hunk (default Contained
+/// scope deletes exactly the items in the range) plus one ordinary
+/// insertion leftover for the plus lines. Returns `None` (caller keeps
+/// the ordinary hunk) when the hunk is already semantic, balanced or
+/// single-minus, carries context/no-newline lines, lacks a pre-image,
+/// has a minus line outside whole contained items, touches EOF, or loses
+/// the per-hunk T375 byte-win guard.
+pub(crate) fn try_partial_delete_hunk(
+    hunk: &str,
+    file_old: Option<&str>,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    let checkpoint = used_rules.len();
+    let mut lines = hunk.lines();
+    let header = lines.next()?;
+    let rest = header.strip_prefix("@@")?;
+    if header.contains("rule=") {
+        return None;
+    }
+    let (old_start, old_len, new_start, _new_len) = parse_unified_header(rest)?;
+    // Old-side line numbers per minus line; plus lines ride the leftover.
+    let mut minus: Vec<(u32, &str)> = Vec::new();
+    let mut plus: Vec<&str> = Vec::new();
+    let mut old_ln = old_start;
+    // `---` file markers live in the prelude, never in a hunk body, so
+    // a `---x` body line is deleted `--x` content (strip one). Context,
+    // `\ No newline`, or anything else vetoes (the source runs `-U0`).
+    for line in lines {
+        match (line.strip_prefix('-'), line.strip_prefix('+')) {
+            (Some(text), _) => {
+                minus.push((old_ln, text));
+                old_ln += 1;
+            }
+            (_, Some(text)) => plus.push(text),
+            _ => return None,
+        }
+    }
+    // Strictly minus-heavy multi-line hunks only: balanced hunks keep
+    // their rename/call chain, singles never win T375 (and stranded
+    // singles keep their join).
+    if minus.len() < 2 || minus.len() <= plus.len() {
+        return None;
+    }
+    let old_text = file_old?;
+    let file: syn::File = syn::parse_str(old_text).ok()?;
+    let old_lines: Vec<&str> = old_text.lines().collect();
+    // EOF-touching regions vetoed: the last delete would absorb the
+    // preceding blank (delete_lines EOF rule), which no trailing
+    // insertion position can restore.
+    let last = old_start + old_len.saturating_sub(1);
+    if last as usize >= old_lines.len() {
+        return None;
+    }
+    // Item spans (1-based, inclusive) from the pre-image; syn item spans
+    // cover outer attrs, so attr lines need no separate accounting.
+    let mut spans: Vec<(u32, u32)> = Vec::new();
+    for it in &file.items {
+        let s = it.span().start().line as u32;
+        let e = it.span().end().line as u32;
+        if s < 1 || e < s {
+            return None;
+        }
+        // Any item overlapping the range must be fully contained —
+        // else the hunk edits (not deletes) that item.
+        if s <= last && e >= old_start && (s < old_start || e > last) {
+            return None;
+        }
+        spans.push((s, e));
+    }
+    if !spans.iter().any(|(s, e)| *s >= old_start && *e <= last) {
+        return None;
+    }
+    // Every non-blank minus line must sit inside a contained item;
+    // separator blanks ride delete absorption (union-merged).
+    for (ln, text) in &minus {
+        if text.trim().is_empty() {
+            continue;
+        }
+        if !spans
+            .iter()
+            .any(|(s, e)| *s >= old_start && *e <= last && *s <= *ln && *ln <= *e)
+        {
+            return None;
+        }
+    }
+    // The last delete absorbs the following blank when one exists; the
+    // insertion leftover restores it so the tree stays byte-exact.
+    let compensate = old_lines
+        .get(last as usize)
+        .is_some_and(|l| l.trim().is_empty());
+    let rule = unique_rule(used_rules, "delete_items");
+    let mut out = String::new();
+    out.push_str(&format!(
+        "@@ -{old_start},{old_len} +{new_start},0 @@ rule={rule}\n# allow=many\n# item I\n- I\n"
+    ));
+    if !plus.is_empty() || compensate {
+        let count = plus.len() + usize::from(compensate);
+        let anchor = old_start.checked_sub(1)?;
+        out.push_str(&format!("@@ -{anchor},0 +{new_start},{count} @@\n"));
+        for text in &plus {
+            out.push('+');
+            out.push_str(text);
+            out.push('\n');
+        }
+        if compensate {
+            out.push_str("+\n");
+        }
+    }
+    if out.len() < hunk.len() {
+        Some(out)
     } else {
         used_rules.truncate(checkpoint);
         None
@@ -289,5 +419,215 @@ mod tests {
         );
         let files = validated_live(&out, &pre_map(&[("a.rs", &content)]));
         assert_eq!(files.get("a.rs").map(String::as_str), Some(""));
+    }
+
+    /// 7945da1 miniature: two uses + two doc'd fns deleted mid-file,
+    /// replaced by two lines; the blank after the range is absorbed by
+    /// the last delete and restored by the insertion leftover.
+    fn partial_pre() -> String {
+        format!(
+            "//! Docs.\n\nuse std::fs;\nuse std::path::Path;\nuse std::process::Command;\n\n{}\n{}\n#[test]\nfn kept() {{}}\n",
+            big_fn("aaa"),
+            big_fn("bbb")
+        )
+    }
+
+    /// Native hunk deleting lines `start..start+len` (1-based) with the
+    /// given plus lines, and the expected post-image (plus lines spliced
+    /// in, absorbed blank restored by the caller-supplied tail).
+    fn partial_native(start: u32, minus: &[&str], plus: &[&str], new_start: u32) -> String {
+        let mut hunk = format!(
+            "@@ -{start},{} +{new_start},{} @@\n",
+            minus.len(),
+            plus.len()
+        );
+        for line in minus {
+            hunk.push('-');
+            hunk.push_str(line);
+            hunk.push('\n');
+        }
+        for line in plus {
+            hunk.push('+');
+            hunk.push_str(line);
+            hunk.push('\n');
+        }
+        hunk
+    }
+
+    /// Full one-section patch around one emitted hunk pair, live-applied
+    /// over `old` (T436 rule — never parse-only).
+    fn partial_live(emitted: &str, old: &str) -> String {
+        let patch = format!("diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n{emitted}");
+        let parsed = rsmpl_patch::parse_patch(&patch).expect("emitted patch must parse");
+        let path = parsed.files[0].target_path.clone();
+        let mut files = HashMap::new();
+        files.insert(path.clone(), old.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+        files.remove(&path).unwrap()
+    }
+
+    #[test]
+    fn partial_delete_hunk_fires_with_insertion_and_compensation() {
+        let old = partial_pre();
+        let old_lines: Vec<&str> = old.lines().collect();
+        // Deleted span: lines 4..=end of big_fn bbb (uses + doc'd fns).
+        let start = 4u32;
+        let span_end = old_lines
+            .iter()
+            .position(|l| *l == "#[test]")
+            .expect("kept tail") as u32
+            + 1
+            - 2; // blank line before #[test]
+        let minus: Vec<&str> = old_lines[(start as usize - 1)..(span_end as usize)].to_vec();
+        let plus = ["mod common;", "use common::*;"];
+        let hunk = partial_native(start, &minus, &plus, start);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(
+            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("@@ -3,0 +4,3 @@\n+mod common;\n+use common::*;\n+\n"),
+            "got:\n{out}"
+        );
+        assert!(out.len() < hunk.len());
+        // Expected: kept head + plus lines + the absorbed blank + tail.
+        let mut expect = old_lines[..(start as usize - 1)].join("\n");
+        expect.push('\n');
+        expect.push_str("mod common;\nuse common::*;\n");
+        expect.push_str(&old_lines[(span_end as usize)..].join("\n"));
+        expect.push('\n');
+        assert_eq!(partial_live(&out, &old), expect);
+    }
+
+    #[test]
+    fn partial_delete_pure_deletion_needs_no_insertion() {
+        // No plus lines and a non-blank line after the range: just the
+        // delete hunk, no leftover.
+        let old = format!("use std::fs;\n{}\nfn kept() {{}}\n", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let len = old_lines.len() - 2; // uses..end of big_fn, tail kept
+        let minus: Vec<&str> = old_lines[1..(1 + len)].to_vec();
+        let hunk = partial_native(2, &minus, &[], 2);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert_eq!(
+            out.lines().filter(|l| l.starts_with("@@")).count(),
+            1,
+            "got:\n{out}"
+        );
+        let expect = String::from("use std::fs;\nfn kept() {}\n");
+        assert_eq!(partial_live(&out, &old), expect);
+    }
+
+    #[test]
+    fn partial_delete_pure_deletion_restores_absorbed_blank() {
+        // Minus-only with a blank after the range: one `+` line restores
+        // the separator the last delete absorbs.
+        let old = format!("{}\nfn kept() {{}}\n", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let len = old_lines.len() - 2; // big_fn only, blank + tail kept
+        let minus: Vec<&str> = old_lines[..len].to_vec();
+        let hunk = partial_native(1, &minus, &[], 1);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(out.contains("@@ -0,0 +1,1 @@\n+\n"), "got:\n{out}");
+        assert_eq!(partial_live(&out, &old), "\nfn kept() {}\n");
+    }
+
+    #[test]
+    fn partial_delete_bof_anchor_fires() {
+        // Hunk at line 1 with plus lines: insertion anchors at 0.
+        let old = format!("{}\nfn kept() {{}}\n", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let len = old_lines.len() - 2; // big_fn only, tail kept
+        let minus: Vec<&str> = old_lines[..len].to_vec();
+        let plus = ["mod common;"];
+        let hunk = partial_native(1, &minus, &plus, 1);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
+        assert!(
+            out.contains("@@ -0,0 +1,2 @@\n+mod common;\n+\n"),
+            "got:\n{out}"
+        );
+        assert_eq!(partial_live(&out, &old), "mod common;\n\nfn kept() {}\n");
+    }
+
+    #[test]
+    fn partial_delete_single_minus_vetoes() {
+        // cli_e2e's `@@ -4 +3,0 @@` one-line use deletion: never wins.
+        let old = "use std::fs;\nuse std::path::Path;\nfn kept() {}\n";
+        let hunk = "@@ -2 +1,0 @@\n-use std::path::Path;\n";
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(hunk, Some(old), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_balanced_vetoes() {
+        // Balanced hunks keep their rename/call chain (never stolen).
+        let old = format!("{}fn kept() {{}}\n", big_fn("gone"));
+        let minus: Vec<&str> = old.lines().take(2).collect();
+        let hunk = partial_native(2, &minus, &["use std::fs;", "use std::io;"], 2);
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_mid_item_cut_vetoes() {
+        // stdin_e2e shape: minus lines inside (not covering) a fn body.
+        let old = "fn big() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n}\nfn kept() {}\n";
+        let hunk = "@@ -2,2 +2,0 @@\n-    let a = 1;\n-    let b = 2;\n";
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(hunk, Some(old), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_non_item_line_vetoes() {
+        // A top-level comment line is no item: the hunk stays ordinary.
+        let old = format!("// leading note\n{}\nfn kept() {{}}\n", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let len = old_lines.len() - 2;
+        let minus: Vec<&str> = old_lines[..len].to_vec();
+        let hunk = partial_native(1, &minus, &[], 1);
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_eof_touch_vetoes() {
+        // The last delete would absorb the preceding blank (EOF rule).
+        let old = format!("fn kept() {{}}\n\n{}", big_fn("gone"));
+        let old_lines: Vec<&str> = old.lines().collect();
+        let start = 4u32;
+        let minus: Vec<&str> = old_lines[(start as usize - 1)..].to_vec();
+        let hunk = partial_native(start, &minus, &[], start);
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_tiny_vetoes() {
+        // Two short uses cost more as a sweep hunk than ordinary (T375).
+        let old = "use a;\nuse b;\nfn kept() {}\n";
+        let hunk = "@@ -1,2 +1,0 @@\n-use a;\n-use b;\n";
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(hunk, Some(old), &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partial_delete_no_pre_vetoes() {
+        // Legacy no-pre-image path stays ordinary (moves precedent).
+        let hunk = "@@ -1,4 +1,0 @@\n-use a;\n-use b;\n-fn gone() {}\n-}\n";
+        let mut used = Vec::new();
+        assert!(try_partial_delete_hunk(hunk, None, &mut used).is_none());
+        assert!(used.is_empty());
     }
 }

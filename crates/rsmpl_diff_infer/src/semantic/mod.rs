@@ -1,7 +1,7 @@
 //! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
 //! array-head-peel call-migration sweep (T441) + method-to-function,
 //! method-to-method, &-receiver strip, use-path prefix,
-//! whole-file item-deletion (T464),
+//! whole-file item-deletion (T464) + partial-file item-deletion (T465),
 //! and whole-item move (T430) fan-outs. Every emission clears a token-win guard (T375): the
 //! semantic hunk is kept only when byte-smaller than the ordinary
 //! hunk(s) it replaces (bytes proxy tokens), else the ordinary text
@@ -349,6 +349,12 @@ fn compress_section_per_hunk(
             } else if line.starts_with('+') && !line.starts_with("+++") {
                 pluses.push(&line[1..]);
             }
+        }
+        // T465: partial item-deletion (whole-item minus-heavy hunks only).
+        if let Some(d) = deletes::try_partial_delete_hunk(hunk, file_old, used_rules) {
+            compressed_any = true;
+            out.push_str(&d);
+            continue;
         }
         // One balanced hunk through the shared detector chain
         // (`compress_balanced_pair_body` — same shapes the verbatim

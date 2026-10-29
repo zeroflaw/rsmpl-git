@@ -5980,6 +5980,16 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   (each item delete absorbs one adjacent blank, so neighbours double-claim
   the shared separator — the union is still just a deletion), every other
   overlap pair still fails. Byte-win guarded (T375).
+- Partial-file item-deletion sweep (T465): a minus-heavy unbalanced
+  native hunk whose minus lines are whole top-level items in the
+  pre-image compresses to one real-range `@@ -O,L +N,0 @@
+  rule=delete_items_K` hunk (`# allow=many`, `# item I`, `- I` — default
+  Contained scope deletes exactly the items in the range) plus one
+  ordinary insertion leftover for the plus lines (with a compensating
+  trailing `+` blank when the pre-image line after the range is blank —
+  the last delete absorbs it). Balanced hunks keep their rename/call
+  detectors (strictly minus-heavy only); mid-item cuts, non-item code
+  lines, EOF-touching regions, and T375 losers stay ordinary.
 - Verbatim identical-line sweep (T403): N ≥ 2 identical balanced
   single-line (`-`/`+`) pairs shared across a section's hunks (pure
   additions elsewhere veto whole-section balance but not this sweep)

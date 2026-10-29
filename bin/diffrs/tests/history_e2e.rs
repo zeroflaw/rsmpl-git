@@ -42,8 +42,9 @@ struct Case {
     /// Root commit: the pre-change tree is an empty dir, not a checkout.
     root: bool,
     /// Pinned semantic-hunk header count (`^@@ -1,1 @@ rule=` plus
-    /// anchored `rule=move_/`paste_` cut/paste hunks, which cite real
-    /// ranges/anchors instead of the scope=file dummy).
+    /// anchored `rule=move_/`paste_` cut/paste and `rule=delete_`
+    /// real-range partial-deletion hunks, which cite real ranges/anchors
+    /// instead of the scope=file dummy).
     expect_sem: usize,
 }
 
@@ -65,7 +66,10 @@ const CASES: &[Case] = &[
         // T464: two whole-file deletions (inspect.rs, json_counts_e2e.rs)
         // compress to delete_items/delete_items_2; the lone long-name
         // test-fn rename stays ordinary (T375, +160 B over ordinary).
-        expect_sem: 2,
+        // T465: +6 partial-file item deletions (cli_e2e 809-line +
+        // main.rs 391-line shrinks tile whole items; --check green +
+        // byte-identical round-trip).
+        expect_sem: 8,
     },
     Case {
         commit: "12d70c6b4e3d027f22f52316243f05989afd6d55",
@@ -106,7 +110,9 @@ const CASES: &[Case] = &[
         commit: "e06313cd2def54f32c9152edd588c5cda230be59",
         rev: None,
         root: false,
-        expect_sem: 0,
+        // T465: one partial-file item deletion (2 removed `use` lines
+        // tile whole items; --check green + byte-identical).
+        expect_sem: 1,
     },
     // Symlink create (T121) and symlink delete (T298: the T353
     // `wrong type` dogfood gap) — ordinary passthrough, zero semantic.
@@ -164,7 +170,9 @@ const CASES: &[Case] = &[
         // T415 unary routing: five identical `!opaque_hit_lines(...)`
         // pairs compress to one verbatim hunk (leading-`!` bypasses to
         // `Raw`; the engine matches `Unary` structurally).
-        expect_sem: 1,
+        // T465: +1 partial-file item deletion (14-line whole-item
+        // removal; --check green + byte-identical).
+        expect_sem: 2,
     },
     Case {
         commit: "1b8993a08b6b8c9175403230c8daaff9e3dd3f5b",
@@ -181,7 +189,9 @@ const CASES: &[Case] = &[
         root: false,
         // T403 totality veto: an unchanged `&cand.body_text` guard
         // subterm would be rewritten by a sweep — stays ordinary.
-        expect_sem: 0,
+        // T465: +1 partial-file item deletion (10-line whole-item
+        // removal; --check green + byte-identical).
+        expect_sem: 1,
     },
     Case {
         commit: "33a8cbbe7d3936411f96895437b5eac5e1478918",
@@ -273,7 +283,9 @@ const CASES: &[Case] = &[
         commit: "b8498697004ce96df90e122b1926923ffc890c96",
         rev: None,
         root: false,
-        expect_sem: 1,
+        // T465: +1 partial-file item deletion (60-line whole-item
+        // removal beside the verbatim hunk; --check green + byte-identical).
+        expect_sem: 2,
     },
     // f09edcd (T170): two byte-identical test fns move cli_e2e.rs ->
     // ellipsis_e2e.rs — 2 cuts + 2 pastes.
@@ -287,6 +299,79 @@ const CASES: &[Case] = &[
     // one delete_items hunk + blank/doc leftovers (79KB -> 2KB).
     Case {
         commit: "e062ddad978aab91dc3864e25168ad75b55b7dbd",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // 7945da1 (T465): partial-file item deletion — 18 e2e files lose
+    // whole helper items to tests/common (each +2 lines), 18 delete hunks.
+    Case {
+        commit: "7945da142a19e2ac3f75e944ebf5bc49980ef64e",
+        rev: None,
+        root: false,
+        expect_sem: 18,
+    },
+    // 099b322 (T465): partial-file item deletion — T251 common-dedup
+    // leaves two whole-item deletions behind (2 delete hunks).
+    Case {
+        commit: "099b322398b1af157ea0f04c214c87271bb00abf",
+        rev: None,
+        root: false,
+        expect_sem: 2,
+    },
+    // 2515e7c (T465): one partial-file item deletion (whole-item
+    // removal; --check green + byte-identical round-trip).
+    Case {
+        commit: "2515e7c688ed19881d2e84af97eaacf019612684",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // 3758f49 (T465): one partial-file item deletion inside the
+    // interleaved-evolution move commit (the pure-deletion remainder).
+    Case {
+        commit: "3758f49ecf8a0eeeabede088a2eb6bc49b6e4092",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // 3cbc2d8 (T465): one partial-file item deletion (whole-item
+    // removal; --check green + byte-identical round-trip).
+    Case {
+        commit: "3cbc2d8adacf2062bbf028663d2aaeb062ebba32",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // 4cfe716 (T465): one partial-file item deletion (whole-item
+    // removal; --check green + byte-identical round-trip).
+    Case {
+        commit: "4cfe7160f934cd5724d23168329de8d052d269d2",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // 813e192 (T465): one partial-file item deletion inside the
+    // vis-evolution commit (the pure-deletion remainder).
+    Case {
+        commit: "813e192ad1fed604d93e97c7ebcb404a00d16b6a",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // f2944c5 (T465): one partial-file item deletion — stale
+    // `unified_diff_for_file` dead-code removal (doc'd 3-line fn;
+    // nested-test-fn removal in the same file stays ordinary).
+    Case {
+        commit: "f2944c52eff5d9b895906c3982eb5191c0a401ad",
+        rev: None,
+        root: false,
+        expect_sem: 1,
+    },
+    // f4f1635 (T465): one partial-file item deletion — stale
+    // `minus_raw_with_context` dead-code removal (4-line fn).
+    Case {
+        commit: "f4f1635bbbdad700e12015ffc5af6a65057744c3",
         rev: None,
         root: false,
         expect_sem: 1,
@@ -466,6 +551,15 @@ fn is_move_hunk(line: &str) -> bool {
     line.starts_with("@@ ") && (line.contains(" rule=move_") || line.contains(" rule=paste_"))
 }
 
+/// A partial-deletion hunk header (T465): anchored `@@ ` prefix plus a
+/// `rule=delete_` tag (real old-side ranges, never the scope=file dummy;
+/// T464's dummy matches this clause too, so the `@@ -1,1 @@` counter
+/// below excludes `delete_` to avoid double-counting). The ` rule=`
+/// infix keeps T358 safety: content lines never start with `@@`.
+fn is_partial_delete_hunk(line: &str) -> bool {
+    line.starts_with("@@ ") && line.contains(" rule=delete_")
+}
+
 /// Rule-name guard for `expect_sem > 0` rows (T463): every rule family
 /// the inference can emit (`rename_*`, `calls_*`, `verbatim`, `move_*`,
 /// `paste_*`, `use_*`, `delete_*`) passes; an ordinary patch carries no `rule=` at
@@ -515,7 +609,11 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
     // false "compressing"), so never loosen this prefix.
     let sem = patch
         .lines()
-        .filter(|l| l.starts_with("@@ -1,1 @@ rule=") || is_move_hunk(l))
+        .filter(|l| {
+            (l.starts_with("@@ -1,1 @@ rule=") && !l.contains("rule=delete_"))
+                || is_move_hunk(l)
+                || is_partial_delete_hunk(l)
+        })
         .count();
     if sem != case.expect_sem {
         failures.push(format!(

@@ -41,9 +41,11 @@ MOVE_PREFIXES = (" rule=move_", " rule=paste_")
 def is_sem_hunk(line: str) -> bool:
     """Anchored semantic-hunk test (T358-safe: diff content lines never
     start with `@@`); covers scope=file dummies plus T430 move cut/paste
-    hunks, which cite real ranges/anchors instead."""
+    hunks, which cite real ranges/anchors instead, plus T465 real-range
+    `rule=delete_` partial-deletion hunks (T464's dummy matches too)."""
     return line.startswith(SEM_PREFIX) or (
-        line.startswith("@@ ") and any(p in line for p in MOVE_PREFIXES)
+        line.startswith("@@ ")
+        and (any(p in line for p in MOVE_PREFIXES) or " rule=delete_" in line)
     )
 
 
