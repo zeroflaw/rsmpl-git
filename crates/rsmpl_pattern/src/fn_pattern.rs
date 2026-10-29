@@ -388,6 +388,30 @@ pub fn parse_fn_pattern(
     };
     i += 1;
 
+    // WI-1b terse rename (`- fn foo`: no tokens remain after the name):
+    // every value slot stays unconstrained, bodies preserved. Any slot
+    // text (`(...)`, `<...>`, `-> T`, `where`, `{`, `;`) falls through to
+    // the long-form path below.
+    if i >= toks.len() {
+        return Ok(crate::terse_fn::terse_pattern(
+            attrs_written,
+            visibility,
+            qualifiers,
+            qualifier_meta,
+            name,
+            returns_none,
+        ));
+    }
+
+    // WI-1b: the fn line itself is bare (`fn foo`) but body/context lines
+    // followed — neither terse (bare pair only) nor long (needs `(...)`).
+    // Name the fix instead of the misleading missing-parens error below.
+    if crate::terse_fn::is_stray_body_tail(&toks[i..]) {
+        return Err(fail(
+            "terse fn rename takes no body lines: write just `- fn foo` / `+ fn bar` (no `(...)`, `{`, `...`), or spell both sides long (`fn foo(...) { ... }`, SPEC 14.1)"
+                .to_string(),
+        ));
+    }
     // Generics: `<...>` or generic metavariable or absent.
     let mut generics = GenericPat::Absent;
     if i < toks.len() && toks[i] == "<" {

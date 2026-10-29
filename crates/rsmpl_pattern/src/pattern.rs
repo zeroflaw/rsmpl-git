@@ -623,6 +623,15 @@ fn classify(
             &where_metas,
             false,
         )?;
+        // WI-1b: terse rename is both-sides-or-neither. A terse minus with
+        // a long plus (or vice versa) would silently insert/delete slots
+        // in `plan_sig_edits` — fail fast instead (SPEC 2.6).
+        if crate::terse_fn::is_terse(&minus_fn) != crate::terse_fn::is_terse(&plus_fn) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "terse fn rename requires both sides terse (`- fn foo` / `+ fn bar`); any slot text (`(...)`, `<...>`, `-> T`, `where`, `{`) needs the long form on both sides (SPEC 14.1)",
+            ));
+        };
         let minus_name = match &minus_fn.name {
             crate::fn_pattern::NamePat::Concrete(n) => n.clone(),
             crate::fn_pattern::NamePat::Meta(n) => format!("${n}"),

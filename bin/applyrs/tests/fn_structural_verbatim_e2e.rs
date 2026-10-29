@@ -77,8 +77,38 @@ fn missing_function_name() {
 
 #[test]
 fn missing_parameter_list() {
-    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo\n+ fn bar(...) {\n      ...\n  }\n";
+    // WI-1b: a bare `- fn foo` is now the valid terse rename, so the old
+    // probe shape became a mixed terse/long pair (pinned below). This
+    // `->`-without-parens shape still exercises the original fence.
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo -> i32 {\n+ fn bar -> i32 {\n      ...\n  }\n";
     fail_both(patch, "a.rs", BASE, "fn pattern missing parameter list");
+}
+
+#[test]
+fn terse_with_body_lines_needle() {
+    // WI-1b: a bare fn line plus body/context lines is neither terse
+    // (bare pair only) nor long (needs `(...)`) — the needle names the fix.
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo\n+ fn bar(...) {\n      ...\n  }\n";
+    fail_both(
+        patch,
+        "a.rs",
+        BASE,
+        "terse fn rename takes no body lines: write just `- fn foo` / `+ fn bar` (no `(...)`, `{`, `...`), or spell both sides long (`fn foo(...) { ... }`, SPEC 14.1)",
+    );
+}
+
+#[test]
+fn mixed_terse_long_needle() {
+    // WI-1b: terse rename is both-sides-or-neither; a terse minus with a
+    // long plus would silently insert slots, so it fails fast.
+    let patch =
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo\n+ fn bar(...) {\n+ ...\n+ }\n";
+    fail_both(
+        patch,
+        "a.rs",
+        BASE,
+        "terse fn rename requires both sides terse (`- fn foo` / `+ fn bar`); any slot text (`(...)`, `<...>`, `-> T`, `where`, `{`) needs the long form on both sides (SPEC 14.1)",
+    );
 }
 
 #[test]

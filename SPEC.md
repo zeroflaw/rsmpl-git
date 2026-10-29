@@ -1526,6 +1526,30 @@ where
 }
 ```
 
+#### 14.1.1 Terse rename
+
+The bare pair:
+
+```diff
+@@ -10,1 @@ rule=rename_foo
+# lang=rust
+- fn foo
++ fn bar
+```
+
+is a rename-only shorthand for today's `fn foo(...) { ... }` form, usable
+only when neither side writes slot or body text. It matches any function
+named `foo` regardless of parameter list, return type, generic parameters
+or where clause, and rewrites only the name ident — every other slot and
+the body are preserved byte-for-byte, so `pub async fn foo<T>(x: T) -> T
+where T: Clone { x }` becomes `pub async fn bar<T>(x: T) -> T where T:
+Clone { x }`. Any visibility/qualifier tokens written before `fn` (e.g.
+`- pub async fn foo`) still match literally, exactly as in the long form.
+The terse pair takes no body lines: trailing `...`/`{`/`}` context lines
+fail fast with a repair needle (write the bare pair, or spell both sides
+long). A terse side paired with a long side fails fast the same way —
+slot evolution needs the long form on both sides.
+
 ### 14.2 Function slots
 
 A Rust function item is modeled as these slots:

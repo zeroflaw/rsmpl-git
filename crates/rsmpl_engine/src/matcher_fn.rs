@@ -223,6 +223,12 @@ pub(crate) fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
     let Some(s) = start else {
         return text.to_string();
     };
+    // WI-1b: a terse fn line (`- fn foo`: no parameter list) is the whole
+    // pattern — return it alone instead of swallowing trailing context
+    // lines such as the closing `}` (the fn parser validates the shape).
+    if rsmpl_pattern::is_terse_fn_line(lines[s]) {
+        return lines[s].to_string();
+    }
     let mut depth = 0i32;
     let mut parens = 0i32;
     let mut brackets = 0i32;
