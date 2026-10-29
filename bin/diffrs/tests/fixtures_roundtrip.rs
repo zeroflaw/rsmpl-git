@@ -1634,6 +1634,50 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "45-single-m2f-stays-ordinary" {
+            // T483: single method-to-function site veto full-cycle miniature --
+            // one `a.old_method(1);` -> `new_function(a, 1);` line costs more
+            // as a semantic hunk than the one ordinary hunk it replaces, so
+            // no rule= hunks: pure ordinary passthrough. Veto side of
+            // fixture 14 (3-site calls_old_method_to_new_function fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single m2f edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "46-use-divergent-tail-stays-ordinary" {
+            // T483: divergent-tail use-prefix veto full-cycle miniature --
+            // `use crate::old::A/B;` -> `new::A`/`new::C` keeps per-site tails
+            // byte-unequal on the second site, so the N>=2 prefix sweep
+            // declines (unit gate use_prefix_sweep_divergent_tail_...). No
+            // rule= hunks: pure ordinary passthrough. Veto side of fixture
+            // 16 (3-site use_old_to_new fire); hetero-across-sites shapes
+            // still fire, only per-site divergence vetoes.
+            assert!(
+                !semantic.contains("rule="),
+                "divergent-tail use-prefix edit must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-use crate::old::B;"),
+                "divergent-tail minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+use crate::new::C;"),
+                "divergent-tail plus lines must be preserved, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
