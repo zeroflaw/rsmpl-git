@@ -180,6 +180,7 @@ context would be larger, so these are lower bounds.)
 | 21-qualified-call (6 sites, qualified-call sweep) | 981 B / 16 ln | 133 B / 5 ln | 86% |
 | 22-turbofish (6 sites, turbofish sweep with T hole) | 801 B / 16 ln | 105 B / 5 ln | 87% |
 | 23-macro-rename (5 sites, macro-rename sweep) | 671 B / 14 ln | 125 B / 6 ln | 81% |
+| 24-sig-evolution (3 sites, rename + return evolution, `impl` framing) | 383 B / 12 ln | 155 B / 10 ln | 60% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

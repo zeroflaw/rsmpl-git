@@ -12,7 +12,7 @@ use super::prov::{commit_prov, push_section_prov};
 use super::HunkProvenance;
 
 /// Ordered pair-sweep chain, tightest first (existing order,
-/// unchanged; WI-4a appends one shape at the end, WI-4b one more): slot → method-to-fn → method-to-method →
+/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more): slot → sig-evolution → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
 /// call-literal → call-peel → let-type-add → type-sweep. Returns the winning semantic section
@@ -31,6 +31,16 @@ pub(crate) fn run_pair_chain(
         super::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((slot, "fn_slot_sweep"));
+    }
+    // WI-4c: signature evolution (name plus any vis/qual/generics/
+    // params/return/where delta, bodies untouched) — immediately after
+    // the rename-only slot sweep whose zero-delta classes it
+    // generalizes (disjoint by construction: slot keeps rename-only,
+    // this requires an evolving non-name slot).
+    if let Some(evo) =
+        super::try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((evo, "sig_evolution"));
     }
     if let Some(m2f) =
         super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)

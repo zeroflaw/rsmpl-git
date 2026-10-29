@@ -1,0 +1,10 @@
+diff --git src/lib.rs
+@@ -6,15 @@ rule=r1
+# allow=many
+  impl Svc {
+      ...
+-     fn run(...) {
++     fn execute(...) -> u64 {
+          ...
+      }
+  }

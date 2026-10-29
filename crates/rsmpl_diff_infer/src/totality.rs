@@ -613,6 +613,56 @@ pub(crate) fn template_type_holds(
     report.rules.iter().map(|r| r.matches).sum::<usize>() == n
 }
 
+/// Generic template totality for fn-header sweeps (WI-4c): the emitted
+/// minus header template `minus_header` (e.g. `fn old (...)`, concrete
+/// evolving slots, preserved slots omitted or `(...)`) must match exactly
+/// `n` fn items in the pre-image file. Counted by the engine itself,
+/// not by a hand-rolled syntactic walk: a `# sweep` self-rewrite probe
+/// (`- H` / `+ H` with a `...` body, `impl Svc` wrapper when
+/// `indented`) is compiled and engine-applied to a scratch tree and its
+/// match count must equal `n` (the `template_type_holds` prescription
+/// lifted to items). `None` pre-image keeps the legacy allow; probe
+/// parse/apply failure vetoes. Opaque positions need no extra veto:
+/// the engine never matches fn items inside macro bodies or string
+/// literals. Conservative by construction: the sweep probe counts
+/// whole-file matches, so a same-name fn outside the emitted range
+/// vetoes even a ranged emission that would not touch it (same
+/// posture as `slot_holds`).
+pub(crate) fn template_fn_holds(
+    path: &str,
+    file_old: Option<&str>,
+    minus_header: &str,
+    indented: bool,
+    n: usize,
+) -> bool {
+    if n == 0 || minus_header.contains('\n') {
+        return false;
+    }
+    let Some(pre) = file_old else {
+        return true;
+    };
+    let body = if indented {
+        format!(
+            "  impl Svc {{\n      ...\n-     {minus_header}\n+     {minus_header}\n          ...\n      }}\n  }}\n"
+        )
+    } else {
+        format!("- {minus_header}\n+ {minus_header}\n      ...\n  }}\n")
+    };
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n{body}",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+}
+
 /// N-site use-prefix totality: file + inline-mod `use` spans whose
 /// leading segments equal `old_prefix` occur exactly `minuses.len()`
 /// times (tails preserved; group members each count). Fn-body uses never
@@ -1208,6 +1258,89 @@ mod tests {
             "f.rs",
             Some(pre),
             "Vec<T0>",
+            0
+        ));
+    }
+    #[test]
+    fn template_fn_counts_header_matches() {
+        // The emitted minus header (wildcards + concrete slots) must
+        // match exactly N fn items: `V Q` rides hetero vis, `(...)`
+        // hetero params, omitted return matches any return.
+        let pre =
+            "pub fn alpha(x: i32) -> i32 {\n    x\n}\nfn alpha(y: String) -> String {\n    y\n}\n";
+        assert!(crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre),
+            "V Q fn alpha(...) {",
+            false,
+            2
+        ));
+        // Concrete slots narrow the domain: the params-concrete probe
+        // matches only vis-less same-param sites (minus-omitted vis is
+        // `Absent`, not match-any — the `V Q` pair is the wildcard).
+        assert!(!crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre),
+            "fn alpha(x : i32) {",
+            false,
+            2
+        ));
+        let pre_single =
+            "pub fn other(x: i32) -> i32 {\n    x\n}\nfn alpha(x: i32) -> i32 {\n    x\n}\n";
+        assert!(crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre_single),
+            "fn alpha(x : i32) {",
+            false,
+            1
+        ));
+        // Indented probes wrap in `impl Svc` and count methods.
+        let pre_impl =
+            "impl Svc {\n    fn alpha(x: i32) -> i32 {\n        x\n    }\n    fn alpha(y: String) -> String {\n        y\n    }\n}\n";
+        assert!(crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre_impl),
+            "fn alpha(...) {",
+            true,
+            2
+        ));
+        assert!(!crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre_impl),
+            "fn alpha(...) {",
+            false,
+            2
+        ));
+    }
+    #[test]
+    fn template_fn_none_pre_allows_and_garbage_vetoes() {
+        assert!(crate::totality::template_fn_holds(
+            "f.rs",
+            None,
+            "fn alpha(...) {",
+            false,
+            2
+        ));
+        let pre = "fn m() {}\n";
+        assert!(!crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre),
+            "fn alpha(...) {",
+            false,
+            2
+        ));
+        assert!(!crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre),
+            "fn alpha(",
+            false,
+            2
+        ));
+        assert!(!crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre),
+            "fn alpha(...) {",
+            false,
             0
         ));
     }

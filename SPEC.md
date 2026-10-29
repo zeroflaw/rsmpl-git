@@ -5980,7 +5980,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`). `totality` is
 `"pre-image"` when the section had pre-image text to count against,
@@ -6011,7 +6011,30 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   `+ V Q fn New G (...) W {`); uniformly indented sites emit the
   `impl Svc` advisory-context sweep (T323: header names no block,
   all blocks rewrite). Mixed indent or divergent deltas stay
-  passthrough.
+  passthrough. The slot sweep is the zero-delta (rename-only) special
+  case of the signature-evolution sweep below; both detectors run, slot
+  first, and rename-only classes never reach evolution.
+- Signature-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
+  `{`-terminated fn header, where the name plus any of
+  vis/qualifiers/generics/params/return/where carry one uniform delta
+  and bodies stay untouched. Every non-name slot is either preserved
+  (per-site minus == plus) or evolving (one uniform plus text; the
+  minus base may be hetero). Uniform bases emit concrete
+  (absent → omitted); hetero preserved bases emit wildcards
+  (`V`/`Q`/`G`/`W`, params `(...)`, return omitted = `Any`); hetero
+  evolving bases wildcard the minus side while the plus side sets the
+  slot wholesale; removals emit minus-concrete/plus-omitted. Two
+  engine-spelling laws are enforced at emission: `V`/`Q` only ever
+  appear as the pair (a lone `V`/`Q` is inference-ambiguous and
+  concrete+wildcard mixes are rejected), and a concrete plus-side
+  return drops the `where` wildcard (`-> T W` is unparsable — the
+  minus side keeps `W` and widens the return to omission instead).
+  Divergent plus sides and hetero-base removals stay ordinary (the
+  engine's slots are all-or-nothing: `...`, concrete, or omitted).
+  Pre-image totality is the generic engine-count check: the emitted
+  minus header must match exactly N fn items in the pre-image
+  (macro/string twins never count — the engine never enters them).
+  Detector name `sig_evolution`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →

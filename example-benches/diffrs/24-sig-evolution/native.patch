@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -6 +6 @@ impl Alpha {
+-    fn run(&self, x: i32) -> i32 {
++    fn execute(&self, x: i32) -> u64 {
+@@ -12 +12 @@ impl Beta {
+-    fn run(&self, y: String) -> String {
++    fn execute(&self, y: String) -> u64 {
+@@ -18 +18 @@ impl Gamma {
+-    fn run(&self, z: u8) -> u8 {
++    fn execute(&self, z: u8) -> u64 {

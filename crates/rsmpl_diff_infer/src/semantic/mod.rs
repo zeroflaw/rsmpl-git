@@ -123,7 +123,7 @@ pub(crate) fn item_emission_header(
         None => crate::emission_header(path, rule, &[]),
     }
 }
-pub(crate) use generalized::{try_let_sweep, try_type_sweep};
+pub(crate) use generalized::{try_let_sweep, try_sig_evolution_sweep, try_type_sweep};
 pub(crate) use peel::try_call_peel_sweep;
 
 /// Try to compress binary-stripped `sections` (one full

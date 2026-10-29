@@ -230,3 +230,54 @@ fn wi4b_type_sweep_extra_site_stays_ordinary() {
         "native minus must survive, got: {semantic}"
     );
 }
+
+#[test]
+fn wi4c_sig_evolution_fires() {
+    // Fixture 73: two `fn alpha` headers with hetero params gain a
+    // uniform rename + `-> u32` return in one `# allow=many`
+    // item-shape hunk (covering range, `fn_slot_sweep` keeps the
+    // rename-only classes — this needs the evolving return).
+    let (native_input, semantic) = convert_fixture("73-sig-evolution-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "sig evolution must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# scope=file"),
+        "ranged hunk, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- fn alpha(...) {\n"),
+        "minus header missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ fn beta(...) -> u32 {\n"),
+        "plus header missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-fn alpha(x: i32)"),
+        "typed minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "sig sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi4c_sig_evolution_extra_site_stays_ordinary() {
+    // Fixture 74: a third untouched `fn alpha` in the pre-image
+    // breaks engine-count totality (3 != 2) — the sweep would silently
+    // rewrite it, so the section stays ordinary.
+    let (_native_input, semantic) = convert_fixture("74-sig-evolution-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "extra fn site must veto, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-fn alpha(x: i32) -> i32 {"),
+        "native minus must survive, got: {semantic}"
+    );
+}
