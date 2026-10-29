@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -2,6 @@ rule=r1
+# allow=many
+- config_loader::parse_config_value(E0)
++ config_loader::read_config_value(E0)

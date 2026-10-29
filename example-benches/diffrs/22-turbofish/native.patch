@@ -1,0 +1,16 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,6 +2,6 @@ fn ingest() {
+-    let a = decode_message::<u8>(first_packet_payload);
+-    let b = decode_message::<i32>(second_packet_payload);
+-    let c = decode_message::<u64>(third_packet_payload);
+-    let d = decode_message::<bool>(fourth_packet_payload);
+-    let e = decode_message::<f64>(fifth_packet_payload);
+-    let f = decode_message::<String>(sixth_packet_payload);
++    let a = parse_message::<u8>(first_packet_payload);
++    let b = parse_message::<i32>(second_packet_payload);
++    let c = parse_message::<u64>(third_packet_payload);
++    let d = parse_message::<bool>(fourth_packet_payload);
++    let e = parse_message::<f64>(fifth_packet_payload);
++    let f = parse_message::<String>(sixth_packet_payload);

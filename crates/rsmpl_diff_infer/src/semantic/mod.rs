@@ -17,8 +17,10 @@
 mod calls;
 mod deletes;
 mod literal;
+mod macros;
 mod methods;
 mod moves;
+mod paths;
 mod peel;
 pub(crate) mod prefix;
 pub(crate) mod prov;
@@ -30,10 +32,12 @@ pub(crate) use slot::try_fn_slot_sweep;
 
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
 pub(crate) use literal::{try_call_literal_section, try_call_literal_sweep};
+pub(crate) use macros::try_macro_rename_sweep;
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,
 };
+pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
 /// WI-1b: covering item span for item-shape detectors (item rename,
 /// slot sweep). Item patterns (`- fn Old`, slot headers with `...`
@@ -453,6 +457,65 @@ fn compress_section(
         }
         used_rules.truncate(checkpoint);
     }
+    // WI-3: qualified-path, turbofish, and macro-rename sweeps — after
+    // the method sweeps, before the bare-call sweep (tightest first).
+    if let Some(qual) =
+        try_qualified_call_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if qual.len() < section.len() {
+            push_section_prov(
+                prov,
+                &qual,
+                section.len(),
+                &path,
+                "qualified_call",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
+            return Some(qual);
+        }
+        used_rules.truncate(checkpoint);
+    }
+    if let Some(turbo) =
+        try_turbofish_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if turbo.len() < section.len() {
+            push_section_prov(
+                prov,
+                &turbo,
+                section.len(),
+                &path,
+                "turbofish",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
+            return Some(turbo);
+        }
+        used_rules.truncate(checkpoint);
+    }
+    if let Some(mac) =
+        try_macro_rename_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
+    {
+        if mac.len() < section.len() {
+            push_section_prov(
+                prov,
+                &mac,
+                section.len(),
+                &path,
+                "macro_rename",
+                &changed,
+                file_old,
+                checkpoint,
+                used_rules,
+            );
+            return Some(mac);
+        }
+        used_rules.truncate(checkpoint);
+    }
     if let Some(uses) =
         try_use_prefix_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules)
     {
@@ -472,6 +535,9 @@ fn compress_section(
         }
         used_rules.truncate(checkpoint);
     }
+    // N >= 2 bare-call rewrites (callee-only delta), use-path prefix
+    // renames above included; fall through to the trailing-arg sweeps
+    // otherwise.
     if let Some(sweep) = try_call_sweep(&minuses, &pluses, &path, file_old, &changed, used_rules) {
         if sweep.len() < section.len() {
             push_section_prov(

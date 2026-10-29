@@ -5977,7 +5977,8 @@ provenance for one emitted semantic hunk (empty when fully ordinary):
 `{rule, file, detector, sites, totality, saved_bytes}`. `detector` is
 the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_to_fn`, `method_to_method`, `method_same_literal`,
-`ref_strip`, `use_prefix`, `call_sweep`, `call_arg_add`,
+`ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
+`use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
 `call_literal_section`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
@@ -6084,7 +6085,46 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   method ident and shared arg token-texts (typically literals, bound
   verbatim so `&d.join("repo")`-style sites can never over-match) →
   one `# allow=many` general-expr hunk (`# expr Receiver` only).
-  Trailing `;`/`,` tolerated.
+   Trailing `;`/`,` tolerated.
+- Qualified-call sweep: N ≥ 2 `-`/`+` pairs, each a multi-segment
+  (`syn`-parsed, generic-free, qself-free) `P::Old(args)` →
+  `P::New(args)` call with a shared prefix (leading `::` has no engine
+  spelling and declines), one shared last-segment delta, uniform arity,
+  and per-site token-equal args → one `# allow=many` hunk with the
+  concrete path form (`- crate::old_api(E0…)` /
+  `+ crate::new_api(E0…)`; SPEC 19.3 prefers concrete paths, no `# symbol`
+  tax). Leading-`::` and qself sites stay ordinary. Call sites inside
+  `let` inits unwrap to their init call (T449 precedent). Pre-image
+  totality keys on the exact rendered path + arity (bare twins never
+  match a qualified pattern and vice versa — probed parity).
+- Turbofish sweep: N ≥ 2 `-`/`+` pairs, one uniform variant per hunk —
+  bare calls (`foo::<u8>(x)` → `bar::<u8>(x)`), qualified calls
+  (`crate::old::<u8>(x)` → `crate::new::<u8>(x)`, same prefix rule as
+  the qualified sweep), or method calls (`recv.old::<u8>(x)` →
+  `recv.new::<u8>(x)` with per-site token-equal receivers) — every side
+  carrying `::<…>` (the `::` spelling; `let`-init calls unwrap, T449).
+  Value args token-equal per site with uniform value arity; turbofish
+  uniform turbo-arity with per-site minus token-equals plus; across all
+  sites at most one turbo position varies — that position emits an
+  inferred `T` on both sides (`- foo::<T>(E0)` /
+  `+ bar::<T>(E0)`), the rest verbatim. A bare-without-turbofish
+  pattern never matches a turbofish site (R3 parity, probed), and
+  turbo-arity is match-exact, so totality keys on callee + value arity
+  + turbo arity + concrete non-hole turbo texts (`&`-receivers counted
+  conservatively). Two varying positions, per-site turbofish deltas,
+  non-type holes, and qself stay ordinary.
+- Macro-rename sweep: N ≥ 2 `-`/`+` pairs, each a single-segment
+  macro invocation `old!(body)` → `new!(body)` (whole-line statements
+  and `let`-init invocations, which match the pattern in place —
+  probed) with one shared old/new name delta and per-site token-equal
+  bodies (bodies vary across sites; delimiters unrestricted — the
+  engine `...` matches `!()`, `![]`, `!{}` alike, probed) → one
+  `# allow=many` `# macro=token_tree` hunk (`- old!(...)` /
+  `+ new!(...)`). Token-tree matching is verbatim-only by design, so
+  the body is never spelled. Qualified macro paths, same-name body
+  rewrites (macro interiors, WI-9), and divergent new names stay
+  ordinary. Pre-image totality counts every `old!` invocation (any
+  delimiter/body — the `...` pattern matches all).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed
@@ -6212,9 +6252,9 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks (whole-item moves pair pure-minus/pure-plus
   twins instead — see above; verbatim stranded-join pairs excepted),
-  turbofish sites, non-strip
-  `&`-receiver sites, single-segment use prefixes, paths, macro
-  interiors, rename sections — detectors key emissions to the
+  leading-`::`/qself call sites, non-strip
+  `&`-receiver sites, single-segment use prefixes, macro
+  interiors (same-name body rewrites), rename sections — detectors key emissions to the
   b-side path, which would seed from the wrong file, so differing
   `a/old b/new` sides stay ordinary passthrough, T377) stays
   ordinary-hunk passthrough.

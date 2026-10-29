@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -2,5 @@ rule=r1
+# allow=many
+# macro=token_tree
+- old_render_widget!(...)
++ new_render_widget!(...)

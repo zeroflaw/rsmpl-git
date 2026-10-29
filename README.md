@@ -177,6 +177,9 @@ context would be larger, so these are lower bounds.)
 | 18-macro-invocation-veto (2 sites + pure addition, stays ordinary) | 378 B / 14 ln | 308 B / 14 ln | 19% |
 | 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 86 B / 5 ln | 80% |
 | 20-method-to-function (3 sites, method-to-function sweep) | 237 B / 10 ln | 109 B / 5 ln | 54% |
+| 21-qualified-call (6 sites, qualified-call sweep) | 981 B / 16 ln | 133 B / 5 ln | 86% |
+| 22-turbofish (6 sites, turbofish sweep with T hole) | 801 B / 16 ln | 105 B / 5 ln | 87% |
+| 23-macro-rename (5 sites, macro-rename sweep) | 671 B / 14 ln | 125 B / 6 ln | 81% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

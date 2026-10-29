@@ -5,7 +5,11 @@
 //! heterogeneous fn/method renames (one ident delta → one slot-sweep
 //! `V Q fn … G (…) W` hunk), N-site method-to-function fan-outs
 //! (`recv.old(args)` → `new_fn(recv, args)`), N-site method-to-method
-//! renames (`recv.old(args)` → `recv.new(args)`), N-site use-path
+//! renames (`recv.old(args)` → `recv.new(args)`), N-site qualified-call
+//! renames (`P::old(args)` → `P::new(args)`), N-site turbofish-carrying
+//! renames (bare/qualified/method calls with `::<…>`, at most one
+//! varying turbo position bound as `T`), N-site macro renames
+//! (`old!(…)` → `new!(…)` under `# macro=token_tree`), N-site use-path
 //! prefix renames (`use P::Old::T` → `use P::New::T`), and N-site
 //! call rewrites (same callee/arity delta → one `# allow=many`
 //! hunk), and whole-item 1-to-1 moves (byte-identical fn deleted here,
@@ -463,6 +467,18 @@ pub(crate) fn compress_balanced_pair_body(
         semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         Some((strip, "ref_strip"))
+    } else if let Some(qual) =
+        semantic::try_qualified_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        Some((qual, "qualified_call"))
+    } else if let Some(turbo) =
+        semantic::try_turbofish_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        Some((turbo, "turbofish"))
+    } else if let Some(mac) =
+        semantic::try_macro_rename_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        Some((mac, "macro_rename"))
     } else if let Some(uses) =
         semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
@@ -1320,13 +1336,30 @@ mod tests {
         assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
-    fn verbatim_let_macro_init_stays_passthrough() {
-        // T440 boundary: a macro invocation in the init matches nothing
-        // (the engine never enters macro bodies), so the pair stays
-        // ordinary rather than failing loud.
+    fn verbatim_let_macro_init_fires_as_macro_rename() {
+        // WI-3 boundary flip: a macro invocation in the init used to
+        // match nothing (verbatim rejects macros, SPEC 21), so the pair
+        // stayed ordinary. The macro-rename sweep now claims
+        // `vec_old!` -> `vec_new!` renames — including let-wrapped ones
+        // (the pattern matches the init macro in place, probed).
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let v = vec_old!(1, 2, 3);\n+    let v = vec_new!(1, 2, 3);\n@@ -9,1 +10,1 @@\n-    let v = vec_old!(1, 2, 3);\n+    let v = vec_new!(1, 2, 3);\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("# macro=token_tree\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("- vec_old!(...)\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+ vec_new!(...)\n"),
+            "got: {}",
+            out.rsmpl
+        );
     }
     #[test]
     fn verbatim_let_init_mismatch_stays_passthrough() {

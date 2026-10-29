@@ -610,6 +610,268 @@ pub(crate) fn use_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// N-site qualified-call totality (WI-3): full path `old_path` with
+/// `arity` value args occurs exactly `minuses.len()` times. Only
+/// generic-free paths count (the emitted pattern carries no turbofish,
+/// and a bare-without-turbofish pattern never matches a turbofish site
+/// — R3 parity, probed). Exact-path matching is probed: a bare twin
+/// never matches a qualified pattern and vice versa.
+pub(crate) fn qualified_call_holds(
+    file_old: Option<&str>,
+    old_path: &str,
+    arity: usize,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct C<'a> {
+        old_path: &'a str,
+        arity: usize,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for C<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.qself.is_none()
+                        && p.path.segments.len() >= 2
+                        && p.path
+                            .segments
+                            .iter()
+                            .all(|s| matches!(s.arguments, syn::PathArguments::None))
+                        && call.args.len() == self.arity
+                        && render_full_path(p) == self.old_path
+                    {
+                        self.count += 1;
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut c = C {
+        old_path,
+        arity,
+        count: 0,
+    };
+    c.visit_file(&file);
+    if c.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
+/// Canonical full-path render for totality counting: leading `::` plus
+/// bare ident joins — the same spelling the qualified/turbofish
+/// detectors emit, so detector and counter agree by construction.
+fn render_full_path(p: &syn::ExprPath) -> String {
+    let mut out = String::new();
+    if p.path.leading_colon.is_some() {
+        out.push_str("::");
+    }
+    let segs: Vec<String> = p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    out.push_str(&segs.join("::"));
+    out
+}
+
+/// N-site turbofish-call totality (WI-3): full path `old_path` with
+/// `val_arity` value args and a last-segment turbofish of `turbo_arity`
+/// args whose `concrete` positions (index, flat-ws text) match occurs
+/// exactly `minuses.len()` times. Non-turbofish twins never match the
+/// emitted `::<...>` pattern (R3, probed) so they never count;
+/// colon2-spelling is ignored (a bare-`<>` twin counts — erring toward
+/// veto). Prefix segments must be generic-free (the emission spells
+/// them concrete).
+pub(crate) fn turbofish_call_holds(
+    file_old: Option<&str>,
+    old_path: &str,
+    val_arity: usize,
+    turbo_arity: usize,
+    concrete: &[(usize, String)],
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct C<'a> {
+        old_path: &'a str,
+        val_arity: usize,
+        turbo_arity: usize,
+        concrete: &'a [(usize, String)],
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for C<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.qself.is_none()
+                        && call.args.len() == self.val_arity
+                        && render_full_path(p) == self.old_path
+                        && turbo_concrete_holds(p, self.turbo_arity, self.concrete)
+                    {
+                        self.count += 1;
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut c = C {
+        old_path,
+        val_arity,
+        turbo_arity,
+        concrete,
+        count: 0,
+    };
+    c.visit_file(&file);
+    if c.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
+/// The last-segment turbofish of a call path carries `turbo_arity` args
+/// with every `concrete` position flat-equal (prefix segments
+/// generic-free — the emission spells them concrete). Colon2-insensitive
+/// (counts bare-`<>` spellings too — veto-safe).
+fn turbo_concrete_holds(
+    p: &syn::ExprPath,
+    turbo_arity: usize,
+    concrete: &[(usize, String)],
+) -> bool {
+    if p.path.segments.is_empty() {
+        return false;
+    }
+    for seg in p.path.segments.iter().take(p.path.segments.len() - 1) {
+        if !matches!(seg.arguments, syn::PathArguments::None) {
+            return false;
+        }
+    }
+    let last = p.path.segments.last();
+    let Some(syn::PathArguments::AngleBracketed(args)) = last.map(|s| &s.arguments) else {
+        return false;
+    };
+    if args.args.len() != turbo_arity {
+        return false;
+    }
+    concrete.iter().all(|(i, want)| {
+        args.args.iter().nth(*i).is_some_and(|a| {
+            super::semantic::flat_ws(&a.to_token_stream().to_string())
+                == super::semantic::flat_ws(want)
+        })
+    })
+}
+
+/// N-site turbofish-method totality (WI-3): method `method` with
+/// `val_arity` value args and a `turbo_arity`-arg turbofish whose
+/// `concrete` positions match occurs exactly `minuses.len()` times.
+/// All receivers counted (incl `&`-wrapped — conservative, mirroring
+/// `method_holds`: the pattern cannot match them, so an extra `&` site
+/// vetoes).
+pub(crate) fn turbofish_method_holds(
+    file_old: Option<&str>,
+    method: &str,
+    val_arity: usize,
+    turbo_arity: usize,
+    concrete: &[(usize, String)],
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct M<'a> {
+        method: &'a str,
+        val_arity: usize,
+        turbo_arity: usize,
+        concrete: &'a [(usize, String)],
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for M<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::MethodCall(m) = node {
+                if m.method == self.method
+                    && m.args.len() == self.val_arity
+                    && m.turbofish.as_ref().is_some_and(|t| {
+                        t.args.len() == self.turbo_arity
+                            && self.concrete.iter().all(|(i, want)| {
+                                t.args.iter().nth(*i).is_some_and(|a| {
+                                    super::semantic::flat_ws(&a.to_token_stream().to_string())
+                                        == super::semantic::flat_ws(want)
+                                })
+                            })
+                    })
+                {
+                    self.count += 1;
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut m = M {
+        method,
+        val_arity,
+        turbo_arity,
+        concrete,
+        count: 0,
+    };
+    m.visit_file(&file);
+    if m.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
+/// N-site macro-rename totality (WI-3): single-segment macro invocations
+/// named `old_name` (any delimiter, any body — the emitted `...`
+/// matches all three delimiters, probed) occur exactly `minuses.len()`
+/// times. Qualified twins (`crate::old!`) never match the bare pattern
+/// (probed) so they never count.
+pub(crate) fn macro_holds(
+    file_old: Option<&str>,
+    old_name: &str,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct M<'a> {
+        old_name: &'a str,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for M<'_> {
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            if node.path.leading_colon.is_none()
+                && node.path.segments.len() == 1
+                && node.path.segments[0].ident == self.old_name
+                && matches!(node.path.segments[0].arguments, syn::PathArguments::None)
+            {
+                self.count += 1;
+            }
+            syn::visit::visit_macro(self, node);
+        }
+    }
+    let mut m = M { old_name, count: 0 };
+    m.visit_file(&file);
+    if m.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
