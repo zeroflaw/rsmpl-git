@@ -376,6 +376,16 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 1,
     },
+    // c649b34 (T471): move + partial-delete composition — the T468
+    // split moved 3 fns mod.rs->calls.rs with 2 evolved in transit
+    // (super::->crate::), so only parse_call_pair moves verbatim
+    // (move+paste) while the evolved pair rides delete_items.
+    Case {
+        commit: "c649b3469cb5c1de41ff6928257592160c902ba9",
+        rev: None,
+        root: false,
+        expect_sem: 3,
+    },
 ];
 
 fn binary() -> PathBuf {
