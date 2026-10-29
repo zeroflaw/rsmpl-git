@@ -437,15 +437,19 @@ fn apply_rsmpl_hunk(
     // general-expr / macro shapes thread their first-match map through.
     let empty = || HashMap::new();
     match &compiled.kind {
-        PatternKind::Fn { .. } => matcher_fn::apply_fn_hunk(
-            parsed,
-            &state.original,
-            &state.index,
-            rh,
-            compiled,
-            edits,
-        )
-        .map(|n| (n, empty())),
+        PatternKind::Fn { .. } => {
+            let before = edits.len();
+            let n = matcher_fn::apply_fn_hunk(
+                parsed,
+                &state.original,
+                &state.index,
+                rh,
+                compiled,
+                edits,
+            )?;
+            let bindings = follow_uses(rh, compiled, parsed, state, path, edits, before)?;
+            Ok((n, bindings))
+        }
         PatternKind::Expr {
             minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
             ..
@@ -465,15 +469,19 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
-        PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
-            parsed,
-            &state.original,
-            &state.index,
-            rh,
-            compiled,
-            edits,
-        )
-        .map(|n| (n, empty())),
+        PatternKind::ItemRename { .. } => {
+            let before = edits.len();
+            let n = matcher_item::apply_item_rename_hunk(
+                parsed,
+                &state.original,
+                &state.index,
+                rh,
+                compiled,
+                edits,
+            )?;
+            let bindings = follow_uses(rh, compiled, parsed, state, path, edits, before)?;
+            Ok((n, bindings))
+        }
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,
@@ -870,6 +878,76 @@ fn nearest_source(state: &FileState, old_start: u32) -> Option<String> {
     source_line(state, line).map(|excerpt| format!("source at line {line}: '{excerpt}'"))
 }
 
+/// WI-6a `# follow=uses`: after the definition rewrite, resolve same-file
+/// use sites and append their ident-span edits under the same rule
+/// (SPEC 14.8). Zero new def edits (optional zero-match) means nothing to
+/// follow — a no-op, never a veto. Returns extra bindings (`follow_skipped`
+/// when `# fallback=syntax` left sites untouched).
+fn follow_uses(
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    parsed: &syn::File,
+    state: &FileState,
+    path: &str,
+    edits: &mut Vec<TextEdit>,
+    before: usize,
+) -> Result<HashMap<String, String>, StructuredError> {
+    let mut bindings = HashMap::new();
+    if !rh.follows_uses() {
+        return Ok(bindings);
+    }
+    if edits.len() == before {
+        return Ok(bindings);
+    }
+    let (old, new) = match &compiled.kind {
+        PatternKind::Fn {
+            minus_name,
+            plus_name,
+            ..
+        } => (minus_name.clone(), plus_name.clone()),
+        PatternKind::ItemRename {
+            minus_name,
+            plus_name,
+            ..
+        } => (minus_name.clone(), plus_name.clone()),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+            )
+            .with_rule(rh.rule_name())
+            .with_file(path)
+            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
+        }
+    };
+    // Ranges this hunk already rewrote: a same-named definition outside
+    // them shadows (the resolver decides veto vs skip, never guesses).
+    let renamed: Vec<(usize, usize)> = edits[before..].iter().map(|e| (e.start, e.end)).collect();
+    let outcome = crate::use_graph::resolve(
+        parsed,
+        &state.original,
+        &state.index,
+        &old,
+        &renamed,
+        rh.fallback_syntax(),
+    )
+    .map_err(|veto| {
+        StructuredError::new(ErrorCode::SymbolConflict, veto.reason)
+            .with_rule(rh.rule_name())
+            .with_file(path)
+            .with_suggestion(
+                "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped`) instead of failing",
+            )
+    })?;
+    for (a, b) in outcome.spans {
+        edits.push(TextEdit::new(a, b, new.clone()));
+    }
+    if !outcome.skipped.is_empty() {
+        bindings.insert("follow_skipped".to_string(), outcome.skipped.join("; "));
+    }
+    Ok(bindings)
+}
+
 /// v0.1 capability gate (SPEC 22-23): only `format=preserve` and AST matching
 /// (plus macro token-tree patterns).
 fn gate_directives(
@@ -885,6 +963,22 @@ fn gate_directives(
         .with_rule(rh.rule_name())
         .with_file(path)
         .with_suggestion("remove the directive and run `cargo fmt` after apply"));
+    }
+    // WI-6a: `# follow=uses` is legal only on fn and item rename hunks
+    // (SPEC 18.6); every other shape keeps the SPEC 14.8 follow-up hunks.
+    if rh.follows_uses()
+        && !matches!(
+            &compiled.kind,
+            PatternKind::Fn { .. } | PatternKind::ItemRename { .. }
+        )
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+        )
+        .with_rule(rh.rule_name())
+        .with_file(path)
+        .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
     }
     let is_macro = matches!(
         &compiled.kind,

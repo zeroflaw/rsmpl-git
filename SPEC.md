@@ -800,7 +800,8 @@ hunks that already carry other directives omit it.
 | `# format=canonical` | Rejected in v0.1 (run `cargo fmt` after apply, Section 22.3). |
 | `# returns=none` | Minus-side requires no explicit return type (function items only, Section 14.2). |
 | `# root=item/expr/stmt/type` | Force the parse context when the shape is ambiguous (Section 13.4). |
-| `# fallback=syntax` | Allow syntactic match when `# symbol` cannot resolve (required in v0.1, Section 19). |
+| `# fallback=syntax` | Allow syntactic match when `# symbol` cannot resolve (required in v0.1, Section 19); also the WI-6a follow skip switch (Section 14.8). |
+| `# follow=uses` | Rewrite same-file use sites alongside a fn/item rename (WI-6a, Section 14.8; legal only on fn/item rename hunks). |
 | `# symbol Name=path` | Bind a semantic symbol to a fully-qualified path (Sections 9.5, 19). |
 | `# metavars=sigiled/bare` | Sigiled mode requires `$Name` in bodies; bare is the token-efficient default (Section 15.5). |
 
@@ -2204,6 +2205,48 @@ cleanly, so a full rename composes follow-up hunks (all probe-verified):
 A bare `- Old` / `+ New` pair with no `# root=` never routes (ambiguous
 shape, Section 13.4) — always force the context explicitly.
 
+#### Use-site following (`# follow=uses`, WI-6a)
+
+A fn or item rename hunk carrying `# follow=uses` rewrites the definition
+ident **and** its same-file use sites in one hunk:
+
+```diff
+diff --git src/lib.rs
+@@ -2,3 @@ rule=rename
+# follow=uses
+- struct Old
++ struct New
+```
+
+This rewrites the `struct Old` header plus every same-file use the
+syntactic walk can prove: type paths (`x: Old`, `-> Old`, `Vec<Old>`),
+value and call paths (every segment spelling `Old` — bare `Old`,
+trailing `m::Old`, leading `Old::new`, middle `a::Old::assoc`;
+turbofish lives outside the ident span and is preserved), struct-literal
+and pattern paths (`Old { a }`, `Some(Old)`), `impl` self-ty and
+trait-side segments (`impl Old`, which name the item itself), and
+`use`-tree segments (`use m::Old`, group members, `as` tails preserved).
+The hunk range is ignored for uses: a follow rewrites the whole file,
+which is the point (no range discovery). Spans cover definition + use
+edits (`spans.len() >= matches`; `matches` counts definitions); the
+lowered diff is the observable truth as always (Section D.2).
+
+Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
+a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
+Never inferred across files in v0.1 (WI-6b owns the workspace index):
+a use in a file the patch does not touch stays stale, so include every
+touched file in the patch.
+
+Fail loud (Section 2.6): a second same-named definition, a shadowing
+local binding or enum variant, or a macro/attribute mention the resolver
+cannot attribute vetoes the whole hunk with `RSMPL_SYMBOL_CONFLICT`
+naming the site — unless the hunk also carries `# fallback=syntax`, in
+which case unprovable sites are left untouched and listed in the WI-2
+`follow_skipped` binding while provable sites still rewrite (a shadowed
+definition skips *all* use rewriting, since every use is then ambiguous).
+On any other shape `# follow=uses` is `RSMPL_PATTERN_CONFLICT` (Section
+18.6: other shapes keep the follow-up hunks above).
+
 > **v0.1 implementation note:** `const fn` shapes keep routing to the function classifier (the keyword in name position falls through); `impl!(...)` macro shapes keep routing to the macro classifier (a `!` after the kind falls through). Item-rename hunks reject `# returns=none` (function-only). `auto trait` headers and raw-identifier edge cases beyond `` `r#name` `` are not supported; use an ordinary hunk.
 
 ### 14.9 Use-path prefix renames
@@ -3359,7 +3402,8 @@ case where an ordinary hunk cannot express the edit.
 | C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
-| C15 | inert directives: lone `# fallback=syntax` (no `# symbol`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
+| C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
+| C17 | `# follow=uses` on any shape other than a fn or item rename hunk (WI-6a) | `` `# follow=uses` is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
@@ -3469,7 +3513,7 @@ Fallback directive:
 ```
 
 In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
-A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic in v0.1).
+A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic in v0.1) — except on a `# follow=uses` hunk, where it is the WI-6a skip switch (Section 14.8).
 
 A sole symbol ident carrying explicit turbofish (`Old::<u8>(E)` with `# symbol Old=crate::old_api`) expands to the seeded path and binds the turbofish args structurally (SPEC 18.6 R3); other symbol spellings keep exact-path behavior.
 > **v0.1 implementation note:** syntactic fallback compares the full path text exactly (e.g. `crate::old_api` matches only callees spelled `crate::old_api` — not bare `old_api`, not `other::old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment. No resolver integration (rust-analyzer / cargo metadata) is planned for v0.1; revisit only with a dogfood case where exact-path matching blocks a real rename.
@@ -4206,7 +4250,7 @@ invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (three engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons) or structural fn-pattern misuse (eleven engine-verbatim reasons, both Section 14.7); any concrete-shape, missing-name, bare-side-mismatch, or lexical-name item pattern (six engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9) — plus the two bare-side `use` fences in the same section; and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
 The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. It gains three further members: the Section 9.6 declaration-name fences (`missing name`, `invalid name`, `empty path`, `empty capture`), the Section 16 standalone-`...` fence, and the Section 17.8 repeat-both fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
-It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C-table compile-time fences — eleven live C1-C12 rejections (`...` in general shape, four `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6) plus the WI-5a C2-closure fire (`let-else` minus now applies), each pinned text+JSON+untouched (fires pinned as success+output) in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections; C16 pinned in `root_item_verbatim_e2e.rs`).
+It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C-table compile-time fences — eleven live C1-C12 rejections (`...` in general shape, four `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6) plus the WI-5a C2-closure fire (`let-else` minus now applies), each pinned text+JSON+untouched (fires pinned as success+output) in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections; C16 pinned in `root_item_verbatim_e2e.rs`). It gains one further member: the WI-6a C17 misplaced-`# follow=uses` fence (rule+file envelope, set suggestion), pinned text+JSON+untouched in `follow_uses_e2e.rs`.
 
 It gains one further member: the Section 14.8 item attr-merge fence (plus-side-omitted verbatim reason, rule+file envelope with null range/suggestion; the differ case reuses the 14.6 second fence byte-identical, suggestion set). Defensive-only, documented without pins (T287/T290/T291 precedent — no CLI trigger, so no fence to pin): the seven `expected X pattern` dispatch arms (`function`, `item capture`, `insertion`, `impl-context`, `expression`, `use-path`, `generalized stmt/expr/type` — plan.rs routes each `PatternKind` to its own matcher, cf. the 21.3 macro note), the `cannot analyze method signature` synth backstop (rendered from an already-parsed signature; no CLI trigger post-T190/T221), the `general statement patterns must be ...` arm alongside the `invalid let`/`expression`/`type` match-time re-parses the body list already names (the classifier pre-validates the same strings at compile time), and the span-guard family (`span line ... outside file`, `edit range ... outside file`, `... name span mismatch (file changed during matching?)`, `use prefix span is empty (file changed during matching?)` — the target file is immutable during matching).
 
@@ -5588,11 +5632,16 @@ prints one JSON object to stdout:
   (`spans.len() == matches`); signature-evolution replacements emit one
   span per edit (delete+insert pairs). Insertions report the anchor as
   `[L, L]`; an empty match set (optional no-match) reports `[]`.
+  A `# follow=uses` hunk additionally carries one span per rewritten use
+  site, so `spans.len() >= matches` there (`matches` still counts
+  definitions only).
   Each entry also carries `bindings` when the shape binds something:
   the first accepted match's metavariable → matched source text map,
   sorted by name. Renames, insertions, deletions, and use-prefix renames
   bind nothing and omit both keys (an empty map plus a zero count
-  carries no evidence). Values truncate at 80 chars and entries at 8
+  carries no evidence) — except a `# follow=uses` hunk with skipped
+  sites, which binds `follow_skipped` to the `; `-joined skip notes.
+  Values truncate at 80 chars and entries at 8
   (sorted order); `bindings_truncated` counts the omitted entries, so
   the report stays within an absolute byte budget while an over-broad
   hunk still shows its extra span before apply. Budget (bytes beyond

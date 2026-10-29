@@ -218,6 +218,7 @@ fn canonical_directives(r: &RsmplHunk) -> Vec<String> {
             }
             Directive::ReturnsNone(true) => dirs.push("# returns=none".to_string()),
             Directive::FallbackSyntax(true) => dirs.push("# fallback=syntax".to_string()),
+            Directive::FollowUses => dirs.push("# follow=uses".to_string()),
             Directive::SigiledMetavars(true) => dirs.push("# metavars=sigiled".to_string()),
             _ => {}
         }
@@ -349,6 +350,20 @@ mod tests {
         let got = canon(text);
         assert!(
             got.contains("@@ -2,3 @@ rule=r1\n# allow=many\n- foo(E0)\n+ bar(E0)\n"),
+            "got:\n{got}"
+        );
+        assert_eq!(got, canon(&got));
+    }
+
+    #[test]
+    fn follow_uses_emits_in_fixed_order() {
+        // WI-6a: `# follow=uses` survives canonicalization after fallback.
+        // Tail directives keep input relative order (existing
+        // canonical semantics); the pin is survival + fixed point.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=z\n# fallback=syntax\n# follow=uses\n- struct Old\n+ struct New\n";
+        let got = canon(text);
+        assert!(
+            got.contains("# fallback=syntax\n# follow=uses\n- struct Old\n+ struct New\n"),
             "got:\n{got}"
         );
         assert_eq!(got, canon(&got));

@@ -6,6 +6,7 @@
 
 mod canonical;
 mod diet_detect;
+mod directives;
 mod errors;
 mod model;
 mod parser;

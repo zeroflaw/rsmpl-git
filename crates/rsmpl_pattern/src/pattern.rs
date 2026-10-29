@@ -327,7 +327,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // T169: lone `# fallback=syntax` (zero `# symbol` declarations) is a
     // silent no-op on every shape — the engine symbol loop iterates zero
     // times, so the directive constrains nothing. Fail fast (SPEC 2.6).
+    // WI-6a: a `# follow=uses` hunk gives the fallback meaning (skip
+    // ambiguous/opaque follow sites instead of vetoing, SPEC 14.8), so it
+    // is exempt from the lone-fallback fence.
     if table.symbols.is_empty()
+        && !hunk.follows_uses()
         && hunk
             .directives
             .iter()

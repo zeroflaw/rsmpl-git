@@ -235,6 +235,10 @@ pub enum Directive {
     Scope(Scope),
     Bind(String),
     Use(String),
+    /// WI-6a: `# follow=uses` — rewrite same-file use sites of a renamed
+    /// fn/item alongside its definition (SPEC 14.8). Legal only on fn and
+    /// item rename hunks; gated in the engine planner (SPEC 18.6).
+    FollowUses,
     Attrs(AttrsPolicy),
     Mode(ParseMode),
     MacroMode(MacroMode),
@@ -404,6 +408,21 @@ impl RsmplHunk {
                 _ => None,
             })
             .collect()
+    }
+
+    /// True when the hunk carries `# follow=uses` (WI-6a, SPEC 14.8).
+    pub fn follows_uses(&self) -> bool {
+        self.directives
+            .iter()
+            .any(|d| matches!(d, Directive::FollowUses))
+    }
+
+    /// True when the hunk opts into syntactic fallback for ambiguous or
+    /// opaque follow sites (WI-6a: skip + report instead of veto).
+    pub fn fallback_syntax(&self) -> bool {
+        self.directives
+            .iter()
+            .any(|d| matches!(d, Directive::FallbackSyntax(true)))
     }
 
     pub fn rule_name(&self) -> String {

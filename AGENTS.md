@@ -41,7 +41,8 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 | `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8) |
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments (SPEC 14.6) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous (SPEC 13.4) |
-| `# fallback=syntax` | allow syntactic match when `# symbol` can't resolve (SPEC 19) |
+| `# fallback=syntax` | allow syntactic match when `# symbol` can't resolve (SPEC 19); with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing (SPEC 14.8) |
+| `# follow=uses` | rewrite same-file use sites alongside a fn/item rename; definition-only without it (SPEC 14.8) |
 | `# returns=none` | minus-side requires no return type (SPEC 14.2, fn only) |
 
 Everything else lives in the full table (SPEC 9.3); you rarely need it.
@@ -54,7 +55,7 @@ evolve, `...`/same-metavar slots are preserved, bodies are never rewritten
 (SPEC 14.7). A `trait T {` header + fn pair rewrites trait methods incl.
 `;` decls (never `pub`, SPEC 13.4). Other items rename with a bare pair, one ident edit,
 vis/generics/bodies preserved (SPEC 14.8; definition-only, follow-ups
-per the 14.8 table):
+per the 14.8 table — or one `# follow=uses` hunk for same-file uses):
 
 ```diff
 - struct Old
