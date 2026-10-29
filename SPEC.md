@@ -5965,7 +5965,9 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
   (the last run stays an ordinary trailing leftover; a
   single item with a blank-ending prefix and no following blank trims the
   absorbed blank from the prefix leftover hunk), and a global T375 byte-win
-  guard. Mixed-hunk input is unreachable (the source always runs
+  guard (strict `emitted < replaced`, ties stay ordinary — e.g. a 3-line
+  fn, 6 ordinary lines, costs more as cut+paste and stays ordinary by
+  design). Mixed-hunk input is unreachable (the source always runs
   `git diff --unified=0`, so declining mixed hunks is defensive only);
   inter-run gap relaxation stays vetoed (the same-anchor paste join
   restores exactly one blank); vis-evolution needs engine move+evolve
@@ -6077,7 +6079,9 @@ against the whole section, per-hunk candidates against their hunk
 (prelude shared either way; ties stay ordinary); a losing shape
 falls back to ordinary (whole-section losers still retry per hunk),
 so short singles and tiny sweeps never cost more than the
-passthrough. Every output therefore
+passthrough (no fixed line threshold — the comparison is bytes, so a
+vetoed move minus side may still ride a `delete_items` sweep firing
+on the same minus run). Every output therefore
 parses by construction; the pinned shapes additionally round-trip
 through `applyrs --check` against the pre-change tree. Semantic
 validity beyond the pinned shapes is best-effort: verify with the
