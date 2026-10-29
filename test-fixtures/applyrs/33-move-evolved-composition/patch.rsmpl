@@ -1,0 +1,30 @@
+diff --git src/new.rs
+--- a/src/new.rs
++++ b/src/new.rs
+@@ -1,0 +2,1 @@
++
+@@ -1,0 @@ rule=paste_parse_pair
+# use=M1
++ M1
+@@ -1,0 +15,8 @@
++
++fn sweep_a() {
++    crate::helper();
++}
++
++fn sweep_b(x: i32) -> i32 {
++    crate::compute(x)
++}
+diff --git src/old.rs
+--- a/src/old.rs
++++ b/src/old.rs
+@@ -2,1 +1,0 @@
+-
+@@ -3,12 @@ rule=move_parse_pair
+# item I
+# bind=M1
+- I
+@@ -16,7 +1,0 @@ rule=delete_items
+# allow=many
+# item I
+- I
