@@ -1410,6 +1410,44 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "37-move-evolved-composition" {
+            // T476: move + partial-delete composition (c649b34/T471
+            // prize-shape miniature) -- one verbatim fn moves cross-file
+            // (cut + paste) while two in-transit-evolved fns (`super::`
+            // -> `crate::`) ride one real-range delete_items hunk plus
+            // an ordinary addition leftover. First full-cycle cover for
+            // sweep interaction (09 covers the same-file dedup-loser).
+            assert!(
+                semantic.contains("rule=move_parse_pair"),
+                "verbatim move cut must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=paste_parse_pair"),
+                "verbatim move paste must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=delete_items").count(),
+                1,
+                "exactly one delete hunk, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn sweep_a"),
+                "evolved minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    super::helper();"),
+                "evolved minus body must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    crate::helper();"),
+                "evolved plus lines ride the ordinary leftover, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "composition must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
