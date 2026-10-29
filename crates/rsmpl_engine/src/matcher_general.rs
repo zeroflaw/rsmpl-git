@@ -1333,6 +1333,29 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_hetero_method_with_dotted_arg() {
+        // WI-2 follow-up: `- E.push(F.clone())` (hetero receiver + dotted
+        // arg) must bind both holes and substitute both sides. The call
+        // router stays out (composite `__RSMPL_F.clone()` arg is concrete,
+        // bypassing to the general matcher); the general matcher binds
+        // `E->order`, `F->rel` and emits `rel.clone()`, never literal `F`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@ rule=hetpush\n# lang=rust\n# allow=many\n# expr E\n# expr F\n- E.push(F.clone())\n+ E.push2(F.clone())\n";
+        let src = "fn m() {\n    order.push(rel.clone());\n    other.push(rel.clone());\n    third.push(other.clone());\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches(".push2(").count(), 3, "got: {out}");
+        assert!(out.contains("order.push2(rel.clone());"), "got: {out}");
+        assert!(out.contains("third.push2(other.clone());"), "got: {out}");
+        assert!(!out.contains("F.clone()"), "unsubstituted metavar: {out}");
+        // Same shape diet (inferred, no `# expr` lines) — the WI-2
+        // follow-up's actual failure (`no match found` before the
+        // `infer_method_dot` fix).
+        let diet = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@ rule=hetpush\n# allow=many\n- E.push(F.clone())\n+ E.push2(F.clone())\n";
+        let out = apply(diet, src).unwrap();
+        assert_eq!(out.matches(".push2(").count(), 3, "diet got: {out}");
+        assert!(!out.contains("F.clone()"), "diet unsubstituted: {out}");
+    }
+
+    #[test]
     fn rewrites_unary_not() {
         // T415: leading-bang patterns compile as general unary exprs
         // (router bypass in classify_call_pattern plus the macro

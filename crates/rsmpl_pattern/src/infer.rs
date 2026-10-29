@@ -777,8 +777,13 @@ fn assign_call_slots(
             if t.is_empty() || t.starts_with("let ") || t.starts_with("fn ") {
                 continue;
             }
-            // Method split at last `.` outside strings.
-            if let Some(dot) = rfind_dot(t) {
+            // Method split at the receiver/method dot: depth-aware (same
+            // family as the WI-2 router fix). `rfind_dot` ignored paren
+            // depth, so `E.push(F.clone())` split at the inner `F.clone`
+            // dot (recv `E.push(F`, empty args) and `E` never inferred.
+            // Only dots at paren-depth 0 (outside strings) split; the
+            // last such dot with a `(` after it wins (WI-2 follow-up).
+            if let Some(dot) = infer_method_dot(t) {
                 let recv = t[..dot].trim();
                 let after = t[dot + 1..].trim();
                 if let Some(paren) = after.find('(') {
@@ -955,6 +960,41 @@ fn balanced_args(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+/// Receiver/method split dot for inference: the last `.` outside strings
+/// at paren-depth 0 with a `(` after it. Mirrors `method_split_dots` in
+/// `expr_pattern` (WI-2 router fix): dots inside the arg list
+/// (`E.push(F.clone())` inner dot) or inside strings never split.
+fn infer_method_dot(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut dots = Vec::new();
+    let mut depth = 0usize;
+    let mut i = 0;
+    let mut in_str = false;
+    let mut esc = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+        } else if b == b'"' {
+            in_str = true;
+        } else if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth = depth.saturating_sub(1);
+        } else if b == b'.' && depth == 0 {
+            dots.push(i);
+        }
+        i += 1;
+    }
+    dots.into_iter().rev().find(|&d| s[d + 1..].contains('('))
 }
 
 fn rfind_dot(s: &str) -> Option<usize> {
@@ -1350,5 +1390,37 @@ mod tests {
         let b2 = base(vec![Directive::SigiledMetavars(true)]);
         let t2 = infer_table(b2, "foo($E)", "bar($E)", None).unwrap();
         assert_eq!(t2.kind_of("E"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn hetero_method_with_dotted_arg_infers_both() {
+        // WI-2 follow-up: `E.push(F.clone())` mis-split at the inner
+        // `F.clone` dot (`rfind_dot` ignored paren depth), so `E`
+        // (outside parens) never inferred and the diet hunk never
+        // matched. Depth-aware split infers both as `expr`.
+        let t = infer("E.push(F.clone())", "E.push2(F.clone())");
+        assert_eq!(t.kind_of("E"), Some(MetavarKind::Expr));
+        assert_eq!(t.kind_of("F"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn concrete_method_with_dotted_arg_infers_nothing() {
+        // Fully-concrete `order.push(rel.clone())` carries no holes.
+        let t = infer("order.push(rel.clone())", "order.push2(rel.clone())");
+        assert_eq!(t.kind_of("order"), None);
+        assert_eq!(t.kind_of("rel"), None);
+    }
+
+    #[test]
+    fn infer_method_dot_skips_string_and_arg_dots() {
+        // Dots inside strings and inside the arg list never split.
+        assert_eq!(
+            infer_method_dot("Receiver.contains(\"a.b\")"),
+            Some("Receiver".len())
+        );
+        // `foo(a.b(c))` has no depth-0 dot: plain call, not a method.
+        assert_eq!(infer_method_dot("foo(a.b(c))"), None);
+        // `(a.b).c(d)`: inner dot is nested, outer dot splits.
+        assert_eq!(infer_method_dot("(a.b).c(d)"), Some("(a.b)".len()));
     }
 }

@@ -141,8 +141,10 @@ pub fn classify_args(args_text: &str, table: &MetavarTable) -> Vec<ArgPat> {
         {
             args.push(ArgPat::Meta(t.trim_start_matches('$').to_string()));
         } else if t.starts_with("__RSMPL_") {
-            // Placeholder produced earlier; map back if possible.
-            args.push(ArgPat::Meta(t));
+            // Placeholder produced earlier; map back if possible. Bare
+            // only: `__RSMPL_F.clone()` is a concrete call around a hole,
+            // not a whole-slot hole (WI-2 follow-up).
+            args.push(is_bare_placeholder_arg(&t));
         } else {
             args.push(ArgPat::Concrete(t));
         }
@@ -160,6 +162,20 @@ fn is_bare_ellipsis(t: &str) -> bool {
     t.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
         !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     })
+}
+
+/// True when `t` is exactly one `__RSMPL_` placeholder ident (no dots,
+/// parens, or operators): `__RSMPL_F` binds whole-slot, `__RSMPL_F.clone()`
+/// does not (it is concrete text carrying a hole for the general matcher).
+fn is_bare_placeholder_arg(t: &str) -> ArgPat {
+    let ok = t.strip_prefix("__RSMPL_").is_some_and(|rest| {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    if ok {
+        ArgPat::Meta(t.to_string())
+    } else {
+        ArgPat::Concrete(t.to_string())
+    }
 }
 
 fn split_top_level(s: &str) -> Vec<String> {
@@ -1013,6 +1029,45 @@ mod tests {
         assert!(
             matches!(kind, ExprPatternKind::MethodCall { .. }),
             "grouped receiver misrouted: {kind:?}"
+        );
+    }
+
+    #[test]
+    fn placeholder_arg_composite_is_concrete() {
+        // WI-2 follow-up: `__RSMPL_F.clone()` is a concrete call around a
+        // hole, not a whole-slot hole. Treating it as `Meta` bound the
+        // whole `rel.clone()` to a bogus `__RSMPL_F.clone()` name and left
+        // literal `F.clone()` in the plus side.
+        assert!(matches!(
+            is_bare_placeholder_arg("__RSMPL_F"),
+            ArgPat::Meta(_)
+        ));
+        assert!(matches!(
+            is_bare_placeholder_arg("__RSMPL_F.clone()"),
+            ArgPat::Concrete(_)
+        ));
+        assert!(matches!(
+            is_bare_placeholder_arg("__RSMPL_F(1)"),
+            ArgPat::Concrete(_)
+        ));
+    }
+
+    #[test]
+    fn hetero_method_with_dotted_arg_routes_to_general() {
+        // `E.push(F.clone())` with both declared must bypass the call
+        // router to `Raw` (general matcher handles the nested method
+        // structurally); staying `MethodCall` with a composite `Meta`
+        // arg mis-binds and mis-substitutes.
+        use rsmpl_patch::{Directive, MetavarKind};
+        let table = MetavarTable::from_directives(&[Directive::MetaVar {
+            kind: MetavarKind::Expr,
+            names: vec!["E".to_string(), "F".to_string()],
+        }])
+        .unwrap();
+        let (kind, _, _) = classify_call_pattern("E.push(F.clone())", &table).unwrap();
+        assert!(
+            matches!(kind, ExprPatternKind::Raw { .. }),
+            "hetero dotted arg must bypass to Raw, got: {kind:?}"
         );
     }
 }
