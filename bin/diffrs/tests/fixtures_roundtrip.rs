@@ -1229,6 +1229,70 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "31-delete-whole-file" {
+            // T473: whole-file item deletion (e062dda/T464 miniature) —
+            // the deleted file's items sweep into one scope=file
+            // delete_items hunk; module-doc lines ride ordinary leftovers.
+            assert!(
+                semantic.contains("rule=delete_items"),
+                "whole-file delete sweep must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=delete_items").count(),
+                1,
+                "exactly one delete hunk, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn old_"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-//! Old helpers"),
+                "non-item doc lines ride ordinary leftovers, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "32-partial-delete" {
+            // T473: partial-file item deletion (7945da1/T465 prize-shape
+            // miniature) — one minus-heavy unbalanced hunk (whole helper
+            // items out, `mod common;` + `use common::*;` in) compresses
+            // to one real-range delete_items hunk plus an ordinary
+            // insertion leftover with the compensating trailing blank.
+            assert!(
+                semantic.contains("rule=delete_items"),
+                "partial delete sweep must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=delete_items").count(),
+                1,
+                "exactly one delete hunk, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn binary"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn init_repo"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+mod common;"),
+                "plus lines ride the insertion leftover, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+use common::*;"),
+                "plus lines ride the insertion leftover, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
