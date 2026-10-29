@@ -717,6 +717,93 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
         }
         failures.push(msg);
     }
+    // WI-1c fixed point (S″ == S′ byte-identical): rebuild the
+    // parent→child change in a fresh repo and re-infer through
+    // `--staged`, the same mode family as the rev-form conversion
+    // (both all-tracked and git-sorted; pending would append
+    // untracked new-file sections last and differ in section order
+    // while canonical forms agree — probed 38-new-file-move).
+    let rdir = tempfile::tempdir().unwrap();
+    if !case.root {
+        let parent = format!("{}~1", case.commit);
+        if !materialize_parent(top, &parent, rdir.path()) {
+            failures.push(format!("{short}: git archive {parent} (rediff) failed"));
+            return;
+        }
+    }
+    if !git_ok(rdir.path(), &["init", "-q"]) {
+        failures.push(format!("{short}: git init (rediff) failed"));
+        return;
+    }
+    if !case.root {
+        if !git_ok(rdir.path(), &["add", "-A"]) {
+            failures.push(format!("{short}: git add parent (rediff) failed"));
+            return;
+        }
+        if !git_ok(
+            rdir.path(),
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.email=test@test",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qm",
+                "parent",
+            ],
+        ) {
+            failures.push(format!("{short}: git commit parent (rediff) failed"));
+            return;
+        }
+        // The worktree must equal the child exactly: the child
+        // archive never deletes, so drop every parent file first.
+        for entry in std::fs::read_dir(rdir.path()).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name().to_string_lossy() == ".git" {
+                continue;
+            }
+            if entry.file_type().unwrap().is_dir() {
+                std::fs::remove_dir_all(entry.path()).unwrap();
+            } else {
+                std::fs::remove_file(entry.path()).unwrap();
+            }
+        }
+    }
+    if !materialize_parent(top, case.commit, rdir.path()) {
+        failures.push(format!(
+            "{short}: git archive {} (rediff) failed",
+            case.commit
+        ));
+        return;
+    }
+    if !git_ok(rdir.path(), &["add", "-A"]) {
+        failures.push(format!("{short}: git add child (rediff) failed"));
+        return;
+    }
+    let rediff = Command::new(binary())
+        .arg("--repo")
+        .arg(rdir.path())
+        .arg("--staged")
+        .output()
+        .unwrap();
+    if !rediff.status.success() {
+        failures.push(format!(
+            "{short}: diffrs --staged (rediff) exited {}: {}",
+            rediff.status,
+            String::from_utf8_lossy(&rediff.stderr)
+        ));
+        return;
+    }
+    let second = String::from_utf8_lossy(&rediff.stdout).to_string();
+    if second != patch {
+        failures.push(format!(
+            "{short}: fixed point broken: S″ != S′ ({}B vs {}B)",
+            second.len(),
+            patch.len()
+        ));
+    }
 }
 
 #[test]
