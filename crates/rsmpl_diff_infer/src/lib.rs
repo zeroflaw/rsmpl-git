@@ -447,57 +447,8 @@ pub(crate) fn compress_balanced_pair_body(
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
             .map(|f| (f, "item_rename"))
-    } else if let Some(slot) =
-        semantic::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((slot, "fn_slot_sweep"))
-    } else if let Some(m2f) =
-        semantic::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((m2f, "method_to_fn"))
-    } else if let Some(m2m) =
-        semantic::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((m2m, "method_to_method"))
-    } else if let Some(same) = semantic::try_method_same_literal_sweep(
-        minuses, pluses, path, file_old, changed, used_rules,
-    ) {
-        Some((same, "method_same_literal"))
-    } else if let Some(strip) =
-        semantic::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((strip, "ref_strip"))
-    } else if let Some(qual) =
-        semantic::try_qualified_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((qual, "qualified_call"))
-    } else if let Some(turbo) =
-        semantic::try_turbofish_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((turbo, "turbofish"))
-    } else if let Some(mac) =
-        semantic::try_macro_rename_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((mac, "macro_rename"))
-    } else if let Some(uses) =
-        semantic::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((uses, "use_prefix"))
-    } else if let Some(call) =
-        semantic::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((call, "call_sweep"))
-    } else if let Some(call) =
-        semantic::try_call_arg_add_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((call, "call_arg_add"))
-    } else if let Some(call) =
-        semantic::try_call_literal_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        Some((call, "call_literal"))
     } else {
-        semantic::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules)
-            .map(|f| (f, "call_peel"))
+        semantic::chain::run_pair_chain(minuses, pluses, path, file_old, changed, used_rules)
     };
     match full {
         Some((f, detector)) => {
