@@ -1869,6 +1869,52 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "57-single-verbatim-stays-ordinary" {
+            // T489: single verbatim site veto miniature --
+            // one `foo(&state.parsed);` -> `foo(parsed);` costs more
+            // as a semantic hunk than the ordinary hunk it replaces:
+            // pure ordinary passthrough (N>=2 gate in the verbatim
+            // identical-line sweep, veto side of fixture 19, the
+            // multi-site verbatim fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single verbatim edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "58-hetero-m2m-stays-ordinary" {
+            // T489: hetero-delta m2m veto miniature --
+            // `a.old_method(1);` -> `a.new_method(1);` plus
+            // `b.old_method(2);` -> `b.brand_new(2);`: different new
+            // idents share no (old, new) class, so the m2m sweep
+            // declines with no per-site singles (call sweeps need one
+            // shared delta -- the contrast to fixture 55, where hetero
+            // slot deltas fire one single rule per site). Veto side of
+            // fixture 15 (homo multi-site m2m fire).
+            assert!(
+                !semantic.contains("rule="),
+                "hetero-delta m2m edit must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-    a.old_method(1);"),
+                "hetero minus lines must be preserved, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+    b.brand_new(2);"),
+                "hetero plus lines must be preserved, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
