@@ -49,7 +49,18 @@ pub fn apply_with_captures(
     // T137: ordinary-only files skip the Rust parse entirely (original +
     // rewritten). The unit is the file: any RSmPL hunk in any section with
     // the same target path means Rust.
+    // WI-6b1: a patch containing `# follow=uses` searches the whole loaded
+    // workspace (every `.rs` file in the `files` map), not just patch
+    // targets — the CLI loads the repo files when follow is present.
+    let patch_has_follow = patch
+        .files
+        .iter()
+        .flat_map(|s| &s.hunks)
+        .any(|h| matches!(h, Hunk::Rsmpl(rh) if rh.follows_uses()));
     let mut states: HashMap<String, FileState> = HashMap::new();
+    // Files that look like Rust but do not parse: the follow step applies
+    // the `raw_mentions` tripwire (veto/skip when the text names `old`).
+    let mut unparseable: Vec<(String, String)> = Vec::new();
     for section in &patch.files {
         let path = section.target_path.clone();
         if states.contains_key(&path) {
@@ -86,6 +97,34 @@ pub fn apply_with_captures(
                 parsed,
             },
         );
+    }
+    if patch_has_follow {
+        // Workspace file set: every other loaded `.rs` file is searchable.
+        // Parsed files join `states` (empty edit lists below); unparseable
+        // ones are recorded for the follow-step tripwire. Non-`.rs` files
+        // are never searched (SPEC 14.8). Sorted for deterministic reports.
+        let mut extra: Vec<String> = files
+            .keys()
+            .filter(|p| !states.contains_key(*p) && p.ends_with(".rs"))
+            .cloned()
+            .collect();
+        extra.sort();
+        for path in extra {
+            let original = files.get(&path).cloned().unwrap_or_default();
+            match syn::parse_str::<syn::File>(&original) {
+                Ok(parsed) => {
+                    states.insert(
+                        path.clone(),
+                        FileState {
+                            index: LineIndex::new(&original),
+                            original,
+                            parsed: Some(parsed),
+                        },
+                    );
+                }
+                Err(_) => unparseable.push((path, original)),
+            }
+        }
     }
 
     // T348: every section shares original coordinates — validate all
@@ -225,18 +264,22 @@ pub fn apply_with_captures(
     }
 
     // ---- Pass 2: every other hunk in document order. ----
+    // WI-6b1: borrows stay scoped per hunk so the workspace follow step can
+    // take `&states` + `&mut file_edits` with nothing live.
     for (sec_idx, section) in patch.files.iter().enumerate() {
         let path = &section.target_path;
-        let Some(state) = states.get(path) else {
+        if !states.contains_key(path) {
             continue;
-        };
-        let edits = file_edits.get_mut(path).expect("file state");
+        }
         for (hunk_idx, hunk) in section.hunks.iter().enumerate() {
             match hunk {
                 Hunk::Ordinary(oh) => {
-                    let mut e = ordinary_hunk_edits(&state.index, &state.original, oh)
-                        .map_err(|s| s.with_file(path))?;
-                    edits.append(&mut e);
+                    let mut e = {
+                        let state = states.get(path).expect("file state");
+                        ordinary_hunk_edits(&state.index, &state.original, oh)
+                            .map_err(|s| s.with_file(path))?
+                    };
+                    file_edits.get_mut(path).expect("file state").append(&mut e);
                 }
                 Hunk::Rsmpl(rh) => {
                     if !rh.binds().is_empty() {
@@ -254,10 +297,14 @@ pub fn apply_with_captures(
                         rh.header.old_start,
                         rh.header.old_start + rh.header.old_len
                     );
-                    let edits_before = edits.len();
-                    let (found, first_bindings) =
+                    let edits_before = file_edits.get(path).map(|v| v.len()).unwrap_or(0);
+                    let (found, def_bindings) = {
+                        let state = states.get(path).expect("file state");
+                        let edits = file_edits.get_mut(path).expect("file state");
+                        // Definition matching only; follow runs below.
                         apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
-                            .map_err(|e| e.with_file(path))?;
+                            .map_err(|e| e.with_file(path))?
+                    };
                     // T249: record capture-paste edits for blank-join. A
                     // paste hunk pushes exactly one insertion at
                     // `edits_before`, so its index is stable.
@@ -268,15 +315,39 @@ pub fn apply_with_captures(
                             ..
                         }
                     ) && found == 1
-                        && edits.len() == edits_before + 1
+                        && file_edits.get(path).map(|v| v.len()).unwrap_or(0) == edits_before + 1
                     {
-                        let pos = edits[edits_before].start;
-                        debug_assert_eq!(edits[edits_before].end, pos);
+                        let pos = file_edits.get(path).expect("file state")[edits_before].start;
+                        debug_assert_eq!(
+                            file_edits.get(path).expect("file state")[edits_before].end,
+                            pos
+                        );
                         if let Some(marks) = paste_marks.get_mut(path) {
                             marks.push((pos, edits_before));
                         }
                     }
-                    let spans = edit_spans(&state.index, &edits[edits_before..]);
+                    // WI-6b1 workspace follow before spans: def-file spans
+                    // cover definition + same-file uses (SPEC 14.8), and
+                    // other files' uses land in their own edit lists.
+                    let (follow_bindings, extra_reports) = if rh.follows_uses() {
+                        follow_uses_workspace(
+                            rh,
+                            &compiled,
+                            &states,
+                            &mut file_edits,
+                            &unparseable,
+                            path,
+                            edits_before,
+                            found,
+                        )?
+                    } else {
+                        (HashMap::new(), Vec::new())
+                    };
+                    let spans = {
+                        let state = states.get(path).expect("file state");
+                        let edits = file_edits.get(path).expect("file state");
+                        edit_spans(&state.index, &edits[edits_before..])
+                    };
                     // A non-insertion hunk carrying `# use=` has no v0.1 meaning.
                     if !rh.uses().is_empty()
                         && !matches!(
@@ -301,12 +372,14 @@ pub fn apply_with_captures(
                     // anchors rather than pattern search and are excluded
                     // by the probe itself.
                     let wide = if found == 0 && !rh.is_optional() && rh.scope() != Scope::File {
+                        let state = states.get(path).expect("file state");
                         probe_whole_file(state, path, rh, &compiled, &captures)
                     } else {
                         None
                     };
                     // T67: diagnostic-only excerpt; happy/optional paths pay nothing.
                     let preview = if found == 0 && !rh.is_optional() {
+                        let state = states.get(path).expect("file state");
                         candidate_preview(state, rh, &compiled)
                     } else {
                         None
@@ -322,12 +395,16 @@ pub fn apply_with_captures(
                     )?;
                     // WI-2: first-match bindings, sorted by name for a
                     // deterministic report (the CLI bounds tokens, SPEC D.2).
-                    let mut bindings: Vec<(String, String)> = first_bindings.into_iter().collect();
+                    // Definition-shape bindings (call/general-expr/macros)
+                    // merge with `follow_skipped` when both exist.
+                    let mut merged = def_bindings;
+                    merged.extend(follow_bindings);
+                    let mut bindings: Vec<(String, String)> = merged.into_iter().collect();
                     bindings.sort_by(|a, b| a.0.cmp(&b.0));
                     rule_order.push((
                         (sec_idx, hunk_idx),
                         RuleReport {
-                            rule,
+                            rule: rule.clone(),
                             file: path.clone(),
                             matches: found,
                             spans,
@@ -335,6 +412,25 @@ pub fn apply_with_captures(
                             bindings_truncated: 0,
                         },
                     ));
+                    // WI-6b1: one follow-only entry per non-definition file
+                    // touched (same rule name, `matches` = use-site count,
+                    // `spans.len() == matches`). Shared position key keeps
+                    // them adjacent to the definition entry in document
+                    // order (the sort below is stable); file order inside
+                    // is sorted at the source.
+                    for (file, matches, spans) in extra_reports {
+                        rule_order.push((
+                            (sec_idx, hunk_idx),
+                            RuleReport {
+                                rule: rule.clone(),
+                                file,
+                                matches,
+                                spans,
+                                bindings: Vec::new(),
+                                bindings_truncated: 0,
+                            },
+                        ));
+                    }
                 }
             }
         }
@@ -437,19 +533,17 @@ fn apply_rsmpl_hunk(
     // general-expr / macro shapes thread their first-match map through.
     let empty = || HashMap::new();
     match &compiled.kind {
-        PatternKind::Fn { .. } => {
-            let before = edits.len();
-            let n = matcher_fn::apply_fn_hunk(
-                parsed,
-                &state.original,
-                &state.index,
-                rh,
-                compiled,
-                edits,
-            )?;
-            let bindings = follow_uses(rh, compiled, parsed, state, path, edits, before)?;
-            Ok((n, bindings))
-        }
+        // WI-6b1: definition matching only — `# follow=uses` runs as a
+        // workspace step in the pass-2 loop (needs every file's state).
+        PatternKind::Fn { .. } => matcher_fn::apply_fn_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        )
+        .map(|n| (n, empty())),
         PatternKind::Expr {
             minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
             ..
@@ -469,19 +563,15 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
-        PatternKind::ItemRename { .. } => {
-            let before = edits.len();
-            let n = matcher_item::apply_item_rename_hunk(
-                parsed,
-                &state.original,
-                &state.index,
-                rh,
-                compiled,
-                edits,
-            )?;
-            let bindings = follow_uses(rh, compiled, parsed, state, path, edits, before)?;
-            Ok((n, bindings))
-        }
+        PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        )
+        .map(|n| (n, empty())),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,
@@ -881,23 +971,35 @@ fn nearest_source(state: &FileState, old_start: u32) -> Option<String> {
 /// WI-6a `# follow=uses`: after the definition rewrite, resolve same-file
 /// use sites and append their ident-span edits under the same rule
 /// (SPEC 14.8). Zero new def edits (optional zero-match) means nothing to
-/// follow — a no-op, never a veto. Returns extra bindings (`follow_skipped`
-/// when `# fallback=syntax` left sites untouched).
-fn follow_uses(
+/// WI-6b1: one follow-only entry per non-definition file touched by
+/// `# follow=uses`: (file, rewritten use-site count, line spans).
+type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>)>;
+
+/// WI-6b1 `# follow=uses` workspace step (SPEC 14.8): after the definition
+/// rewrite, resolve use sites across every loaded `.rs` file (unique-
+/// definition fast path) and append their ident-span edits under the same
+/// rule. Zero new def edits (optional zero-match) means nothing to follow
+/// — a no-op, never a veto.
+///
+/// Returns extra bindings (`follow_skipped` when `# fallback=syntax` left
+/// sites untouched) plus the follow-only entries. The caller reports the
+/// definition file as usual and each extra entry as its own `RuleReport`
+/// with the same rule name (SPEC D.2).
+#[allow(clippy::too_many_arguments)]
+fn follow_uses_workspace(
     rh: &rsmpl_patch::RsmplHunk,
     compiled: &rsmpl_pattern::CompiledPattern,
-    parsed: &syn::File,
-    state: &FileState,
-    path: &str,
-    edits: &mut Vec<TextEdit>,
-    before: usize,
-) -> Result<HashMap<String, String>, StructuredError> {
+    states: &HashMap<String, FileState>,
+    file_edits: &mut HashMap<String, Vec<TextEdit>>,
+    unparseable: &[(String, String)],
+    def_path: &str,
+    edits_before: usize,
+    found: usize,
+) -> Result<(HashMap<String, String>, FollowExtras), StructuredError> {
     let mut bindings = HashMap::new();
-    if !rh.follows_uses() {
-        return Ok(bindings);
-    }
-    if edits.len() == before {
-        return Ok(bindings);
+    let no_follow: FollowExtras = Vec::new();
+    if found == 0 {
+        return Ok((bindings, no_follow));
     }
     let (old, new) = match &compiled.kind {
         PatternKind::Fn {
@@ -916,36 +1018,101 @@ fn follow_uses(
                 "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
             )
             .with_rule(rh.rule_name())
-            .with_file(path)
+            .with_file(def_path)
             .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
         }
     };
     // Ranges this hunk already rewrote: a same-named definition outside
     // them shadows (the resolver decides veto vs skip, never guesses).
-    let renamed: Vec<(usize, usize)> = edits[before..].iter().map(|e| (e.start, e.end)).collect();
-    let outcome = crate::use_graph::resolve(
-        parsed,
-        &state.original,
-        &state.index,
+    let renamed: Vec<(usize, usize)> = file_edits
+        .get(def_path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    // Deterministic file order for reports and vetoes.
+    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
+    let mut paths: Vec<&String> = states.keys().collect();
+    paths.sort();
+    for p in paths {
+        let st = &states[p];
+        if let Some(parsed) = st.parsed.as_ref() {
+            refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
+        }
+    }
+    let outcome = crate::use_graph::resolve_workspace(
+        &refs,
         &old,
+        def_path,
         &renamed,
         rh.fallback_syntax(),
     )
     .map_err(|veto| {
         StructuredError::new(ErrorCode::SymbolConflict, veto.reason)
             .with_rule(rh.rule_name())
-            .with_file(path)
+            .with_file(def_path)
             .with_suggestion(
                 "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped`) instead of failing",
             )
     })?;
-    for (a, b) in outcome.spans {
-        edits.push(TextEdit::new(a, b, new.clone()));
+    // Unparseable-workspace tripwire (SPEC 14.8): a file the resolver could
+    // not search that names `old` outside strings/comments fails loud
+    // without fallback (never a silent stale site), or is listed and left
+    // untouched with it. Token-exact via `proc_macro2` lexing; when even
+    // lexing fails, assume a mention (fail loud).
+    let mut tripwire: Vec<String> = Vec::new();
+    for (path, text) in unparseable {
+        if crate::use_graph::raw_mentions(text, &old) {
+            tripwire.push(path.clone());
+        }
     }
-    if !outcome.skipped.is_empty() {
-        bindings.insert("follow_skipped".to_string(), outcome.skipped.join("; "));
+    tripwire.sort();
+    tripwire.dedup();
+    if !tripwire.is_empty() && !rh.fallback_syntax() {
+        let path = &tripwire[0];
+        return Err(StructuredError::new(
+            ErrorCode::SymbolConflict,
+            format!("use of `{old}` may hide in unparseable file {path}: cannot search it syntactically"),
+        )
+        .with_rule(rh.rule_name())
+        .with_file(def_path)
+        .with_suggestion(
+            "add `# fallback=syntax` to skip unsearchable files (listed in `follow_skipped`) instead of failing",
+        ));
     }
-    Ok(bindings)
+    // Append use-span edits per file; record pre-push lengths so extra
+    // reports span exactly the pushed edits.
+    let mut before_lens: HashMap<String, usize> = HashMap::new();
+    for (f, spans) in &outcome.per_file {
+        before_lens.insert(f.clone(), file_edits.get(f).map(|v| v.len()).unwrap_or(0));
+        let vec = file_edits.get_mut(f).expect("workspace file state");
+        for (a, b) in spans {
+            vec.push(TextEdit::new(*a, *b, new.clone()));
+        }
+    }
+    let mut extras: FollowExtras = Vec::new();
+    for (f, spans) in &outcome.per_file {
+        if f == def_path {
+            continue;
+        }
+        if spans.is_empty() {
+            continue;
+        }
+        let st = states.get(f).expect("workspace file state");
+        let edits = file_edits.get(f).expect("workspace file state");
+        let before = before_lens.get(f).copied().unwrap_or(0);
+        let line_spans = edit_spans(&st.index, &edits[before..]);
+        extras.push((f.clone(), spans.len(), line_spans));
+    }
+    extras.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut skipped = outcome.skipped;
+    for path in &tripwire {
+        skipped.push(format!(
+            "{path}: unparseable file left untouched (may name `{old}`)"
+        ));
+    }
+    if !skipped.is_empty() {
+        bindings.insert("follow_skipped".to_string(), skipped.join("; "));
+    }
+    Ok((bindings, extras))
 }
 
 /// v0.1 capability gate (SPEC 22-23): only `format=preserve` and AST matching
@@ -1514,5 +1681,127 @@ mod tests {
         let files = apply_multi(patch, vec![("src/lib.rs", src)]).unwrap();
         let out = &files["src/lib.rs"];
         assert_eq!(out, "fn top() {}\nfn helper() {}\nfn mid() {}\n");
+    }
+
+    // WI-6b1: unique-definition cross-file `# follow=uses`. The `files`
+    // map is the workspace: the def hunk touches only `a.rs`, uses in
+    // `b.rs` rewrite under the same rule with a follow-only entry.
+
+    const XFOLLOW_PATCH: &str = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,1 @@ rule=rename\n# follow=uses\n- struct Old\n+ struct New\n";
+
+    #[test]
+    fn cross_file_follow_rewrites_other_file_uses() {
+        let (files, report) = apply_multi_report(
+            XFOLLOW_PATCH,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                (
+                    "src/b.rs",
+                    "use crate::Old;\nfn f(x: Old) -> Old {\n    Old\n}\n",
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(files["src/a.rs"], "pub struct New;\n");
+        assert_eq!(
+            files["src/b.rs"],
+            "use crate::New;\nfn f(x: New) -> New {\n    New\n}\n"
+        );
+        // One def entry (matches = definitions) plus one follow-only
+        // entry for `b.rs` (matches = use-site count, spans agree).
+        assert_eq!(report.rules.len(), 2, "report: {:?}", report.rules);
+        let def = &report.rules[0];
+        assert_eq!(
+            (def.rule.as_str(), def.file.as_str()),
+            ("rename", "src/a.rs")
+        );
+        assert_eq!(def.matches, 1);
+        let extra = &report.rules[1];
+        assert_eq!(
+            (extra.rule.as_str(), extra.file.as_str()),
+            ("rename", "src/b.rs")
+        );
+        assert_eq!(extra.matches, 4);
+        assert_eq!(extra.spans.len(), 4);
+        assert!(extra.bindings.is_empty());
+    }
+
+    #[test]
+    fn cross_file_follow_second_definition_vetoes() {
+        let err = apply_multi_report(
+            XFOLLOW_PATCH,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "pub struct Old;\n"),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("RSMPL_SYMBOL_CONFLICT"), "got: {err}");
+        assert!(err.contains("shadowed"), "got: {err}");
+        assert!(err.contains("src/b.rs"), "got: {err}");
+    }
+
+    #[test]
+    fn cross_file_follow_second_definition_skips_with_fallback() {
+        let patch = XFOLLOW_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
+        let (files, report) = apply_multi_report(
+            &patch,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                (
+                    "src/b.rs",
+                    "pub struct Old;\nfn f(x: Old) -> Old {\n    x\n}\n",
+                ),
+            ],
+        )
+        .unwrap();
+        // Definition still renames; ambiguous uses stay stale and report.
+        assert_eq!(files["src/a.rs"], "pub struct New;\n");
+        assert!(
+            files["src/b.rs"].contains("x: Old"),
+            "got: {}",
+            files["src/b.rs"]
+        );
+        assert_eq!(report.rules.len(), 1, "report: {:?}", report.rules);
+        let joined: String = report.rules[0]
+            .bindings
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        assert!(
+            joined.contains("follow_skipped"),
+            "report: {:?}",
+            report.rules
+        );
+        assert!(joined.contains("src/b.rs"), "report: {:?}", report.rules);
+    }
+
+    #[test]
+    fn cross_file_follow_unparseable_tripwire() {
+        // `b.rs` does not parse and names `old`: without fallback the
+        // hunk vetoes (never a silent stale site); with it the def still
+        // renames and the file is listed.
+        let err = apply_multi_report(
+            XFOLLOW_PATCH,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "fn broken( {{{ old\n"),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("RSMPL_SYMBOL_CONFLICT"), "got: {err}");
+        assert!(err.contains("src/b.rs"), "got: {err}");
+        let patch = XFOLLOW_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
+        let (files, report) = apply_multi_report(
+            &patch,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "fn broken( {{{\n"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(files["src/a.rs"], "pub struct New;\n");
+        assert_eq!(report.rules.len(), 1, "report: {:?}", report.rules);
     }
 }

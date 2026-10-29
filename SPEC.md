@@ -2233,9 +2233,33 @@ lowered diff is the observable truth as always (Section D.2).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
-Never inferred across files in v0.1 (WI-6b owns the workspace index):
-a use in a file the patch does not touch stays stale, so include every
-touched file in the patch.
+Workspace search (WI-6b1): the resolver searches every loaded `.rs`
+file, not just the definition file. `applyrs` loads the whole workspace
+(every repo `.rs` file outside `.git/`, `target/`, `.history/`) whenever
+the patch carries `# follow=uses`, and lowers cross-file rewrites even in
+files the patch never sections. One hunk therefore renames the definition
+plus its uses repo-wide; the JSON report carries one entry per touched
+file under the same rule name (Section D.2).
+
+Unique-definition rule (precision-first, Section 2.6/D3): cross-file
+follow rewrites only when exactly one definition of the old ident exists
+workspace-wide. The common rename — one `Old`, used in N files — just
+works. A second same-named definition anywhere makes every use ambiguous:
+without `# fallback=syntax` the hunk vetoes with `RSMPL_SYMBOL_CONFLICT`
+naming the first shadow (`path:line`); with it all use rewriting is
+skipped and each shadow is listed in `follow_skipped`. Same-file
+shadowing (a local binding, an enum variant) and opaque sites
+(macro/attribute interiors, `qself` paths) veto or skip exactly as before,
+now reported `path:line`-qualified when the workspace holds several
+files; single-file patches keep the historical `line N` wording.
+
+Out of scope in v0.1: non-`.rs` files are never searched; symlinked
+files/dirs are skipped; a workspace `.rs` file that does not parse trips a
+fail-loud tripwire when its text names the ident outside strings/comments
+(`RSMPL_SYMBOL_CONFLICT` naming the file, or a `follow_skipped` note with
+`# fallback=syntax`); multi-definition workspaces never attribute uses by
+module path (WI-6b2 owns prefix-aware resolution); `diffrs` emits no
+`# follow=uses` (WI-7 grouping owns the shared-intent spelling).
 
 Fail loud (Section 2.6): a second same-named definition, a shadowing
 local binding or enum variant, or a macro/attribute mention the resolver
@@ -5634,7 +5658,12 @@ prints one JSON object to stdout:
   `[L, L]`; an empty match set (optional no-match) reports `[]`.
   A `# follow=uses` hunk additionally carries one span per rewritten use
   site, so `spans.len() >= matches` there (`matches` still counts
-  definitions only).
+  definitions only). Cross-file uses (Section 14.8) report as extra
+  entries under the same rule name — one per touched file, in sorted
+  file order right after the definition entry: the definition entry
+  keeps `matches` = definitions, each follow-only entry reports
+  `matches` = its file's rewritten use-site count with `spans.len() ==
+  matches` there and empty `bindings`.
   Each entry also carries `bindings` when the shape binds something:
   the first accepted match's metavariable → matched source text map,
   sorted by name. Renames, insertions, deletions, and use-prefix renames

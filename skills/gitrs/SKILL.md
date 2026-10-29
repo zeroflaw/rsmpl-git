@@ -47,7 +47,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments; write `#[...]` on its own diff line (single-line `#[a] let x = E;` never matches) |
 | `# root=item\|expr\|stmt\|type` | force parse context |
 | `# fallback=syntax` | syntactic match when `# symbol` can't resolve; with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing |
-| `# follow=uses` | rewrite same-file use sites alongside a fn/item rename (definition-only without it) |
+| `# follow=uses` | rewrite workspace use sites alongside a fn/item rename (unique-definition only, multi-def vetoes) (definition-only without it) |
 | `# returns=none` | minus-side requires no return type (fn only) |
 
 ## Shapes (SPEC 14/15/16/18.6)

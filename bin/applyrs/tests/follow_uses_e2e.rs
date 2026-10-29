@@ -126,6 +126,54 @@ fn follow_on_call_shape_is_rejected() {
 }
 
 #[test]
+fn cross_file_uses_rewrite_without_targeting_their_file() {
+    // WI-6b1: the patch sections only `src/a.rs`; `src/b.rs` is found by
+    // the CLI workspace load and rewritten under the same rule.
+    let dir = init_repo();
+    write(dir.path(), "src/a.rs", "pub struct Old;\n");
+    write(
+        dir.path(),
+        "src/b.rs",
+        "use crate::Old;\nfn f(x: Old) -> Old {\n    Old\n}\n",
+    );
+    let patch =
+        "diff --git src/a.rs\n@@ -1,1 @@ rule=rename\n# follow=uses\n- struct Old\n+ struct New\n";
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--diff-max-lines", "0"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(dir.path(), "src/a.rs"), "pub struct New;\n");
+    assert_eq!(
+        read(dir.path(), "src/b.rs"),
+        "use crate::New;\nfn f(x: New) -> New {\n    New\n}\n"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let files: Vec<&str> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert!(files.contains(&"src/a.rs"), "got: {v}");
+    assert!(files.contains(&"src/b.rs"), "got: {v}");
+    let rules: Vec<(&str, &str)> = v["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["rule"].as_str().unwrap(), r["file"].as_str().unwrap()))
+        .collect();
+    assert!(rules.contains(&("rename", "src/a.rs")), "got: {v}");
+    assert!(rules.contains(&("rename", "src/b.rs")), "got: {v}");
+}
+
+#[test]
 fn macro_mention_vetoes_without_fallback() {
     let dir = init_repo();
     write(

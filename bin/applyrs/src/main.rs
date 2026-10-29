@@ -284,6 +284,31 @@ fn run() -> Result<(), CliError> {
         }
     }
 
+    // WI-6b1: a patch with `# follow=uses` searches the whole workspace.
+    // Load every other repo `.rs` file (sorted) so the engine can rewrite
+    // cross-file uses; unreadable files warn and are skipped (the engine
+    // tripwire still vetoes when an unparseable file may name the ident).
+    let mut extra_order: Vec<String> = Vec::new();
+    let needs_workspace = patch
+        .files
+        .iter()
+        .flat_map(|s| &s.hunks)
+        .any(|h| matches!(h, rsmpl_patch::Hunk::Rsmpl(rh) if rh.follows_uses()));
+    if needs_workspace {
+        for rel in workspace_rs_files(&cli.repo) {
+            if originals.contains_key(&rel) {
+                continue;
+            }
+            match std::fs::read_to_string(cli.repo.join(&rel)) {
+                Ok(text) => {
+                    originals.insert(rel.clone(), text);
+                    extra_order.push(rel);
+                }
+                Err(e) => eprintln!("warning: cannot read {rel} for follow=uses search: {e}"),
+            }
+        }
+    }
+
     let mut updated = originals.clone();
     let report =
         rsmpl_engine::apply_patch_to_tree(&mut updated, &patch).map_err(CliError::Structured)?;
@@ -293,8 +318,8 @@ fn run() -> Result<(), CliError> {
     // default, still appliable via the `--unidiff-zero` wrapper below.
     // Per-file stats are computed from the full old/new contents so they stay
     // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1).
-    // `changed` follows patch section order (`order`). The engine only
-    // mutates paths already in `order`, so no spillover branch is needed.
+    // `changed` follows patch section order (`order`); WI-6b1 cross-file
+    // follow rewrites may spill into workspace extras, lowered after.
     let mut changed: Vec<(String, usize, usize, String)> = Vec::new();
     let mut sections = Vec::new();
     for rel in &order {
@@ -411,6 +436,21 @@ fn run() -> Result<(), CliError> {
             }
         };
         if let Some(s) = section {
+            let (added, removed) = rsmpl_git::file_line_stats(old, new);
+            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
+            sections.push(s);
+        }
+    }
+    // WI-6b1: changed workspace extras (cross-file `# follow=uses`
+    // rewrites in files the patch never targeted) lower as plain content
+    // modifies — regular files by construction, never renames/modes.
+    for rel in &extra_order {
+        let old = &originals[rel];
+        let new = &updated[rel];
+        if old == new {
+            continue;
+        }
+        if let Some(s) = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0) {
             let (added, removed) = rsmpl_git::file_line_stats(old, new);
             changed.push((rel.clone(), added, removed, post_sha_hex(new)));
             sections.push(s);
@@ -568,6 +608,45 @@ fn run() -> Result<(), CliError> {
     let names: Vec<&str> = changed.iter().map(|(p, _, _, _)| p.as_str()).collect();
     eprintln!("applied {} file(s): {}", names.len(), names.join(", "));
     Ok(())
+}
+
+/// WI-6b1: workspace file set for `# follow=uses` — every repo `.rs` file
+/// outside `.git/`, `target/`, `.history/` (lexical walk, std only;
+/// symlinked files/dirs are skipped, SPEC 14.8). Sorted for deterministic
+/// reports.
+fn workspace_rs_files(repo: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![repo.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                if name == ".git" || name == "target" || name == ".history" {
+                    continue;
+                }
+                stack.push(path);
+            } else if meta.is_file() && name.ends_with(".rs") {
+                if let Ok(rel) = path.strip_prefix(repo) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Declared `old mode`/`new mode` for `rel` (the T364 mode-flip input:

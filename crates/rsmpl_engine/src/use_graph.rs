@@ -56,13 +56,7 @@ pub fn resolve(
     renamed: &[(usize, usize)],
     fallback: bool,
 ) -> Result<FollowOutcome, FollowVeto> {
-    let mut collector = Collector {
-        old,
-        defs: Vec::new(),
-        uses: Vec::new(),
-        opaque: Vec::new(),
-    };
-    collector.visit_file(parsed);
+    let collector = collect(parsed, old);
 
     // Byte-map definitions (fail loud on unmappable spans, never guess).
     let mut def_ranges: Vec<(usize, usize, u32, &'static str)> = Vec::new();
@@ -145,6 +139,235 @@ pub fn resolve(
         }
     }
     Ok(FollowOutcome { spans, skipped })
+}
+
+/// Workspace-wide resolution for WI-6b1 (SPEC 14.8): the unique-definition
+/// cross-file fast path.
+///
+/// `files` maps path → (parsed AST, original text, line index) for every
+/// loaded `.rs` file. `renamed_file` + `renamed` carry the definition hunk's
+/// ident-span edits (same convention as `resolve`): a same-named definition
+/// overlapping one of them is the renamed definition itself.
+///
+/// Unique-definition rule (precision-first, SPEC 2.6/D3): when exactly one
+/// definition of `old` exists workspace-wide, every collected use segment
+/// names it, so all files' use spans rewrite. A second definition anywhere
+/// makes every use ambiguous: without `fallback` the hunk vetoes naming the
+/// first shadow `path:line`; with it all use rewriting is skipped and each
+/// shadow def is listed. Opaque (macro/attribute/qself) sites behave per
+/// file like `resolve`: veto without fallback, skip-with-report with it.
+/// Non-`.rs` files never reach here (the planner only passes parsed files).
+///
+/// Returns per-file sorted/deduped byte spans plus workspace-wide skip notes
+/// (`path:line`-qualified for cross-file review).
+#[derive(Debug)]
+pub struct WorkspaceOutcome {
+    /// Path → ident byte ranges (`original[a..b] == old`), sorted/deduped.
+    /// Entries exist only for files with ≥1 rewrite span.
+    pub per_file: Vec<(String, Vec<(usize, usize)>)>,
+    /// `path:line`-qualified notes for sites left untouched under fallback.
+    pub skipped: Vec<String>,
+}
+
+pub fn resolve_workspace<'a>(
+    files: &[(String, &'a syn::File, &'a str, &'a LineIndex)],
+    old: &str,
+    renamed_file: &str,
+    renamed: &[(usize, usize)],
+    fallback: bool,
+) -> Result<WorkspaceOutcome, FollowVeto> {
+    if files.len() <= 1 {
+        // Single-file fast path: the exact WI-6a outcome and messages
+        // (`line N`, no path prefix). The planner always passes the
+        // definition file, so an empty set means nothing to search.
+        let Some((_, parsed, original, index)) = files.first() else {
+            return Ok(WorkspaceOutcome {
+                per_file: Vec::new(),
+                skipped: Vec::new(),
+            });
+        };
+        let out = resolve(parsed, original, index, old, renamed, fallback)?;
+        let per_file = if out.spans.is_empty() {
+            Vec::new()
+        } else {
+            vec![(renamed_file.to_string(), out.spans)]
+        };
+        return Ok(WorkspaceOutcome {
+            per_file,
+            skipped: out.skipped,
+        });
+    }
+    struct Collected {
+        path: String,
+        original: String,
+        defs: Vec<(proc_macro2::Span, &'static str)>,
+        uses: Vec<proc_macro2::Span>,
+        opaque: Vec<(u32, String)>,
+    }
+    let mut all: Vec<Collected> = Vec::with_capacity(files.len());
+    for (path, parsed, original, _) in files {
+        let c = collect(parsed, old);
+        all.push(Collected {
+            path: path.clone(),
+            original: (*original).to_string(),
+            defs: c.defs,
+            uses: c.uses,
+            opaque: c.opaque,
+        });
+    }
+    let index_of = |path: &str| {
+        files
+            .iter()
+            .find(|(p, _, _, _)| p == path)
+            .map(|(_, _, _, idx)| *idx)
+    };
+    // Byte-map definitions workspace-wide (fail loud, never guess).
+    struct DefHit {
+        path: String,
+        line: u32,
+        kind: &'static str,
+        a: usize,
+        b: usize,
+    }
+    let mut def_hits: Vec<DefHit> = Vec::new();
+    for c in &all {
+        let index = index_of(&c.path).expect("workspace index present");
+        for (span, kind) in &c.defs {
+            let line = span.start().line as u32;
+            match span_bytes(&c.original, index, *span) {
+                Some((a, b)) => def_hits.push(DefHit {
+                    path: c.path.clone(),
+                    line,
+                    kind,
+                    a,
+                    b,
+                }),
+                None => {
+                    return Err(FollowVeto {
+                        reason: format!(
+                            "definition of `{old}` ({kind}) at {}:{line} maps outside the file",
+                            c.path,
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    let renamed_hit_in = |path: &str, a: usize, b: usize| {
+        path == renamed_file && renamed.iter().any(|(s, e)| a < *e && *s < b)
+    };
+    let shadow: Vec<&DefHit> = def_hits
+        .iter()
+        .filter(|d| !renamed_hit_in(&d.path, d.a, d.b))
+        .collect();
+
+    // Map + verify use spans per file.
+    let mut per_file: Vec<(String, Vec<(usize, usize)>)> = Vec::new();
+    for c in &all {
+        let index = index_of(&c.path).expect("workspace index present");
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for span in &c.uses {
+            let line = span.start().line as u32;
+            let (a, b) = span_bytes(&c.original, index, *span).ok_or_else(|| FollowVeto {
+                reason: format!("use of `{old}` at {}:{line} maps outside the file", c.path),
+            })?;
+            if c.original.get(a..b) != Some(old) {
+                return Err(FollowVeto {
+                    reason: format!(
+                        "use of `{old}` at {}:{line} is not the expected text",
+                        c.path
+                    ),
+                });
+            }
+            if renamed_hit_in(&c.path, a, b) {
+                continue;
+            }
+            spans.push((a, b));
+        }
+        spans.sort_unstable();
+        spans.dedup();
+        if !spans.is_empty() {
+            per_file.push((c.path.clone(), spans));
+        }
+    }
+    per_file.sort_by(|a, b| a.0.cmp(&b.0));
+    let use_sites: usize = per_file.iter().map(|(_, s)| s.len()).sum();
+
+    let mut skipped: Vec<String> = Vec::new();
+    if !shadow.is_empty() {
+        if !fallback {
+            let d = shadow[0];
+            return Err(FollowVeto {
+                reason: format!(
+                    "shadowed definition of `{old}` ({}) at {}:{}: cannot tell which definition each use names ({} use sites workspace-wide)",
+                    d.kind, d.path, d.line, use_sites,
+                ),
+            });
+        }
+        for d in &shadow {
+            skipped.push(format!(
+                "{}:{}: shadowed definition of `{old}` ({}); {use_sites} use sites left untouched",
+                d.path, d.line, d.kind,
+            ));
+        }
+        per_file.clear();
+    }
+    // Opaque sites: veto without fallback, skip-with-report with it. Under
+    // shadowing all spans are already cleared; opaque notes still apply.
+    let mut opaque: Vec<(String, u32, String)> = Vec::new();
+    for c in &all {
+        for (line, ctx) in &c.opaque {
+            opaque.push((c.path.clone(), *line, ctx.clone()));
+        }
+    }
+    opaque.sort();
+    if !opaque.is_empty() {
+        if !fallback {
+            let (path, line, ctx) = &opaque[0];
+            return Err(FollowVeto {
+                reason: format!(
+                    "use of `{old}` inside {ctx} at {path}:{line}: macro/attribute interiors are opaque"
+                ),
+            });
+        }
+        for (path, line, ctx) in &opaque {
+            skipped.push(format!(
+                "{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"
+            ));
+        }
+        if !shadow.is_empty() {
+            // Already cleared; notes above carry the signal.
+        } else {
+            // Opaque sites are left untouched but provable sites still
+            // rewrite: nothing to subtract here because opaque idents were
+            // never collected as use spans (the walk records a note instead
+            // of a span). The skip notes are the report.
+        }
+    }
+    Ok(WorkspaceOutcome { per_file, skipped })
+}
+
+/// Shared single-file collection behind `resolve` (no behavior change).
+fn collect<'a>(parsed: &'a syn::File, old: &'a str) -> Collector<'a> {
+    let mut collector = Collector {
+        old,
+        defs: Vec::new(),
+        uses: Vec::new(),
+        opaque: Vec::new(),
+    };
+    collector.visit_file(parsed);
+    collector
+}
+
+/// Whole-ident mention test for unparseable files (WI-6b1 tripwire): lex
+/// `text` with `proc_macro2` (comments vanish, strings stay literals) and
+/// report whether `old` appears as a full ident. When even lexing fails,
+/// assume a mention — fail loud, never a silent stale site.
+pub fn raw_mentions(text: &str, old: &str) -> bool {
+    match text.parse::<proc_macro2::TokenStream>() {
+        Ok(tokens) => tokens_mention(&tokens, old),
+        Err(_) => true,
+    }
 }
 
 /// Whole-ident test on token text, recursing through groups: `old` must
@@ -527,5 +750,106 @@ mod tests {
             "fn old() -> i32 {\n    1\n}\nfn g() -> i32 {\n    let old = 2;\n    old + old()\n}\n";
         let err = resolve_for_test(src, "old", "fn old", false).unwrap_err();
         assert!(err.reason.contains("shadowed"), "got: {}", err.reason);
+    }
+
+    fn workspace_for_test(
+        files: &[(&str, &str)],
+        old: &str,
+        renamed_file: &str,
+        renamed_site: &str,
+        fallback: bool,
+    ) -> Result<WorkspaceOutcome, FollowVeto> {
+        let parsed: Vec<syn::File> = files
+            .iter()
+            .map(|(_, src)| syn::parse_str(src).expect("test src must parse"))
+            .collect();
+        let originals: Vec<String> = files.iter().map(|(_, s)| (*s).to_string()).collect();
+        let indexes: Vec<LineIndex> = originals.iter().map(|s| LineIndex::new(s)).collect();
+        let refs: Vec<(String, &syn::File, &str, &LineIndex)> = files
+            .iter()
+            .enumerate()
+            .map(|(i, (path, _))| {
+                (
+                    (*path).to_string(),
+                    &parsed[i],
+                    originals[i].as_str(),
+                    &indexes[i],
+                )
+            })
+            .collect();
+        let def_src = files
+            .iter()
+            .find(|(p, _)| *p == renamed_file)
+            .expect("renamed file present")
+            .1;
+        let off = def_src.find(renamed_site).expect("renamed site must exist");
+        let a = off + renamed_site.find(old).expect("old inside site");
+        resolve_workspace(&refs, old, renamed_file, &[(a, a + old.len())], fallback)
+    }
+
+    #[test]
+    fn workspace_rewrites_uses_across_files() {
+        let out = workspace_for_test(
+            &[
+                ("a.rs", "pub struct Old;\n"),
+                (
+                    "b.rs",
+                    "use crate::Old;\nfn f(x: Old) -> Old {\n    Old\n}\n",
+                ),
+            ],
+            "Old",
+            "a.rs",
+            "struct Old",
+            false,
+        )
+        .unwrap();
+        assert!(out.skipped.is_empty());
+        let total: usize = out.per_file.iter().map(|(_, s)| s.len()).sum();
+        assert_eq!(total, 4, "per_file: {:?}", out.per_file);
+        let b = out
+            .per_file
+            .iter()
+            .find(|(p, _)| p == "b.rs")
+            .expect("b.rs entry");
+        assert_eq!(b.1.len(), 4);
+        assert!(out.per_file.iter().all(|(p, _)| p != "a.rs"));
+    }
+
+    #[test]
+    fn workspace_second_definition_vetoes_and_skips() {
+        let files = [
+            ("a.rs", "pub struct Old;\n"),
+            ("b.rs", "pub struct Old;\nfn f(x: Old) -> Old {\n    x\n}\n"),
+        ];
+        let err = workspace_for_test(&files, "Old", "a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("shadowed"), "got: {}", err.reason);
+        assert!(err.reason.contains("b.rs"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "a.rs", "struct Old", true).unwrap();
+        assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
+        assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
+        assert!(out.skipped[0].contains("b.rs"), "got: {:?}", out.skipped);
+    }
+
+    #[test]
+    fn workspace_opaque_site_in_other_file_vetoes_then_skips() {
+        let files = [
+            ("a.rs", "pub struct Old;\n"),
+            (
+                "b.rs",
+                "fn f() {\n    m!(Old);\n}\nfn g(x: Old) -> Old {\n    x\n}\n",
+            ),
+        ];
+        let err = workspace_for_test(&files, "Old", "a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("opaque"), "got: {}", err.reason);
+        assert!(err.reason.contains("b.rs"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "a.rs", "struct Old", true).unwrap();
+        let b = out
+            .per_file
+            .iter()
+            .find(|(p, _)| p == "b.rs")
+            .expect("b.rs entry");
+        assert_eq!(b.1.len(), 2, "per_file: {:?}", out.per_file);
+        assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
+        assert!(out.skipped[0].contains("b.rs"), "got: {:?}", out.skipped);
     }
 }
