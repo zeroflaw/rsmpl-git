@@ -91,24 +91,29 @@ pub(crate) fn supported_expr(e: &syn::Expr) -> bool {
             // structurally in the engine.
             | syn::Expr::If(_)
             | syn::Expr::Block(_)
+            // WI-5b: `match` (scrutinee + arms), loops, closures, and
+            // `let` expressions match structurally in the engine, plus
+            // `break`/`continue` (loop bodies almost always contain one).
+            | syn::Expr::Match(_)
+            | syn::Expr::Loop(_)
+            | syn::Expr::While(_)
+            | syn::Expr::ForLoop(_)
+            | syn::Expr::Closure(_)
+            | syn::Expr::Let(_)
+            | syn::Expr::Break(_)
+            | syn::Expr::Continue(_)
     )
 }
 
 /// Strict single-expression gate shared by the `let`-init paths: the
 /// engine `Stmt` path matches inits structurally via `match_expr`, so a
-/// pattern containing macros, lets, closures or unsupported nodes
-/// matches nothing and the sweep would fail loud. The try+closure
-/// combination matches nothing either (a2fc9b3 precedent).
+/// pattern containing macros or unsupported nodes matches nothing and
+/// the sweep would fail loud. WI-5b: `let` expressions, closures,
+/// `match`/loops (and `try` around them) match structurally now, so
+/// they no longer veto here.
 pub(crate) fn init_ok(e: &syn::Expr) -> bool {
     let probe = probe_expr(e);
-    if probe.macros > 0 || probe.lets > 0 || probe.closures > 0 || probe.unsupported > 0 {
-        return false;
-    }
-    // The try+closure combination matches nothing (a2fc9b3 precedent).
-    if probe.trys > 0 && probe.closures > 0 {
-        return false;
-    }
-    true
+    !(probe.macros > 0 || probe.unsupported > 0)
 }
 
 #[cfg(test)]
@@ -146,19 +151,22 @@ mod tests {
             "if a { b }",
             "if a { b } else { c }",
             "{ x }",
+            // WI-5b: `match`/loops/closures/`let` match structurally now.
+            "match a { _ => b }",
+            "loop { }",
+            "while a { b }",
+            "for x in y { b }",
+            "|| x",
+            "|x| x",
+            "let Some(x) = y",
+            "break",
+            "continue",
         ] {
             assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
-        // Rejected: match/loops/closures/let/macro shapes fall to
-        // `_ => false` in the engine and never match.
-        for bad in [
-            "m!(x)",
-            "let Some(x) = y",
-            "|| x",
-            "match a { _ => b }",
-            "loop {}",
-            "async { x }",
-        ] {
+        // Rejected: macro/async shapes fall to `_ => false` in the
+        // engine and never match.
+        for bad in ["m!(x)", "async { x }"] {
             assert!(!supported_expr(&expr(bad)), "{bad} must be unsupported");
         }
     }
@@ -167,12 +175,15 @@ mod tests {
     fn init_ok_pins_strict_gate() {
         assert!(init_ok(&expr("compute_first(input)")));
         assert!(init_ok(&expr("x + 1")));
-        // Macros, lets, closures, unsupported nodes each veto.
+        // Macros and unsupported nodes veto; WI-5b shapes pass.
         assert!(!init_ok(&expr("m!(x)")));
-        assert!(!init_ok(&expr("match a { _ => b }")));
-        assert!(!init_ok(&expr("|| x")));
-        // Try alone is fine; try+closure matches nothing (a2fc9b3).
+        assert!(init_ok(&expr("match a { _ => b }")));
+        assert!(init_ok(&expr("|| x")));
+        assert!(init_ok(&expr("loop { }")));
+        assert!(init_ok(&expr("let Some(x) = y")));
+        // Try alone is fine; try+closure matches structurally (WI-5b).
         assert!(init_ok(&expr("x?")));
-        assert!(!init_ok(&expr("(|| x)?")));
+        assert!(init_ok(&expr("(|| x)?")));
+        assert!(!init_ok(&expr("m!(x)?")));
     }
 }

@@ -994,13 +994,31 @@ mod tests {
     }
     #[test]
     fn verbatim_sweep_try_over_closure_stays_passthrough() {
-        // a2fc9b3 shape: Try alone and closures alone match fine, but a
-        // `?`-applied call wrapping a closure matches nothing (loud
-        // MATCH_CONFLICT) — probe-bisected, so the gate is exactly this
-        // combination.
+        // WI-5b: `?` over a closure matches structurally now (the
+        // a2fc9b3 veto is gone) — this pair stays ordinary only via
+        // the novelty gate: plus-side `H` is absent from minus and
+        // would infer as an unbound hole (fails on apply).
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    c(&x).map_err(|e| g(&e))?;\n+    c(&x).map_err(H)?;\n@@ -9,1 +10,1 @@\n-    c(&x).map_err(|e| g(&e))?;\n+    c(&x).map_err(H)?;\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(!out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
+    }
+    #[test]
+    fn verbatim_sweep_try_over_closure_compresses() {
+        // WI-5b: without a novel plus-side name, `?`-over-closure pairs
+        // compress (the a2fc9b3 combination matches now).
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    c(&x).map_err(|e| g(&e))?;\n+    c(&x).map_err(|e| h(&e))?;\n@@ -9,1 +10,1 @@\n-    c(&x).map_err(|e| g(&e))?;\n+    c(&x).map_err(|e| h(&e))?;\n";
+        let out = infer_rsmpl(raw).unwrap();
+        assert!(out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
+        assert!(
+            out.rsmpl.contains("- c(&x).map_err(|e| g(&e))?\n"),
+            "got: {}",
+            out.rsmpl
+        );
+        assert!(
+            out.rsmpl.contains("+ c(&x).map_err(|e| h(&e))?\n"),
+            "got: {}",
+            out.rsmpl
+        );
     }
     #[test]
     fn verbatim_sweep_closure_without_try_compresses() {

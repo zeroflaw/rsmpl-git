@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=bump_fallback
+# sweep
+- let P = E else { return 0 };
++ let P = E else { return 1 };

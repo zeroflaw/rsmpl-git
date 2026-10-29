@@ -1,11 +1,12 @@
-//! WI-5a shape pins for `test-fixtures/diffrs/7{5,6}-*`: `if`-expression
-//! verbatim sweeps (uniform `let v = if flag { 1 } else { 2 };` lines
-//! whose init is now engine-matchable since WI-5a). Split out of
-//! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
-//! (helpers duplicated, not shared — T246 precedent). The generic
-//! native → semantic → native round-trip for these fixtures already
-//! runs in `fixtures_roundtrip.rs`; this file adds the fire/veto shape
-//! pins plus a `--check` gate on the emitted semantic patch.
+//! WI-5a/WI-5b shape pins for `test-fixtures/diffrs/7{5,6}-*` (WI-5a:
+//! `if`-expression verbatim sweeps) and `7{7,8,9},80-*` (WI-5b: `match`,
+//! closure, `if let` verbatim sweeps whose inits are engine-matchable
+//! since WI-5b). Split out of `fixtures_roundtrip.rs` to hold that
+//! file's 2000-line budget (helpers are duplicated, not shared — T246
+//! precedent). The generic native → semantic → native round-trip for
+//! these fixtures already runs in `fixtures_roundtrip.rs`; this file
+//! adds the fire/veto shape pins plus a `--check` gate on the emitted
+//! semantic patch.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -179,5 +180,107 @@ fn wi5a_if_cond_extra_site_stays_ordinary() {
     assert!(
         semantic.contains("-    let v = if flag { 1 } else { 2 };"),
         "native minus must survive, got: {semantic}"
+    );
+}
+
+#[test]
+fn wi5b_match_scrutinee_fires() {
+    // Fixture 77: three uniform `let v = match flag { ... };` lines
+    // rewrite one arm in one `# allow=many` hunk. The init is a `match`
+    // expression — vetoed before WI-5b (SPEC 18.6 R1), engine-matchable
+    // since.
+    let (native_input, semantic) = convert_fixture("77-match-scrutinee-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "match sweep must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# scope=file"),
+        "ranged hunk, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- let v = match flag { true => 1, _ => 2 };\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ let v = match flag { true => 1, _ => 3 };\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    let v = match flag"),
+        "changed lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "match sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi5b_match_extra_site_stays_ordinary() {
+    // Fixture 78: a third untouched `match` line in the pre-image breaks
+    // totality (3 != 2) — the section stays ordinary.
+    let (_native_input, semantic) = convert_fixture("78-match-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "extra match site must veto, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    let v = match flag { true => 1, _ => 2 };"),
+        "native minus must survive, got: {semantic}"
+    );
+}
+
+#[test]
+fn wi5b_closure_body_fires() {
+    // Fixture 79: three uniform `let f = |x| x;` lines rewrite the
+    // closure body in one `# allow=many` hunk. Closure inits were
+    // vetoed before WI-5b (SPEC 18.6 R1), engine-matchable since.
+    let (native_input, semantic) = convert_fixture("79-closure-param-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "closure sweep must fire, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- let f = |x| x;\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ let f = |x| x + 1;\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "closure sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi5b_if_let_scrutinee_fires() {
+    // Fixture 80: three uniform `let v = if let Some(x) = y ...` lines
+    // rewrite the else branch in one `# allow=many` hunk — the `If`
+    // arm plus the `Let`-expression arm firing together (WI-5a + WI-5b).
+    let (native_input, semantic) = convert_fixture("80-if-let-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "if-let sweep must fire, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- let v = if let Some(x) = y { 1 } else { 2 };\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ let v = if let Some(x) = y { 1 } else { 3 };\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "if-let sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
     );
 }

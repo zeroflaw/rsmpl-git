@@ -12,8 +12,11 @@
 //!   (paths, literals, binary/unary/cast/reference/paren, calls, method
 //!   calls, assignment, field access, indexing, arrays, tuples, struct
 //!   literals, ranges, `await`, `?`, `return`, `if` with condition +
-//!   then-block + else branch, and blocks as concrete-length statement
-//!   sequences — WI-5a). Anything else rejects the candidate.
+//!   then-block + else branch, blocks as concrete-length statement
+//!   sequences (WI-5a), plus `match` (scrutinee + arms), `loop`/`while`/
+//!   `for` (label-strict, bodies structural), closures (qualifiers
+//!   strict, params/return/body structural), and `let` expressions
+//!   (WI-5b)). Anything else rejects the candidate.
 //! - `Type`: a general Rust type over a bounded variant set (paths with
 //!   generic args, references, slices, arrays, tuples, parens, raw
 //!   pointers, fn pointers, `impl Trait`, `dyn Trait`, `_`).
@@ -385,10 +388,10 @@ pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> 
         (syn::Expr::Await(a), syn::Expr::Await(b)) => match_expr(&a.base, &b.base, cx),
         (syn::Expr::Try(a), syn::Expr::Try(b)) => match_expr(&a.expr, &b.expr, cx),
         (syn::Expr::Return(a), syn::Expr::Return(b)) => opt_expr_eq(&a.expr, &b.expr, cx),
-        // WI-5a: `if` (condition + then-block + else branch) and blocks
-        // (concrete-length statement sequences live in
-        // `matcher_general_ctrl`). `match`, loops, and closures still
-        // reject here (WI-5b owns those arms).
+        // WI-5a/5b: `if` + blocks + `match`/loops/closures/`let`
+        // expressions match structurally in `matcher_general_ctrl`.
+        // Anything else (async/try/unsafe blocks, yield, macro types)
+        // still rejects here and stays an ordinary hunk.
         (syn::Expr::If(a), syn::Expr::If(b)) => crate::matcher_general_ctrl::match_if(a, b, cx),
         (syn::Expr::Block(a), syn::Expr::Block(b)) => {
             // Labels compare strictly (a labeled block is a different
@@ -400,6 +403,30 @@ pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> 
             };
             labels_eq && crate::matcher_general_ctrl::match_block(&a.block, &b.block, cx)
         }
+        (syn::Expr::Match(a), syn::Expr::Match(b)) => {
+            crate::matcher_general_ctrl::match_match(a, b, cx)
+        }
+        (syn::Expr::Loop(a), syn::Expr::Loop(b)) => {
+            crate::matcher_general_ctrl::match_loop(a, b, cx)
+        }
+        (syn::Expr::While(a), syn::Expr::While(b)) => {
+            crate::matcher_general_ctrl::match_while(a, b, cx)
+        }
+        (syn::Expr::ForLoop(a), syn::Expr::ForLoop(b)) => {
+            crate::matcher_general_ctrl::match_for(a, b, cx)
+        }
+        (syn::Expr::Closure(a), syn::Expr::Closure(b)) => {
+            crate::matcher_general_ctrl::match_closure(a, b, cx)
+        }
+        (syn::Expr::Let(a), syn::Expr::Let(b)) => {
+            crate::matcher_general_ctrl::match_let_expr(a, b, cx)
+        }
+        // WI-5b: `break` (optional label + value) and `continue`
+        // (optional label) — loop bodies almost always contain one.
+        (syn::Expr::Break(a), syn::Expr::Break(b)) => {
+            render(&a.label) == render(&b.label) && opt_expr_eq(&a.expr, &b.expr, cx)
+        }
+        (syn::Expr::Continue(a), syn::Expr::Continue(b)) => render(&a.label) == render(&b.label),
         _ => false,
     }
 }
@@ -529,7 +556,12 @@ fn match_type_param_bound(
 
 /// Match `fn` return types structurally (T149): absent/absent matches, and
 /// a whole-type placeholder (`T`) binds the target span like elsewhere.
-fn match_return_type(pat: &syn::ReturnType, tgt: &syn::ReturnType, cx: &mut MatchCx) -> bool {
+/// `pub(crate)` for `matcher_general_ctrl` closure arms (WI-5b).
+pub(crate) fn match_return_type(
+    pat: &syn::ReturnType,
+    tgt: &syn::ReturnType,
+    cx: &mut MatchCx,
+) -> bool {
     match (pat, tgt) {
         (syn::ReturnType::Default, syn::ReturnType::Default) => true,
         (syn::ReturnType::Type(_, a), syn::ReturnType::Type(_, b)) => {
@@ -1525,6 +1557,42 @@ mod tests {
                 file: "fn a(o: Option<i32>) {\n    let v @ Some(x) = o;\n    let _ = (v, x);\n}\n",
                 contains: "let v @ Some(x) = o;",
             },
+            // WI-5b R1-match: the scrutinee hole binds; one arm rewrites.
+            Fire {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- match E { Some(x) => 1, _ => 2 }\n+ match E { Some(x) => 1, _ => 3 }\n",
+                file: "fn a(o: Option<i32>) {\n    let v = match o { Some(x) => 1, _ => 2 };\n    let _ = v;\n}\n",
+                contains: "_ => 3",
+            },
+            // WI-5b R1-loop: body rewrites structurally.
+            Fire {
+                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# root=expr\n- loop { break; }\n+ loop { continue; }\n",
+                file: "fn a() {\n    loop { break; }\n}\n",
+                contains: "continue;",
+            },
+            // WI-5b R1-while: the condition hole binds; body rewrites.
+            Fire {
+                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- while E { break; }\n+ while E { continue; }\n",
+                file: "fn a(x: bool) {\n    while x { break; }\n}\n",
+                contains: "continue;",
+            },
+            // WI-5b R1-for: the bound pattern binds; the iterator hole binds.
+            Fire {
+                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# root=expr\n# pat P\n# expr E\n- for P in E { break; }\n+ for P in E { continue; }\n",
+                file: "fn a() {\n    for x in y { break; }\n}\n",
+                contains: "continue;",
+            },
+            // WI-5b R1-closure: param and body holes bind.
+            Fire {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# pat P\n# expr E\n- |P| E\n+ |P| E + 1\n",
+                file: "fn a() {\n    let f = |x| x;\n    let _ = f;\n}\n",
+                contains: "|x| x + 1",
+            },
+            // WI-5b R1-let: `if let` scrutinee hole binds via the Let arm.
+            Fire {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- if let Some(x) = E { 1 } else { 2 }\n+ if let Some(x) = E { 1 } else { 3 }\n",
+                file: "fn a(y: Option<i32>) {\n    let v = if let Some(x) = y { 1 } else { 2 };\n    let _ = v;\n}\n",
+                contains: "else { 3 }",
+            },
         ];
         for row in fires {
             let patch = format!("{head}{}", row.patch);
@@ -1536,30 +1604,6 @@ mod tests {
             );
         }
         let rows = [
-            // R1: closure as the general expression.
-            Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- |x| E\n+ |x| E\n",
-                file: "fn a() {\n    let f = |x| x + 1;\n    let _ = f;\n}\n",
-                code: "RSMPL_MATCH_CONFLICT",
-                reason: "no match found",
-                suggestion: NO_MATCH,
-            },
-            // R1: `match` as the general expression.
-            Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- match E { _ => 1 }\n+ match E { _ => 2 }\n",
-                file: "fn a(x: bool) {\n    let v = match x { _ => 1 };\n    let _ = v;\n}\n",
-                code: "RSMPL_MATCH_CONFLICT",
-                reason: "no match found",
-                suggestion: NO_MATCH,
-            },
-            // R1: `loop` as the general expression.
-            Row {
-                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- loop { E }\n+ loop { E }\n",
-                file: "fn a() {\n    loop { break; }\n}\n",
-                code: "RSMPL_MATCH_CONFLICT",
-                reason: "no match found",
-                suggestion: NO_MATCH,
-            },
             // R2: mixed `let-else` (pattern without diverge vs target
             // with) still rejects — both sides must carry the diverge.
             Row {
@@ -1634,8 +1678,8 @@ mod tests {
         ];
         assert_eq!(
             rows.len(),
-            11,
-            "SPEC 18.6 lists R1(match/loops/closures),R2-mixed,R4-veto,R5 + C10-C14 runtime rows (R3 closed by T144; WI-5a moved R1-block/if,R2-fire,R4-fire to pins above)"
+            8,
+            "SPEC 18.6 lists R2-mixed,R4-veto,R5 + C10-C14 runtime rows (R3 closed by T144; WI-5a moved R1-block/if,R2-fire,R4-fire and WI-5b moved R1-match/loops/closures/let to pins above)"
         );
         for row in rows {
             let patch = format!("{head}{}", row.patch);

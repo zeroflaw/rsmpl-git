@@ -40,6 +40,8 @@ below).
 | 19-impl-sweep | 1 hunk renames `old_name`→`new_name` over 4 heterogeneous `impl` blocks, `;` decl + free fn untouched | 156 B / 10 ln | 391 B / 15 ln | 60% |
 | 20-trait-sweep | 1 hunk renames `old_name`→`new_name` over 3 heterogeneous `trait` blocks (`;` decls + default body), `impl` + free fn untouched | 124 B / 7 ln | 303 B / 12 ln | 59% |
 | 21-if-cond-rewrite | 1 hunk rewrites `> 0`→`>= 0` in `if` conditions over 4 sites (WI-5a: condition hole binds per site, then/else blocks concrete) | 115 B / 5 ln | 411 B / 12 ln | 72% |
+| 22-match-scrutinee-rewrite | 1 hunk rewrites `_ => 2`→`_ => 3` in `match` arms over 4 sites (WI-5b: scrutinee hole binds per site, arms concrete) | 131 B / 5 ln | 463 B / 12 ln | 72% |
+| 23-let-else-init-rewrite | 1 hunk rewrites `return 0`→`return 1` in `let-else` diverges over 4 sites (WI-5b: `P`/`E` holes bind per site, diverge concrete) | 122 B / 5 ln | 359 B / 12 ln | 66% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even

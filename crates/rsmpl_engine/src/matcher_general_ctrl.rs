@@ -1,24 +1,26 @@
-//! Control-flow and statement arms for the general matcher (WI-5a).
+//! Control-flow and statement arms for the general matcher (WI-5a/5b).
 //!
 //! Split from `matcher_general` per D5 (the parent file sits at the
 //! 2000-line gate). Owns the statement-level structural matching:
 //! `match_local` (`let` with or without `let-else`, `P @ sub`),
 //! `match_block` (concrete-length statement sequences), `match_stmt`,
-//! `match_if`, and the `@`-subpattern helper `match_pat`.
+//! `match_if`, `match_match` (+ `match_arm`), `match_loop`,
+//! `match_while`, `match_for`, `match_closure` (+ param helper),
+//! `match_let_expr`, and the `@`-subpattern helper `match_pat`.
 //! The parent keeps `match_expr`/`match_type` plus collection,
 //! substitution, and application; the two modules call each other
 //! (circular within the crate is fine).
 //!
-//! Everything not listed here (`match`, loops, closures, `let`
-//! expressions) still rejects in `match_expr` and stays an ordinary
-//! hunk (WI-5b owns those arms).
+//! Everything not listed here (async/try/unsafe blocks, yield, macro
+//! types) still rejects in `match_expr` and stays an ordinary hunk.
 
 use syn::spanned::Spanned;
 
 use crate::edits::fragments_equal;
 
 use super::matcher_general::{
-    as_placeholder, match_expr, match_type, render, render_eq, single_placeholder_type, MatchCx,
+    as_placeholder, match_expr, match_return_type, match_type, render, render_eq,
+    single_placeholder_type, MatchCx,
 };
 
 /// Split a `let` pattern into (inner pattern, optional ascribed type).
@@ -141,18 +143,179 @@ pub(crate) fn match_if(pat: &syn::ExprIf, tgt: &syn::ExprIf, cx: &mut MatchCx) -
     }
 }
 
-/// Match a `let` subpattern under `P @ sub`: a whole-pattern
-/// placeholder binds the target pattern text; anything else must be
-/// strictly token-equal (never guessed).
+/// Match a pattern position: a whole-pattern placeholder binds the
+/// target pattern text; a placeholder-head `P @ sub` binds `P` to the
+/// whole target text and matches `sub` recursively (a target `@`
+/// unwraps to its subpattern, otherwise the whole target pattern);
+/// anything else must be strictly token-equal (never guessed).
+/// Shared by `match_local` bound patterns (WI-5a) and by match arms,
+/// for-loop / closure / let-expression positions (WI-5b).
 pub(crate) fn match_pat(pat: &syn::Pat, tgt: &syn::Pat, cx: &mut MatchCx) -> bool {
     if let syn::Pat::Ident(pid) = pat {
-        if pid.subpat.is_none() {
-            if let Some(name) = as_placeholder(&cx.reverse, &pid.ident.to_string()).cloned() {
-                return cx.bind_span(&name, tgt.span());
+        if let Some(name) = as_placeholder(&cx.reverse, &pid.ident.to_string()).cloned() {
+            if let Some((_, sub)) = &pid.subpat {
+                // `P @ sub`: `P` binds the whole target text; `sub`
+                // matches the target subpattern (or the whole target
+                // pattern when it carries no `@`).
+                if !cx.bind_span(&name, tgt.span()) {
+                    return false;
+                }
+                let tsub: &syn::Pat = match tgt {
+                    syn::Pat::Ident(tid) => tid.subpat.as_ref().map(|(_, s)| &**s).unwrap_or(tgt),
+                    _ => tgt,
+                };
+                return match_pat(sub, tsub, cx);
             }
+            return cx.bind_span(&name, tgt.span());
         }
     }
     render_eq(pat, tgt)
+}
+
+/// Strict label equality: a labeled block/loop is a different control
+/// construct from an unlabeled one (never guessed).
+fn match_label(pat: &Option<syn::Label>, tgt: &Option<syn::Label>, _cx: &mut MatchCx) -> bool {
+    match (pat, tgt) {
+        (None, None) => true,
+        (Some(a), Some(b)) => render_eq(a, b),
+        _ => false,
+    }
+}
+
+/// Match a `match` expression: scrutinee via the general expression
+/// matcher, arms pairwise (equal count, source order). Each arm matches
+/// its pattern via `match_pat` (placeholder binds, concrete strict),
+/// its guard structurally, and its body as an expression.
+pub(crate) fn match_match(pat: &syn::ExprMatch, tgt: &syn::ExprMatch, cx: &mut MatchCx) -> bool {
+    if !match_expr(&pat.expr, &tgt.expr, cx) {
+        return false;
+    }
+    pat.arms.len() == tgt.arms.len()
+        && pat
+            .arms
+            .iter()
+            .zip(tgt.arms.iter())
+            .all(|(a, b)| match_arm(a, b, cx))
+}
+
+fn match_arm(pat: &syn::Arm, tgt: &syn::Arm, cx: &mut MatchCx) -> bool {
+    // Arm attributes compare strictly: an attributed arm is a different
+    // item, never guessed. Trailing-comma presence is formatting only.
+    if pat.attrs.len() != tgt.attrs.len() {
+        return false;
+    }
+    if !pat
+        .attrs
+        .iter()
+        .zip(tgt.attrs.iter())
+        .all(|(a, b)| render_eq(a, b))
+    {
+        return false;
+    }
+    if !match_pat(&pat.pat, &tgt.pat, cx) {
+        return false;
+    }
+    match (&pat.guard, &tgt.guard) {
+        (None, None) => {}
+        (Some((_, a)), Some((_, b))) => {
+            if !match_expr(a, b, cx) {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    match_expr(&pat.body, &tgt.body, cx)
+}
+
+/// Match a `loop` expression: label strictly, body structurally.
+pub(crate) fn match_loop(pat: &syn::ExprLoop, tgt: &syn::ExprLoop, cx: &mut MatchCx) -> bool {
+    match_label(&pat.label, &tgt.label, cx) && match_block(&pat.body, &tgt.body, cx)
+}
+
+/// Match a `while` expression: label strictly, condition via the
+/// general matcher, body structurally.
+pub(crate) fn match_while(pat: &syn::ExprWhile, tgt: &syn::ExprWhile, cx: &mut MatchCx) -> bool {
+    match_label(&pat.label, &tgt.label, cx)
+        && match_expr(&pat.cond, &tgt.cond, cx)
+        && match_block(&pat.body, &tgt.body, cx)
+}
+
+/// Match a `for` loop: label strictly, bound pattern via `match_pat`,
+/// iterator via the general matcher, body structurally.
+pub(crate) fn match_for(pat: &syn::ExprForLoop, tgt: &syn::ExprForLoop, cx: &mut MatchCx) -> bool {
+    match_label(&pat.label, &tgt.label, cx)
+        && match_pat(&pat.pat, &tgt.pat, cx)
+        && match_expr(&pat.expr, &tgt.expr, cx)
+        && match_block(&pat.body, &tgt.body, cx)
+}
+
+/// Match a closure: async/move/capture qualifiers plus lifetimes and
+/// constness compare strictly (a different qualifier is a different
+/// closure); params pairwise via the decomposed helper (mirrors the
+/// `P: T` rule of `match_local`); return type structurally; body as an
+/// expression.
+pub(crate) fn match_closure(
+    pat: &syn::ExprClosure,
+    tgt: &syn::ExprClosure,
+    cx: &mut MatchCx,
+) -> bool {
+    if render(&pat.asyncness) != render(&tgt.asyncness) {
+        return false;
+    }
+    if render(&pat.movability) != render(&tgt.movability) {
+        return false;
+    }
+    if render(&pat.lifetimes) != render(&tgt.lifetimes) {
+        return false;
+    }
+    if render(&pat.constness) != render(&tgt.constness) {
+        return false;
+    }
+    if pat.inputs.len() != tgt.inputs.len() {
+        return false;
+    }
+    if !pat
+        .inputs
+        .iter()
+        .zip(tgt.inputs.iter())
+        .all(|(a, b)| match_closure_param(a, b, cx))
+    {
+        return false;
+    }
+    match_return_type(&pat.output, &tgt.output, cx) && match_expr(&pat.body, &tgt.body, cx)
+}
+
+/// Match one closure parameter: decompose `P: T` like `match_local`
+/// (bare `P` never drops an annotation), inner pattern via `match_pat`,
+/// ascribed type via placeholder-or-structural agreement.
+fn match_closure_param(pat: &syn::Pat, tgt: &syn::Pat, cx: &mut MatchCx) -> bool {
+    let (pi, pty) = match pat {
+        syn::Pat::Type(pt) => (&*pt.pat, Some(&*pt.ty)),
+        _ => (pat, None),
+    };
+    let (ti, tty) = match tgt {
+        syn::Pat::Type(pt) => (&*pt.pat, Some(&*pt.ty)),
+        _ => (tgt, None),
+    };
+    if !match_pat(pi, ti, cx) {
+        return false;
+    }
+    match (pty, tty) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            if let Some(name) = single_placeholder_type(a, cx) {
+                return cx.bind_span(&name, b.span());
+            }
+            match_type(a, b, cx)
+        }
+        _ => false,
+    }
+}
+
+/// Match a `let` expression (`if let` / `while let` conditions): pattern
+/// via `match_pat`, scrutinee via the general matcher.
+pub(crate) fn match_let_expr(pat: &syn::ExprLet, tgt: &syn::ExprLet, cx: &mut MatchCx) -> bool {
+    match_pat(&pat.pat, &tgt.pat, cx) && match_expr(&pat.expr, &tgt.expr, cx)
 }
 
 #[cfg(test)]
@@ -287,5 +450,124 @@ mod tests {
         let src = "fn a(o: Option<i32>) {\n    let q @ Some(x) = o;\n    let _ = (q, x);\n}\n";
         let err = apply(&patch, src).unwrap_err();
         assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn match_scrutinee_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- match E {{ Some(x) => 1, _ => 2 }}\n+ match E {{ Some(x) => 1, _ => 3 }}\n"
+        );
+        let src = "fn a(o: Option<i32>) {\n    let v = match o { Some(x) => 1, _ => 2 };\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("_ => 3"), "got: {out}");
+    }
+
+    #[test]
+    fn match_arm_count_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- match E {{ Some(x) => 1 }}\n+ match E {{ Some(x) => 2 }}\n"
+        );
+        let src = "fn a(o: Option<i32>) {\n    let v = match o { Some(x) => 1, _ => 2 };\n    let _ = v;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    #[test]
+    fn match_guard_divergence_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- match E {{ x if x > 0 => 1, _ => 2 }}\n+ match E {{ x if x > 0 => 1, _ => 3 }}\n"
+        );
+        let src =
+            "fn a(x: i32) {\n    let v = match x { x if x > 1 => 1, _ => 2 };\n    let _ = v;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    #[test]
+    fn loop_body_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n- loop {{ break; }}\n+ loop {{ continue; }}\n"
+        );
+        let src = "fn a() {\n    loop { break; }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("continue;"), "got: {out}");
+    }
+
+    #[test]
+    fn loop_label_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n- loop {{ break; }}\n+ loop {{ continue; }}\n"
+        );
+        let src = "fn a() {\n    'outer loop { break; }\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    #[test]
+    fn while_cond_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- while E {{ break; }}\n+ while E {{ continue; }}\n"
+        );
+        let src = "fn a(x: bool) {\n    while x { break; }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("continue;"), "got: {out}");
+    }
+
+    #[test]
+    fn for_iter_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- for P in E {{ break; }}\n+ for P in E {{ continue; }}\n"
+        );
+        let src = "fn a() {\n    for x in y { break; }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("for x in y { continue; }"), "got: {out}");
+    }
+
+    #[test]
+    fn closure_param_and_body_holes_rewrite() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- |P| E\n+ |P| E + 1\n"
+        );
+        let src = "fn a() {\n    let f = |x| x;\n    let _ = f;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("|x| x + 1"), "got: {out}");
+    }
+
+    #[test]
+    fn closure_async_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- |P| E\n+ |P| E + 1\n"
+        );
+        let src = "fn a() {\n    let f = async |x| x;\n    let _ = f;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    #[test]
+    fn let_expr_scrutinee_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- if let Some(x) = E {{ 1 }} else {{ 2 }}\n+ if let Some(x) = E {{ 1 }} else {{ 3 }}\n"
+        );
+        let src = "fn a(y: Option<i32>) {\n    let v = if let Some(x) = y { 1 } else { 2 };\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("else { 3 }"), "got: {out}");
+    }
+
+    #[test]
+    fn let_expr_pat_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- if let Some(x) = E {{ 1 }} else {{ 2 }}\n+ if let Some(x) = E {{ 1 }} else {{ 3 }}\n"
+        );
+        let src = "fn a(y: Option<i32>) {\n    let v = if let None = y { 1 } else { 2 };\n    let _ = v;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    #[test]
+    fn at_pattern_in_match_arm_fires() {
+        // Placeholder-head `@` unwraps in arm positions too; the plus
+        // side reuses `P` alone (repeating `@` would double-splice,
+        // the SPEC R4 plus-side rule).
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- match E {{ P @ Q => 1, _ => 2 }}\n+ match E {{ P => 1, _ => 3 }}\n"
+        );
+        let src = "fn a(o: Option<i32>) {\n    let v = match o { v @ Some(x) => 1, _ => 2 };\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("_ => 3"), "got: {out}");
     }
 }

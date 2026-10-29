@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,4 +2,4 @@
+-    let x = a else { return 0 };
+-    let y = b else { return 0 };
+-    let z = c else { return 0 };
+-    let w = d else { return 0 };
++    let x = a else { return 1 };
++    let y = b else { return 1 };
++    let z = c else { return 1 };
++    let w = d else { return 1 };

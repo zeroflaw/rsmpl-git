@@ -154,8 +154,9 @@ pub(crate) fn try_verbatim_sweep(
         // (emission minus, emission plus, uniqueness needle, is-let).
         // A `let` scrutinee parses as `syn::Expr::Let`, so the Expr arm
         // below must decline `Let` on either side first — complete
-        // single-line `let` statements take the T440 `Stmt` path, and
-        // the Expr `lets > 0` probe would otherwise veto them here.
+        // single-line `let` statements take the T440 `Stmt` path (which
+        // owns the `;` terminator), even though `let` inits now match
+        // structurally (WI-5b).
         let parsed = (
             syn::parse_str::<syn::Expr>(stripped_m),
             syn::parse_str::<syn::Expr>(stripped_p),
@@ -185,6 +186,17 @@ pub(crate) fn try_verbatim_sweep(
         let Some((emit_minus, emit_plus, needle, is_let)) = resolved else {
             continue;
         };
+        // WI-5b novelty gate: verbatim emits directive-less literal
+        // hunks, so diet inference hole-ifies every undeclared
+        // uppercase ident. A plus-side ident absent from the minus
+        // side would infer as an unbound hole and fail on apply
+        // ("used in `+` without binding") — stay ordinary instead
+        // (that shape is antiunify territory, which declares its
+        // holes). Strings/backticks are masked so literal text never
+        // counts as an introduced name.
+        if plus_introduces_unbound_name(&emit_minus, &emit_plus) {
+            continue;
+        }
         if !is_let {
             let (minus_expr, plus_expr) = match (
                 syn::parse_str::<syn::Expr>(&emit_minus),
@@ -581,6 +593,94 @@ fn split_verbatim_hunks(section: &str) -> (String, Vec<String>) {
     (prelude, hunks)
 }
 
+/// True when the plus side introduces an uppercase ident absent from
+/// the minus side (WI-5b novelty gate — see the call site).
+fn plus_introduces_unbound_name(minus: &str, plus: &str) -> bool {
+    let masked_minus = mask_code_words(minus);
+    let masked_plus = mask_code_words(plus);
+    let minus_ids = upper_idents(&masked_minus);
+    upper_idents(&masked_plus)
+        .iter()
+        .any(|n| !minus_ids.iter().any(|m| m == n))
+}
+
+/// Blank `"..."` strings and `` `...` `` literals so their words never
+/// count as introduced names (mirrors the compiler's masking).
+fn mask_code_words(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut in_tick = false;
+    let mut esc = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+                out.push(' ');
+            }
+        } else if in_tick {
+            if b == b'`' {
+                in_tick = false;
+                out.push(' ');
+            }
+        } else if b == b'"' {
+            in_str = true;
+            out.push(' ');
+        } else if b == b'`' {
+            in_tick = true;
+            out.push(' ');
+        } else {
+            out.push(b as char);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Uppercase-start ident runs (`is_candidate` mirror without the
+/// dependency — `verbatim.rs` must not pull in `rsmpl_pattern`).
+fn upper_idents(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_ascii_uppercase() {
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let d = bytes[j] as char;
+                if d.is_ascii_alphanumeric() || d == '_' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            out.push(s[i..j].to_string());
+            i = j;
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let d = bytes[j] as char;
+                if d.is_ascii_alphanumeric() || d == '_' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Engine-capability gates for one verbatim pair (T403): both sides
 /// strip to expressions the engine can match and construct. Rejects
 /// `let` scrutinees (they fail `Expr` parse — complete single-line
@@ -590,11 +690,10 @@ fn split_verbatim_hunks(section: &str) -> (String, Vec<String>) {
 /// invocations anywhere on either side (plain patterns never enter
 /// macro bodies, SPEC 21 — 33a8cbb failed loud), bare-ident and
 /// literal minus sides (they would match every mention), and
-/// `?`-applied calls wrapping a closure on the minus side (Try alone
-/// and closures alone match fine, but the combination matches nothing
-/// — a2fc9b3 failed loud, probe-bisected). Plus-side closures are
-/// construct fine (probe-verified: concrete plus text splices),
-/// so only plus-side macros and lets stay rejected. Top-level Unary
+/// `?`-applied calls wrapping a closure on either side (WI-5b: `try`
+/// around a closure matches structurally now — the a2fc9b3 veto is
+/// gone). Plus-side closures construct fine (probe-verified: concrete
+/// plus text splices), so only plus-side macros stay rejected. Top-level Unary
 /// (`!`, `-`, ...) matches via the general matcher (T415: the router
 /// bypasses leading `!`/`-` to `Raw`, mirroring the T252 `&` bypass;
 /// the T414 veto was removed when routing was fixed).
@@ -612,19 +711,22 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     // in `classify_call_pattern` and skips the macro pre-route, so the
     // general matcher handles unary structurally. `&` precedent is T252.)
     let m = probe_expr(minus);
-    if m.macros > 0 || m.lets > 0 || (m.trys > 0 && m.closures > 0) {
+    // WI-5b: `let` expressions, closures, `match`/loops (and `try`
+    // around them) match structurally now — only macros veto here.
+    if m.macros > 0 {
         return false;
     }
     let p = probe_expr(plus);
-    if p.macros > 0 || p.lets > 0 {
+    if p.macros > 0 {
         return false;
     }
     // T412: the engine general matcher (`match_expr`) handles only a
     // bounded Expr variant set — a top-level Call/MethodCall pair takes
     // the call matcher (concrete args compare opaquely, closures fine),
     // but any other top-level shape compiles to a General hunk where an
-    // unsupported node (match/loops/closures — blocks and `if` match
-    // since WI-5a, `return` since T418) never matches. Reject the pair so the section stays ordinary
+    // unsupported node (macros/async — blocks/`if` since WI-5a,
+    // match/loops/closures/`let` since WI-5b, `return` since T418)
+    // never matches. Reject the pair so the section stays ordinary
     // (2382b02 `return ...` failed `--check` live before T418).
     if !matches!(minus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && m.unsupported > 0 {
         return false;
@@ -642,10 +744,12 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
 /// Complete-`let` pair gate (T440): both trimmed lines parse as
 /// `syn::Stmt::Local` (a successful `Stmt` parse already implies the
 /// semicolon — syn 2 types it as a plain `Semi`) with no `let-else`
-/// diverge (the engine never moves into let-else targets), and init
+/// diverge (WI-5a engine matches diverge structurally, but this sweep
+/// keeps the conservative veto — no totality change here), and init
 /// presence agrees (engine `(Some, None)` never matches). Init
-/// expressions satisfy the expression shape gates: no macros/lets/
-/// closures and no unsupported nodes on either side (the `Stmt` path
+/// expressions satisfy the expression shape gates: no macros and no
+/// unsupported nodes on either side (WI-5b: lets/closures/match/loops
+/// are matchable inits; the `Stmt` path matches inits via structural
 /// matches inits via structural `match_expr`, never the call router,
 /// so there is no Call/MethodCall top-level exception). Multi-line
 /// fragments (`let lenient =` with no init/semicolon — the b849869
@@ -677,9 +781,9 @@ fn verbatim_let_shape(m: &str, p: &str) -> Option<()> {
 
 /// Init-expression gates for the `let` path (T440): mirrors
 /// `verbatim_shape_ok` minus/plus rules — the engine `match_expr`
-/// rejects macros, lets, closures and unsupported nodes with
-/// `_ => false`, so a pattern containing them matches nothing and
-/// the sweep would fail loud.
+/// rejects macros and unsupported nodes with `_ => false`, so a
+/// pattern containing them matches nothing and the sweep would fail
+/// loud (WI-5b: lets/closures/match/loops are matchable inits now).
 fn verbatim_init_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     init_ok(minus) && init_ok(plus)
 }

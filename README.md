@@ -152,6 +152,8 @@ context would be larger, so these are lower bounds.)
 | 19-impl-sweep (4 methods, 1 hunk) | 156 B / 10 ln | 391 B / 15 ln | 60% |
 | 20-trait-sweep (3 methods, 1 hunk) | 124 B / 7 ln | 303 B / 12 ln | 59% |
 | 21-if-cond-rewrite (4 sites, 1 hunk) | 115 B / 5 ln | 411 B / 12 ln | 72% |
+| 22-match-scrutinee-rewrite (4 sites, 1 hunk) | 131 B / 5 ln | 463 B / 12 ln | 72% |
+| 23-let-else-init-rewrite (4 sites, 1 hunk) | 122 B / 5 ln | 359 B / 12 ln | 66% |
 
 `example-benches/diffrs/` (26 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):

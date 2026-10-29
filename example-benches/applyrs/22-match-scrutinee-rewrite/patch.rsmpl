@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=relax_fallback
+# sweep
+- match E { Some(x) => 1, _ => 2 }
++ match E { Some(x) => 1, _ => 3 }

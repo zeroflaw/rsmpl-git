@@ -11,6 +11,10 @@ use std::collections::{HashMap, HashSet};
 use crate::metavar::MetavarTable;
 use crate::quote_utils::mask_literal_spans;
 
+use super::infer_control::{
+    assign_control_line, assign_expr_ast, assign_expr_text, assign_type_ast, is_control_expr,
+};
+
 /// True for diet candidates: leading `A-Z`, rest alnum/`_`.
 pub fn is_candidate(name: &str) -> bool {
     let mut chars = name.chars();
@@ -303,7 +307,11 @@ fn infer_sigiled(
     commit_sigiled(base, kinds, order)
 }
 
-fn add_kind(kinds: &mut HashMap<String, HashSet<MetavarKind>>, name: &str, kind: MetavarKind) {
+pub(crate) fn add_kind(
+    kinds: &mut HashMap<String, HashSet<MetavarKind>>,
+    name: &str,
+    kind: MetavarKind,
+) {
     if is_candidate(name) {
         if let Some(set) = kinds.get_mut(name) {
             set.insert(kind);
@@ -666,7 +674,7 @@ fn split_top_eq(s: &str) -> Option<(String, String)> {
     None
 }
 
-fn split_top_colon(s: &str) -> (String, Option<String>) {
+pub(crate) fn split_top_colon(s: &str) -> (String, Option<String>) {
     let mut in_str = false;
     let mut esc = false;
     let bytes = s.as_bytes();
@@ -697,7 +705,7 @@ fn split_top_colon(s: &str) -> (String, Option<String>) {
     (s.to_string(), None)
 }
 
-fn names_in(text: &str, kinds: &HashMap<String, HashSet<MetavarKind>>) -> Vec<String> {
+pub(crate) fn names_in(text: &str, kinds: &HashMap<String, HashSet<MetavarKind>>) -> Vec<String> {
     scan_idents(text, false)
         .into_iter()
         .map(|t| t.trim_start_matches('$').to_string())
@@ -749,12 +757,10 @@ fn assign_let_slots(
             // With `# root=stmt` the init is still `expr`; without root
             // the same holds. No branch needed on `root` here.
             let _ = root;
-            for n in names_in(&init, kinds) {
-                // Only bare-arg / wholesale init holes infer here; deeper
-                // general-expr holes are picked up by the call/general
-                // passes below (same `expr` kind, so no conflict).
-                add_kind(kinds, &n, MetavarKind::Expr);
-            }
+            // WI-5b: AST-aware init (a `|P| E` / `match` / `for` init
+            // would claim `P` as `expr` under the text fallback,
+            // contradicting `# pat P`).
+            assign_expr_text(&init, kinds);
         }
     }
     Ok(())
@@ -1040,15 +1046,47 @@ fn assign_general_fallback(
     base: &MetavarTable,
 ) -> Result<(), StructuredError> {
     for text in [masked_minus, masked_plus] {
-        // Forced roots are whole-text (the root governs the shape).
+        // Forced roots are whole-text (the root governs the shape) —
+        // but a control-flow expression gets AST-aware kinds first: a
+        // blind whole-text pass would claim `Some` in
+        // `match E { Some(x) => 1 }` (or `P` in `|P| E`) as `expr`,
+        // contradicting the arm/param positions (WI-5b).
         match root {
             Some("type") => {
+                // Whole-text single type: AST walk assigns by position;
+                // unparsable text keeps the legacy whole-text fallback.
+                if let Ok(t) = syn::parse_str::<syn::Type>(text.trim()) {
+                    assign_type_ast(&t, kinds);
+                    continue;
+                }
                 for n in names_in(text, kinds) {
                     add_kind(kinds, &n, MetavarKind::Type);
                 }
                 continue;
             }
             Some("expr") => {
+                let t = text.trim();
+                // Single-expression control shapes (match/loops/closures
+                // `if`/`let`): walk the AST so arm constructors stay
+                // literal and pat slots infer `pat`.
+                let mut handled = false;
+                if let Ok(syn::Stmt::Expr(e, _)) = syn::parse_str::<syn::Stmt>(t) {
+                    if is_control_expr(&e) {
+                        assign_expr_ast(&e, kinds);
+                        handled = true;
+                    }
+                }
+                if !handled {
+                    if let Ok(e) = syn::parse_str::<syn::Expr>(t) {
+                        if is_control_expr(&e) {
+                            assign_expr_ast(&e, kinds);
+                            handled = true;
+                        }
+                    }
+                }
+                if handled {
+                    continue;
+                }
                 for n in names_in(text, kinds) {
                     add_kind(kinds, &n, MetavarKind::Expr);
                 }
@@ -1104,6 +1142,12 @@ fn assign_general_fallback(
             // `let`-led but unmatched by the split (composite patterns):
             // leave literal.
             if t.starts_with("let") {
+                continue;
+            }
+            // WI-5b: control-flow lines get AST-aware kinds (a text
+            // fallback would claim `P` in `for P in E` / `|P|` as
+            // `expr`, contradicting `# pat P`).
+            if assign_control_line(t, kinds) {
                 continue;
             }
             // Macro invocations (`foo!(...)`) carry token-tree bodies,
