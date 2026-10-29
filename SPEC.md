@@ -6113,18 +6113,25 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   + turbo arity + concrete non-hole turbo texts (`&`-receivers counted
   conservatively). Two varying positions, per-site turbofish deltas,
   non-type holes, and qself stay ordinary.
-- Macro-rename sweep: N ≥ 2 `-`/`+` pairs, each a single-segment
-  macro invocation `old!(body)` → `new!(body)` (whole-line statements
+- Macro-rename sweep: N ≥ 2 `-`/`+` pairs, each a bare
+  (`old!(body)` → `new!(body)`) or qualified
+  (`prefix::old!(body)` → `prefix::new!(body)`, one uniform class per
+  hunk — shared prefix, one shared last-segment delta, generic-free
+  segments, no leading `::`) macro invocation (whole-line statements
   and `let`-init invocations, which match the pattern in place —
-  probed) with one shared old/new name delta and per-site token-equal
+  probed) with one shared old/new path and per-site token-equal
   bodies (bodies vary across sites; delimiters unrestricted — the
-  engine `...` matches `!()`, `![]`, `!{}` alike, probed) → one
-  `# allow=many` `# macro=token_tree` hunk (`- old!(...)` /
-  `+ new!(...)`). Token-tree matching is verbatim-only by design, so
-  the body is never spelled. Qualified macro paths, same-name body
-  rewrites (macro interiors, WI-9), and divergent new names stay
-  ordinary. Pre-image totality counts every `old!` invocation (any
-  delimiter/body — the `...` pattern matches all).
+  engine `...` matches `!()`, `![]`, `!{}` alike, probed, including
+  for qualified paths) → one `# allow=many` `# macro=token_tree`
+  hunk (`- old!(...)` / `+ new!(...)`, or the concrete qualified
+  form `- prefix::old!(...)` / `+ prefix::new!(...)`; SPEC 19.3
+  prefers concrete paths, no `# symbol` tax). Token-tree matching is
+  verbatim-only by design, so the body is never spelled. Leading-`::`
+  (no engine spelling, probed), same-name body rewrites (macro
+  interiors, WI-9), and divergent new names stay ordinary. Pre-image
+  totality counts every invocation of the exact rendered path (any
+  delimiter/body — the `...` pattern matches all; bare twins never
+  match a qualified pattern and vice versa, probed).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

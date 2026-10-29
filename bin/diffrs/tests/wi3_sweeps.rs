@@ -1,5 +1,6 @@
-//! WI-3 shape pins for `test-fixtures/diffrs/6{1-6}-*`: qualified-call,
-//! turbofish, and macro-rename sweeps. Split out of
+//! WI-3 shape pins for `test-fixtures/diffrs/6{1-8}-*`: qualified-call,
+//! turbofish, macro-rename, and qualified-macro (WI-3 residue) sweeps.
+//! Split out of
 //! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
 //! (helpers duplicated, not shared — T246 precedent). The generic
 //! native → semantic → native round-trip for these fixtures already
@@ -329,6 +330,61 @@ fn wi3_macro_rename_fires() {
         "macro sweep must beat native bytes ({} vs {})",
         semantic.len(),
         native_input.len()
+    );
+}
+
+#[test]
+fn wi3_qualified_macro_fires() {
+    // Fixture 67 (WI-3 residue): three hetero-body
+    // `crate::old_render_widget!(...)` sites rewrite in one
+    // `# macro=token_tree` hunk with the concrete qualified path.
+    let (native_input, semantic) = convert_fixture("67-qualified-macro-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "qualified macro rename must fire, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("# macro=token_tree\n"),
+        "macro directive missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- crate::old_render_widget!(...)\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ crate::new_render_widget!(...)\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    crate::old_render_widget!("),
+        "renamed minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "qualified macro sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi3_qualified_macro_prefix_divergent_stays_ordinary() {
+    // Fixture 68: `crate::old` -> `crate::new` plus `other::old` ->
+    // `other::new` share no path class — veto side of fixture 67.
+    let (native_input, semantic) = convert_fixture("68-qualified-macro-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "prefix-divergent macros must stay ordinary, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    crate::old_render_widget!(first_widget_argument);"),
+        "minus lines must be preserved, got: {semantic}"
+    );
+    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
+    assert!(
+        semantic == normalize_native(&native_input),
+        "ordinary passthrough must equal normalized native, got: {semantic}"
     );
 }
 

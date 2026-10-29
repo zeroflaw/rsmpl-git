@@ -40,11 +40,13 @@ fn parse_macro_expr(line: &str) -> Option<syn::ExprMacro> {
 }
 
 /// N-site (N >= 2) macro-rename sweep: every pair parses as
-/// `old!(body)` -> `new!(body)` with one shared old/new single-segment
-/// macro name, per-site token-equal bodies, and a real name delta.
-/// Emits one `# allow=many` `# macro=token_tree` hunk with the verbatim
-/// `...` body (token-tree matching is verbatim-only by design, T133):
-/// every `old!` invocation rewrites regardless of body or delimiter.
+/// `old!(body)` -> `new!(body)` (bare) or `prefix::old!(body)` ->
+/// `prefix::new!(body)` (qualified, one uniform class per hunk) with one
+/// shared old/new macro path, per-site token-equal bodies, and a real
+/// last-segment name delta. Emits one `# allow=many`
+/// `# macro=token_tree` hunk with the verbatim `...` body (token-tree
+/// matching is verbatim-only by design, T133): every `old!` invocation
+/// rewrites regardless of body or delimiter.
 pub(crate) fn try_macro_rename_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -56,63 +58,100 @@ pub(crate) fn try_macro_rename_sweep(
     if minuses.len() < 2 {
         return None;
     }
-    let mut old_name: Option<String> = None;
-    let mut new_name: Option<String> = None;
+    let mut old_path: Option<String> = None;
+    let mut new_path: Option<String> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         let (o, n) = parse_macro_pair(m, p)?;
-        if old_name.as_ref().is_some_and(|x| *x != o) {
+        if old_path.as_ref().is_some_and(|x| *x != o) {
             return None;
         }
-        if new_name.as_ref().is_some_and(|x| *x != n) {
+        if new_path.as_ref().is_some_and(|x| *x != n) {
             return None;
         }
-        old_name = Some(o);
-        new_name = Some(n);
+        old_path = Some(o);
+        new_path = Some(n);
     }
-    let (old_name, new_name) = (old_name?, new_name?);
-    if old_name == new_name {
+    let (old_path, new_path) = (old_path?, new_path?);
+    if old_path == new_path {
         return None;
     }
-    if !crate::totality::macro_holds(file_old, &old_name, minuses, changed) {
+    // Last-segment delta shared across the class; the prefix (possibly
+    // empty for bare) must match segment-wise or the class is hetero.
+    let (o_pre, o_l) = split_macro_path(&old_path)?;
+    let (n_pre, n_l) = split_macro_path(&new_path)?;
+    if o_pre != n_pre || o_l == n_l {
         return None;
     }
-    let rule = unique_rule(used_rules, &format!("macros_{old_name}_to_{new_name}"));
+    let (old_last, _) = (o_l, n_l);
+    if o_pre.is_empty() {
+        if !crate::totality::macro_holds(file_old, &old_last, minuses, changed) {
+            return None;
+        }
+    } else if !crate::totality::qualified_macro_holds(file_old, &old_path, minuses, changed) {
+        return None;
+    }
+    let flat = |p: &str| p.replace("::", "_");
+    let rule = unique_rule(
+        used_rules,
+        &format!("macros_{}_to_{}", flat(&old_path), flat(&new_path)),
+    );
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str("# macro=token_tree\n");
-    hunk.push_str(&format!("- {old_name}!(...)\n+ {new_name}!(...)\n"));
+    hunk.push_str(&format!("- {old_path}!(...)\n+ {new_path}!(...)\n"));
     Some(hunk)
 }
 
-/// Parse a `-`/`+` line pair as a macro rename; return (old name, new
-/// name) when both sides are single-segment macro invocations with a
-/// shared delta and per-site token-equal bodies.
+/// Split a rendered macro path into (prefix segments, last segment).
+fn split_macro_path(path: &str) -> Option<(Vec<String>, String)> {
+    let mut segs: Vec<String> = path.split("::").map(str::to_string).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let last = segs.pop()?;
+    Some((segs, last))
+}
+
+/// Parse a `-`/`+` line pair as a macro rename; return (old path, new
+/// path) rendered with `::` joins when both sides are macro invocations
+/// with a shared prefix, a last-segment delta, generic-free segments,
+/// no leading `::`, and per-site token-equal bodies.
 fn parse_macro_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
     let o_mac = parse_macro_expr(old_line)?;
     let n_mac = parse_macro_expr(new_line)?;
-    let old = macro_name(&o_mac)?;
-    let new = macro_name(&n_mac)?;
+    let old = macro_path(&o_mac)?;
+    let new = macro_path(&n_mac)?;
     if o_mac.mac.tokens.to_string() != n_mac.mac.tokens.to_string() {
         return None;
     }
     Some((old, new))
 }
 
-/// The single-segment ident of a macro invocation path; `None` for
-/// qualified paths (`crate::old!` stays ordinary in v1), leading `::`,
-/// and generic args.
-fn macro_name(mac: &syn::ExprMacro) -> Option<String> {
-    if mac.mac.path.leading_colon.is_some() || mac.mac.path.segments.len() != 1 {
+/// The rendered path of a macro invocation (`old!` or `prefix::old!`);
+/// `None` for leading `::` (no engine spelling, probed — declined like
+/// qualified calls), segment-count mismatch is checked by the caller via
+/// exact rendered-path equality, and generic args.
+fn macro_path(mac: &syn::ExprMacro) -> Option<String> {
+    if mac.mac.path.leading_colon.is_some() {
         return None;
     }
-    let seg = &mac.mac.path.segments[0];
-    if !matches!(seg.arguments, syn::PathArguments::None) {
+    let mut segs = Vec::new();
+    for seg in mac.mac.path.segments.iter() {
+        if !matches!(seg.arguments, syn::PathArguments::None) {
+            return None;
+        }
+        let name = seg.ident.to_string();
+        if ident_len(&name)? != name.len() {
+            return None;
+        }
+        segs.push(name);
+    }
+    if segs.is_empty() {
         return None;
     }
-    let name = seg.ident.to_string();
-    if ident_len(&name)? != name.len() {
-        return None;
-    }
-    Some(name)
+    // Bare (len 1) and qualified (len >= 2) both qualify; the sweep
+    // requires a uniform class (exact rendered-path equality above), so
+    // mixed bare/qualified classes stay ordinary by construction.
+    Some(segs.join("::"))
 }
 
 #[cfg(test)]
@@ -263,10 +302,127 @@ mod tests {
     }
 
     #[test]
-    fn macro_qualified_path_stays_passthrough() {
+    fn macro_qualified_path_fires() {
+        // WI-3 residue: qualified macro renames compress like bare ones
+        // (probed: the engine matches the concrete qualified path).
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_render_widget!(first_widget_argument);\n-    crate::old_render_widget!(second_widget_argument);\n+    crate::new_render_widget!(first_widget_argument);\n+    crate::new_render_widget!(second_widget_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::old_render_widget!(first_widget_argument);\n    crate::old_render_widget!(second_widget_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- crate::old_render_widget!(...)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ crate::new_render_widget!(...)\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("# macro=token_tree\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_qualified_delimiter_mix_fires() {
+        // The engine `...` matches all delimiters for qualified paths too.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_render_widget!(first_widget_argument);\n-    crate::old_render_widget![second_widget_argument];\n+    crate::new_render_widget!(first_widget_argument);\n+    crate::new_render_widget![second_widget_argument];\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        assert!(
+            out.contains("- crate::old_render_widget!(...)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn macro_qualified_let_wrapped_fires() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = crate::old_render_widget!(first_widget_argument);\n-    let second_value = crate::old_render_widget!(second_widget_argument);\n+    let first_value = crate::new_render_widget!(first_widget_argument);\n+    let second_value = crate::new_render_widget!(second_widget_argument);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        assert!(
+            out.contains("- crate::old_render_widget!(...)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn macro_qualified_prefix_divergent_stays_passthrough() {
+        // Different prefixes share no path class.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_render_widget!(first_widget_argument);\n-    other::old_render_widget!(second_widget_argument);\n+    crate::new_render_widget!(first_widget_argument);\n+    other::new_render_widget!(second_widget_argument);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_qualified_last_same_stays_passthrough() {
+        // Same last segment is not a rename.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_render_widget!(first_widget_argument);\n-    crate::old_render_widget!(second_widget_argument);\n+    other::old_render_widget!(first_widget_argument);\n+    other::old_render_widget!(second_widget_argument);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_bare_twin_does_not_veto_qualified() {
+        // Exact-path parity both directions: a bare twin never matches
+        // the qualified pattern (probed) so it must not veto.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_render_widget!(first_widget_argument);\n-    crate::old_render_widget!(second_widget_argument);\n+    crate::new_render_widget!(first_widget_argument);\n+    crate::new_render_widget!(second_widget_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::old_render_widget!(first_widget_argument);\n    crate::old_render_widget!(second_widget_argument);\n    old_render_widget!(bare_twin_argument);\n}\n",
+        )]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=r1"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_qualified_extra_site_vetoes() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_render_widget!(first_widget_argument);\n-    crate::old_render_widget!(second_widget_argument);\n+    crate::new_render_widget!(first_widget_argument);\n+    crate::new_render_widget!(second_widget_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::old_render_widget!(first_widget_argument);\n    crate::old_render_widget!(second_widget_argument);\n    crate::old_render_widget!(untouched_third_argument);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn macro_leading_colon_stays_passthrough() {
+        // Leading `::` has no engine spelling (probed) — declined.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    ::crate::old_render_widget!(first_widget_argument);\n-    ::crate::old_render_widget!(second_widget_argument);\n+    ::crate::new_render_widget!(first_widget_argument);\n+    ::crate::new_render_widget!(second_widget_argument);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_mixed_bare_qualified_stays_passthrough() {
+        // Bare + qualified share no path class.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_render_widget!(first_widget_argument);\n-    crate::old_render_widget!(second_widget_argument);\n+    new_render_widget!(first_widget_argument);\n+    crate::new_render_widget!(second_widget_argument);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }

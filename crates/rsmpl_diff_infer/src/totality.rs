@@ -872,6 +872,51 @@ pub(crate) fn macro_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// N-site qualified macro-rename totality (WI-3 residue): multi-segment
+/// macro invocations with the exact rendered path `old_path` (any
+/// delimiter, any body — the emitted `...` matches all, probed) occur
+/// exactly `minuses.len()` times. Bare twins never match the qualified
+/// pattern and vice versa (probed), so only exact-path hits count.
+pub(crate) fn qualified_macro_holds(
+    file_old: Option<&str>,
+    old_path: &str,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    let n = minuses.len();
+    struct M<'a> {
+        old_path: &'a str,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for M<'_> {
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            if node.path.leading_colon.is_none() && render_macro_path(node) == self.old_path {
+                self.count += 1;
+            }
+            syn::visit::visit_macro(self, node);
+        }
+    }
+    let mut m = M { old_path, count: 0 };
+    m.visit_file(&file);
+    if m.count != n {
+        return false;
+    }
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
+/// Render a `syn::Macro` invocation path (`prefix::name` or bare).
+fn render_macro_path(node: &syn::Macro) -> String {
+    node.path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
