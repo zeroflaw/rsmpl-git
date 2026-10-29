@@ -5910,7 +5910,13 @@ coordinates, so a compressed hunk never overlaps a leftover hunk
 the `# scope=file` +
 `@@ -1,1 @@` dummy (Section 17.3); rule names derive from the
 rewritten idents (`rename_old_to_new`, `calls_old_to_new`, suffixed
-on collision). Sections carrying `old mode`/`new mode` skip the
+on collision). Emission range rule (canonical SHOULD, Section D.5):
+when all sites of one detector class lie within one contiguous
+original range of at most 64 lines, emit that real range with
+`# allow=many` and no `# scope=file`; otherwise emit `# sweep`.
+`# sweep` is always canonical-legal, so sweep-only emission already
+conforms; the real-range form is a byte-saving tightening.
+Sections carrying `old mode`/`new mode` skip the
 whole-section attempt and go straight per-hunk — whole-section
 emissions rebuild only the `diff --git` header and would silently
 drop the mode flip, while the per-hunk prelude keeps the mode lines
@@ -6194,5 +6200,69 @@ pipe empties into `applyrs` — empty input is the T59 authoring
 error). Failures exit 2 with the stdout-only `RSMPL_IO_CONFLICT`
 envelope family (same as `applyrs`, Section D.2). JSON shape:
 `{version, files: [{path}], patch}`.
+
+### D.5 Canonical form and lossless cycles
+
+Canonical RSmPL is what `diffrs` emits and what cycle comparisons
+compare: diet spelling (`# sweep`, inferred metavariables, terse
+renames), directives in fixed order, files sorted by path with hunks
+in document order, one hunk per detector class per file. Hunks keep
+document order rather than range-sorting: an insertion anchor at a
+range edge applies in document order (Section 20.2 — a paste at
+`(1,0)` plus an edit of `[1,1]` yields different trees when swapped,
+probed via the 03-move-fn shape), so range-sorting would change
+application results. Emission
+range rule: if all sites of a class lie within one contiguous
+original range of at most 64 lines, emit that real range with
+`# allow=many` (no `# scope=file`); otherwise `# sweep`. Moves and
+deletes keep today's real ranges/anchors. Rule ids are `r1…` in
+canonical hunk order, making the form deterministic: the same
+pre/post trees yield a byte-identical canonical patch.
+
+Concretely (`rsmpl_patch::canonicalize`, parse → re-emit):
+
+- Files sorted by target path; hunks within a file keep document
+  order (insertion anchors at a range edge are order-sensitive,
+  Section 20.2 — range-sorting is not application-safe). Ranges cite
+  original pre-patch coordinates (Section 10).
+- Semantic rules renumbered `r1…` in canonical order (one global
+  counter, matching the `diffrs` emitter convention).
+- Directives in fixed order: `# sweep` (fused exactly when effective
+  `allow == many` and `scope == file`, else the explicit non-default
+  `allow`/`scope` lines); `# optional`; `# repeat`; `# lang=rust`;
+  `# root=`; `# bind=` then `# use=`; `# symbol N=P`;
+  `# <kind> N1, N2` merged per kind, kinds sorted, names deduped;
+  `# attrs=/# mode=/# macro=/# format=` only when non-default;
+  `# returns=none`; `# fallback=syntax`; `# metavars=sigiled`.
+  Effective values are emitted, so positional `# sweep` expansion
+  re-emits identically.
+- RSmPL headers as `@@ -old_start,old_len @@` (new side elided,
+  Section 10.4); with `# scope=file` the range is the canonical
+  `@@ -1,1 @@` dummy (Section 17.3) except zero-length insertion
+  anchors, which ignore scope (Section 10.5). Ordinary hunks keep
+  both ranges; `@@ … @@` titles are dropped.
+- File headers collapsed to single-path `diff --git <target>` when
+  Section 6 allows it (rename/create/delete halves keep two paths);
+  `index …` lines dropped (the lowering never reproduces them);
+  all other metadata and all body lines kept verbatim.
+
+Losslessness is judged on file trees plus canonical patches, never
+raw native bytes: the 0-context lowering cannot reproduce an
+arbitrary hand-written native patch byte-for-byte, and `index`/title
+stripping is deliberate. Two cycles close the contract:
+
+- Native → semantic → native (state-lossless): applying the lowered
+  native patch to the pre-tree yields a post-tree byte-identical to
+  the true post-tree.
+- Semantic → native → semantic (canonical-lossless): re-diffing the
+  post-tree and re-inferring yields `S′` with `canonicalize(S′) ==
+  canonicalize(S)`, and one further iteration is a fixed point
+  (`S″ == S′` byte-identical).
+
+Corpus in scope: all applyrs fixtures (38), all diffrs fixtures
+(60), all example benches, plus the history_e2e pins. Out of scope
+(declared lossy): binary/gitlink sections (stripped with a warning),
+non-UTF-8 sections, and CRLF semantic compression (whose passthrough
+cycle must still be tree-lossless).
 
 ---
