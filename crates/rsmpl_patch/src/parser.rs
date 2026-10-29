@@ -838,6 +838,11 @@ fn parse_header_tags(tail: &str) -> std::result::Result<Option<String>, Structur
 pub fn parse_directives(raw: &[String]) -> Result<Vec<Directive>> {
     let mut out = Vec::new();
     for line in raw {
+        // WI-1a: `# sweep` (SPEC 9.3) expands in place; later explicits win.
+        if crate::sweep::is_sweep_line(line) {
+            out.extend(crate::sweep::expansion());
+            continue;
+        }
         out.push(parse_directive(line)?);
     }
     Ok(out)
@@ -1059,6 +1064,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
         )
         .with_suggestion("write bare `# repeat` with no value".to_string())
         .into()),
+        "sweep" => crate::sweep::reject_value(v, line),
         "scope" => match v {
             "contained" => Ok(Directive::Scope(Scope::Contained)),
             "anchor" => Ok(Directive::Scope(Scope::Anchor)),

@@ -7,6 +7,7 @@
 mod errors;
 mod model;
 mod parser;
+mod sweep;
 mod trailing_blank;
 
 pub use errors::{ErrorCode, StructuredError};

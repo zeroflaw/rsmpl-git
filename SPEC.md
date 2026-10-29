@@ -787,6 +787,7 @@ hunks that already carry other directives omit it.
 | `# scope=overlap` | Matched AST node may overlap the old range. |
 | `# scope=exact` | Matched AST node span must exactly match the old range after trivia normalization. |
 | `# scope=file` | Search the whole file; the `@@` old range is a dummy (canonical `@@ -1,1 @@`) and range-bounds validation is skipped. Insertion anchors ignore scope. |
+| `# sweep` | Exactly `# allow=many` + `# scope=file` (fused sweep header). Ranged multi-match keeps spelling `# allow=many` without `# scope=file`. |
 | `# bind=Name` | Capture exactly one rewritten or removed AST object under a cross-hunk name. Scalar only in this version. |
 | `# use=Name` | Use a previously captured scalar object. |
 | `# attrs=preserve` | Ignore unwritten attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement. Default. Explicitly written attributes constrain the match (exact match, other sites skipped); the plus side must mirror the minus side. |
