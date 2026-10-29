@@ -1714,6 +1714,43 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "49-single-same-literal-stays-ordinary" {
+            // T485: single same-literal site veto miniature --
+            // one `agents.contains("skills/rsmpl-git/SKILL.md");` ->
+            // `agents.contains("skills/gitrs/SKILL.md");` costs more
+            // as a semantic hunk than the ordinary hunk it replaces:
+            // pure ordinary passthrough (unit gate
+            // `method_same_literal_single_site_stays_passthrough`,
+            // veto side of fixture 17, the 3-site calls_contains_literal fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single same-literal edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "50-single-ref-strip-stays-ordinary" {
+            // T485: single ref-strip site veto miniature --
+            // one `copy_tree(&a.join("repo"), x);` -> `copy_tree(a, x);`
+            // costs more as a semantic hunk than the ordinary hunk it
+            // replaces: pure ordinary passthrough (unit gate
+            // `ref_strip_sweep_single_site_stays_passthrough`, veto side
+            // of fixture 18, the 2-site calls_join_strip fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single ref-strip edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
