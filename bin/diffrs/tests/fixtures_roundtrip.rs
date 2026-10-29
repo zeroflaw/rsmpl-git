@@ -1550,6 +1550,48 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "41-single-rename-stays-ordinary" {
+            // T481: T375 single-rename veto full-cycle miniature --
+            // a short-header `fn foo() {` -> `fn bar() {` rename costs
+            // more as a semantic hunk (rule + scope + lang overhead)
+            // than the one ordinary hunk it replaces, so no rule=
+            // hunks: pure ordinary passthrough, still shorter via
+            // 0-context + header collapse.
+            assert!(
+                !semantic.contains("rule="),
+                "short single rename must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "42-single-rename-fires" {
+            // T481: the same single-rename shape with a long signature
+            // fires -- the `fn Old(...)` / `fn New(...)` pattern lines
+            // are far shorter than the ordinary lines, so the byte
+            // guard clears (unit-test `fn_rename_compresses` shape,
+            // first full-cycle cover).
+            assert!(
+                semantic.contains("rule=rename_foo_to_bar"),
+                "long single rename must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn foo("),
+                "renamed minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn bar("),
+                "renamed plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "single rename must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
