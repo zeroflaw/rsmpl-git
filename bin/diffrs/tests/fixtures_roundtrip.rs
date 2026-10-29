@@ -1592,6 +1592,48 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "43-single-use-stays-ordinary" {
+            // T482: single use-prefix site veto full-cycle miniature --
+            // one `use crate::old::Thing;` -> `new::Thing` line costs more
+            // as a semantic hunk (rule + scope overhead) than the one
+            // ordinary hunk it replaces, so no rule= hunks: pure ordinary
+            // passthrough, still shorter via 0-context + header collapse.
+            // Veto side of fixture 16 (3-site use_old_to_new fire).
+            assert!(
+                !semantic.contains("rule="),
+                "single use-prefix edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
+        } else if name == "44-single-slot-fires" {
+            // T482: single slot-sweep site with a long signature fires --
+            // the `fn Old(...)` / `fn New(...)` slot pattern lines are far
+            // shorter than the ordinary lines, so the byte guard clears
+            // (13-shape minus one site + keep wrapper; first single-site
+            // slot-sweep full-cycle cover, mirrors 42 for the slot family).
+            assert!(
+                semantic.contains("rule=rename_old_function_name_to_new_function_name"),
+                "single slot rename must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn old_function_name("),
+                "renamed minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn new_function_name("),
+                "renamed plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "slot rename must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }
