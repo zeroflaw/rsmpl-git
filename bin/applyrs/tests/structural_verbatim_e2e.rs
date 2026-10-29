@@ -106,7 +106,7 @@ fn ordinary_hunk_elided_new_side_verbatim() {
     let patch = "diff --git a.rs\n@@ -1,1 @@\n fn main() {}\n";
     let reason = "ordinary hunk requires both -old,len +new,len ranges: @@ -1,1 @@";
     let suggestion =
-        "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add a `#` directive line to make it an RSmPL hunk";
+        "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk";
     let content = "fn main() {}\n";
     let dir = init_repo();
     write(dir.path(), "a.rs", content);

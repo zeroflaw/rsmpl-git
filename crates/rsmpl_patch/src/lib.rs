@@ -4,6 +4,7 @@
 //! Implements SPEC sections 5-11 (patch structure, hunk detection,
 //! header syntax, directive lines, range semantics).
 
+mod diet_detect;
 mod errors;
 mod model;
 mod parser;

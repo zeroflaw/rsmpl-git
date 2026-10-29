@@ -4,8 +4,9 @@
 //! `patch ::= file_section*`, file sections start with `diff --git`
 //! (one path suffices, SPEC 6), hunks start with `@@ -a,b (+c,d)? @@ tail`
 //! (new-side elision is RSmPL-only, SPEC 8). A hunk is RSmPL iff the
-//! first line after the header is an unprefixed `#` directive (SPEC
-//! 7.1); `# lang=rust` is accepted but optional (Rust is the default).
+//! header carries `rule=` or at least one unprefixed `#` directive line
+//! follows the header (SPEC 7.1); `# lang=rust` is accepted but never
+//! required (Rust is the default).
 
 use crate::errors::{ErrorCode, StructuredError};
 use crate::model::*;
@@ -558,7 +559,7 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
             break;
         }
     }
-    let is_rsmpl_candidate = !raw_directives.is_empty();
+    let is_rsmpl_candidate = !raw_directives.is_empty() || header.rule.is_some();
     // Validate backtick quoting early for RSmPL candidates (SPEC 24.1.5).
     if is_rsmpl_candidate {
         for d in &raw_directives {
@@ -567,11 +568,14 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
     }
 
     if is_rsmpl_candidate {
-        // Per SPEC 7.1 any unprefixed `#` directive block makes the hunk
-        // RSmPL (Rust is the default language); `# lang=rust` may be
+        // Per SPEC 7.1 a hunk is RSmPL iff the header carries `rule=`
+        // or at least one unprefixed `#` directive block follows it
+        // (Rust is the default language); `# lang=rust` may be
         // included for explicitness, `# lang=<other>` is rejected by
-        // `parse_directives`. Unknown/typo'd keys are rejected there too,
-        // so omitting the lang line never silently accepts a typo.
+        // `parse_directives`. A `rule=`-only hunk carries zero
+        // directives (diet form, SPEC WI-1); unknown/typo'd keys are
+        // rejected there too, so omitting the lang line never silently
+        // accepts a typo.
         let directives = parse_directives(&raw_directives)?;
         // Parse body lines until next hunk/file header or EOF/blank separator.
         let (body, next) = parse_body_lines(lines, idx, true)?;
@@ -608,7 +612,7 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
                 ),
             )
             .with_suggestion(
-                "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add a `#` directive line to make it an RSmPL hunk",
+                "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk",
             )
             .into());
         }

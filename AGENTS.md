@@ -11,11 +11,8 @@ Skill: `skills/gitrs/SKILL.md` teaches the patch-first loop
 ```diff
 diff --git src/lib.rs
 @@ -1,5 @@ rule=rename_foo
-# lang=rust
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-   }
+- fn foo
++ fn bar
 ```
 
 Minimal recipe: `diff --git <path>` alone suffices (single path ≡
@@ -25,8 +22,8 @@ patch has several hunks). For RSmPL hunks the `+new,len` side is
 ignored (SPEC 10.4), so elide it (`@@ -old,len @@`); copying the old
 side verbatim (`@@ -old,len +old,len @@`) stays compatible.
 
-Rules: every semantic hunk = `@@ -old,len @@ rule=name` header (+new,len elided, RSmPL-only) + at least one `#` directive line + `-`/`+`/context lines
-(`# lang=rust` alone is the marker for bare renames; hunks that already carry other directives omit it, SPEC 7.1). All `-old,len`
+Rules: every semantic hunk = `@@ -old,len @@` header with `rule=name` or at least one `#` directive line + `-`/`+`/context lines
+(directive-free renames use the terse form plus `rule=`; hunks that already carry other directives omit `# lang=rust`, SPEC 7.1). All `-old,len`
 ranges cite the ORIGINAL pre-patch file, never rebased by earlier hunks
 (SPEC 10). Ordinary Git hunks (no `#` directives) may mix in but must not
 overlap semantic ranges (SPEC 10.6, SPEC 11).
@@ -35,7 +32,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 
 | Directive | Meaning (SPEC 9.3) |
 |---|---|
-| `# lang=rust` | optional: marker for directive-free hunks; omit when other `#` lines present (SPEC 7.1) |
+| `# lang=rust` | optional, never required: detection is `rule=` or any `#` line (SPEC 7.1) |
 | `# allow=many` | many matches may rewrite (default `one`) |
 | `# repeat` | fold nested same-rule matches bottom-up: `Box::new(Box::new(x))` → `x` in one call-rewrite hunk (SPEC 17.8; call + general-expr shapes, `...` bodies opaque) |
 | `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3) |

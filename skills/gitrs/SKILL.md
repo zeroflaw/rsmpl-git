@@ -22,18 +22,17 @@ through `gitrs` as ordinary hunks, so one tool owns every change.
 ```diff
 diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_foo
-# lang=rust
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-  }
+- fn foo
++ fn bar
 ```
 
 Single path suffices; `---`/`+++`/`index` are optional metadata; `rule=`
-may be omitted for single hunks; elide the `+new,len` side (ignored for
+may be omitted when a `#` directive line is present (diagnostics show `<unnamed>`; add `rule=name` when a
+patch has several hunks); elide the `+new,len` side (ignored for
 RSmPL hunks, SPEC 10.4). Every `@@ -old,len @@` cites ORIGINAL pre-patch
-lines, never rebased (SPEC 10). Bare renames keep `# lang=rust` as the
-marker; hunks with other directives omit it (SPEC 7.1).
+lines, never rebased (SPEC 10). A hunk is RSmPL iff the header carries
+`rule=` or at least one `#` directive line follows it; directive-free
+renames use the terse form plus `rule=` (SPEC 7.1).
 
 ## Directives (SPEC 9.3)
 

@@ -68,17 +68,14 @@ An RSmPL-Git patch should look as close as possible to a normal Git patch. The f
 
 A minimal RSmPL hunk looks like this (diet form: single-path header,
 elided new side — the `+new,len` side is ignored for RSmPL hunks, Section
-10.4; `# lang=rust` is the marker because a bare rename carries no other
-directive, Section 7.1):
+10.4; a directive-free rename needs only `rule=`, Section 7.1):
 
 ```diff
 diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_foo
-# lang=rust
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-  }
+- fn foo
++ fn bar
+```
 ```
 
 A normal Git hunk remains normal:
@@ -452,23 +449,21 @@ old side verbatim (`@@ -10,7 +10,7 @@`) stays compatible.
 A hunk is an RSmPL hunk if and only if:
 
 1. it has a normal unified-diff hunk header; and
-2. immediately after the hunk header, there is at least one unprefixed directive line beginning with `#`.
+2. the header carries `rule=`, or immediately after the hunk header there
+   is at least one unprefixed directive line beginning with `#`.
 
 The tool is Rust-only, so the language defaults to Rust. A
-`# lang=rust` directive may be included for explicitness but is not
+`# lang=rust` directive may be included for explicitness but is never
 required; `# lang=<other>` is rejected.
 
-Because detection needs at least one `#` line, a hunk whose shape
-requires no other directive (such as a bare rename) still writes one
-marker line:
+Because detection needs `rule=` or at least one `#` line, a hunk whose
+shape requires no other directive (such as a bare rename) writes only
+the terse form plus `rule=`:
 
 ```diff
 @@ -10,7 @@ rule=rename_foo
-# lang=rust
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-  }
+- fn foo
++ fn bar
 ```
 
 while a hunk that already carries other directives omits it:
@@ -767,15 +762,16 @@ RSmPL hunks default to Rust. A hunk may include:
 
 for explicitness, but it is not required. Any `# lang=` value other
 than `rust` is rejected. Because hunk detection (Section 7.1) needs
-at least one `#` directive line, a hunk whose shape requires no other
-directive (such as a bare rename) keeps `# lang=rust` as its marker;
+`rule=` or at least one `#` directive line, a hunk whose shape requires
+no other directive (such as a bare rename) writes the terse form plus
+`rule=` with no directive lines at all;
 hunks that already carry other directives omit it.
 
 ### 9.3 Core directives
 
 | Directive | Meaning |
 |---|---|
-| `# lang=rust` | Accepted for explicitness; optional — hunks default to Rust, but at least one `#` line is required for detection, so directive-free hunks keep this line as their marker (Section 7.1). `# lang=<other>` is rejected. |
+| `# lang=rust` | Accepted for explicitness; optional — hunks default to Rust and are detected by `rule=` or any `#` line (Section 7.1). `# lang=<other>` is rejected. |
 | `# allow=one` | Exactly one match is expected. Default. |
 | `# allow=many` | Multiple matches may be rewritten. |
 | `# optional` | Zero matches are allowed. |
@@ -4871,19 +4867,16 @@ and later:
 
 All examples use the diet-minimal recipe from Section 6 (single-path
 header, elided new side, no `# lang=rust` next to other directives —
-the form agents should emit). Bare renames keep `# lang=rust` as the
-sole-directive marker (Section 7.1).
+the form agents should emit). Bare renames use the terse form plus
+`rule=` with no directive lines (Section 7.1).
 
 ### 29.1 Rename a plain function
 
 ```diff
 diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_plain_foo
-# lang=rust
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-  }
+- fn foo
++ fn bar
 ```
 
 Matches:
@@ -5407,8 +5400,8 @@ renames and Git-tooling compatibility); the `+new_start,new_len` side is
 elided (RSmPL-only — it is ignored per Section 10.4, and ordinary hunks
 must keep both ranges); `rule=name` is recommended for multi-hunk patches
 but optional (a hunk without it is valid; diagnostics show `<unnamed>`);
-`# lang=rust` is the marker only for otherwise directive-free hunks (bare
-renames) and is omitted when other directives are present (Sections 7.1,
+`# lang=rust` is never required (detection is `rule=` or any `#` line)
+and is omitted when other directives are present (Sections 7.1,
 9.2). The verbose compatible spelling used in the Section 29 examples
 (two-path headers, copied new sides, explicit `# lang=rust`) stays valid.
 
