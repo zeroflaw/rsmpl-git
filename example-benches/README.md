@@ -39,6 +39,7 @@ below).
 | 18-attrs-sweep | `V`/`Q`/`G`/`W` rename `foo`→`baz` over 4 attributed sigs, attrs preserved, `bar` untouched, 1 hunk | 122 B / 7 ln | 407 B / 15 ln | 70% |
 | 19-impl-sweep | 1 hunk renames `old_name`→`new_name` over 4 heterogeneous `impl` blocks, `;` decl + free fn untouched | 156 B / 10 ln | 391 B / 15 ln | 60% |
 | 20-trait-sweep | 1 hunk renames `old_name`→`new_name` over 3 heterogeneous `trait` blocks (`;` decls + default body), `impl` + free fn untouched | 124 B / 7 ln | 303 B / 12 ln | 59% |
+| 21-if-cond-rewrite | 1 hunk rewrites `> 0`→`>= 0` in `if` conditions over 4 sites (WI-5a: condition hole binds per site, then/else blocks concrete) | 115 B / 5 ln | 411 B / 12 ln | 72% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even

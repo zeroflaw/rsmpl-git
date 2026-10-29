@@ -123,7 +123,7 @@ SPEC D.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 
-`example-benches/applyrs/` (20 benches) compares the agent-authored `patch.rsmpl`
+`example-benches/applyrs/` (21 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
 same result, RSmPL input vs full Git spelling. Re-measure any time with
 `./example-benches/run.sh`. (A hand-written native patch with conventional
@@ -151,6 +151,7 @@ context would be larger, so these are lower bounds.)
 | 18-attrs-sweep (4 attributed sigs, 1 hunk) | 122 B / 7 ln | 407 B / 15 ln | 70% |
 | 19-impl-sweep (4 methods, 1 hunk) | 156 B / 10 ln | 391 B / 15 ln | 60% |
 | 20-trait-sweep (3 methods, 1 hunk) | 124 B / 7 ln | 303 B / 12 ln | 59% |
+| 21-if-cond-rewrite (4 sites, 1 hunk) | 115 B / 5 ln | 411 B / 12 ln | 72% |
 
 `example-benches/diffrs/` (26 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):

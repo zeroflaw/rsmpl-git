@@ -86,6 +86,11 @@ pub(crate) fn supported_expr(e: &syn::Expr) -> bool {
             | syn::Expr::Await(_)
             | syn::Expr::Try(_)
             | syn::Expr::Return(_)
+            // WI-5a: `if` (condition + then-block + else branch) and
+            // blocks (concrete-length statement sequences) match
+            // structurally in the engine.
+            | syn::Expr::If(_)
+            | syn::Expr::Block(_)
     )
 }
 
@@ -137,19 +142,21 @@ mod tests {
             "fut.await",
             "x?",
             "return x",
+            // WI-5a: `if` and blocks match structurally now.
+            "if a { b }",
+            "if a { b } else { c }",
+            "{ x }",
         ] {
             assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
-        // Rejected: control-flow/block/closure/let/macro shapes fall to
+        // Rejected: match/loops/closures/let/macro shapes fall to
         // `_ => false` in the engine and never match.
         for bad in [
             "m!(x)",
             "let Some(x) = y",
             "|| x",
-            "if a { b }",
             "match a { _ => b }",
             "loop {}",
-            "{ x }",
             "async { x }",
         ] {
             assert!(!supported_expr(&expr(bad)), "{bad} must be unsupported");

@@ -102,8 +102,9 @@ Beyond calls — `let` (`- let x = E;` / `+ let y = E;`), general
 expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>`, `T` inferred).
 A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
 set: full supported-vs-rejected table with exact errors is SPEC 18.6
-(control-flow exprs, `let-else` targets, `P @` subpatterns, macro types
-stay ordinary hunks — permanent v0.1 scope);
+(`match`/loops/closures, mixed `let-else`, concrete-head `P @`,
+macro types stay ordinary hunks; blocks, `if`, agreed `let-else`,
+and placeholder-head `P @` match structurally);
 ellipsis positions are SPEC 16.
 
 ## Ranges (file reads, not a CLI listing)

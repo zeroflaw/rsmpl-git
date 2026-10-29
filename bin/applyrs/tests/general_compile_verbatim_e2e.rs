@@ -1,12 +1,13 @@
-//! T306: engine-verbatim general-shape compile-time reasons (SPEC 18.6 C1–C12).
+//! T306: engine-verbatim general-shape compile-time reasons (SPEC 18.6 C-table).
 //!
 //! SPEC 18.6 C-table already carries the exact strings, but nothing pins
 //! the text/JSON envelopes end to end. C13/C14/C15 are pinned elsewhere
-//! (symbol_shape, inert_directive). Each test below asserts both
-//! envelopes plus an untouched worktree. All failures are
-//! `RSMPL_PATTERN_CONFLICT` with `rule:` + `file:` lines; text omits the
-//! null `range:`/`suggestion:` lines (C11/C12 carry a set `suggestion:`),
-//! JSON carries explicit nulls.
+//! (symbol_shape, inert_directive). C2 closed by WI-5a (`let-else`
+//! minus patterns now match structurally — pinned as a fire below).
+//! Each remaining test asserts both envelopes plus an untouched
+//! worktree. All failures are `RSMPL_PATTERN_CONFLICT` with `rule:` +
+//! `file:` lines; text omits the null `range:`/`suggestion:` lines
+//! (C11/C12 carry a set `suggestion:`), JSON carries explicit nulls.
 
 mod common;
 use common::*;
@@ -83,19 +84,34 @@ fn c1_ellipsis_in_general_shape() {
 }
 
 #[test]
-fn c2_let_else_in_minus() {
-    check(
-        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# pat P\n- let P = foo() else { return; };\n+ let P = foo();\n",
-        "v1 general patterns do not support `let-else` statements",
-        false,
+fn c2_let_else_in_minus_now_fires() {
+    // WI-5a closed C2: a `let-else` minus matches a `let-else` target
+    // structurally (diverge blocks compare as `Block`s).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "a.rs",
+        "fn f() {\n let x = foo() else { return 0 };\n let _ = x;\n}\n",
     );
+    let out = run_stdin(
+        dir.path(),
+        "diff --git a.rs\n@@ -2,1 @@ rule=r\n# pat P\n- let P = foo() else { return 0 };\n+ let P = foo();\n",
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "a.rs");
+    assert!(got.contains("let x = foo();"), "got: {got}");
 }
 
 #[test]
 fn c3_root_stmt_mismatch() {
     check(
         "diff --git a.rs\n@@ -1,1 @@ rule=r\n# root=stmt\n# expr E\n- foo(E)\n+ bar(E)\n",
-        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`)",
         false,
     );
 }

@@ -425,10 +425,22 @@ fn const_fn_still_routes_to_fn() {
 
 #[test]
 fn general_coverage_diagnostics_are_pinned() {
-    // SPEC 18.6 compile-time rows (C1-C10): each unsupported shape must
-    // fail with the exact table diagnostic, so the table cannot drift
-    // from the code without a test failing.
+    // SPEC 18.6 compile-time rows (C1-C10, C2 closed by WI-5a): each
+    // unsupported shape must fail with the exact table diagnostic, so
+    // the table cannot drift from the code without a test failing.
     let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    // C2 (closed by WI-5a): a `let-else` minus now compiles to a
+    // General Stmt pattern instead of failing.
+    let c2 = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let x = E else {{ return; }};\n+ let y = E;\n"
+    );
+    assert!(
+        matches!(
+            compile(&hunk_of(&c2)).unwrap().kind,
+            PatternKind::General { .. }
+        ),
+        "C2 let-else minus must compile to General Stmt"
+    );
     let cases = [
         // C1: `...` in a general shape.
         (
@@ -437,17 +449,10 @@ fn general_coverage_diagnostics_are_pinned() {
             ),
             "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
         ),
-        // C2: `let-else` in the minus pattern.
-        (
-            format!(
-                "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let x = E else {{ return; }};\n+ let y = E;\n"
-            ),
-            "v1 general patterns do not support `let-else` statements",
-        ),
         // C3: `# root=stmt` with a non-`let` shape.
         (
             format!("{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# root=stmt\n- foo\n+ bar\n"),
-            "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+            "`# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`)",
         ),
         // C4: `# root=expr` with a non-expression shape.
         (
@@ -499,7 +504,11 @@ fn general_coverage_diagnostics_are_pinned() {
             "`# symbol` is only supported in call shapes in v0.1",
         ),
     ];
-    assert_eq!(cases.len(), 10, "SPEC 18.6 lists C1-C10 compile-time rows");
+    assert_eq!(
+        cases.len(),
+        9,
+        "SPEC 18.6 lists C1,C3-C10 compile-time rows (C2 closed by WI-5a)"
+    );
     for (patch, want) in cases {
         let err = compile(&hunk_of(&patch)).unwrap_err();
         let rendered = err.render();

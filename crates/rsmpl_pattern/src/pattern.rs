@@ -17,7 +17,7 @@ use crate::quote_utils::{mask_literal_spans, unmask_literal_spans, validate_quot
 /// Shape of a generalized (non-call) pattern (T10 v1 subset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeneralShape {
-    /// A `let` statement (`syn::Stmt::Local`, no `let-else`).
+    /// A `let` statement (`syn::Stmt::Local`, with or without `let-else`).
     Stmt,
     /// A general Rust expression (bounded engine variant set).
     Expr,
@@ -545,7 +545,7 @@ fn classify(
                     Some(g) => Ok(g),
                     None => Err(StructuredError::new(
                         ErrorCode::PatternConflict,
-                        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+                        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`)",
                     )),
                 };
             }
@@ -715,7 +715,7 @@ fn has_path_ellipsis(text: &str) -> bool {
 /// the engine rejects with an unsupported-shape diagnostic).
 ///
 /// Routing (forced by `# root=` or heuristic): a `syn::Stmt::Local` (`let`,
-/// no `let-else`) becomes `Stmt`; otherwise a Rust `Type` when forced or when
+/// with or without `let-else`) becomes `Stmt`; otherwise a Rust `Type` when forced or when
 /// a type-level metavariable is declared; otherwise a Rust `Expr`.
 /// `...` is rejected: v1 general patterns are concrete-or-metavariable only.
 #[allow(clippy::too_many_lines)]
@@ -759,16 +759,12 @@ fn try_general(
     });
 
     // 1. `let` statements (only `Stmt::Local`). Other statement shapes fall
-    // through so existing routing is untouched.
+    // through so existing routing is untouched. `let-else` diverge
+    // blocks ride along structurally (WI-5a: the engine matches them
+    // as `Block`s, both sides or neither).
     if want(GeneralShape::Stmt) {
         match syn::parse_str::<syn::Stmt>(&sub) {
             Ok(syn::Stmt::Local(local)) => {
-                if local.init.as_ref().is_some_and(|i| i.diverge.is_some()) {
-                    return Err(StructuredError::new(
-                        ErrorCode::PatternConflict,
-                        "v1 general patterns do not support `let-else` statements",
-                    ));
-                }
                 check_let_pat(&local)?;
                 return Ok(Some(build_general(
                     GeneralShape::Stmt,
@@ -786,7 +782,7 @@ fn try_general(
                 if forced == Some(GeneralShape::Stmt) {
                     return Err(StructuredError::new(
                         ErrorCode::PatternConflict,
-                        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`)",
+                        "`# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`)",
                     ));
                 }
             }
@@ -937,7 +933,9 @@ fn build_general(
 }
 
 /// Reject `let` patterns the v1 engine cannot match: embedded metavariables
-/// inside the bound pattern (other than a whole-pattern placeholder, or a
+/// inside the bound pattern (other than a whole-pattern `# pat P` placeholder,
+/// a `P @ sub` shape whose head is a whole-pattern placeholder and whose
+/// subpattern is a single placeholder or concrete, a concrete pattern, or a
 /// `P: T` shape whose parts are each whole-placeholder/concrete).
 fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
     let pat = &local.pat;
@@ -945,7 +943,22 @@ fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
         syn::Pat::Type(pt) => (&*pt.pat, Some(&*pt.ty)),
         _ => (pat, None),
     };
-    if matches!(inner, syn::Pat::Ident(_)) {
+    if let syn::Pat::Ident(pid) = inner {
+        // WI-5a `P @ sub` admission: a fully concrete `@` keeps the
+        // historical literal behavior; a placeholder head admits a
+        // single-placeholder or concrete subpattern. Placeholders
+        // anywhere else (concrete head + placeholder sub, or a
+        // composite-placeholder sub) stay C8.
+        if let Some((_, sub)) = &pid.subpat {
+            let head_is_ph = pid.ident.to_string().starts_with("__RSMPL_");
+            if head_is_ph {
+                if contains_placeholder(sub) && !is_single_placeholder_pat(sub) {
+                    return Err(embedded_pat_err());
+                }
+            } else if contains_placeholder(sub) {
+                return Err(embedded_pat_err());
+            }
+        }
         if let Some(t) = ty {
             let rendered = quote::quote!(#t).to_string();
             if rendered.contains("__RSMPL_") && !is_single_placeholder_type(t) {
@@ -959,6 +972,19 @@ fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
         return Err(embedded_pat_err());
     }
     Ok(())
+}
+
+/// True when the subpattern carries any placeholder ident.
+fn contains_placeholder(pat: &syn::Pat) -> bool {
+    quote::quote!(#pat).to_string().contains("__RSMPL_")
+}
+
+/// True when the subpattern is exactly one placeholder ident (`Q`).
+fn is_single_placeholder_pat(pat: &syn::Pat) -> bool {
+    if let syn::Pat::Ident(pid) = pat {
+        return pid.subpat.is_none() && pid.ident.to_string().starts_with("__RSMPL_");
+    }
+    false
 }
 
 fn is_single_placeholder_type(t: &syn::Type) -> bool {

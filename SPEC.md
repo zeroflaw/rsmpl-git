@@ -3252,9 +3252,9 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 >
 > Bare `<kind> <Name>` pairs for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, and `impl` (Section 14.8) are item renames, not general shapes: one ident-span edit per match, everything else preserved. `impl` renames the self-ty ident and the trait-side path's last segment.
 >
-> Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, no `let-else`): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, or spell an ascribed shape `P: T` with placeholder parts. A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
+> Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, with or without a `let-else` diverge block — both sides must agree structurally): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, spell an ascribed shape `P: T` with placeholder parts, or spell `P @ sub` with a placeholder head (WI-5a: `P` binds the whole target pattern text, `sub` matches recursively). A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >
-> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, and `?`. General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, raw pointers (`*const`/`*mut`), fn-pointer types, `impl Trait`, `dyn Trait`, and `_` (which matches any type). Anything else (blocks, `if`/`match`/loops/closures, `let-else` targets, parenthesized path arguments such as `Fn(A) -> B` with placeholders, `...` wildcards in these shapes) rejects the candidate rather than guessing. Placeholder path segments may carry generic arguments (`P<u8>`, `P::<T>`) and method-call turbofish compares structurally (`collect::<T>` binds `T`); lifetimes are wildcards in v1 and are not compared. A call shape must consume the whole pattern: `foo(E) + 1` and `E.foo() + 1` route to the general matcher, not to a `foo(E)`/`E.foo()` call prefix (only a trailing `;` keeps call routing, so `foo(E);` stays a call). An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
+> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `if` (condition plus then-block plus else branch — `else if` chains recurse), and blocks (concrete-length statement sequences, never ellipsis). General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, raw pointers (`*const`/`*mut`), fn-pointer types, `impl Trait`, `dyn Trait`, and `_` (which matches any type). Anything else (`match`/loops/closures, `let` expressions, mixed `let-else` where only one side carries the diverge, parenthesized path arguments such as `Fn(A) -> B` with placeholders, `...` wildcards in these shapes) rejects the candidate rather than guessing. Placeholder path segments may carry generic arguments (`P<u8>`, `P::<T>`) and method-call turbofish compares structurally (`collect::<T>` binds `T`); lifetimes are wildcards in v1 and are not compared. A call shape must consume the whole pattern: `foo(E) + 1` and `E.foo() + 1` route to the general matcher, not to a `foo(E)`/`E.foo()` call prefix (only a trailing `;` keeps call routing, so `foo(E);` stays a call). An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
 
 Example:
 
@@ -3332,10 +3332,13 @@ candidate rejection that surfaces as `RSMPL_MATCH_CONFLICT` with reason `no
 match found` and a suggestion naming the file to read for valid ranges.
 There is no partial matching and no guessing; check this table before
 authoring instead of iterating against `--check`. The match-time (R-row)
-rejections are permanent v0.1 scope, not deferred work: control-flow
-expressions, `let-else` targets, `P @` subpatterns, and macro types go
+rejections are permanent v0.1 scope, not deferred work, except where an
+implementing work item is named: `match`/loops/closures, `let`
+expressions, mixed `let-else`, and macro types go
 through ordinary hunks (the same composition as Section 21.3 macro
-bodies and Section 22 formatting). Reopen a row only with a dogfood
+bodies and Section 22 formatting). Blocks, `if`, agreed `let-else`,
+and `P @` subpatterns are implemented (WI-5a) with the exact semantics
+in their rows. Reopen a remaining row only with a dogfood
 case where an ordinary hunk cannot express the edit.
 
 #### Compile-time rejections (exact diagnostics)
@@ -3343,13 +3346,13 @@ case where an ordinary hunk cannot express the edit.
 | # | Trigger | Exact diagnostic |
 |---|---|---|
 | C1 | `...` anywhere in a general minus/plus side | `v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)` |
-| C2 | `let-else` in the minus pattern | `v1 general patterns do not support `let-else` statements` |
-| C3 | `# root=stmt` with a non-`let` shape | `` `# root=stmt` requires a `let` statement pattern (v1 supports `let` only, no `let-else`) `` |
+| C2 | (closed by WI-5a) `let-else` in the minus pattern now matches a `let-else` target structurally: both diverge blocks must be present and compare as `Block`s (concrete-length statement sequences); mixed `let-else` (only one side carries the diverge) rejects at match time under R2 | — |
+| C3 | `# root=stmt` with a non-`let` shape | `` `# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`) `` |
 | C4 | `# root=expr` with a non-expression shape | `` `# root=expr` requires a Rust expression pattern `` |
 | C5 | `# root=type` with a non-type shape | `` `# root=type` requires a Rust type pattern `` |
 | C6 | empty `+` side on an expression | `v1 expression deletion (empty `+` side) is only supported for `...;` statement shapes; match a `let` statement or write an explicit replacement` |
 | C7 | empty `+` side on a type | `v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type` |
-| C8 | embedded metavariable inside the `let` bound pattern (anything other than a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts) | `v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported` |
+| C8 | embedded metavariable inside the `let` bound pattern (anything other than a whole-pattern `# pat P` placeholder, a `P @ sub` shape with a placeholder head and a single-placeholder-or-concrete subpattern, a concrete pattern, or `P: T` with placeholder parts) | `v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported` |
 | C9 | `# returns=none` on a non-function hunk | `` `# returns=none` requires a function-item pattern `` |
 | C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
 | C11 | `+` side writes attributes the `-` side did not match | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
@@ -3385,20 +3388,21 @@ and `E.foo() + 1` route to the general matcher rather than a `foo(E)` /
 The receiver/method dot split skips `"..."` string literals (T419): a dot
 inside a string arg (`R.contains("a.b")`) never splits receiver from method.
 
-Envelope: all twelve C1-C12 rejections above fail with
+Envelope: all eleven live C1-C12 rejections above fail with
 `RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the
 null `range:`/`suggestion:` lines, JSON carries explicit `range: null` /
 `suggestion: null`) -- except C11/C12, which carry the set suggestion
-(like the Section 14.6 pair they share strings with).
+(like the Section 14.6 pair they share strings with). C2 is closed by
+WI-5a (now a firing shape, pinned end to end) and no longer fails.
 
 #### Match-time silent rejections (surface as `no match found`)
 
 | # | Trigger | Mechanism | Write instead |
 |---|---|---|---|
-| R1 | block, `if`, `match`, loops, or closures as the general expression | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`; anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
-| R2 | `let-else` in the *target* file | v1 never matches `let-else` targets (`diverge.is_some()` rejects the candidate) | an ordinary Git hunk |
+| R1 | `match`, loops, or closures as the general expression (WI-5a implemented blocks and `if`; WI-5b owns the rest) | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `if` (condition, then-block as a concrete statement sequence, else branch — `else if` chains recurse), blocks (statement sequences of equal length, members matched structurally — never ellipsis); anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
+| R2 | mixed `let-else` (only one side carries the diverge block) | agreed `let-else` matches structurally (WI-5a: both diverge blocks present, compared as `Block`s); mixed presence rejects the candidate | an ordinary Git hunk |
 | R3 | (closed by T144/T145) placeholder path segments with generic arguments match structurally (`P<u8>`, `P::<T>` bind the segment ident and compare args via `match_generic_arg`); method-call turbofish compares structurally too (lifetimes wildcard, `_` matches any type; T176: call-shape `R.collect::<T>()` binds through the call router, not only via the general matcher; placeholder `R.M::<T>()` binds the method ident like callee `P::<T>`, and bare `R.M()` never matches a turbofish site (T177 parity, T178)). T177: a bare call/method pattern without `::<...>` never matches a turbofish site (None-vs-Some fails on both arms, general-matcher parity) — spell `::<T>` explicitly. Function-call turbofish compares structurally as well (`id::<T>` binds `T` to the target source text; concrete args compare token-normalized; the pattern must use the `::<>` form — a bare `id<T>` pattern never matches a real call) | parenthesized path arguments (`Fn(A) -> B` shapes with placeholders) still reject via rendered-text comparison | — |
-| R4 | `P @ ...` subpattern bindings in `let` | `subpat.is_some()` rejects the candidate | a whole-pattern `# pat P` placeholder or a concrete pattern |
+| R4 | `P @ sub` with a concrete head, or a composite-placeholder subpattern | WI-5a: a placeholder head `P` binds the whole target pattern text and `sub` matches recursively (a target `@` unwraps to its subpattern, otherwise the whole target pattern; single-placeholder subs bind, concrete subs compare strictly token-equal); write plus sides with `P` alone (repeating the `P @ sub` spelling re-splices the whole target text and duplicates the subpattern); non-placeholder heads and composite subs fail at C8 | a whole-pattern `# pat P` placeholder or a concrete pattern |
 | R5 | unsupported type variants (macro types) | supported: paths with generic arguments, references, slices, arrays, tuples, parentheses, raw pointers (`*const`/`*mut`, constness strict), fn-pointer types (arity/unsafety/ABI strict, variadics never match), `impl Trait`, `dyn Trait` (bound count strict, `dyn` presence strict, `?` modifiers and `for<'a>` binders strict, plain lifetime bounds wildcard), `_` (which matches any type), `!`; anything else rejects the candidate | a concrete type or a whole-type `# type T` placeholder |
 
 #### Deliberate wildcards (not failures)
@@ -4202,7 +4206,7 @@ invalid-literal quotes (verbatim reasons + envelopes, Section 15.4).
 Also rejected with `RSMPL_PATTERN_CONFLICT` (rule + file lines; text omits null `range:`/`suggestion:` lines except the attrs-merge pair, which carries the set suggestion — JSON explicit throughout): any `use`-path pattern carrying grouped/glob tails, `as` tails, `!`, `...`, `$Meta`, backticks, or declared-metavariable segments (seven engine-verbatim reasons, Section 14.9); any unterminated fn signature whose tail swallows the body lines (three engine-verbatim needles, Section 14.5); and any `+` side whose attributes ambiguously merge with the `-` side (two engine-verbatim reasons with suggestion, Section 14.6); any fn-slot/param-list `...`/body misuse (five engine-verbatim reasons) or structural fn-pattern misuse (eleven engine-verbatim reasons, both Section 14.7); any concrete-shape, missing-name, bare-side-mismatch, or lexical-name item pattern (six engine-verbatim reasons, Section 14.8); any `use`-path tail misuse — mirrored attributes, invalid paths/segments, or a missing path (four engine-verbatim reasons, Section 14.9) — plus the two bare-side `use` fences in the same section; and any degenerate empty `-`/`+` pattern pair (the one reachable Raw shape, fenced below).
 
 The body list above gains four final members: the Section 14.6 attribute match-time fences, the Section 13.4 trait-method visibility fence, the Section 16.5 `+`-path `...` fence, and the Section 14.7 structural fn-pattern fences. It gains three further members: the Section 9.6 declaration-name fences (`missing name`, `invalid name`, `empty path`, `empty capture`), the Section 16 standalone-`...` fence, and the Section 17.8 repeat-both fence. Match-time `invalid expression` / `invalid `let`` / `invalid type` re-parses are defensive-only: the classifier pre-validates the same pattern string at compile time (C-gates above), so a CLI hunk cannot reach them (T287/T290/T291 precedent, documented not pinned).
-It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C1-C12 compile-time fences (`...` in general shape, `let-else`, four `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6), each pinned text+JSON+untouched in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections; C16 pinned in `root_item_verbatim_e2e.rs`).
+It gains three more members: the Section 9.6 empty-directive and second invalid-name fences, the Section 20.3 self-cycle fence, and the Section 25.2 outside-section twins plus the empty-patch fence. It gains twelve further members: the Section 18.6 C-table compile-time fences — eleven live C1-C12 rejections (`...` in general shape, four `# root=` mismatches, empty-`+` expression, empty-`+` type, embedded `let` metavariables, `returns=none` on non-function, leading attributes on non-`let`, and the two attribute-merge rejections shared with Section 14.6) plus the WI-5a C2-closure fire (`let-else` minus now applies), each pinned text+JSON+untouched (fires pinned as success+output) in `general_compile_verbatim_e2e.rs` (C13/C14/C15 already pinned via their sections; C16 pinned in `root_item_verbatim_e2e.rs`).
 
 It gains one further member: the Section 14.8 item attr-merge fence (plus-side-omitted verbatim reason, rule+file envelope with null range/suggestion; the differ case reuses the 14.6 second fence byte-identical, suggestion set). Defensive-only, documented without pins (T287/T290/T291 precedent — no CLI trigger, so no fence to pin): the seven `expected X pattern` dispatch arms (`function`, `item capture`, `insertion`, `impl-context`, `expression`, `use-path`, `generalized stmt/expr/type` — plan.rs routes each `PatternKind` to its own matcher, cf. the 21.3 macro note), the `cannot analyze method signature` synth backstop (rendered from an already-parsed signature; no CLI trigger post-T190/T221), the `general statement patterns must be ...` arm alongside the `invalid let`/`expression`/`type` match-time re-parses the body list already names (the classifier pre-validates the same strings at compile time), and the span-guard family (`span line ... outside file`, `edit range ... outside file`, `... name span mismatch (file changed during matching?)`, `use prefix span is empty (file changed during matching?)` — the target file is immutable during matching).
 
@@ -4404,8 +4408,9 @@ suggestion: read `src/lib.rs` to list valid ranges; check the pattern or add `# 
 
 (JSON mode carries the same strings with `rule:`/`file:` set and `range:`
 echoing the hunk range; nulls only where a line is absent — never here.)
-`let-else` target, a block / `if` / `match` / loop / closure expression,
-a `P @` subpattern, or a macro type, the shape itself is outside v0.1
+`let-else` target with a `let` pattern that carries no diverge,
+a `match` / loop / closure expression,
+a `P @` shape with a concrete head or composite subpattern, or a macro type, the shape itself is outside v0.1
 scope (Section 18.6 rows R1 / R2 / R4 / R5) — rewrite it with an
 ordinary hunk instead of re-shaping the pattern.
 The same holds when the preview shows a `use` nested inside a function body:

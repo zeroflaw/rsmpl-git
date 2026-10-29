@@ -2,14 +2,18 @@
 //!
 //! v1 supports three pattern shapes (see `rsmpl_pattern::GeneralShape`):
 //!
-//! - `Stmt`: a `let` statement (`syn::Stmt::Local`, no `let-else`). The bound
+//! - `Stmt`: a `let` statement (`syn::Stmt::Local`, with or without a
+//!   `let-else` diverge block — both sides must agree structurally). The bound
 //!   pattern may be a whole-pattern placeholder (`# pat P`), a concrete
-//!   pattern, or `P: T` with placeholder parts; the initializer is matched
-//!   with the general expression matcher.
+//!   pattern, `P: T` with placeholder parts, or `P @ sub` (WI-5a: `P`
+//!   binds the whole target pattern text, `sub` matches recursively);
+//!   the initializer is matched with the general expression matcher.
 //! - `Expr`: a general Rust expression over a bounded variant set
 //!   (paths, literals, binary/unary/cast/reference/paren, calls, method
 //!   calls, assignment, field access, indexing, arrays, tuples, struct
-//!   literals, ranges, `await`, `?`). Anything else rejects the candidate.
+//!   literals, ranges, `await`, `?`, `return`, `if` with condition +
+//!   then-block + else branch, and blocks as concrete-length statement
+//!   sequences — WI-5a). Anything else rejects the candidate.
 //! - `Type`: a general Rust type over a bounded variant set (paths with
 //!   generic args, references, slices, arrays, tuples, parens, raw
 //!   pointers, fn pointers, `impl Trait`, `dyn Trait`, `_`).
@@ -120,11 +124,11 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
 }
 
 /// Per-candidate matching context: bindings plus placeholder maps.
-struct MatchCx<'a> {
+pub(crate) struct MatchCx<'a> {
     original: &'a str,
     index: &'a LineIndex,
     /// placeholder ident (`__RSMPL_E`) -> declared name (`E`).
-    reverse: HashMap<String, String>,
+    pub(crate) reverse: HashMap<String, String>,
     /// declared name -> bound original text.
     bindings: HashMap<String, String>,
 }
@@ -138,7 +142,7 @@ impl<'a> MatchCx<'a> {
         self.original.get(start..end).map(|t| t.to_string())
     }
 
-    fn bind(&mut self, name: &str, text: &str) -> bool {
+    pub(crate) fn bind(&mut self, name: &str, text: &str) -> bool {
         match self.bindings.get(name) {
             Some(prev) => fragments_equal(prev, text),
             None => {
@@ -148,7 +152,7 @@ impl<'a> MatchCx<'a> {
         }
     }
 
-    fn bind_span(&mut self, name: &str, span: proc_macro2::Span) -> bool {
+    pub(crate) fn bind_span(&mut self, name: &str, span: proc_macro2::Span) -> bool {
         match self.slice(span) {
             Some(t) => self.bind(name, &t),
             None => false,
@@ -157,15 +161,18 @@ impl<'a> MatchCx<'a> {
 }
 
 /// Declared metavariable behind a placeholder ident, if any.
-fn as_placeholder<'m>(reverse: &'m HashMap<String, String>, ident: &str) -> Option<&'m String> {
+pub(crate) fn as_placeholder<'m>(
+    reverse: &'m HashMap<String, String>,
+    ident: &str,
+) -> Option<&'m String> {
     reverse.get(ident)
 }
 
-fn render<T: quote::ToTokens>(node: &T) -> String {
+pub(crate) fn render<T: quote::ToTokens>(node: &T) -> String {
     quote::quote!(#node).to_string()
 }
 
-fn render_eq<T: quote::ToTokens, U: quote::ToTokens>(a: &T, b: &U) -> bool {
+pub(crate) fn render_eq<T: quote::ToTokens, U: quote::ToTokens>(a: &T, b: &U) -> bool {
     fragments_equal(&render(a), &render(b))
 }
 
@@ -277,7 +284,7 @@ fn match_turbofish(
 }
 
 /// Declared name if `t` is exactly one placeholder path (`__RSMPL_T`).
-fn single_placeholder_type(t: &syn::Type, cx: &MatchCx) -> Option<String> {
+pub(crate) fn single_placeholder_type(t: &syn::Type, cx: &MatchCx) -> Option<String> {
     if let syn::Type::Path(tp) = t {
         if tp.qself.is_none() && tp.path.segments.len() == 1 {
             let seg = &tp.path.segments[0];
@@ -290,7 +297,7 @@ fn single_placeholder_type(t: &syn::Type, cx: &MatchCx) -> Option<String> {
 }
 
 /// Match a single whole-expression placeholder (`E` alone) or recurse.
-fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> bool {
+pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> bool {
     if let syn::Expr::Path(ep) = pat {
         if ep.qself.is_none()
             && ep.path.segments.len() == 1
@@ -378,6 +385,21 @@ fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> bool {
         (syn::Expr::Await(a), syn::Expr::Await(b)) => match_expr(&a.base, &b.base, cx),
         (syn::Expr::Try(a), syn::Expr::Try(b)) => match_expr(&a.expr, &b.expr, cx),
         (syn::Expr::Return(a), syn::Expr::Return(b)) => opt_expr_eq(&a.expr, &b.expr, cx),
+        // WI-5a: `if` (condition + then-block + else branch) and blocks
+        // (concrete-length statement sequences live in
+        // `matcher_general_ctrl`). `match`, loops, and closures still
+        // reject here (WI-5b owns those arms).
+        (syn::Expr::If(a), syn::Expr::If(b)) => crate::matcher_general_ctrl::match_if(a, b, cx),
+        (syn::Expr::Block(a), syn::Expr::Block(b)) => {
+            // Labels compare strictly (a labeled block is a different
+            // control construct); bodies match structurally.
+            let labels_eq = match (&a.label, &b.label) {
+                (None, None) => true,
+                (Some(x), Some(y)) => x.name.ident == y.name.ident,
+                _ => false,
+            };
+            labels_eq && crate::matcher_general_ctrl::match_block(&a.block, &b.block, cx)
+        }
         _ => false,
     }
 }
@@ -412,7 +434,7 @@ fn match_member(pat: &syn::Member, tgt: &syn::Member, cx: &mut MatchCx) -> bool 
     }
 }
 
-fn match_type(pat: &syn::Type, tgt: &syn::Type, cx: &mut MatchCx) -> bool {
+pub(crate) fn match_type(pat: &syn::Type, tgt: &syn::Type, cx: &mut MatchCx) -> bool {
     if let Some(name) = single_placeholder_type(pat, cx) {
         return cx.bind_span(&name, tgt.span());
     }
@@ -516,60 +538,6 @@ fn match_return_type(pat: &syn::ReturnType, tgt: &syn::ReturnType, cx: &mut Matc
             }
             match_type(a, b, cx)
         }
-        _ => false,
-    }
-}
-
-/// Split a `let` pattern into (inner pattern, optional ascribed type).
-fn decompose_pat(pat: &syn::Pat) -> (&syn::Pat, Option<&syn::Type>) {
-    if let syn::Pat::Type(pt) = pat {
-        (&pt.pat, Some(&pt.ty))
-    } else {
-        (pat, None)
-    }
-}
-
-fn match_local(pat: &syn::Local, tgt: &syn::Local, cx: &mut MatchCx) -> bool {
-    // v1 does not move into `let-else` targets.
-    if tgt.init.as_ref().is_some_and(|i| i.diverge.is_some()) {
-        return false;
-    }
-    let (pi, pty) = decompose_pat(&pat.pat);
-    let (ti, tty) = decompose_pat(&tgt.pat);
-    // Bound (inner) pattern.
-    if let syn::Pat::Ident(pid) = pi {
-        if let Some(name) = as_placeholder(&cx.reverse, &pid.ident.to_string()).cloned() {
-            if pid.subpat.is_some() {
-                return false; // `P @ ...` bindings are not supported in v1
-            }
-            if !cx.bind_span(&name, ti.span()) {
-                return false;
-            }
-        } else if !render_eq(pi, ti) {
-            return false;
-        }
-    } else if !fragments_equal(&render(&pat.pat), &render(&tgt.pat)) {
-        return false;
-    }
-    // Ascribed-type agreement (strict: both absent, or both present and
-    // matching). A bare `P` never silently drops an annotation.
-    match (pty, tty) {
-        (None, None) => {}
-        (Some(a), Some(b)) => {
-            if let Some(name) = single_placeholder_type(a, cx) {
-                if !cx.bind_span(&name, b.span()) {
-                    return false;
-                }
-            } else if !match_type(a, b, cx) {
-                return false;
-            }
-        }
-        _ => return false,
-    }
-    // Initializer.
-    match (&pat.init, &tgt.init) {
-        (Some(a), Some(b)) => match_expr(&a.expr, &b.expr, cx),
-        (None, None) => true,
         _ => false,
     }
 }
@@ -893,7 +861,7 @@ pub fn apply_general_hunk(
                     reverse: reverse.clone(),
                     bindings: HashMap::new(),
                 };
-                if !match_local(pat_local, tgt, &mut cx) {
+                if !crate::matcher_general_ctrl::match_local(pat_local, tgt, &mut cx) {
                     continue;
                 }
                 // Attribute policy (mirrors fn matching: fail, never guess).
@@ -1524,23 +1492,50 @@ mod tests {
         const ATTR_SUGGESTION: Option<&str> =
             Some("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`");
         let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
-        let rows = [
-            // R1: block as the general expression.
-            Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- { E }\n+ { E }\n",
+        // WI-5a fires (SPEC 18.6 R1-block/if, R2, R4): each row applies
+        // and the output contains the expected text.
+        struct Fire {
+            patch: &'static str,
+            file: &'static str,
+            contains: &'static str,
+        }
+        let fires = [
+            // R1-block: the hole binds the block statement.
+            Fire {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- { E }\n+ { E + 1 }\n",
                 file: "fn a() {\n    let v = { 1 };\n    let _ = v;\n}\n",
-                code: "RSMPL_MATCH_CONFLICT",
-                reason: "no match found",
-                suggestion: NO_MATCH,
+                contains: "{ 1 + 1 }",
             },
-            // R1: `if` as the general expression.
-            Row {
+            // R1-if: the condition hole binds; the else branch rewrites.
+            Fire {
                 patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- if E { 1 } else { 2 }\n+ if E { 1 } else { 3 }\n",
                 file: "fn a(x: bool) {\n    let v = if x { 1 } else { 2 };\n    let _ = v;\n}\n",
-                code: "RSMPL_MATCH_CONFLICT",
-                reason: "no match found",
-                suggestion: NO_MATCH,
+                contains: "else { 3 }",
             },
+            // R2: `let-else` fires when both sides carry the diverge.
+            Fire {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- let x = E else { return 0 };\n+ let y = E else { return 0 };\n",
+                file: "fn a(o: Option<i32>) -> i32 {\n    let x = o else { return 0 };\n    x\n}\n",
+                contains: "let y = o else { return 0 };",
+            },
+            // R4: `P @ sub` binds `P` to the whole target pattern; the
+            // plus side reuses `P` alone (fixed-point output).
+            Fire {
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# pat P\n# expr E\n- let P @ Some(x) = E;\n+ let P = E;\n",
+                file: "fn a(o: Option<i32>) {\n    let v @ Some(x) = o;\n    let _ = (v, x);\n}\n",
+                contains: "let v @ Some(x) = o;",
+            },
+        ];
+        for row in fires {
+            let patch = format!("{head}{}", row.patch);
+            let out = apply(&patch, row.file).unwrap();
+            assert!(
+                out.contains(row.contains),
+                "SPEC 18.6 drift: want {:?} in:\n{out}",
+                row.contains
+            );
+        }
+        let rows = [
             // R1: closure as the general expression.
             Row {
                 patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# root=expr\n# expr E\n- |x| E\n+ |x| E\n",
@@ -1565,7 +1560,8 @@ mod tests {
                 reason: "no match found",
                 suggestion: NO_MATCH,
             },
-            // R2: `let-else` in the target file.
+            // R2: mixed `let-else` (pattern without diverge vs target
+            // with) still rejects — both sides must carry the diverge.
             Row {
                 patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- let x = E;\n+ let y = E;\n",
                 file: "fn a(o: Option<i32>) -> i32 {\n    let x = o else { return 0 };\n    x\n}\n",
@@ -1573,7 +1569,8 @@ mod tests {
                 reason: "no match found",
                 suggestion: NO_MATCH,
             },
-            // R4: `P @ ...` subpattern binding in `let`.
+            // R4: `P @ sub` still rejects when the *initializer* fails
+            // (here `E` binds the pattern `q` but must also equal `1`).
             Row {
                 patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# pat P\n# expr E\n- let P @ E = E;\n+ let P @ E = E;\n",
                 file: "fn a() {\n    let q = 1;\n    let _ = q;\n}\n",
@@ -1637,8 +1634,8 @@ mod tests {
         ];
         assert_eq!(
             rows.len(),
-            13,
-            "SPEC 18.6 lists R1,R2,R4,R5 + C10-C14 runtime rows (R3 closed by T144)"
+            11,
+            "SPEC 18.6 lists R1(match/loops/closures),R2-mixed,R4-veto,R5 + C10-C14 runtime rows (R3 closed by T144; WI-5a moved R1-block/if,R2-fire,R4-fire to pins above)"
         );
         for row in rows {
             let patch = format!("{head}{}", row.patch);

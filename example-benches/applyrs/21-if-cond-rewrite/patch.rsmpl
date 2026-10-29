@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=relax_bound
+# sweep
+- if E > 0 { 1 } else { 2 }
++ if E >= 0 { 1 } else { 2 }
