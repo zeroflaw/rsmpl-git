@@ -5589,8 +5589,18 @@ prints one JSON object to stdout:
   bind nothing and omit both keys (an empty map plus a zero count
   carries no evidence). Values truncate at 80 chars and entries at 8
   (sorted order); `bindings_truncated` counts the omitted entries, so
-  the report stays token-bounded while an over-broad hunk still shows
-  its extra span before apply.
+  the report stays within an absolute byte budget while an over-broad
+  hunk still shows its extra span before apply. Budget (bytes beyond
+  the reported `diff` string, `--diff-max-lines 0`): fixed envelope
+  ≈90 B (`verified` + keys) + ≈80 B per `files[]` entry (64-hex
+  `post_sha` dominates) + ≈110 B per `rules[]` entry (single-span,
+  no bindings) + ≈15 B per extra span (`[s,e]` pairs grow with
+  matches — that growth is evidence, not overhead) + at most
+  8×80 B bindings per rule when the shape binds. Operational pin:
+  overhead ≤ `200 + 150·F + 150·R + 20·S` bytes (`F` = files,
+  `R` = rules, `S` = total spans). There is deliberately no relative
+  % bound: a sub-KB report can exceed any % while staying within
+  bytes, and a multi-KB report is where the pin applies.
 - `files` lists per-file `{path, added, removed, post_sha}` computed from
   the full old/new contents, so counts stay exact even when `diff` is
   truncated or omitted (see D.2.1). `post_sha` is the SHA-256 hex of the
@@ -5976,7 +5986,11 @@ range (anchor-only move pastes report `[]`). `totality` is
 else `"section-visible"`. `saved_bytes` is the hunk's byte win vs the
 ordinary text it replaced (multi-hunk section rewrites split the
 section total equally so entries sum to the section delta). `version`
-stays `1` (additive, per D.2 rules).
+stays `1` (additive, per D.2 rules). Budget (bytes beyond `patch`):
+≈100 B fixed + ≈130 B per `hunks[]` entry + ≈5 B per covered site
+(`sites` arrays grow with matches — evidence, not overhead).
+Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
+`T` = total sites). No relative % bound, same rationale as D.2.
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain
