@@ -1355,6 +1355,61 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
+        } else if name == "35-impl-method-partial-delete" {
+            // T475: impl-method partial-file item deletion (d426215/T466
+            // prize-shape miniature) -- doc'd `lowercase_warnings`
+            // method out of `impl Catalog`, minus hunk starting with a
+            // separator blank the engine never absorbs: one shrunk-range
+            // delete_items hunk plus an ordinary minus-blank leftover
+            // ahead of it. First dedicated cover for the
+            // collect_impl_method_spans path (33 covers mod-nested fns).
+            assert!(
+                semantic.contains("rule=delete_items"),
+                "impl-method partial delete sweep must fire, got: {semantic}"
+            );
+            assert_eq!(
+                semantic.matches("rule=delete_items").count(),
+                1,
+                "exactly one delete hunk, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    pub fn lowercase_warnings"),
+                "deleted item lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-    /// Warn (not error)"),
+                "deleted doc lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("\n-\n"),
+                "leading blank rides an ordinary leftover, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "36-eof-touch-kept-blank-veto" {
+            // T475: EOF-touch kept-preceding-blank veto (T472 veto-side
+            // miniature) -- same repo shape as 34 but the separator blank
+            // is kept, so the minus hunk covers only the fn lines and the
+            // preceding kept blank vetoes the sweep: no rule=delete_items,
+            // ordinary hunk only, cycle still byte-identical.
+            assert!(
+                !semantic.contains("rule=delete_items"),
+                "kept preceding blank must veto the sweep, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("-fn stale_helper"),
+                "vetoed lines stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "ordinary must still beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
         }
     }
 }

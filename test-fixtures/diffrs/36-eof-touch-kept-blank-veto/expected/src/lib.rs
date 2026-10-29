@@ -1,0 +1,4 @@
+fn keep() {
+    work()
+}
+
