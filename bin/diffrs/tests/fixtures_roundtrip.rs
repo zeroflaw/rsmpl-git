@@ -1822,6 +1822,53 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic == normalized,
                 "[{name}] ordinary passthrough must equal normalized native"
             );
+        } else if name == "55-slot-hetero-fires" {
+            // T488: hetero slot-sweep fire miniature -- two long-signature
+            // fns renamed DIFFERENTLY fire one per-site single rule each
+            // (homo multi-site shapes share one rule as in fixture 13;
+            // hetero deltas cannot share, so diffrs emits per-site singles,
+            // each clearing the T375 byte guard on its own).
+            assert!(
+                semantic.contains("rule=rename_old_function_name_to_new_function_name"),
+                "hetero slot first site must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("rule=rename_other_old_function_name_to_brand_new_name"),
+                "hetero slot second site must fire, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("-fn old_function_name("),
+                "renamed minus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("+fn brand_new_name("),
+                "renamed plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "hetero slot sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
+            );
+        } else if name == "56-single-let-call-literal-stays-ordinary" {
+            // T488: single let-bound call-literal site veto miniature --
+            // one `let a = make_call("alpha", first_count, false);` ->
+            // `let a = make_call("alpha", first_count, "100644");` costs
+            // more as a semantic hunk than the ordinary hunk it replaces:
+            // pure ordinary passthrough (veto side of fixture 26, the
+            // let-bound cross-hunk fire; fixture 52 pins the same veto for
+            // the bare-statement shape of fixture 25).
+            assert!(
+                !semantic.contains("rule="),
+                "single let-bound call-literal edit must stay ordinary, got: {semantic}"
+            );
+            let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+            assert!(context.is_empty(), "zero-context, got: {context:?}");
+            let normalized = normalize_native(&native_input);
+            assert!(
+                semantic == normalized,
+                "[{name}] ordinary passthrough must equal normalized native"
+            );
         }
     }
 }
