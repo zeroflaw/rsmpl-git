@@ -32,13 +32,13 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 
 | Directive | Meaning (SPEC 9.3) |
 |---|---|
-| `# lang=rust` | optional, never required: detection is `rule=` or any `#` line (SPEC 7.1) |
-| `# allow=many` | many matches may rewrite (default `one`) |
+| `# sweep` | fused `# allow=many` + `# scope=file` (WI-1a); ranged multi-match keeps `# allow=many` alone |
+| `# allow=many` | many matches may rewrite (default `one`); `# sweep` is the fused file-sweep form |
 | `# repeat` | fold nested same-rule matches bottom-up: `Box::new(Box::new(x))` → `x` in one call-rewrite hunk (SPEC 17.8; call + general-expr shapes, `...` bodies opaque) |
-| `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3) |
+| `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3); prefer `# sweep` for sweeps |
 | `# optional` | zero matches OK (default: error) |
-| `# expr E` / `# type T` / `# item I` / `# pat P` | declare metavariable (SPEC 15) |
-| `# item I` + `# bind=Name` / `# use=Name` | cut / paste a moved item (SPEC 9.3) |
+| `E` / `T` / `P` / `V Q G W` / `I` | inferred metavariables — no declaration needed (SPEC 15.8); explicit `# expr E` etc. still legal |
+| `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8) |
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments (SPEC 14.6) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous (SPEC 13.4) |
 | `# fallback=syntax` | allow syntactic match when `# symbol` can't resolve (SPEC 19) |
@@ -71,7 +71,6 @@ is declared (SPEC 15.4):
 ```diff
 @@ -5,5 @@ rule=rename_calls
 # allow=many
-# expr E
 - foo(E)
 + bar(E)
 ```
@@ -83,26 +82,24 @@ leading `&`, which routes to general-expr matching (`- &E.path()` / `+ E.path()`
 ```diff
 @@ -5,5 @@ rule=method_to_function
 # allow=many
-# expr Receiver
-# expr Arg
 - Receiver.old_method(Arg)
 + new_function(Receiver, Arg)
 ```
 
-Move — cut with `# item I` + `# bind=Helper` + `- I`, paste with
+Move — cut with `# bind=Helper` + `- I` (`I` infers `item`), paste with
 `# use=Helper` + `+ Helper`; paste hunks may precede cut hunks; cross-file
 moves are two file sections (SPEC 9.3, SPEC 10.5). Same-anchor pastes land
 in document order (first hunk topmost) with one blank line between items
 (SPEC 20.2).
 
 Use-path prefix — after a `mod` rename, move imports with one hunk
-(`- use crate::old` / `+ use crate::new`, `# allow=many`); plain, grouped,
+(`- use crate::old` / `+ use crate::new`, `# allow=many` or `# sweep`); plain, grouped,
 glob, `as`, and `pub use` tails preserved, segment-wise; members at the
 matched position rewrite too (`crate::{old, x}` → `crate::{new, x}`),
 but never by suffix (`crate::{x::old}` is untouched) (SPEC 14.9).
 
 Beyond calls — `let` (`- let x = E;` / `+ let y = E;`), general
-expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>` with `# type T`).
+expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>`, `T` inferred).
 A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
 set: full supported-vs-rejected table with exact errors is SPEC 18.6
 (control-flow exprs, `let-else` targets, `P @` subpatterns, macro types
@@ -117,7 +114,7 @@ ellipsis positions are SPEC 16.
 # Doc/attr lines count: they are part of the item span (/// + #[x] + fn 1-5 → @@ -1,5 @@).
 ```
 
-Small file already held? Skip discovery: `@@ -1,1 @@` + `# scope=file`
+Small file already held? Skip discovery: `@@ -1,1 @@` + `# sweep`
 searches the whole file (SPEC 17.3).
 
 ## Verify cheaply

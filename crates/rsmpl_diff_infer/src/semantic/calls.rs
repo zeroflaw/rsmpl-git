@@ -46,13 +46,12 @@ pub(crate) fn try_call_sweep(
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = crate::git_header(path)
     );
     let mut vars = Vec::new();
     for i in 0..arity {
         let v = format!("E{i}");
-        hunk.push_str(&format!("# expr {v}\n"));
         vars.push(v);
     }
     let args = vars.join(", ");
@@ -120,13 +119,12 @@ pub(crate) fn try_call_arg_add_sweep(
     }
     let rule = unique_rule(used_rules, &format!("calls_{cal}_add_{}", tail.len()));
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = crate::git_header(path)
     );
     let mut vars = Vec::new();
     for i in 0..k {
         let v = format!("E{i}");
-        hunk.push_str(&format!("# expr {v}\n"));
         vars.push(v);
     }
     let head = vars.join(", ");

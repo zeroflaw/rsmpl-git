@@ -1,9 +1,6 @@
 diff --git src/a.rs
-@@ -1,1 @@ rule=calls_make_call_literal
-# allow=many
-# scope=file
-# expr E0
-# expr E1
+@@ -1,1 @@ rule=r1
+# sweep
 - make_call(E0, E1, false)
 + make_call(E0, E1, "100644")
 diff --git src/b.rs

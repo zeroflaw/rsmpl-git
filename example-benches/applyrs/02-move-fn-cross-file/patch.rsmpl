@@ -1,6 +1,5 @@
 diff --git src/old.rs
 @@ -1,44 @@ rule=cut_helper
-# item I
 # bind=Helper
 - I
 

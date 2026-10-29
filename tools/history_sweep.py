@@ -17,8 +17,8 @@ conversions become pins in history_e2e.rs.
 Usage:
     python3 tools/history_sweep.py [rev-range] [--limit N]
 
-Sem-hunk counts use the anchored line-start prefix
-`@@ -1,1 @@ rule=` (scope=file dummies); substring counts inflate
+Sem-hunk counts use the anchored diet predicate
+`@@ … rule=r` (all RSmPL hunks carry diet `r1…` ids); substring counts inflate
 inside test-file string literals (T358 lesson).
 """
 
@@ -35,18 +35,14 @@ from pathlib import Path
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SEM_PREFIX = "@@ -1,1 @@ rule="
-MOVE_PREFIXES = (" rule=move_", " rule=paste_")
 
 
 def is_sem_hunk(line: str) -> bool:
-    """Anchored semantic-hunk test (T358-safe: diff content lines never
-    start with `@@`); covers scope=file dummies plus T430 move cut/paste
-    hunks, which cite real ranges/anchors instead, plus T465 real-range
-    `rule=delete_` partial-deletion hunks (T464's dummy matches too)."""
-    return line.startswith(SEM_PREFIX) or (
-        line.startswith("@@ ")
-        and (any(p in line for p in MOVE_PREFIXES) or " rule=delete_" in line)
-    )
+    """Anchored semantic-hunk test (T358-safe + WI-1e diet: diff content
+    lines never start with `@@`); diet rule ids are `r1…`, so any
+    `@@ … rule=r` header is semantic — dummy `# sweep` hunks plus
+    ranged move/partial-delete hunks alike."""
+    return line.startswith("@@ ") and "rule=r" in line
 
 
 def run(cmd: list[str], cwd: Path | None = None, inp: bytes | None = None) -> subprocess.CompletedProcess[bytes]:

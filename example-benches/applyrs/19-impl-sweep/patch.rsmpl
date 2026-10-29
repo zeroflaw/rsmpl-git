@@ -1,8 +1,6 @@
 diff --git src/lib.rs
 @@ -1,1 @@ rule=sweep_impl
-# scope=file
-# allow=many
-# lang=rust
+# sweep
   impl Svc {
       ...
 -     fn old_name(...) {

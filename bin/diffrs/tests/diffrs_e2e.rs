@@ -400,9 +400,10 @@ fn fn_rename_compresses_to_semantic_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("rule=rename_foo_to_bar"), "got: {patch}");
-    assert!(patch.contains("- fn foo(...) {"), "got: {patch}");
-    assert!(!patch.contains("-fn foo"), "got: {patch}");
+    assert!(patch.contains("rule=r1\n"), "got: {patch}");
+    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert!(patch.contains("- fn foo\n"), "got: {patch}");
+    assert!(!patch.contains("- fn foo(...)"), "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);
@@ -434,7 +435,8 @@ fn call_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# allow=many"), "got: {patch}");
+    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert!(!patch.contains("# expr"), "got: {patch}");
     assert!(patch.contains("- foo(E0)"), "got: {patch}");
     assert_eq!(
         patch.matches("@@ -1,1 @@").count(),
@@ -496,14 +498,8 @@ fn call_sweep_two_files_round_trip() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        patch.contains("rule=calls_old_function_to_new_function\n"),
-        "got: {patch}"
-    );
-    assert!(
-        patch.contains("rule=calls_old_function_to_new_function_2\n"),
-        "got: {patch}"
-    );
+    assert!(patch.contains("rule=r1\n"), "got: {patch}");
+    assert!(patch.contains("rule=r2\n"), "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);
@@ -619,7 +615,8 @@ fn free_slot_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# visibility V"), "got: {patch}");
+    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert!(!patch.contains("# visibility"), "got: {patch}");
     assert!(patch.contains("- V Q fn foo G (...) W {"), "got: {patch}");
     assert!(patch.contains("+ V Q fn bar G (...) W {"), "got: {patch}");
     assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
@@ -727,7 +724,8 @@ fn method_to_method_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# expr Receiver"), "got: {patch}");
+    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert!(!patch.contains("# expr"), "got: {patch}");
     assert!(patch.contains("- Receiver.foo(E0)"), "got: {patch}");
     assert!(patch.contains("+ Receiver.bar(E0)"), "got: {patch}");
     assert_eq!(patch.matches("@@ -1,1 @@").count(), 1, "got: {patch}");
@@ -776,7 +774,8 @@ fn method_to_fn_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("# expr Receiver"), "got: {patch}");
+    assert!(patch.contains("# sweep\n"), "got: {patch}");
+    assert!(!patch.contains("# expr"), "got: {patch}");
     assert!(patch.contains("- Receiver.old_method(E0)"), "got: {patch}");
     assert!(
         patch.contains("+ new_function(Receiver, E0)"),
@@ -994,7 +993,8 @@ fn use_prefix_sweep_compresses_to_one_hunk() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("rule=use_old_to_new"), "got: {patch}");
+    assert!(patch.contains("rule=r1\n"), "got: {patch}");
+    assert!(patch.contains("# sweep\n"), "got: {patch}");
     assert!(patch.contains("- use crate::old\n"), "got: {patch}");
     assert!(patch.contains("+ use crate::new\n"), "got: {patch}");
     assert_eq!(
@@ -1258,7 +1258,7 @@ fn space_path_rs_rename_uses_single_header_and_round_trips() {
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(patch.contains("diff --git my file.rs\n"), "got: {patch}");
     assert!(!patch.contains("diff --git a/"), "got: {patch}");
-    assert!(patch.contains("- fn foo(...) {"), "got: {patch}");
+    assert!(patch.contains("- fn foo\n"), "got: {patch}");
 
     git(dir.path(), &["stash", "-q"]);
     let checked = check_with_applyrs(dir.path(), &patch);

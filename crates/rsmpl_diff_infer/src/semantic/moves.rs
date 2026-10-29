@@ -301,8 +301,7 @@ pub(crate) fn try_move_sweep(
             let hunk = &parsed[p.minus_hunk_key.0].hunks[p.minus_hunk_key.1];
             let start = hunk.old_start + p.item.first as u32;
             let len = (p.item.last - p.item.first + 1) as u32;
-            let cut =
-                format!("@@ -{start},{len} @@ rule={cut_rule}\n# item I\n# bind={bind}\n- I\n");
+            let cut = format!("@@ -{start},{len} @@ rule={cut_rule}\n# bind={bind}\n- I\n");
             bind_of.insert(key, (bind.clone(), cut.clone()));
             (bind, cut)
         };
@@ -971,11 +970,11 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("must fire");
         let text = out.join("");
         assert!(
-            text.contains("@@ -2,42 @@ rule=move_big\n# item I\n# bind=M1\n- I\n"),
+            text.contains("@@ -2,42 @@ rule=r1\n# bind=M1\n- I\n"),
             "got:\n{text}"
         );
         assert!(
-            text.contains("@@ -2,0 @@ rule=paste_big\n# use=M1\n+ M1\n"),
+            text.contains("@@ -2,0 @@ rule=r2\n# use=M1\n+ M1\n"),
             "got:\n{text}"
         );
         assert!(
@@ -1004,7 +1003,7 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("must fire");
         let text = out.join("");
         assert!(
-            text.contains("@@ -0,0 @@ rule=paste_big\n# use=M1\n+ M1\n"),
+            text.contains("@@ -0,0 @@ rule=r2\n# use=M1\n+ M1\n"),
             "got:\n{text}"
         );
         assert!(
@@ -1027,15 +1026,15 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a], &pre, &mut used).expect("must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         validated_live(&text, &pre);
     }
 
     #[test]
-    fn move_tiny_item_stays_ordinary() {
-        // T375: a 3-line item costs more as bind/use than as two
-        // ordinary hunks — the byte-win guard vetoes.
+    fn move_tiny_item_fires_as_diet() {
+        // WI-1e diet (no `# item I`, `# sweep`-short cut): the 3-line
+        // move now wins T375 (byte-guard flip pinned).
         let a = "diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,3 +2,0 @@\n-fn m() {\n-    1\n-}\n";
         let b = "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 +2,3 @@\n+fn m() {\n+    1\n+}\n";
         let pre = pre_map(&[
@@ -1043,8 +1042,11 @@ mod tests {
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a.to_string(), b.to_string()], &pre, &mut used).is_none());
-        assert!(used.is_empty(), "vetoed sweep must release rule names");
+        let out = try_move_sweep(&[a.to_string(), b.to_string()], &pre, &mut used)
+            .expect("diet wins T375");
+        let text = out.join("");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("# bind="), "got:\n{text}");
     }
 
     #[test]
@@ -1091,8 +1093,8 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("struct move must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_Big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_Big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         validated_live(&text, &pre);
     }
 
@@ -1133,8 +1135,8 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used)
             .expect("blank-prefix at EOF must fire via prefix-trim");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             !text.contains("-fn big()"),
             "minus lines must be consumed, got:\n{text}"
@@ -1170,8 +1172,8 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used)
             .expect("blank-ending prefix at EOF must fire via prefix-trim");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -2,1 +2,0 @@\n-fn gone() {}\n"),
             "got:\n{text}"
@@ -1203,8 +1205,8 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used)
             .expect("leading blank with following blank must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(text.contains("@@ -2,1 +2,0 @@\n-\n"), "got:\n{text}");
         validated_live(&text, &pre);
     }
@@ -1326,8 +1328,8 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("trailing leftovers must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -2,0 +45,1 @@\n+// trailing\n"),
             "got:\n{text}"
@@ -1354,8 +1356,8 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("prefix+trailing must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -0,0 +1,3 @@\n+use x;\n+\n+// lead\n"),
             "got:\n{text}"
@@ -1391,9 +1393,9 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("fan-out must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big_2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
         assert!(
             !text.contains("-fn big()"),
@@ -1431,9 +1433,9 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("EOF fan-out must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big_2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
         assert!(
             !text.contains("-fn big()"),
@@ -1465,8 +1467,8 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("dedup must fire");
         let text = out.join("");
-        assert_eq!(text.matches("rule=move_big\n").count(), 1, "got:\n{text}");
-        assert_eq!(text.matches("rule=paste_big\n").count(), 1, "got:\n{text}");
+        assert_eq!(text.matches("rule=r1\n").count(), 1, "got:\n{text}");
+        assert_eq!(text.matches("rule=r2\n").count(), 1, "got:\n{text}");
         assert_eq!(text.matches("+ M1\n").count(), 1, "got:\n{text}");
         assert!(
             text.contains("@@ -2,42 +2,0 @@\n-fn big()"),
@@ -1514,7 +1516,7 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b, c, d], &pre, &mut used).expect("cross dedup must fire");
         let text = out.join("");
-        assert_eq!(text.matches("rule=move_big\n").count(), 1, "got:\n{text}");
+        assert_eq!(text.matches("rule=r1\n").count(), 1, "got:\n{text}");
         assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
         assert!(
             text.contains("@@ -2,42 +2,0 @@\n-fn big()"),
@@ -1610,8 +1612,8 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("mixed move must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=move_Big2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -88,3 +2,0 @@\n-fn zed() {\n-    2\n-}\n"),
             "got:\n{text}"
@@ -1656,10 +1658,10 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used)
             .expect("multi-pair at EOF must cap to the first pair");
         let text = out.join("");
-        assert!(text.contains("rule=move_one\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_one\n"), "got:\n{text}");
-        assert!(!text.contains("rule=move_two\n"), "got:\n{text}");
-        assert!(!text.contains("rule=paste_two\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
+        assert!(!text.contains("rule=r3\n"), "got:\n{text}");
+        assert!(!text.contains("rule=r4\n"), "got:\n{text}");
         assert!(
             !text.contains("-fn one()"),
             "paired lines must be consumed, got:\n{text}"
@@ -1695,8 +1697,8 @@ mod tests {
         let out =
             try_move_sweep(&[a, b], &pre, &mut used).expect("trailing minus leftovers must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -44,3 +2,0 @@\n-fn tail() {\n-    1\n-}\n"),
             "got:\n{text}"
@@ -1732,7 +1734,7 @@ mod tests {
         let out =
             try_move_sweep(&[a, b], &pre, &mut used).expect("blank-separated trailing must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -45,3 +2,0 @@\n-fn tail() {\n-    1\n-}\n"),
             "got:\n{text}"
@@ -1758,7 +1760,7 @@ mod tests {
         let out =
             try_move_sweep(&[a, b], &pre, &mut used).expect("prefix minus leftovers must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
         assert!(text.contains("@@ -2,1 +2,0 @@\n-use x;\n"), "got:\n{text}");
         validated_live(&text, &pre);
     }
@@ -1794,8 +1796,8 @@ mod tests {
         let mut used = Vec::new();
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("deleted-file cut must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             !text.contains("-fn big()"),
             "minus lines must be consumed, got:\n{text}"
@@ -1827,8 +1829,8 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used)
             .expect("deleted-file cut with leftover must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -43,3 +0,0 @@\n-fn tail() {\n-    1\n-}\n"),
             "got:\n{text}"
@@ -1872,10 +1874,10 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used)
             .expect("multi-paste with prefix to new file must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_one\n"), "got:\n{text}");
-        assert!(text.contains("rule=move_two\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_one\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_two\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             text.contains("@@ -0,0 +1,3 @@\n+use x;\n+\n+// lead\n"),
             "got:\n{text}"
@@ -1937,10 +1939,10 @@ mod tests {
         let out =
             try_move_sweep(&[a, b], &pre, &mut used).expect("move with interior blanks must fire");
         let text = out.join("");
-        assert!(text.contains("rule=move_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=move_spaced\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_big\n"), "got:\n{text}");
-        assert!(text.contains("rule=paste_spaced\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r1\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
+        assert!(text.contains("rule=r2\n"), "got:\n{text}");
         assert!(
             !text.contains("-fn big()"),
             "minus lines must be consumed, got:\n{text}"

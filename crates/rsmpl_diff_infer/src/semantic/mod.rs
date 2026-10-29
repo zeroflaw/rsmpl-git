@@ -407,14 +407,14 @@ pub(crate) fn try_item_rename(
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# scope=file\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = super::git_header(path)
     );
     if old_kind == "fn" {
-        // Plain top-level fns only: the canonical `fn Old(...)`
-        // pattern matches nothing else (SPEC 14.1), and generics /
-        // return types / where-clauses need explicit slots v1 does
-        // not emit.
+        // WI-1e diet terse: `- fn Old` / `+ fn New` (params/return/
+        // generics/where unconstrained, SPEC 14.1.1). Plain top-level
+        // fns only; vis-prefixed or evolved signatures stay ordinary
+        // (slot sweep covers the multi-site case).
         if !old_prefix.is_empty() {
             return None;
         }
@@ -425,10 +425,7 @@ pub(crate) fn try_item_rename(
         if suffix.contains("->") || contains_word(suffix, "where") {
             return None;
         }
-        hunk.push_str("# lang=rust\n");
-        hunk.push_str(&format!(
-            "- fn {old_ident}(...) {{\n+ fn {new_ident}(...) {{\n     ...\n  }}\n"
-        ));
+        hunk.push_str(&format!("- fn {old_ident}\n+ fn {new_ident}\n"));
     } else {
         hunk.push_str(&format!(
             "- {old_prefix}{old_kind} {old_ident}\n+ {new_prefix}{new_kind} {new_ident}\n"
@@ -563,7 +560,7 @@ pub(crate) fn try_fn_slot_sweep(
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = super::git_header(path)
     );
     if all_indented {
@@ -761,7 +758,7 @@ pub(crate) fn try_use_prefix_sweep(
         &format!("use_{}_to_{}", old_prefix[k - 1], new_prefix[k - 1]),
     );
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = super::git_header(path)
     );
     hunk.push_str(&format!(
@@ -894,20 +891,12 @@ pub(crate) fn call_parts(expr: &syn::Expr) -> Option<(String, Vec<syn::Expr>)> {
     None
 }
 
-pub(crate) fn unique_rule(used: &mut Vec<String>, base: &str) -> String {
-    if !used.iter().any(|r| r == base) {
-        used.push(base.to_string());
-        return base.to_string();
-    }
-    let mut i = 2;
-    loop {
-        let candidate = format!("{base}_{i}");
-        if !used.iter().any(|r| r == &candidate) {
-            used.push(candidate.clone());
-            return candidate;
-        }
-        i += 1;
-    }
+pub(crate) fn unique_rule(used: &mut Vec<String>, _base: &str) -> String {
+    // WI-1e diet: rule ids are `r1…` in emission order (SPEC 9.3 diet).
+    // The descriptive base is ignored; uniqueness is positional.
+    let candidate = format!("r{}", used.len() + 1);
+    used.push(candidate.clone());
+    candidate
 }
 
 /// True when a `diff --git` header names a rename (differing real
@@ -987,7 +976,7 @@ mod tests {
         validated_live(&out, &pre);
         assert!(out.contains("diff --git my file.rs\n"), "got: {out}");
         assert!(!out.contains("diff --git a/"), "got: {out}");
-        assert!(out.contains("- fn foo(...) {"), "got: {out}");
+        assert!(out.contains("- fn foo"), "got: {out}");
     }
 
     #[test]
@@ -1005,44 +994,50 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("- fn foo(...) {"), "got: {out}");
-        assert!(out.contains("+ fn bar(...) {"), "got: {out}");
-        assert!(out.contains("# scope=file"), "got: {out}");
+        assert!(out.contains("- fn foo"), "got: {out}");
+        assert!(out.contains("+ fn bar"), "got: {out}");
+        assert!(out.contains("# sweep"), "got: {out}");
         assert!(!out.contains("-fn foo"), "got: {out}");
     }
 
     #[test]
-    fn short_fn_rename_stays_passthrough() {
-        // T375 token-win guard: a short-header single rename costs more
-        // as a semantic hunk (rule + scope + lang + body) than the one
-        // ordinary hunk it replaces.
+    fn short_fn_rename_fires_as_diet() {
+        // WI-1e diet (terse `- fn foo` + `# sweep`, no lang): the
+        // short-header single now wins the T375 byte guard.
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-fn foo() {\n+fn bar() {\n     1\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("diet wins T375");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("# sweep\n"), "got: {out}");
+        assert!(out.contains("- fn foo\n"), "got: {out}");
+        assert!(out.contains("+ fn bar\n"), "got: {out}");
     }
 
     #[test]
-    fn struct_rename_stays_passthrough() {
-        // T375: non-fn singles can never win — the pattern lines are
-        // verbatim copies of the ordinary lines, so the rule + scope
-        // overhead always exceeds the replaced `@@` header.
+    fn struct_rename_fires_as_diet() {
+        // WI-1e diet: `- struct Old` (no suffix) + `# sweep` beats the
+        // ordinary hunk, so the single now fires (byte-guard flip pinned).
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-struct Old {\n+struct New {\n     x: i32,\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("diet wins T375");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("- struct Old\n"), "got: {out}");
     }
 
     #[test]
-    fn pub_struct_rename_stays_passthrough() {
-        // Same T375 math with a vis prefix: verbatim lines, pure overhead.
+    fn pub_struct_rename_fires_as_diet() {
+        // WI-1e diet: same flip as the plain struct single.
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-pub struct Old {\n+pub struct New {\n     x: i32,\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("diet wins T375");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("- pub struct Old\n"), "got: {out}");
     }
 
     #[test]
@@ -1076,7 +1071,7 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("# sweep"), "got: {out}");
         assert!(out.contains("- foo(E0)\n"), "got: {out}");
         assert!(out.contains("+ bar(E0)\n"), "got: {out}");
         // One hunk for all three sites.
@@ -1109,7 +1104,7 @@ mod tests {
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
         assert!(out.contains("- old_function(E0, E1)\n"), "got: {out}");
-        assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
     }
 
     #[test]
@@ -1167,8 +1162,8 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=calls_make_widget_add_1\n"), "got: {out}");
-        assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1)\n"), "got: {out}");
         assert!(out.contains("+ make_widget(E0, E1, false)\n"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
@@ -1187,7 +1182,7 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=calls_make_widget_add_1\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- make_widget()\n"), "got: {out}");
         assert!(out.contains("+ make_widget(false)\n"), "got: {out}");
@@ -1206,7 +1201,7 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=calls_make_widget_add_2\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(out.contains("+ make_widget(E0, false, 1)\n"), "got: {out}");
     }
 
@@ -1271,11 +1266,8 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_run_to_run_stdin_peel\n"),
-            "got: {out}"
-        );
-        assert!(out.contains("# expr D\n# expr M\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
         assert!(!out.contains("# expr T0"), "got: {out}");
         assert!(out.contains("- run(D, &[\"--patch\", M])\n"), "got: {out}");
         assert!(out.contains("+ run_stdin(D, M, &[])\n"), "got: {out}");
@@ -1301,14 +1293,8 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_run_to_run_stdin_peel\n"),
-            "got: {out}"
-        );
-        assert!(
-            out.contains("# expr D\n# expr M\n# expr T0\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
         assert!(
             out.contains("- run(D, &[\"--patch\", M, T0])\n"),
             "got: {out}"
@@ -1330,10 +1316,7 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_run_to_run_stdin_peel\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
     }
 
     #[test]
@@ -1362,7 +1345,7 @@ mod tests {
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
         assert!(!out.contains("peel"), "got: {out}");
-        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
     }
 
     #[test]
@@ -1461,8 +1444,8 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("calls_run_to_run_stdin_peel\n"), "got: {out}");
-        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+        assert!(out.contains("- run(D,"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(
             out.contains("- compute(some_long_state_value)\n"),
             "got: {out}"
@@ -1514,8 +1497,8 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("# visibility V\n"), "got: {out}");
-        assert!(out.contains("# qualifier_list Q\n"), "got: {out}");
+        assert!(!out.contains("# visibility V\n"), "got: {out}");
+        assert!(!out.contains("# qualifier_list Q\n"), "got: {out}");
         assert!(
             out.contains("- V Q fn old_function_name G (...) W {\n"),
             "got: {out}"
@@ -1532,14 +1515,17 @@ mod tests {
     }
 
     #[test]
-    fn short_slot_sweep_stays_passthrough() {
-        // T375: two short headers cost more as a slot sweep (four slot
-        // directives + wrapper) than as two ordinary hunks.
+    fn short_slot_sweep_fires_as_diet() {
+        // WI-1e diet (no slot decls, `# sweep`): the short slot sweep
+        // now wins T375 (byte-guard flip pinned).
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-async fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n+async fn bar(x: i32) -> i32 {\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("diet wins T375");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("# sweep\n"), "got: {out}");
+        assert!(!out.contains("# visibility"), "got: {out}");
     }
 
     #[test]
@@ -1619,14 +1605,8 @@ mod tests {
         ]);
         let out = infer_semantic(&[a, b]).unwrap();
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_old_function_to_new_function\n"),
-            "got: {out}"
-        );
-        assert!(
-            out.contains("rule=calls_old_function_to_new_function_2\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("rule=r2\n"), "got: {out}");
     }
 
     #[test]
@@ -1690,10 +1670,10 @@ mod tests {
         let pre = pre_map(&[("f.rs", "use crate::old::Thing;\nuse crate::old::Other;\n")]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=use_old_to_new"), "got: {out}");
+        assert!(out.contains("rule=r1"), "got: {out}");
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
-        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("# sweep"), "got: {out}");
         assert!(!out.contains("# expr"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
@@ -1712,7 +1692,7 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=use_old_to_new"), "got: {out}");
+        assert!(out.contains("rule=r1"), "got: {out}");
         assert!(out.contains("- use crate::old\n"), "got: {out}");
         assert!(out.contains("+ use crate::new\n"), "got: {out}");
         assert!(!out.contains('{'), "pattern must stay bare, got: {out}");
@@ -1733,7 +1713,7 @@ mod tests {
         )]);
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("rule=use_old_to_new"), "got: {out}");
+        assert!(out.contains("rule=r1"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
     }
 

@@ -1,9 +1,8 @@
 diff --git src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,1 @@ rule=verbatim
-# allow=many
-# scope=file
+@@ -1,1 @@ rule=r1
+# sweep
 - validated(&text)
 + validated_live(&text, &pre)
 @@ -20,0 +21,3 @@

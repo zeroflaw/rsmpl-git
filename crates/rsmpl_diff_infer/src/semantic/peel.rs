@@ -68,13 +68,12 @@ pub(crate) fn try_call_peel_sweep(
         &format!("calls_{}_to_{}_peel", c.old_cal, c.new_cal),
     );
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr D\n# expr M\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = crate::git_header(path)
     );
     let mut tails = Vec::new();
     for i in 0..c.tails {
         let v = format!("T{i}");
-        hunk.push_str(&format!("# expr {v}\n"));
         tails.push(v);
     }
     let tail_list = tails.join(", ");
@@ -181,12 +180,10 @@ pub(crate) fn try_call_peel_section(
             used_rules,
             &format!("calls_{}_to_{}_peel", class.old_cal, class.new_cal),
         );
-        let mut body =
-            format!("@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n# expr D\n# expr M\n");
+        let mut body = format!("@@ -1,1 @@ rule={rule}\n# sweep\n");
         let mut tails = Vec::new();
         for i in 0..class.tails {
             let v = format!("T{i}");
-            body.push_str(&format!("# expr {v}\n"));
             tails.push(v);
         }
         let tail_list = tails.join(", ");

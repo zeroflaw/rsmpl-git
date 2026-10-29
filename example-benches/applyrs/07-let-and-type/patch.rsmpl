@@ -1,13 +1,11 @@
 diff --git src/lib.rs
 @@ -1,15 @@ rule=box_param
 # allow=many
-# type T
 - Vec<T>
 + Box<[T]>
 
 @@ -1,15 @@ rule=rename_let
 # allow=many
-# expr E
 - let count = E;
 + let n = E;
 

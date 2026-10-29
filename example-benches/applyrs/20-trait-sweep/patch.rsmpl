@@ -1,8 +1,6 @@
 diff --git src/lib.rs
 @@ -1,1 @@ rule=sweep_trait
-# scope=file
-# allow=many
-# lang=rust
+# sweep
   trait ZZZ {
 -     fn old_name(...);
 +     fn new_name(...);

@@ -1,7 +1,5 @@
 diff --git src/lib.rs
 @@ -13,15 @@ rule=method_to_free_function
 # allow=many
-# expr Receiver
-# expr Arg
 - Receiver.old_method(Arg)
 + new_function(Receiver, Arg)

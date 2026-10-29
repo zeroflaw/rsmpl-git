@@ -155,13 +155,7 @@ pub(crate) fn try_call_literal_section(
                 format!("{}({head}, {})", class.cal, class.new_lit),
             )
         };
-        let mut head_directives = String::new();
-        for v in &vars {
-            head_directives.push_str(&format!("# expr {v}\n"));
-        }
-        let body = format!(
-            "@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n{head_directives}- {minus_call}\n+ {plus_call}\n"
-        );
+        let body = format!("@@ -1,1 @@ rule={rule}\n# sweep\n- {minus_call}\n+ {plus_call}\n");
         for &idx in members {
             covered_pair[idx] = true;
         }
@@ -325,13 +319,12 @@ pub(crate) fn try_call_literal_sweep(
     }
     let rule = unique_rule(used_rules, &format!("calls_{cal}_literal"));
     let mut hunk = format!(
-        "{header}\n@@ -1,1 @@ rule={rule}\n# allow=many\n# scope=file\n",
+        "{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n",
         header = crate::git_header(path)
     );
     let mut vars = Vec::new();
     for i in 0..k {
         let v = format!("E{i}");
-        hunk.push_str(&format!("# expr {v}\n"));
         vars.push(v);
     }
     let head = vars.join(", ");
@@ -386,11 +379,8 @@ mod tests {
         let out =
             crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_make_widget_literal\n"),
-            "got: {out}"
-        );
-        assert!(out.contains("# expr E0\n# expr E1\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
         assert!(
             out.contains("+ make_widget(E0, E1, \"100644\")\n"),
@@ -415,7 +405,7 @@ mod tests {
         let out =
             crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
         validated_live(&out, &pre);
-        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(!out.contains("calls_make_widget_literal"), "got: {out}");
     }
 
@@ -474,10 +464,7 @@ mod tests {
         let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("must compress");
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_make_widget_literal\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
     }
 
     #[test]
@@ -517,10 +504,7 @@ mod tests {
         let out =
             crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_make_widget_literal\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
         assert!(
             out.contains("+ make_widget(E0, E1, \"100644\")\n"),
@@ -546,10 +530,7 @@ mod tests {
         let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("must compress");
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_make_widget_literal\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(out.contains("- make_widget(E0, E1, false)\n"), "got: {out}");
         assert!(
             out.contains("+ make_widget(E0, E1, \"100644\")\n"),
@@ -594,10 +575,7 @@ mod tests {
         let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("must compress");
         validated_live(&out, &pre);
-        assert!(
-            out.contains("rule=calls_make_widget_literal\n"),
-            "got: {out}"
-        );
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(out.contains("- make_widget(false)\n"), "got: {out}");
         assert!(out.contains("+ make_widget(\"100644\")\n"), "got: {out}");
         assert_eq!(out.matches("@@ -1,1 @@").count(), 1, "got: {out}");
@@ -606,7 +584,7 @@ mod tests {
     #[test]
     fn call_literal_cross_hunk_all_identical_stays_for_verbatim() {
         // T449 + T422: a line-identical cross-hunk class compresses
-        // tighter without metavars (`rule=verbatim` beats the longer
+        // tighter without metavars (`rule=r1` beats the longer
         // literal rule on byte-identical bodies), so the section
         // driver declines and verbatim claims it.
         let raw = section(
@@ -615,7 +593,7 @@ mod tests {
         );
         let out =
             crate::semantic::infer_semantic(std::slice::from_ref(&raw)).expect("must compress");
-        assert!(out.contains("rule=verbatim\n"), "got: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
         assert!(!out.contains("calls_make_widget_literal"), "got: {out}");
     }
 

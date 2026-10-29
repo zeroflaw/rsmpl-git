@@ -735,7 +735,7 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -9,1 +10,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -20,0 +21,1 @@\n+let cached = state.parsed;\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -760,12 +760,13 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_sweep_tiny_pairs_stay_passthrough() {
-        // T375: two 2-char pairs cost more as a rule hunk (rule +
-        // scope + allow overhead) than the two short ordinary hunks.
+    fn verbatim_sweep_tiny_pairs_fire_as_diet() {
+        // WI-1e diet (`# sweep`): the tiny verbatim pair now wins T375
+        // (byte-guard flip pinned).
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-&a,\n+a,\n@@ -9,1 +10,1 @@\n-&a,\n+a,\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule="), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("rule=r1\n"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("# sweep\n"), "got: {}", out.rsmpl);
     }
 
     #[test]
@@ -812,7 +813,7 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -9,1 +10,1 @@\n-        &state.parsed,\n+        parsed,\n@@ -20,1 +21,1 @@\n-        timeout_secs,\n+        timeout_secs.max(1),\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -846,7 +847,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -923,7 +924,8 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(out.rsmpl.contains("- foo(E0)\n"), "got: {}", out.rsmpl);
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(out.rsmpl.contains("rule=r1\n"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r2"), "got: {}", out.rsmpl);
     }
 
     #[test]
@@ -940,7 +942,7 @@ mod tests {
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n@@ -9,1 +10,1 @@\n-    let out = run(a);\n+    let out = run2(a);\n";
         let out = infer_rsmpl(raw).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=calls_run_to_run2\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -976,11 +978,11 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
-        assert!(!out.rsmpl.contains("rule=verbatim_2"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r2"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_sweep_bare_call_literal_repeat_compresses() {
@@ -997,7 +999,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1033,7 +1035,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1053,7 +1055,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_sweep_totality_fires_past_unrelated_string_twin() {
@@ -1066,7 +1068,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1080,7 +1082,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_sweep_totality_vetoes_unparseable_pre_image() {
@@ -1092,7 +1094,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_sweep_return_shape_compresses() {
@@ -1107,7 +1109,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1"),
             "got: {}",
             out.rsmpl
         );
@@ -1124,7 +1126,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1141,7 +1143,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1159,7 +1161,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1"),
             "got: {}",
             out.rsmpl
         );
@@ -1186,7 +1188,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_let_sweep_fires_across_hunks() {
@@ -1202,7 +1204,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );
@@ -1241,7 +1243,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_let_multiline_fragment_stays_passthrough() {
@@ -1252,7 +1254,7 @@ mod tests {
         // group fires either — the hunk is genuinely uncovered.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,2 +2,2 @@\n-    let lenient =\n-        run(dir.path(), patch, &[\"--check\"]);\n+    let mismatched =\n+        run_stdin(dir.path(), patch, &[\"--check\"]);\n@@ -9,2 +10,2 @@\n-    let lenient =\n-        run(dir.path(), other, &[\"--check\"]);\n+    let mismatched =\n+        run_stdin(dir.path(), other, &[\"--check\"]);\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_let_else_stays_passthrough() {
@@ -1260,7 +1262,7 @@ mod tests {
         // let-else targets, so the pair stays ordinary.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let Some(x) = opt_old() else { return; };\n+    let Some(x) = opt_new() else { return; };\n@@ -9,1 +10,1 @@\n-    let Some(x) = opt_old() else { return; };\n+    let Some(x) = opt_new() else { return; };\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_let_macro_init_stays_passthrough() {
@@ -1269,7 +1271,7 @@ mod tests {
         // ordinary rather than failing loud.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let v = vec_old!(1, 2, 3);\n+    let v = vec_new!(1, 2, 3);\n@@ -9,1 +10,1 @@\n-    let v = vec_old!(1, 2, 3);\n+    let v = vec_new!(1, 2, 3);\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_let_init_mismatch_stays_passthrough() {
@@ -1278,7 +1280,7 @@ mod tests {
         // pair stays ordinary.
         let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    let z;\n+    let z = 1;\n@@ -9,1 +10,1 @@\n-    let z;\n+    let z = 1;\n";
         let out = infer_rsmpl(raw).unwrap();
-        assert!(!out.rsmpl.contains("rule=verbatim"), "got: {}", out.rsmpl);
+        assert!(!out.rsmpl.contains("rule=r1"), "got: {}", out.rsmpl);
     }
     #[test]
     fn verbatim_let_initless_pair_compresses() {
@@ -1292,7 +1294,7 @@ mod tests {
         map.insert("f.rs".to_string(), pre.to_string());
         let out = infer_rsmpl_with_pre_images(raw, &map).unwrap();
         assert!(
-            out.rsmpl.contains("@@ -1,1 @@ rule=verbatim\n"),
+            out.rsmpl.contains("@@ -1,1 @@ rule=r1\n"),
             "got: {}",
             out.rsmpl
         );

@@ -1,8 +1,6 @@
 diff --git src/lib.rs
 @@ -1,1 @@ rule=strip_zero_add
-# scope=file
-# allow=many
+# sweep
 # repeat
-# expr E
 - E + 0
 + E

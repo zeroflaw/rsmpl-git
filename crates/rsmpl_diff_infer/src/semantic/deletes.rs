@@ -141,9 +141,7 @@ pub(crate) fn try_delete_sweep(section: &str, used_rules: &mut Vec<String>) -> O
         rewritten.push_str(line);
         rewritten.push('\n');
     }
-    rewritten.push_str(&format!(
-        "@@ -1,1 @@ rule={rule}\n# scope=file\n# allow=many\n# item I\n- I\n"
-    ));
+    rewritten.push_str(&format!("@@ -1,1 @@ rule={rule}\n# sweep\n- I\n"));
     for (s, e) in &runs {
         let len = e - s + 1;
         rewritten.push_str(&format!("@@ -{s},{len} +0,0 @@\n"));
@@ -322,7 +320,7 @@ pub(crate) fn try_partial_delete_hunk(
     }
     let sem_len = old_start + old_len - sem_start;
     out.push_str(&format!(
-        "@@ -{sem_start},{sem_len} +{new_start},0 @@ rule={rule}\n# allow=many\n# item I\n- I\n"
+        "@@ -{sem_start},{sem_len} +{new_start},0 @@ rule={rule}\n# allow=many\n- I\n"
     ));
     if !plus.is_empty() || compensate {
         let count = plus.len() + usize::from(compensate);
@@ -499,9 +497,7 @@ mod tests {
         let mut used = Vec::new();
         let out = try_delete_sweep(&section, &mut used).expect("must fire");
         assert!(
-            out.contains(
-                "@@ -1,1 @@ rule=delete_items\n# scope=file\n# allow=many\n# item I\n- I\n"
-            ),
+            out.contains("@@ -1,1 @@ rule=r1\n# sweep\n- I\n"),
             "got:\n{out}"
         );
         // Non-item lines (docs, separator blanks) stay ordinary.
@@ -618,10 +614,7 @@ mod tests {
         let hunk = partial_native(start, &minus, &plus, start);
         let mut used = Vec::new();
         let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
-        assert!(
-            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
-            "got:\n{out}"
-        );
+        assert!(out.contains("rule=r1\n# allow=many\n- I\n"), "got:\n{out}");
         assert!(
             out.contains("@@ -3,0 +4,3 @@\n+mod common;\n+use common::*;\n+\n"),
             "got:\n{out}"
@@ -857,10 +850,7 @@ mod tests {
         let hunk = partial_native(start, &minus, &[], start);
         let mut used = Vec::new();
         let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
-        assert!(
-            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
-            "got:\n{out}"
-        );
+        assert!(out.contains("rule=r1\n# allow=many\n- I\n"), "got:\n{out}");
         assert!(out.len() < hunk.len());
         // Kept head + the absorbed separator blank + tail.
         let mut expect = old_lines[..(start as usize - 1)].join("\n");
@@ -890,10 +880,7 @@ mod tests {
         let hunk = partial_native(start, &minus, &[], start);
         let mut used = Vec::new();
         let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
-        assert!(
-            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
-            "got:\n{out}"
-        );
+        assert!(out.contains("rule=r1\n# allow=many\n- I\n"), "got:\n{out}");
         assert_eq!(
             out.lines().filter(|l| l.starts_with("@@")).count(),
             1,
@@ -975,10 +962,7 @@ mod tests {
             out.contains("@@ -5,1 +4,0 @@\n-\n"),
             "leading blank rides ordinary, got:\n{out}"
         );
-        assert!(
-            out.contains("rule=delete_items\n# allow=many\n# item I\n- I\n"),
-            "got:\n{out}"
-        );
+        assert!(out.contains("rule=r1\n# allow=many\n- I\n"), "got:\n{out}");
         assert!(out.len() < hunk.len());
         let mut expect = old_lines[..(start as usize - 1)].join("\n");
         expect.push('\n');

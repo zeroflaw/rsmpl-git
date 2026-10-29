@@ -369,7 +369,7 @@ pub(crate) fn try_verbatim_sweep(
         .iter()
         .map(|g| {
             format!(
-                "@@ -1,1 @@ rule={}\n# allow=many\n# scope=file\n- {}\n+ {}\n",
+                "@@ -1,1 @@ rule={}\n# sweep\n- {}\n+ {}\n",
                 g.rule, g.minus, g.plus
             )
         })

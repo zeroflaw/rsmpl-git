@@ -626,7 +626,7 @@ mod tests {
         let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n }\n");
         let pre = "fn m() {\n    foo(1);\n    foo(2);\n}\n";
         assert!(
-            infer(&raw, pre).contains("rule=calls_foo_to_bar"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -642,7 +642,7 @@ mod tests {
         let pre =
             "fn m() {\n    make_widget(alpha, 1, false);\n    make_widget(beta, 2, false);\n}\n";
         assert!(
-            infer(&raw, pre).contains("rule=calls_make_widget_literal"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -653,7 +653,7 @@ mod tests {
         );
         let pre3 = "fn m() {\n    make_widget(alpha, 1, false);\n    make_widget(beta, 2, false);\n    make_widget(gamma, 3, true);\n}\n";
         assert!(
-            infer(&raw, pre3).contains("rule=calls_make_widget_literal"),
+            infer(&raw, pre3).contains("rule=r1"),
             "different-trailing site must not veto, got: {}",
             infer(&raw, pre3)
         );
@@ -675,7 +675,7 @@ mod tests {
         let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    a.contains(\"skills/rsmpl-git/SKILL.md\");\n-    b.contains(\"skills/rsmpl-git/SKILL.md\");\n+    a.contains(\"skills/gitrs/SKILL.md\");\n+    b.contains(\"skills/gitrs/SKILL.md\");\n }\n");
         let pre = "fn m() {\n    a.contains(\"skills/rsmpl-git/SKILL.md\");\n    b.contains(\"skills/rsmpl-git/SKILL.md\");\n}\n";
         assert!(
-            infer(&raw, pre).contains("rule=calls_contains_literal"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -686,7 +686,7 @@ mod tests {
         );
         let pre3 = "fn m() {\n    a.contains(\"skills/rsmpl-git/SKILL.md\");\n    b.contains(\"skills/rsmpl-git/SKILL.md\");\n    c.contains(\"other\");\n}\n";
         assert!(
-            infer(&raw, pre3).contains("rule=calls_contains_literal"),
+            infer(&raw, pre3).contains("rule=r1"),
             "different-arg site must not veto, got: {}",
             infer(&raw, pre3)
         );
@@ -696,7 +696,7 @@ mod tests {
         let raw = sec("@@ -1,5 +1,5 @@\n fn m() {\n-    &dir.path().join(\"\"),\n-    &dir.path().join(\"\"),\n-    write(&dir.path().join(\"\"), \"a\");\n+    dir.path(),\n+    dir.path(),\n+    write(dir.path(), \"a\");\n }\n");
         let pre = "fn m() {\n    let a = &dir.path().join(\"\");\n    let b = &dir.path().join(\"\");\n    write(&dir.path().join(\"\"), \"a\");\n    let s = \"patch text\";\n}\n";
         assert!(
-            infer(&raw, pre).contains("calls_join_strip"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -709,7 +709,7 @@ mod tests {
         let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n");
         let pre = "fn m() {\n    foo(1);\n    foo(1);\n    let s = \"foo(1);\";\n}\n";
         assert!(
-            infer(&raw, pre).contains("rule=calls_foo_to_bar"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -732,7 +732,7 @@ mod tests {
         let raw = sec("@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n");
         let pre = "fn m() {\n    foo(1);\n    foo(1);\n    g(m!(foo(1)));\n}\n";
         assert!(
-            infer(&raw, pre).contains("rule=calls_foo_to_bar"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -753,7 +753,7 @@ mod tests {
         let raw = sec("@@ -1,2 +1,2 @@\n-fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n-fn old_function_name(first_argument: OtherLongType, second_argument: SecondLongType) {\n+fn new_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {\n+fn new_function_name(first_argument: OtherLongType, second_argument: SecondLongType) {\n");
         let pre = "fn old_function_name(first_argument: FirstLongType, second_argument: SecondLongType) {}\nfn old_function_name(first_argument: OtherLongType, second_argument: SecondLongType) {}\n";
         assert!(
-            infer(&raw, pre).contains("rename_old_function_name_to_new_function_name"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );
@@ -765,7 +765,7 @@ mod tests {
         let raw = sec("@@ -1,2 +1,2 @@\n- use crate::old::A;\n- use crate::old::B;\n+ use crate::new::A;\n+ use crate::new::B;\n");
         let pre = "use crate::old::A;\nuse crate::old::B;\n";
         assert!(
-            infer(&raw, pre).contains("rule=use_old_to_new"),
+            infer(&raw, pre).contains("rule=r1"),
             "got: {}",
             infer(&raw, pre)
         );

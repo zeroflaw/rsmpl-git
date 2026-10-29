@@ -1,9 +1,6 @@
 diff --git src/a.rs
-@@ -1,1 @@ rule=calls_make_widget_add_1
-# allow=many
-# scope=file
-# expr E0
-# expr E1
+@@ -1,1 @@ rule=r1
+# sweep
 - make_widget(E0, E1)
 + make_widget(E0, E1, false)
 diff --git src/b.rs

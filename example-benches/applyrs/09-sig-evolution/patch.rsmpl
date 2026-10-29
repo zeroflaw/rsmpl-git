@@ -1,13 +1,11 @@
 diff --git src/lib.rs
-@@ -1,7 @@ rule=expose_helper
-# lang=rust
+@@ -1,7 @@ rule=r1
 - fn helper(...) {
 + pub fn helper(...) -> i64 {
       ...
   }
 
-@@ -9,5 @@ rule=genericize_compute
-# lang=rust
+@@ -9,5 @@ rule=r2
 - fn compute(...) {
 + async fn compute<T>(...) where T: Clone {
       ...

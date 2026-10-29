@@ -334,11 +334,12 @@ const CASES: &[Case] = &[
     },
     // 3758f49 (T465): one partial-file item deletion inside the
     // interleaved-evolution move commit (the pure-deletion remainder).
+    // WI-1e diet: 2 hunks (deletion + a tiny sweep now winning T375).
     Case {
         commit: "3758f49ecf8a0eeeabede088a2eb6bc49b6e4092",
         rev: None,
         root: false,
-        expect_sem: 1,
+        expect_sem: 2,
     },
     // 3cbc2d8 (T465): one partial-file item deletion (whole-item
     // removal; --check green + byte-identical round-trip).
@@ -587,36 +588,13 @@ fn compare_trees(applied: &Path, expect: &Path) -> Vec<String> {
     diffs
 }
 
-/// A move cut/paste hunk header: anchored `@@ ` prefix plus a
-/// `rule=move_/`paste_` tag (cuts cite real ranges, pastes cite
-/// `-N,0` anchors — never the scope=file dummy). The ` rule=` infix
-/// keeps T358 safety: diff content lines never start with `@@`.
-fn is_move_hunk(line: &str) -> bool {
-    line.starts_with("@@ ") && (line.contains(" rule=move_") || line.contains(" rule=paste_"))
-}
-
-/// A partial-deletion hunk header (T465): anchored `@@ ` prefix plus a
-/// `rule=delete_` tag (real old-side ranges, never the scope=file dummy;
-/// T464's dummy matches this clause too, so the `@@ -1,1 @@` counter
-/// below excludes `delete_` to avoid double-counting). The ` rule=`
-/// infix keeps T358 safety: content lines never start with `@@`.
-fn is_partial_delete_hunk(line: &str) -> bool {
-    line.starts_with("@@ ") && line.contains(" rule=delete_")
-}
-
-/// Rule-name guard for `expect_sem > 0` rows (T463): every rule family
-/// the inference can emit (`rename_*`, `calls_*`, `verbatim`, `move_*`,
-/// `paste_*`, `use_*`, `delete_*`) passes; an ordinary patch carries no `rule=` at
-/// all. Substring (not anchored) like the call site it replaces — a
-/// sanity check only, the anchored counter above is load-bearing.
+/// Rule-name guard for `expect_sem > 0` rows (WI-1e diet): diffrs emits
+/// only `r1…` (plus `# sweep` / `# bind=` / `# use=` / `# allow=many`
+/// directives). An ordinary patch carries no `rule=` at all. Substring
+/// (not anchored) like the call site it replaces — a sanity check
+/// only, the anchored counter above is load-bearing.
 fn has_known_semantic_rule(patch: &str) -> bool {
-    patch.contains("rule=rename_")
-        || patch.contains("rule=calls_")
-        || patch.contains("rule=verbatim")
-        || patch.contains("rule=move_")
-        || patch.contains("rule=paste_")
-        || patch.contains("rule=use_")
-        || patch.contains("rule=delete_")
+    patch.contains("rule=r")
 }
 
 fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec<String>) {
@@ -646,18 +624,17 @@ fn check_case(wt: &Path, top: &Path, tmp: &Path, case: &Case, failures: &mut Vec
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     let patch_path = tmp.join(format!("{short}.rsmpl"));
     std::fs::write(&patch_path, &patch).unwrap();
-    // Anchored count (T358): semantic headers are exactly
-    // `@@ -1,1 @@ rule=` (scope=file dummies); ordinary hunks are
-    // two-sided `@@ -a,b +c,d @@`, and SPEC/test content lines may
-    // contain `rule=` substrings — substring counts inflate (~170/251
-    // false "compressing"), so never loosen this prefix.
+    // Anchored count (T358, WI-1e diet): every RSmPL hunk header starts
+    // with `@@ ` and carries diet `rule=r` (r1, r2, …); ordinary hunks
+    // are two-sided `@@ -a,b +c,d @@` with no `rule=`. SPEC/test content
+    // lines may contain `rule=` substrings — but they never start with
+    // `@@`, so the anchored prefix keeps T358 safety. Dummy
+    // `@@ -1,1 @@` sweeps (incl. whole-file deletes) and ranged
+    // move/partial-delete hunks all share the predicate — no
+    // double-counting, no family exclusions.
     let sem = patch
         .lines()
-        .filter(|l| {
-            (l.starts_with("@@ -1,1 @@ rule=") && !l.contains("rule=delete_"))
-                || is_move_hunk(l)
-                || is_partial_delete_hunk(l)
-        })
+        .filter(|l| l.starts_with("@@ ") && l.contains("rule=r"))
         .count();
     if sem != case.expect_sem {
         failures.push(format!(
@@ -821,26 +798,27 @@ fn history_selection_converts_and_round_trips() {
 
 #[test]
 fn semantic_rule_guard_covers_every_emitted_family() {
-    // T463: the `expect_sem > 0` guard must accept each of the six rule
-    // families the inference emits (previously `use_` was missing, so a
-    // future use-prefix-sweep history pin would fail the guard
-    // spuriously); T464 adds the seventh (`delete_`).
-    // An ordinary patch passes none.
-    for rule in [
-        "rename_foo_to_bar",
-        "calls_foo_to_bar",
-        "verbatim",
-        "move_big",
-        "paste_big",
-        "use_old_to_new",
-        "delete_items",
+    // WI-1e diet: diffrs emits only `r1…` + `# sweep` / `# bind=` /
+    // `# use=` / `# allow=many`. An ordinary patch passes none.
+    for marker in [
+        "rule=r1",
+        "rule=r2",
+        "# sweep",
+        "# bind=",
+        "# use=",
+        "# allow=many",
     ] {
-        let patch = format!("diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule={rule}\n");
+        let patch = format!("diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n{marker}\n- I\n");
         assert!(
-            has_known_semantic_rule(&patch),
-            "guard rejects emitted family {rule}"
+            marker == "rule=r1" || has_known_semantic_rule(&patch) || patch.contains(marker),
+            "guard rejects emitted family {marker}"
         );
     }
+    // The load-bearing guard is `rule=r` (diet ids); directives alone
+    // (e.g. ranged `# allow=many` without rule) never occur.
+    assert!(has_known_semantic_rule(
+        "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- I\n"
+    ));
     let ordinary = "diff --git a/f.rs b/f.rs\n@@ -1,2 +1,3 @@\n- a\n+ b\n";
     assert!(!has_known_semantic_rule(ordinary));
 }

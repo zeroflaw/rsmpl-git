@@ -131,83 +131,80 @@ context would be larger, so these are lower bounds.)
 
 | bench | rsmpl | native | saved |
 |---|---|---|---|
-| 01-rename-calls-many (12 sites, 1 hunk) | 92 B / 6 ln | 409 B / 21 ln | 78% |
-| 02-move-fn-cross-file (44-line fn, no restate) | 151 B / 10 ln | 1576 B / 97 ln | 90% |
-| 03-scope-file-sweep (9 sites, no discovery) | 110 B / 7 ln | 445 B / 20 ln | 75% |
-| 04-method-to-function (4 sites) | 161 B / 7 ln | 347 B / 15 ln | 54% |
+| 01-rename-calls-many (12 sites, 1 hunk) | 83 B / 5 ln | 409 B / 21 ln | 80% |
+| 02-move-fn-cross-file (44-line fn, no restate) | 142 B / 9 ln | 1576 B / 97 ln | 91% |
+| 03-scope-file-sweep (9 sites, no discovery) | 83 B / 5 ln | 445 B / 20 ln | 81% |
+| 04-method-to-function (4 sites) | 134 B / 5 ln | 347 B / 15 ln | 61% |
 | 05-use-prefix (5 imports, 1 hunk) | 98 B / 5 ln | 347 B / 14 ln | 72% |
-| 06-repeat-fold (nested `Box::new`, 1 hunk) | 94 B / 7 ln | 209 B / 9 ln | 55% |
-| 07-let-and-type (7 sites, 3 hunks) | 226 B / 17 ln | 593 B / 21 ln | 62% |
-| 08-rename-fn-big-body (54-line body kept) | 122 B / 7 ln | 149 B / 6 ln | 18% |
-| 09-sig-evolution (2 signatures, bodies kept) | 253 B / 14 ln | 251 B / 9 ln | -1% |
-| 10-item-rename (3 bare-pair renames) | 225 B / 15 ln | 210 B / 12 ln | -7% |
-| 11-repeat-general-expr (nested `E + 0`, 1 hunk) | 109 B / 8 ln | 213 B / 11 ln | 49% |
-| 12-amp-receiver (4 sites, 1 hunk) | 102 B / 7 ln | 255 B / 12 ln | 60% |
-| 13-call-sweep-scaling (20 sites, 1 hunk) | 104 B / 7 ln | 649 B / 33 ln | 84% |
-| 14-slot-sweep (4 sigs, 1 hunk) | 210 B / 12 ln | 405 B / 15 ln | 48% |
-| 15-pat-sweep (4 ascribed lets, 1 hunk) | 149 B / 9 ln | 331 B / 12 ln | 55% |
-| 16-symbol-sweep (5 qualified sites, 1 hunk) | 179 B / 10 ln | 425 B / 14 ln | 58% |
-| 17-macro-sweep (5 macro sites, 1 hunk) | 128 B / 7 ln | 285 B / 14 ln | 55% |
-| 18-attrs-sweep (4 attributed sigs, 1 hunk) | 210 B / 12 ln | 407 B / 15 ln | 48% |
-| 19-impl-sweep (4 methods, 1 hunk) | 186 B / 12 ln | 391 B / 15 ln | 52% |
-| 20-trait-sweep (3 methods, 1 hunk) | 154 B / 9 ln | 303 B / 12 ln | 49% |
+| 06-repeat-fold (nested `Box::new`, 1 hunk) | 85 B / 6 ln | 209 B / 9 ln | 59% |
+| 07-let-and-type (7 sites, 3 hunks) | 208 B / 15 ln | 593 B / 21 ln | 65% |
+| 08-rename-fn-big-body (54-line body kept) | 110 B / 6 ln | 149 B / 6 ln | 26% |
+| 09-sig-evolution (2 signatures, bodies kept) | 202 B / 12 ln | 251 B / 9 ln | 20% |
+| 10-item-rename (3 bare-pair renames) | 189 B / 12 ln | 210 B / 12 ln | 10% |
+| 11-repeat-general-expr (nested `E + 0`, 1 hunk) | 82 B / 6 ln | 213 B / 11 ln | 62% |
+| 12-amp-receiver (4 sites, 1 hunk) | 75 B / 5 ln | 255 B / 12 ln | 71% |
+| 13-call-sweep-scaling (20 sites, 1 hunk) | 77 B / 5 ln | 649 B / 33 ln | 88% |
+| 14-slot-sweep (4 sigs, 1 hunk) | 122 B / 7 ln | 405 B / 15 ln | 70% |
+| 15-pat-sweep (4 ascribed lets, 1 hunk) | 105 B / 5 ln | 331 B / 12 ln | 68% |
+| 16-symbol-sweep (5 qualified sites, 1 hunk) | 152 B / 8 ln | 425 B / 14 ln | 64% |
+| 17-macro-sweep (5 macro sites, 1 hunk) | 110 B / 6 ln | 285 B / 14 ln | 61% |
+| 18-attrs-sweep (4 attributed sigs, 1 hunk) | 122 B / 7 ln | 407 B / 15 ln | 70% |
+| 19-impl-sweep (4 methods, 1 hunk) | 156 B / 10 ln | 391 B / 15 ln | 60% |
+| 20-trait-sweep (3 methods, 1 hunk) | 124 B / 7 ln | 303 B / 12 ln | 59% |
 
 `example-benches/diffrs/` (20 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):
 
 | bench | native | semantic | saved |
 |---|---|---|---|
-| 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 111 B / 7 ln | 73% |
+| 01-call-sweep (12 call sites, 1 hunk) | 416 B / 28 ln | 69 B / 5 ln | 83% |
 | 02-ordinary-edit (1 line, stays ordinary) | 89 B / 6 ln | 72 B / 6 ln | 19% |
-| 03-move (same-file reorder, cut+paste) | 1857 B / 89 ln | 128 B / 10 ln | 93% |
-| 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 548 B / 25 ln | 46% |
-| 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 214 B / 12 ln | 39% |
-| 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 518 B / 20 ln | 24% |
-| 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 133 B / 7 ln | 37% |
-| 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 272 B / 12 ln | 50% |
-| 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 349 B / 16 ln | 29% |
-| 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 197 B / 7 ln | 49% |
-| 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 204 B / 8 ln | 36% |
-| 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 142 B / 8 ln | 29% |
-| 13-verbatim-return (2 sites, Return-arm verbatim sweep) | 266 B / 9 ln | 165 B / 8 ln | 38% |
-| 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 145 B / 8 ln | 48% |
-| 15-verbatim-unary (2 sites, Unary-arm verbatim sweep) | 219 B / 9 ln | 142 B / 8 ln | 35% |
-| 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 415 B / 16 ln | 24% |
+| 03-move (same-file reorder, cut+paste) | 1857 B / 89 ln | 106 B / 9 ln | 94% |
+| 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 414 B / 18 ln | 59% |
+| 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 190 B / 11 ln | 46% |
+| 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 459 B / 17 ln | 32% |
+| 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 85 B / 5 ln | 60% |
+| 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 141 B / 7 ln | 74% |
+| 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 290 B / 13 ln | 41% |
+| 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 143 B / 5 ln | 63% |
+| 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 180 B / 7 ln | 44% |
+| 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 118 B / 7 ln | 41% |
+| 13-verbatim-return (2 sites, Return-arm verbatim sweep) | 266 B / 9 ln | 141 B / 7 ln | 47% |
+| 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 121 B / 7 ln | 57% |
+| 15-verbatim-unary (2 sites, Unary-arm verbatim sweep) | 219 B / 9 ln | 118 B / 7 ln | 46% |
+| 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 356 B / 13 ln | 35% |
 | 17-macro-veto (6 sites, macro gates stay ordinary) | 1208 B / 24 ln | 1040 B / 24 ln | 14% |
 | 18-macro-invocation-veto (2 sites + pure addition, stays ordinary) | 378 B / 14 ln | 308 B / 14 ln | 19% |
-| 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 129 B / 7 ln | 70% |
-| 20-method-to-function (3 sites, method-to-function sweep) | 237 B / 10 ln | 178 B / 8 ln | 25% |
+| 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 81 B / 5 ln | 81% |
+| 20-method-to-function (3 sites, method-to-function sweep) | 237 B / 10 ln | 104 B / 5 ln | 56% |
 
-Fan-out edits save 50–90%. Single-ident edits are size-parity — the payoff
-there is semantic safety (slot-exact matching, attrs preserved,
-machine-checked match counts) at ~zero token premium.
+Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
+edits at 50–90% and single-ident edits byte-positive — plus semantic
+safety (slot-exact matching, attrs preserved, machine-checked counts).
 
 ## Minimal semantic hunk
 
 ```diff
 diff --git src/lib.rs
 @@ -1,5 @@ rule=rename_foo
-# lang=rust
-- fn foo(...) {
-+ fn bar(...) {
-      ...
-   }
+- fn foo
++ fn bar
 ```
 
 Minimal header: `diff --git <path>` alone suffices (no
 `---`/`+++`/`index`); `rule=` may be omitted; elide the new side
 (`@@ -old,len @@`, new side ignored, SPEC 10.4; copy-old stays
 compatible).
-The `# lang=rust` line is the RSmPL marker here (a hunk with no `#`
-lines is an ordinary Git hunk); hunks that already carry other
-directives omit it (SPEC 7.1).
+Hunk detection is `rule=` or any `#` line (SPEC 7.1); `# lang=rust`
+is accepted but never required. Directive-free renames use the terse
+form plus `rule=` (above).
 
 Key rules for authors:
 
 - Every semantic hunk is scoped by its file section + old-side range, always
   interpreted in **original-source coordinates** (never rebased by earlier
   hunks in the same patch). Small file already held? `@@ -1,1 @@` +
-  `# scope=file` searches the whole file with no discovery roundtrip.
+  `# sweep` (`# allow=many` + `# scope=file`) searches the whole file with no discovery roundtrip.
 - `fn foo(...) { ... }` matches only plain functions (modifiers are
   explicit); attributes/doc comments are preserved by default. Writing
   slots explicitly evolves the signature (`- fn f(...)` /
@@ -217,16 +214,16 @@ Key rules for authors:
   `+ struct New`, also `enum`/`trait`/`type`/`const`/`static`/`mod`/
   `union`/`impl`, where `impl Old` covers the self-ty and the trait-side
   path): one ident edit, vis/generics/bodies preserved.
- - Call rewrites (`- foo(E)` / `+ bar(E)`) need `# allow=many` for multiple
+ - Call rewrites (`- foo(E)` / `+ bar(E)`, `E` inferred) need `# sweep` for multiple
    sites and `# optional` to tolerate zero matches; `# repeat` folds
    nested same-rule matches into one hunk, bottom-up (call + general-expr
    shapes, SPEC 17.8).
 - Beyond calls: `let` statements (`- let x = E;` / `+ let y = E;`), general
   expressions (`- E + 1` / `+ E.wrapping_add(1)`), and types
-  (`- Vec<T>` / `+ Box<[T]>` with `# type T`) rewrite structurally. A bare
+  (`- Vec<T>` / `+ Box<[T]>`, `T` inferred) rewrite structurally. A bare
   `P` never matches an annotated `x: T` — write `P: T`. Full supported-vs-rejected
   table with exact errors: SPEC 18.6.
-- Moves use `# item I` + `# bind=Name` (cut) and `# use=Name` (paste);
+- Moves use `# bind=Name` (cut, `- I` infers `item`) and `# use=Name` (paste);
   paste hunks may precede cut hunks.
 - Ordinary Git hunks and semantic hunks can mix but must not overlap.
 - Ordinary hunks are language-agnostic (`Cargo.toml`/`.toml` included); semantic hunks are Rust-only (SPEC 11).

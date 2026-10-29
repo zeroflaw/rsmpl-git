@@ -2770,9 +2770,9 @@ file: src/lib.rs
 reason: metavariable `T` declared as expr but used as type
 ```
 
-Diet patches still need one `#` directive line for hunk detection
-until WI-1d (e.g. `# lang=rust` as the marker or `# allow=many`);
-only the per-metavariable declaration lines are elided.
+Diet patches need no per-metavariable declaration lines; hunk
+detection is `rule=` or any `#` line (SPEC 7.1, WI-1d) — a
+directive-free rename uses the terse form plus `rule=`.
 
 
 ---
