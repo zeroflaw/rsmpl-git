@@ -103,7 +103,19 @@ pub fn apply_edits(text: &str, edits: Vec<TextEdit>) -> Result<String, Structure
 /// content conflict is possible. Any overlap involving a replacement or an
 /// insertion keeps the existing rejection. Output preserves input
 /// document order.
+///
+/// WI-9f seam rule: touching deletes (`[a,b)` + `[b,c)`) merge only when no
+/// insertion anchors at the shared boundary point `b`. A seam-anchored
+/// insertion composes at the boundary (`overlaps()` uses strict inequality),
+/// but merging first would swallow the seam and turn it into a
+/// strictly-inside overlap. Strict overlaps always merge (genuine
+/// double-claim).
 pub fn coalesce_deletes(edits: Vec<TextEdit>) -> Vec<TextEdit> {
+    let seam_points: Vec<usize> = edits
+        .iter()
+        .filter(|e| e.is_insertion())
+        .map(|e| e.start)
+        .collect();
     let mut out: Vec<TextEdit> = Vec::new();
     for e in edits {
         if !e.is_pure_delete() {
@@ -114,8 +126,15 @@ pub fn coalesce_deletes(edits: Vec<TextEdit>) -> Vec<TextEdit> {
         let mut i = 0;
         while i < out.len() {
             // Touching counts: whole-line deletes meet at line starts
-            // (`[a,b)` + `[b,c)`), and the union is still just a deletion.
-            if out[i].is_pure_delete() && out[i].start <= cur.end && cur.start <= out[i].end {
+            // (`[a,b)` + `[b,c)`), and the union is still just a deletion —
+            // unless an insertion anchors at the seam (WI-9f, above).
+            let touching =
+                out[i].is_pure_delete() && out[i].start <= cur.end && cur.start <= out[i].end;
+            let strict =
+                out[i].is_pure_delete() && out[i].start < cur.end && cur.start < out[i].end;
+            let seam = out[i].start.max(cur.start);
+            let seam_blocked = touching && !strict && seam_points.contains(&seam);
+            if touching && !seam_blocked {
                 let merged = TextEdit::new(
                     out[i].start.min(cur.start),
                     out[i].end.max(cur.end),
@@ -244,5 +263,44 @@ mod tests {
             TextEdit::new(4, 12, "x".into()),
         ]);
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn coalesce_seam_insertion_blocks_touching_merge() {
+        // WI-9f: touching deletes with an insertion anchored at the seam
+        // stay separate — merging would swallow the seam and turn the
+        // composable boundary insert into a strictly-inside overlap.
+        let out = coalesce_deletes(vec![
+            TextEdit::new(0, 4, String::new()),
+            TextEdit::new(4, 4, "x\n".into()),
+            TextEdit::new(4, 8, String::new()),
+        ]);
+        assert_eq!(
+            out,
+            vec![
+                TextEdit::new(0, 4, String::new()),
+                TextEdit::new(4, 4, "x\n".into()),
+                TextEdit::new(4, 8, String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn coalesce_strict_overlap_merges_despite_seam_insertion() {
+        // A strictly-overlapping pair still merges even when an insertion
+        // sits inside (the insert stays vetoed downstream — merging never
+        // hides a genuine conflict, it only avoids false ones).
+        let out = coalesce_deletes(vec![
+            TextEdit::new(0, 6, String::new()),
+            TextEdit::new(4, 4, "x\n".into()),
+            TextEdit::new(4, 8, String::new()),
+        ]);
+        assert_eq!(
+            out,
+            vec![
+                TextEdit::new(4, 4, "x\n".into()),
+                TextEdit::new(0, 8, String::new()),
+            ]
+        );
     }
 }

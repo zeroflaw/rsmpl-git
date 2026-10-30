@@ -4028,7 +4028,7 @@ Text carries `file:` but no `rule:`/`old_range:` lines (JSON: `rule: null` / `ra
 Document order is the deterministic tie-breaker for non-overlapping insertions at exactly the same original insertion point: the first insertion hunk in the patch appears first (topmost) in the final file. Same-anchor capture pastes additionally gain one blank line between items (Section 20.2).
 
 > **v0.1 implementation note:** multiple insertions at exactly the same point are applied in document order (first hunk topmost); an insertion strictly inside a deleted or replaced range is rejected as an overlap conflict.
-Overlapping pure deletions union-merge instead (T464): two edits that both only delete can never conflict, so adjacent item deletes (which double-claim their shared separator blank) apply as the union.
+Overlapping pure deletions union-merge instead (T464): two edits that both only delete can never conflict, so adjacent item deletes (which double-claim their shared separator blank) apply as the union. Touching-only pairs (`[a,b)` + `[b,c)`) skip the merge when an insertion anchors exactly at the seam point `b` (WI-9f) — the insertion composes at the boundary, and merging first would falsely place it strictly inside the union.
 
 ---
 
