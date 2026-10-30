@@ -2259,18 +2259,42 @@ without `# fallback=syntax` the hunk vetoes with `RSMPL_SYMBOL_CONFLICT`
 naming the first shadow (`path:line`); with it all use rewriting is
 skipped and each shadow is listed in `follow_skipped`. Same-file
 shadowing (a local binding, an enum variant) and opaque sites
-(macro/attribute interiors, `qself` paths) veto or skip exactly as before,
 (macro/attribute interiors, `qself` paths, glob imports paired with a
 same-name use) veto or skip exactly as before, now reported
 `path:line`-qualified when the workspace holds several files;
 single-file patches keep the historical `line N` wording.
+
+Re-export hop (WI-7b): an explicit `pub use …::Old` in a non-definition
+file that names the definition module is a proven one-hop re-export —
+the definition's module path derived from its file (`src/a.rs` →
+`a::Old`, `src/x/y.rs` → `x::y::Old`, `src/lib.rs` → `crate::Old`; one
+leading `crate`/`super`/`self` is stripped before comparing, so
+`pub use crate::a::Old`, `pub use super::a::Old`, and `pub use a::Old`
+all name the same target). The re-export line itself plus uses spelled
+through the re-exporter (`b::Old`, `crate::b::Old`, `use crate::b::Old`)
+rewrite like any other use; several files re-exporting the same
+definition (one hop each, single target) all fire. Anything else is
+opaque: a re-export routed through another re-exporter is a second hop,
+and any other prefix is off-target (it may name a foreign item) — both
+veto with `RSMPL_SYMBOL_CONFLICT` naming the re-export (`path:line`),
+or skip all use rewriting with per-site `follow_skipped` notes under
+`# fallback=syntax` while the definition rename still applies. A
+`pub use …::*` glob pointing away from the definition is likewise opaque,
+but only when another file spells `Old` through that module (bare
+`crate::Old` through a root glob counts too); globs forwarding the
+definition module itself are benign, as are globs no through-use names.
+Nested definitions must be re-exported with the full file-derived path
+(`pub use crate::x::y::Old`); longer spellings that do not match stay
+vetoed — without module-tree resolution a longer path may name a
+different nested module.
 
 Out of scope in v0.1: non-`.rs` files are never searched; symlinked
 files/dirs are skipped; a workspace `.rs` file that does not parse trips a
 fail-loud tripwire when its text names the ident outside strings/comments
 (`RSMPL_SYMBOL_CONFLICT` naming the file, or a `follow_skipped` note with
 `# fallback=syntax`); multi-definition workspaces never attribute uses by
-module path (WI-6b2 owns prefix-aware resolution); `diffrs` emits no
+module path (WI-7b owns only re-export prefix matching, never use
+attribution); `diffrs` emits no
 `# follow=uses` (WI-7 grouping owns the shared-intent spelling).
 
 Fail loud (Section 2.6): a second same-named definition, a shadowing
@@ -2279,7 +2303,8 @@ cannot attribute vetoes the whole hunk with `RSMPL_SYMBOL_CONFLICT`
 naming the site — unless the hunk also carries `# fallback=syntax`, in
 which case unprovable sites are left untouched and listed in the WI-2
 `follow_skipped` binding while provable sites still rewrite (a shadowed
-definition skips *all* use rewriting, since every use is then ambiguous;
+definition or an ambiguous re-export hop skips *all* use rewriting, since
+every use is then ambiguous;
 a glob skips only that file's uses).
 On any other shape `# follow=uses` is `RSMPL_PATTERN_CONFLICT` (Section
 18.6: other shapes keep the follow-up hunks above).

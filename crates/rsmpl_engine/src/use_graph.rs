@@ -182,6 +182,17 @@ pub fn resolve(
 ///
 /// Returns per-file sorted/deduped byte spans plus workspace-wide skip notes
 /// (`path:line`-qualified for cross-file review).
+///
+/// WI-7b: one-hop re-export following. An explicit `pub use …::Old` in a
+/// non-definition file that names the definition module (single target)
+/// is a proven hop: the re-export line and uses spelled through the
+/// re-exporter rewrite like any other use. Anything else vetoes loud
+/// without fallback (a chain through another re-exporter is a second hop;
+/// any other prefix is off-target and may name a foreign item), or clears
+/// all use rewriting with per-site `follow_skipped` notes under fallback.
+/// A `pub use …::*` glob pointing away from the definition is opaque only
+/// when another file spells `Old` through that module; globs forwarding
+/// the definition module itself stay benign.
 #[derive(Debug)]
 pub struct WorkspaceOutcome {
     /// Path → ident byte ranges (`original[a..b] == old`), sorted/deduped.
@@ -226,6 +237,12 @@ pub fn resolve_workspace<'a>(
         uses: Vec<proc_macro2::Span>,
         opaque: Vec<(u32, String)>,
         globs: Vec<u32>,
+        /// WI-7b: explicit `pub use …::Old` re-exports: (line, prefix).
+        reexports: Vec<(u32, Vec<String>)>,
+        /// WI-7b: `pub use …::*` re-export globs: (line, path).
+        pub_globs: Vec<(u32, Vec<String>)>,
+        /// WI-7b: sibling segments of every `Old`-naming path/use-tree.
+        prefixes: Vec<Vec<String>>,
     }
     let mut all: Vec<Collected> = Vec::with_capacity(files.len());
     for (path, parsed, original, _) in files {
@@ -237,6 +254,9 @@ pub fn resolve_workspace<'a>(
             uses: c.uses,
             opaque: c.opaque,
             globs: c.globs,
+            reexports: c.reexports,
+            pub_globs: c.pub_globs,
+            prefixes: c.prefixes,
         });
     }
     let index_of = |path: &str| {
@@ -398,7 +418,182 @@ pub fn resolve_workspace<'a>(
             ));
         }
     }
+    // WI-7b: one-hop re-export analysis. Every explicit `pub use …::Old`
+    // outside the definition file must name the definition module (single
+    // target); a chain through another re-exporter is a second hop and
+    // anything else is off-target — both veto loud, else a foreign `Old`
+    // would be rewritten as ours. `pub use` globs pointing away from the
+    // def are opaque only when another file spells `Old` through that
+    // module; globs forwarding the def module itself are benign, as are
+    // globs no through-use names.
+    let defpath = def_module_path(renamed_file);
+    let exporters: Vec<(String, String)> = all
+        .iter()
+        .filter(|c| c.path != renamed_file && (!c.reexports.is_empty() || !c.pub_globs.is_empty()))
+        .map(|c| {
+            let m = module_last(&c.path).unwrap_or_else(|| "crate".to_string());
+            (c.path.clone(), m)
+        })
+        .collect();
+    let mut hop_first: Option<String> = None;
+    let mut hop_notes: Vec<String> = Vec::new();
+    for c in &all {
+        if c.path == renamed_file {
+            continue;
+        }
+        for (line, prefix) in &c.reexports {
+            if points_at_def(prefix, &defpath) {
+                continue;
+            }
+            let via = exporters.iter().find(|(p, m)| {
+                if p == &c.path {
+                    return false;
+                }
+                if m == "crate" {
+                    prefix.len() == 1 && prefix.first().is_some_and(|s| s == "crate")
+                } else {
+                    prefix.iter().any(|s| s == m)
+                }
+            });
+            let (reason, note) = match via {
+                Some((_, m)) => (
+                    format!(
+                        "re-export of `{old}` at {}:{line} goes through re-exporting module `{m}` (second re-export hop): cannot tell which item each use names",
+                        c.path,
+                    ),
+                    format!(
+                        "{}:{line}: second re-export hop of `{old}` through `{m}` left untouched; {use_sites} use sites left untouched",
+                        c.path,
+                    ),
+                ),
+                None => {
+                    let expected = if defpath.is_empty() {
+                        "crate".to_string()
+                    } else {
+                        defpath.join("::")
+                    };
+                    (
+                        format!(
+                            "re-export of `{old}` at {}:{line} does not name the renamed definition (expected `{expected}::Old`): cannot tell which item each use names",
+                            c.path,
+                        ),
+                        format!(
+                            "{}:{line}: off-target re-export of `{old}` left untouched; {use_sites} use sites left untouched",
+                            c.path,
+                        ),
+                    )
+                }
+            };
+            if hop_first.is_none() {
+                hop_first = Some(reason);
+            }
+            hop_notes.push(note);
+        }
+    }
+    for c in &all {
+        // The definition file's own globs never hide its item: an explicit
+        // definition beats any glob in Rust name resolution, so `a::Old`
+        // still names the definition. Root globs are likewise benign when
+        // the definition lives at the root.
+        if c.path == renamed_file || (module_last(&c.path).is_none() && defpath.is_empty()) {
+            continue;
+        }
+        let is_root_glob = module_last(&c.path).is_none();
+        let mod_name = module_last(&c.path).unwrap_or_else(|| "crate".to_string());
+        for (line, path) in &c.pub_globs {
+            if points_at_def(path, &defpath) {
+                continue;
+            }
+            let mut through_file: Option<String> = None;
+            for f in &all {
+                if f.path == c.path {
+                    continue;
+                }
+                let hit = f.prefixes.iter().any(|p| {
+                    if is_root_glob {
+                        p.len() == 1
+                            && p.first()
+                                .is_some_and(|s| s == "crate" || s == "super" || s == "self")
+                    } else {
+                        p.iter().any(|s| s == &mod_name)
+                    }
+                });
+                if hit {
+                    through_file = Some(f.path.clone());
+                    break;
+                }
+            }
+            if let Some(fpath) = through_file {
+                let reason = format!(
+                    "glob re-export at {}:{line} may forward a different `{old}` (use spelled through `{mod_name}` at {fpath}): cannot tell which item each use names",
+                    c.path,
+                );
+                let note = format!(
+                    "{}:{line}: glob re-export may forward a different `{old}`; {use_sites} use sites left untouched",
+                    c.path,
+                );
+                if hop_first.is_none() {
+                    hop_first = Some(reason);
+                }
+                hop_notes.push(note);
+            }
+        }
+    }
+    if !hop_notes.is_empty() {
+        if !fallback {
+            return Err(FollowVeto {
+                reason: hop_first.expect("hop veto reason present"),
+            });
+        }
+        for note in &hop_notes {
+            skipped.push(note.clone());
+        }
+        per_file.clear();
+    }
     Ok(WorkspaceOutcome { per_file, skipped })
+}
+
+/// WI-7b: definition module path from its repo-relative file path
+/// (`a.rs` → `["a"]`, `src/x/y.rs` → `["x", "y"]`, `src/lib.rs` → `[]`
+/// root, `src/b/mod.rs` → `["b"]`). The `src/`-relative heuristic covers
+/// the standard layout; anything else falls back to the whole path.
+fn def_module_path(def_file: &str) -> Vec<String> {
+    let mut parts: Vec<String> = def_file.split('/').map(|s| s.to_string()).collect();
+    if let Some(pos) = parts.iter().position(|p| p == "src") {
+        parts = parts[pos + 1..].to_vec();
+    }
+    if let Some(last) = parts.last_mut() {
+        if let Some(stem) = last.strip_suffix(".rs") {
+            *last = stem.to_string();
+        }
+    }
+    match parts.last().map(|s| s.as_str()) {
+        Some("mod") | Some("lib") | Some("main") => {
+            parts.pop();
+        }
+        _ => {}
+    }
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
+/// WI-7b: a file's module last-segment name (`src/b.rs` → `Some("b")`,
+/// crate-root files → `None`).
+fn module_last(path: &str) -> Option<String> {
+    def_module_path(path).last().cloned()
+}
+
+/// WI-7b: does a re-export/glob prefix name the definition module? One
+/// leading `crate`/`super`/`self` is stripped, then the remainder must
+/// equal the definition module path exactly (a root definition matches
+/// bare `crate`/`super`). Longer paths stay vetoed: without module-tree
+/// resolution a longer spelling may name a different nested module.
+fn points_at_def(prefix: &[String], defpath: &[String]) -> bool {
+    let stripped: &[String] = match prefix.first().map(|s| s.as_str()) {
+        Some("crate") | Some("super") | Some("self") => &prefix[1..],
+        _ => prefix,
+    };
+    stripped == defpath
 }
 
 /// Shared single-file collection behind `resolve` (no behavior change).
@@ -409,6 +604,9 @@ fn collect<'a>(parsed: &'a syn::File, old: &'a str) -> Collector<'a> {
         uses: Vec::new(),
         opaque: Vec::new(),
         globs: Vec::new(),
+        reexports: Vec::new(),
+        pub_globs: Vec::new(),
+        prefixes: Vec::new(),
     };
     collector.visit_file(parsed);
     collector
@@ -447,6 +645,14 @@ struct Collector<'a> {
     opaque: Vec<(u32, String)>,
     /// 1-based lines of `use …::*` glob trees (WI-6b2-glob: opaque).
     globs: Vec<u32>,
+    /// WI-7b: explicit `pub use …::Old` re-exports: (line, prefix segments
+    /// ahead of `Old`, e.g. `pub use crate::a::Old` → `["crate", "a"]`).
+    reexports: Vec<(u32, Vec<String>)>,
+    /// WI-7b: `pub use …::*` re-export globs: (line, path segments).
+    pub_globs: Vec<(u32, Vec<String>)>,
+    /// WI-7b: sibling segments of every `Old`-naming path/use-tree
+    /// (`b::Old` → `["b"]`), for through-glob checks.
+    prefixes: Vec<Vec<String>>,
 }
 
 impl Collector<'_> {
@@ -468,12 +674,27 @@ impl Collector<'_> {
     /// qualified `Old` is opaque, WI-3 scope note); a bare `Path` node
     /// never carries qualification itself. Turbofish lives on the
     /// segment, outside the ident span, so it is preserved verbatim.
+    /// WI-7b: sibling segments are also recorded in `prefixes` for
+    /// through-glob checks (one entry per `Old`-naming path).
     fn push_path_use(&mut self, path: &syn::Path) {
+        let mut hits_old = false;
+        let mut sibling: Vec<String> = Vec::new();
+        for seg in &path.segments {
+            if seg.ident == self.old {
+                hits_old = true;
+            } else {
+                sibling.push(seg.ident.to_string());
+            }
+        }
+        if !hits_old {
+            return;
+        }
         for seg in &path.segments {
             if seg.ident == self.old {
                 self.uses.push(seg.ident.span());
             }
         }
+        self.prefixes.push(sibling);
     }
 
     /// `qself` split: any `old` segment under qualification is opaque
@@ -489,33 +710,60 @@ impl Collector<'_> {
         false
     }
 
-    /// Walk a `use` tree collecting segments spelling `old` (WI-6a: any
-    /// position — `use m::Old`, `use Old as X`, `use m::{Old, Y}`).
-    /// Glob trees record their line as opaque (WI-6b2-glob).
-    fn walk_use_tree(&mut self, tree: &syn::UseTree) {
+    /// WI-7b: `pub use` trees additionally record re-export edges (explicit
+    /// `Old` namings) and re-export globs plus every `Old` prefix, so the
+    /// workspace pass can prove a one-hop re-export names the definition.
+    /// `is_reexport` is true for any non-`Inherited` visibility (`pub use`,
+    /// `pub(crate) use`); plain `use` is a private import. `prefix` is the
+    /// segment stack ahead of the current tree.
+    fn walk_use_tree(&mut self, tree: &syn::UseTree, is_reexport: bool, prefix: &mut Vec<String>) {
         match tree {
             syn::UseTree::Path(p) => {
                 if p.ident == self.old {
                     self.uses.push(p.ident.span());
+                    self.prefixes.push(prefix.clone());
+                    if is_reexport {
+                        self.reexports
+                            .push((p.ident.span().start().line as u32, prefix.clone()));
+                    }
+                } else {
+                    prefix.push(p.ident.to_string());
+                    self.walk_use_tree(&p.tree, is_reexport, prefix);
+                    prefix.pop();
+                    return;
                 }
-                self.walk_use_tree(&p.tree);
+                self.walk_use_tree(&p.tree, is_reexport, prefix);
             }
             syn::UseTree::Name(n) => {
                 if n.ident == self.old {
                     self.uses.push(n.ident.span());
+                    self.prefixes.push(prefix.clone());
+                    if is_reexport {
+                        self.reexports
+                            .push((n.ident.span().start().line as u32, prefix.clone()));
+                    }
                 }
             }
             syn::UseTree::Rename(r) => {
                 if r.ident == self.old {
                     self.uses.push(r.ident.span());
+                    self.prefixes.push(prefix.clone());
+                    if is_reexport {
+                        self.reexports
+                            .push((r.ident.span().start().line as u32, prefix.clone()));
+                    }
                 }
             }
             syn::UseTree::Glob(g) => {
                 self.globs.push(g.span().start().line as u32);
+                if is_reexport {
+                    self.pub_globs
+                        .push((g.span().start().line as u32, prefix.clone()));
+                }
             }
             syn::UseTree::Group(g) => {
                 for member in &g.items {
-                    self.walk_use_tree(member);
+                    self.walk_use_tree(member, is_reexport, prefix);
                 }
             }
         }
@@ -637,7 +885,10 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
-        self.walk_use_tree(&node.tree);
+        // WI-7b: any non-`Inherited` visibility re-exports (`pub use`,
+        // `pub(crate) use`); plain `use` is a private import.
+        let is_reexport = !matches!(node.vis, syn::Visibility::Inherited);
+        self.walk_use_tree(&node.tree, is_reexport, &mut Vec::new());
     }
 
     fn visit_path(&mut self, node: &'ast syn::Path) {
@@ -1107,5 +1358,198 @@ mod tests {
         let out = resolve_for_test(src, "Old", "struct Old", false).unwrap();
         assert!(out.spans.is_empty(), "spans: {:?}", out.spans);
         assert!(out.skipped.is_empty(), "got: {:?}", out.skipped);
+    }
+
+    #[test]
+    fn def_module_path_covers_layouts() {
+        assert_eq!(def_module_path("a.rs"), vec!["a".to_string()]);
+        assert_eq!(def_module_path("src/a.rs"), vec!["a".to_string()]);
+        assert_eq!(
+            def_module_path("src/x/y.rs"),
+            vec!["x".to_string(), "y".to_string()]
+        );
+        assert!(def_module_path("src/lib.rs").is_empty());
+        assert_eq!(def_module_path("src/b/mod.rs"), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn workspace_one_hop_reexport_fires() {
+        // def in a.rs, `pub use crate::a::Old` in b.rs, through-uses in c.rs:
+        // the re-export line plus every through-use rewrites in one hunk.
+        let out = workspace_for_test(
+            &[
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "pub use crate::a::Old;\n"),
+                (
+                    "src/c.rs",
+                    "use crate::b::Old;\nfn f(x: Old) -> Old {\n    let y = b::Old;\n    y\n}\n",
+                ),
+            ],
+            "Old",
+            "src/a.rs",
+            "struct Old",
+            false,
+        )
+        .unwrap();
+        assert!(out.skipped.is_empty(), "got: {:?}", out.skipped);
+        let b = out
+            .per_file
+            .iter()
+            .find(|(p, _)| p == "src/b.rs")
+            .expect("re-export line rewrites");
+        assert_eq!(b.1.len(), 1, "per_file: {:?}", out.per_file);
+        let c = out
+            .per_file
+            .iter()
+            .find(|(p, _)| p == "src/c.rs")
+            .expect("through-uses rewrite");
+        assert_eq!(c.1.len(), 4, "per_file: {:?}", out.per_file);
+        assert!(out.per_file.iter().all(|(p, _)| p != "src/a.rs"));
+    }
+
+    #[test]
+    fn workspace_fanout_reexports_to_one_target_fire() {
+        // Two files re-exporting the same definition is one hop each to a
+        // single target: every edge resolves, so everything rewrites.
+        let out = workspace_for_test(
+            &[
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "pub use crate::a::Old;\n"),
+                ("src/c.rs", "pub use crate::a::Old;\n"),
+                ("src/d.rs", "fn f(x: b::Old) -> c::Old {\n    x\n}\n"),
+            ],
+            "Old",
+            "src/a.rs",
+            "struct Old",
+            false,
+        )
+        .unwrap();
+        assert!(out.skipped.is_empty(), "got: {:?}", out.skipped);
+        let total: usize = out.per_file.iter().map(|(_, s)| s.len()).sum();
+        assert_eq!(total, 4, "per_file: {:?}", out.per_file);
+    }
+
+    #[test]
+    fn workspace_off_target_reexport_vetoes_and_skips() {
+        // `pub use other::Old` names a foreign `Old`: rewriting it as ours
+        // would be wrong, so the hunk vetoes loud.
+        let files = [
+            ("src/a.rs", "pub struct Old;\n"),
+            (
+                "src/b.rs",
+                "pub use other::Old;\nfn f(x: Old) -> Old {\n    x\n}\n",
+            ),
+        ];
+        let err = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("does not name"), "got: {}", err.reason);
+        assert!(err.reason.contains("src/b.rs"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", true).unwrap();
+        assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
+        assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
+        assert!(
+            out.skipped[0].contains("src/b.rs"),
+            "got: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn workspace_second_hop_reexport_vetoes_and_skips() {
+        // c.rs re-exports through b.rs instead of the definition: a second
+        // hop is opaque and vetoes, even though it transitively resolves.
+        let files = [
+            ("src/a.rs", "pub struct Old;\n"),
+            ("src/b.rs", "pub use crate::a::Old;\n"),
+            ("src/c.rs", "pub use crate::b::Old;\n"),
+        ];
+        let err = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("second"), "got: {}", err.reason);
+        assert!(err.reason.contains("src/c.rs"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", true).unwrap();
+        assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
+        assert!(
+            out.skipped.iter().any(|s| s.contains("src/c.rs")),
+            "got: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn workspace_def_pointing_glob_with_through_use_fires() {
+        // `pub use crate::a::*` forwards our own `Old`: benign, fires.
+        let out = workspace_for_test(
+            &[
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "pub use crate::a::*;\n"),
+                ("src/c.rs", "fn f(x: b::Old) -> Old {\n    x\n}\n"),
+            ],
+            "Old",
+            "src/a.rs",
+            "struct Old",
+            false,
+        )
+        .unwrap();
+        assert!(out.skipped.is_empty(), "got: {:?}", out.skipped);
+        let total: usize = out.per_file.iter().map(|(_, s)| s.len()).sum();
+        assert_eq!(total, 2, "per_file: {:?}", out.per_file);
+    }
+
+    #[test]
+    fn workspace_foreign_glob_with_through_use_vetoes() {
+        // `pub use other::*` in b.rs may forward a different `Old`, and
+        // c.rs spells `Old` through `b`: opaque, vetoes loud.
+        let files = [
+            ("src/a.rs", "pub struct Old;\n"),
+            ("src/b.rs", "pub use other::*;\n"),
+            ("src/c.rs", "fn f(x: b::Old) -> Old {\n    x\n}\n"),
+        ];
+        let err = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("glob re-export"), "got: {}", err.reason);
+        assert!(err.reason.contains("src/b.rs"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", true).unwrap();
+        assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
+        assert!(
+            out.skipped.iter().any(|s| s.contains("src/b.rs")),
+            "got: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn workspace_foreign_glob_without_through_use_fires() {
+        // No file spells `Old` through the globbing module: inert.
+        let out = workspace_for_test(
+            &[
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "pub use other::*;\n"),
+                ("src/c.rs", "fn f(x: Old) -> Old {\n    x\n}\n"),
+            ],
+            "Old",
+            "src/a.rs",
+            "struct Old",
+            false,
+        )
+        .unwrap();
+        assert!(out.skipped.is_empty(), "got: {:?}", out.skipped);
+        let total: usize = out.per_file.iter().map(|(_, s)| s.len()).sum();
+        assert_eq!(total, 2, "per_file: {:?}", out.per_file);
+    }
+
+    #[test]
+    fn workspace_root_foreign_glob_with_crate_use_vetoes() {
+        // lib.rs forwards a foreign glob and b.rs spells `crate::Old`:
+        // through-root-namespace use, opaque.
+        let files = [
+            ("src/a.rs", "pub struct Old;\n"),
+            ("src/lib.rs", "pub use other::*;\n"),
+            (
+                "src/b.rs",
+                "use crate::Old;\nfn f(x: Old) -> Old {\n    x\n}\n",
+            ),
+        ];
+        let err = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("glob re-export"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", true).unwrap();
+        assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
     }
 }
