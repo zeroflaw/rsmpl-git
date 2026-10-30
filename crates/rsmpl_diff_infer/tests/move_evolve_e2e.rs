@@ -967,3 +967,132 @@ fn mod_content_edited_pair_stays_ordinary() {
         out.rsmpl
     );
 }
+
+fn big_trait(vis: &str, name: &str) -> String {
+    let mut s = String::new();
+    for i in 0..12 {
+        s.push_str(&format!("/// pad {i} for byte-win padding text\n"));
+    }
+    if !vis.is_empty() {
+        s.push_str(vis);
+        s.push(' ');
+    }
+    s.push_str(&format!("trait {name} {{}}\n"));
+    s
+}
+
+#[test]
+fn trait_name_change_fires_with_template_paste_and_round_trips() {
+    // WI-8 slice 8: `trait Old {}` → `pub trait New {}` (doc-padded empty
+    // trait) moving files compresses to a cut + trait-template paste and
+    // round-trips byte-identical.
+    let minus_item = big_trait("", "Old");
+    let plus_item = big_trait("pub", "New");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind="),
+        "evolved trait cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub trait New { ... }"),
+        "trait template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn trait_unsafe_gain_fires_with_unsafe_template_and_round_trips() {
+    // WI-8 slice 8: `trait Old` → `pub unsafe trait New` rides the
+    // `unsafe` verbatim in the prefix, like `fn` qualifiers ride
+    // the prefix.
+    let minus_item = big_trait("", "Old");
+    let plus_item = big_trait("pub unsafe", "New");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("+ pub unsafe trait New { ... }"),
+        "unsafe trait template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn trait_item_edited_pair_stays_ordinary() {
+    // A trait item on either side vetoes the trait move: the scalar
+    // `- I` cut would match the method too, so the pair stays a full
+    // delete+insert.
+    let minus_item = big_trait("", "Old");
+    let plus_item = "pub trait New {\n    fn f(&self);\n}\n".to_string();
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_item.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        !out.rsmpl.contains("trait New { ... }"),
+        "method-bearing traits veto the trait move, got:\n{}",
+        out.rsmpl
+    );
+}

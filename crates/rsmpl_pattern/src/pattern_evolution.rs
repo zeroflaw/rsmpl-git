@@ -1,7 +1,7 @@
 //! Evolution-paste template parsing (WI-8a `fn` + WI-8 slice 1
 //! `struct` + WI-8 slice 2 `enum` + WI-8 slice 3 `union` + WI-8 slice 4
 //! `type` + WI-8 slice 5 `const` + WI-8 slice 6 `static` + WI-8 slice 7
-//! `mod` single-line headers).
+//! `mod` + WI-8 slice 8 `trait` single-line headers).
 //!
 //! Used by the `Insertion` classifier and the engine capture splice.
 
@@ -527,6 +527,75 @@ fn valid_mod_evolution_prefix(prefix: &str) -> bool {
         return false;
     }
     syn::parse_str::<syn::ItemMod>(&format!("{pre} mod __RsmplDummy__ {{}}")).is_ok()
+}
+
+/// WI-8 slice 8 trait evolution-paste template: a single-line
+/// `trait` header with a `...` body marker
+/// (`pub trait New { ... }`, `pub unsafe trait New { ... }`). Returns
+/// the verbatim prefix before `trait` (visibility + optional `unsafe`)
+/// and the new ident. The `{ ... }` tail is a shape marker only —
+/// the splice keeps the captured suffix
+/// (generics/supertraits/`{...items}`)
+/// verbatim, same as the `mod` abstraction. `None` when the line
+/// is not a trait-template shape.
+pub fn parse_trait_evolution_template(text: &str) -> Option<(String, String)> {
+    let line = text.trim();
+    if line.lines().count() != 1 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Word-bounded `trait` followed by whitespace.
+    let mut trait_pos = None;
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if bytes[i..].starts_with(b"trait")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 5).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            trait_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let trait_pos = trait_pos?;
+    let prefix = &line[..trait_pos];
+    if !valid_trait_evolution_prefix(prefix) {
+        return None;
+    }
+    let rest = line[trait_pos + 5..].trim_start();
+    let mut ident_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            ident_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if ident_len == 0 {
+        return None;
+    }
+    let tail = &rest[ident_len..];
+    if !tail.contains("...") {
+        return None;
+    }
+    Some((prefix.to_string(), rest[..ident_len].to_string()))
+}
+/// The verbatim text before `trait` in a trait evolution-paste
+/// template: a Rust visibility with optional `unsafe` (`pub`,
+/// `pub(crate)`, `pub unsafe`, or empty for a private trait).
+/// Validated by parsing, not by character vetoes. An `auto` prefix
+/// fails the probe (`auto trait` is rejected authoring-side), so
+/// `auto`-led templates never parse as templates.
+fn valid_trait_evolution_prefix(prefix: &str) -> bool {
+    let pre = prefix.trim();
+    if pre.is_empty() {
+        return true;
+    }
+    if pre.contains(['{', ';']) {
+        return false;
+    }
+    syn::parse_str::<syn::ItemTrait>(&format!("{pre} trait __RsmplDummy__ {{}}")).is_ok()
 }
 
 /// The verbatim text before `fn` in an evolution-paste template: a Rust

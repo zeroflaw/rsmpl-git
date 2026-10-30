@@ -26,8 +26,9 @@ pub use metavar::{MetavarTable, TokenKind};
 pub use pattern::{
     compile, is_trait_header, parse_const_evolution_template, parse_enum_evolution_template,
     parse_evolution_template, parse_mod_evolution_template, parse_static_evolution_template,
-    parse_struct_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
-    split_leading_attrs, trait_header_ident, CompiledPattern, GeneralShape, PatternKind,
+    parse_struct_evolution_template, parse_trait_evolution_template, parse_type_evolution_template,
+    parse_union_evolution_template, split_leading_attrs, trait_header_ident, CompiledPattern,
+    GeneralShape, PatternKind,
 };
 pub use quote_utils::{
     char_lit_len, count_ellipsis_markers, has_ellipsis_marker, is_ellipsis_marker_ident,
