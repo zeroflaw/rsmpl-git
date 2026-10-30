@@ -3602,7 +3602,7 @@ Fallback directive:
 In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (it is also the canonical spelling: tree-aware comparison per D.5 normalizes symbol hunks to it) (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
 A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic in v0.1) — except on a `# follow=uses` hunk, where it is the WI-6a skip switch (Section 14.8).
 
-A sole symbol ident carrying explicit turbofish (`Old::<u8>(E)` with `# symbol Old=crate::old_api`) expands to the seeded path and binds the turbofish args structurally (SPEC 18.6 R3); other symbol spellings keep exact-path behavior.
+A sole symbol ident carrying explicit turbofish (`Old::<u8>(E)` with `# symbol Old=crate::old_api`) expands to the seeded path and binds the turbofish args structurally (SPEC 18.6 R3); a placeholder hole (`Old::<T>(E)` with `# type T`) binds likewise, and tree-aware comparison per D.5 diet-renames the declared hole to the inferred `T` spelling. Other symbol spellings keep exact-path behavior.
 > **v0.1 implementation note:** syntactic fallback compares the full path text exactly (e.g. `crate::old_api` matches only callees spelled `crate::old_api` — not bare `old_api`, not `other::old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment. No resolver integration (rust-analyzer / cargo metadata) is planned for v0.1; revisit only with a dogfood case where exact-path matching blocks a real rename.
 
 ---
@@ -6889,9 +6889,13 @@ class per file. Two comparators share this form: pure
  form the inferrer emits (`- crate::old_api(E0)` /
  `+ crate::new_api(E0)`), dropping the `# symbol` lines, the
  `# fallback=syntax` line (kept only beside `# follow=uses`, where it
- is the WI-6a skip switch), and redundant `# expr` declarations
- (declared expr metavars rename positionally in first-appearance
- order). Only single-pair bare-symbol call hunks normalize this way;
+is the WI-6a skip switch), and redundant `# expr` / `# type`
+declarations (declared expr metavars rename positionally in
+first-appearance order, `E` → `E0`, `E1`, …; declared type metavars
+rename the first hole to bare `T` — the turbofish emitter's
+single-hole spelling, `- foo::<T>(E0)` — and extras to `T1`, `T2`,
+…, so `Old::<U>(E)` + `# type U` shares the inferred `::<T>(E0)`
+form). Only single-pair bare-symbol call hunks normalize this way;
  method shapes, `let` wrappers, multi-pair bodies, and hunks without
  `# fallback=syntax` keep their authored spelling (their error shapes
  must survive comparison, never silently heal). The `let` diet

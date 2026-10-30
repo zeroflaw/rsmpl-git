@@ -11,7 +11,8 @@
 //! concrete diet form (`- crate::old_api(E0)` / `+ crate::new_api(E0)`),
 //! so the tree-aware form rewrites the former to the latter (dropping
 //! the `# symbol`/`# fallback=syntax` lines and diet-renaming declared
-//! `# expr` metavars positionally). Pure [`rsmpl_patch::canonicalize`]
+//! `# expr` / `# type` metavars positionally (`E` → `E0`, first type
+//! hole → bare `T` per the turbofish emitter). Pure [`rsmpl_patch::canonicalize`]
 //! stays the spelling-preserving comparator (fixed-point pins); this is
 //! the meaning-preserving comparator for the cycle harness.
 //!
@@ -84,9 +85,11 @@ pub fn canonicalize_with_tree(
 /// `# symbol Name=path` call hunk with `# fallback=syntax` to the
 /// concrete-path diet form the inferrer emits, dropping the `# symbol`
 /// lines (and `# fallback=syntax` unless `# follow=uses` is present,
-/// where it is the WI-6a skip switch). Declared `# expr` metavars are
-/// diet-renamed positionally (`E` → `E0` in first-appearance order) and
-/// their declarations dropped, matching inferrer emission.
+/// where it is the WI-6a skip switch). Declared `# expr` / `# type`
+/// metavars are diet-renamed positionally (`E` → `E0` in
+/// first-appearance order; first type hole → bare `T`, extras `T1`, …)
+/// and their declarations dropped, matching inferrer emission
+/// (WI-1b-turbofish: `Old::<U>(E)` + `# type U` → `::<T>(E0)`).
 ///
 /// All-or-nothing per hunk: without `# fallback=syntax` the symbol form
 /// errors while the concrete form applies (not equivalent); non-call
@@ -134,20 +137,32 @@ fn normalize_symbol_spelling(patch: &mut rsmpl_patch::Patch) {
             if leftover {
                 continue;
             }
-            // Diet-rename declared `# expr` metavars positionally.
+            // Diet-rename declared `# expr` / `# type` metavars
+            // positionally (WI-1b-turbofish: `Old::<U>(E)` + `# type U`
+            // → inferred `::<T>(E0)` diet; first type hole is bare `T`
+            // per the turbofish emitter, extras `T1`, `T2`, …).
             let mut expr_names: Vec<String> = Vec::new();
+            let mut type_names: Vec<String> = Vec::new();
             for d in &r.directives {
                 if let Directive::MetaVar { kind, names } = d {
-                    if *kind == MetavarKind::Expr {
-                        for n in names {
-                            if !expr_names.contains(n) {
-                                expr_names.push(n.clone());
-                            }
+                    let bucket = match kind {
+                        MetavarKind::Expr => &mut expr_names,
+                        MetavarKind::Type => &mut type_names,
+                        _ => continue,
+                    };
+                    for n in names {
+                        if !bucket.contains(n) {
+                            bucket.push(n.clone());
                         }
                     }
                 }
             }
-            if !diet_rename_expr_metavars(&mut lines, &expr_names) {
+            // SPEC 9.4: one name under two kinds never compiles — leave
+            // the error shape byte-identical, never silently heal it.
+            if expr_names.iter().any(|n| type_names.contains(n)) {
+                continue;
+            }
+            if !diet_rename_symbol_hole_metavars(&mut lines, &expr_names, &type_names) {
                 continue;
             }
             r.lines = lines;
@@ -155,7 +170,9 @@ fn normalize_symbol_spelling(patch: &mut rsmpl_patch::Patch) {
             r.directives.retain(|d| match d {
                 Directive::Symbol { .. } => false,
                 Directive::FallbackSyntax(true) => keep_fallback,
-                Directive::MetaVar { kind, .. } => *kind != MetavarKind::Expr,
+                Directive::MetaVar { kind, .. } => {
+                    *kind != MetavarKind::Expr && *kind != MetavarKind::Type
+                }
                 _ => true,
             });
             r.raw_directives.retain(|l| {
@@ -167,6 +184,9 @@ fn normalize_symbol_spelling(patch: &mut rsmpl_patch::Patch) {
                     return keep_fallback;
                 }
                 if t.starts_with("expr") {
+                    return false;
+                }
+                if t.starts_with("type") {
                     return false;
                 }
                 true
@@ -471,43 +491,65 @@ fn boundary_after(chars: &[char], at: usize) -> bool {
     !is_word_char(chars[at])
 }
 
-/// WI-1b diet rename: declared `# expr` metavars become positional
-/// (`E` → `E0` in first-appearance order across the pattern lines) so
-/// the authored form matches inferrer emission, which declares nothing.
-/// Backticked literals never rename. Collisions (a target already
-/// present as a different token) veto the whole hunk rewrite.
-fn diet_rename_expr_metavars(lines: &mut [rsmpl_patch::BodyLine], expr_names: &[String]) -> bool {
-    if expr_names.is_empty() {
+/// WI-1b diet rename (+ WI-1b-turbofish): declared `# expr` / `# type`
+/// metavars become positional in one combined single-pass table so the
+/// authored form matches inferrer emission, which declares nothing.
+/// Expr names map `E` → `E0`, `E1`, … in first-appearance order; type
+/// names map the first hole to bare `T` (the turbofish emitter's
+/// single-hole spelling, `- foo::<T>(E0)`) and extras to `T1`, `T2`, …
+/// (the inferrer never emits those, so a two-hole authored shape simply
+/// fails to unify downstream instead of healing). Backticked literals
+/// never rename. Collisions (a target already present as a different
+/// token) veto the whole hunk rewrite. One pass (not two sequential
+/// renames) so an expr target that is also a type source renames from
+/// original spelling only.
+fn diet_rename_symbol_hole_metavars(
+    lines: &mut [rsmpl_patch::BodyLine],
+    expr_names: &[String],
+    type_names: &[String],
+) -> bool {
+    if expr_names.is_empty() && type_names.is_empty() {
         return true;
     }
-    // Order by first appearance (minus lines, then plus lines) so the
-    // positional names match inferrer emission order.
-    let mut positioned: Vec<(usize, usize, String)> = Vec::new();
-    let mut order = 0usize;
-    for l in lines.iter() {
-        if !(l.is_removal() || l.is_addition()) {
-            continue;
-        }
-        order += 1;
-        for n in expr_names {
-            if positioned.iter().any(|(_, _, m)| m == n) {
+    // Order each kind by first appearance (minus lines, then plus
+    // lines) so the positional names match inferrer emission order.
+    let order_names = |names: &[String]| {
+        let mut positioned: Vec<(usize, usize, String)> = Vec::new();
+        let mut order = 0usize;
+        for l in lines.iter() {
+            if !(l.is_removal() || l.is_addition()) {
                 continue;
             }
-            if let Some(pos) = first_token_pos(&l.text, n) {
-                positioned.push((order, pos, n.clone()));
+            order += 1;
+            for n in names {
+                if positioned.iter().any(|(_, _, m)| m == n) {
+                    continue;
+                }
+                if let Some(pos) = first_token_pos(&l.text, n) {
+                    positioned.push((order, pos, n.clone()));
+                }
             }
         }
-    }
-    positioned.sort();
-    let mut ordered: Vec<String> = positioned.into_iter().map(|(_, _, n)| n).collect();
-    for n in expr_names {
-        if !ordered.contains(n) {
-            ordered.push(n.clone());
+        positioned.sort();
+        let mut ordered: Vec<String> = positioned.into_iter().map(|(_, _, n)| n).collect();
+        for n in names {
+            if !ordered.contains(n) {
+                ordered.push(n.clone());
+            }
         }
-    }
+        ordered
+    };
     let mut table: Vec<(String, String)> = Vec::new();
-    for (i, n) in ordered.iter().enumerate() {
+    for (i, n) in order_names(expr_names).iter().enumerate() {
         table.push((n.clone(), format!("E{i}")));
+    }
+    for (i, n) in order_names(type_names).iter().enumerate() {
+        let target = if i == 0 {
+            "T".to_string()
+        } else {
+            format!("T{i}")
+        };
+        table.push((n.clone(), target));
     }
     // Collision: a target present as a bare token that is not itself
     // renamed away.
@@ -879,5 +921,71 @@ mod tests {
             got.contains("- crate::old_api(E0, E1)\n+ crate::new_api(E0, E1)\n"),
             "got:\n{got}"
         );
+    }
+
+    #[test]
+    fn symbol_turbofish_type_diet_unifies() {
+        // WI-1b-turbofish: authored `Old::<U>(E)` + `# type U` diet-renames
+        // to the inferred `::<T>(E0)` diet (first hole → bare `T`).
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n# type U\n- Old::<U>(E)\n+ New::<U>(E)\n";
+        let inferred = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- crate::old_api::<T>(E0)\n+ crate::new_api::<T>(E0)\n";
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn m() {\n    crate::old_api::<u8>(1);\n    crate::old_api::<i32>(2);\n}\n",
+        )]);
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- crate::old_api::<T>(E0)\n+ crate::new_api::<T>(E0)\n"),
+            "got:\n{a}"
+        );
+        assert!(!a.contains("# symbol"), "symbols dropped:\n{a}");
+        assert!(!a.contains("# type"), "type decl dropped:\n{a}");
+        assert!(!a.contains("# expr"), "expr decl dropped:\n{a}");
+    }
+
+    #[test]
+    fn symbol_turbofish_type_identity_drops_decl() {
+        // Already-`T` is a no-op rename that still drops the `# type`
+        // declaration, unifying with the decl-free inferred diet.
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n# type T\n- Old::<T>(E)\n+ New::<T>(E)\n";
+        let inferred = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- crate::old_api::<T>(E0)\n+ crate::new_api::<T>(E0)\n";
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn m() {\n    crate::old_api::<u8>(1);\n    crate::old_api::<i32>(2);\n}\n",
+        )]);
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(!a.contains("# type"), "decl dropped:\n{a}");
+    }
+
+    #[test]
+    fn symbol_turbofish_type_collision_vetoes() {
+        // A concrete `T` already in the pattern collides with the
+        // `U` → `T` target — the hunk survives byte-identical.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n# type U\n- Old::<U>(T)\n+ New::<U>(T)\n";
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn m() {\n    crate::old_api::<u8>(T);\n    crate::old_api::<i32>(T);\n}\n",
+        )]);
+        let got = canonicalize_with_tree(text, &p).unwrap();
+        assert!(got.contains("# type U"), "collision vetoes:\n{got}");
+        assert!(got.contains("- Old::<U>(T)"), "body untouched:\n{got}");
+    }
+
+    #[test]
+    fn symbol_expr_type_same_name_vetoes() {
+        // SPEC 9.4: one name under two kinds never compiles — the error
+        // shape survives comparison, never silently heals.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr T\n# type T\n- Old::<T>(T)\n+ New::<T>(T)\n";
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn m() {\n    crate::old_api::<u8>(x);\n    crate::old_api::<i32>(y);\n}\n",
+        )]);
+        let got = canonicalize_with_tree(text, &p).unwrap();
+        assert!(got.contains("# symbol Old=crate::old_api"), "got:\n{got}");
+        assert!(got.contains("# type T"), "type decl stays:\n{got}");
     }
 }
