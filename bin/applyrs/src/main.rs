@@ -84,8 +84,14 @@ struct Cli {
 /// `--format json`, SPEC D.2). Clap's own parse errors are enveloped at the
 /// `try_parse` site below. Both print the stdout-only JSON envelope in
 /// json mode (SPEC D.2).
+///
+/// WI-2a: `--verify build` failures additionally carry whether the patch
+/// landed (`applied: true` post-apply, `false` for `--check` temp-copy
+/// verification), emitted as a top-level additive JSON key so agents can
+/// assert without parsing prose.
 enum CliError {
     Structured(StructuredError),
+    Verify { err: StructuredError, applied: bool },
 }
 
 impl CliError {
@@ -96,23 +102,43 @@ impl CliError {
     fn io_file(message: String, file: &str) -> Self {
         Self::Structured(StructuredError::new(ErrorCode::IoConflict, message).with_file(file))
     }
+
+    fn verify(message: String, applied: bool) -> Self {
+        Self::Verify {
+            err: StructuredError::new(ErrorCode::IoConflict, message),
+            applied,
+        }
+    }
+
+    fn err(&self) -> &StructuredError {
+        match self {
+            Self::Structured(s) => s,
+            Self::Verify { err, .. } => err,
+        }
+    }
+
+    fn applied(&self) -> Option<bool> {
+        match self {
+            Self::Structured(_) => None,
+            Self::Verify { applied, .. } => Some(*applied),
+        }
+    }
 }
 
 fn main() {
     if let Err(e) = run() {
-        match e {
-            CliError::Structured(s) => {
-                if wants_json() {
-                    // JSON failures are stdout-only (T89 symmetry with the
-                    // T85 success silence): the stdout envelope carries the
-                    // machine signal; stderr keeps `warning:` lines only.
-                    // Text mode keeps the human stderr diagnostic.
-                    let payload = serde_json::json!({"version": 1, "error": s.to_json()});
-                    println!("{payload}");
-                } else {
-                    eprintln!("{}", s.render());
-                }
+        if wants_json() {
+            // JSON failures are stdout-only (T89 symmetry with the
+            // T85 success silence): the stdout envelope carries the
+            // machine signal; stderr keeps `warning:` lines only.
+            // Text mode keeps the human stderr diagnostic.
+            let mut payload = serde_json::json!({"version": 1, "error": e.err().to_json()});
+            if let Some(applied) = e.applied() {
+                payload["applied"] = serde_json::json!(applied);
             }
+            println!("{payload}");
+        } else {
+            eprintln!("{}", e.err().render());
         }
         std::process::exit(2);
     }
@@ -508,22 +534,40 @@ fn run() -> Result<(), CliError> {
     }
 
     if cli.format == Format::Json {
+        // WI-2a: tracks whether `--verify build` actually ran so the
+        // success payload can carry additive `"build": "pass"`.
+        let mut build_passed = false;
         if cli.check {
             // `--check` verifies without touching the worktree; an empty
             // lowering skips git entirely (SPEC D.2.3).
             if !lowered.trim().is_empty() {
                 rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
+                // WI-2a `--verify build` under `--check`: verify the
+                // post-images in a temp copy; the worktree stays clean.
+                if cli.verify.as_deref() == Some("build") {
+                    verify_in_temp_copy(
+                        &cli.repo,
+                        &updated,
+                        &changed,
+                        &rename_from,
+                        &is_symlink,
+                        &patch,
+                    )?;
+                    build_passed = true;
+                }
             }
         } else if !lowered.trim().is_empty() {
             // JSON apply mirrors the text apply below: `--format` chooses
             // the report language, never whether the patch lands (T151).
             rsmpl_git::apply_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
-            // WI-2 `--verify build`: post-apply only, never under `--check`.
+            // WI-2a `--verify build`: post-apply run; failure names the
+            // applied state explicitly (`applied: true` in JSON).
             if cli.verify.as_deref() == Some("build") {
                 run_verify_build(&cli.repo)?;
+                build_passed = true;
             }
         }
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "version": 1,
             "rules": report.rules.iter().map(|r| {
                 let mut entry = serde_json::json!({
@@ -551,6 +595,9 @@ fn run() -> Result<(), CliError> {
             "history": history_display,
             "verified": {"reparse": true, "untouched_outside_spans": true},
         });
+        if build_passed {
+            payload["build"] = serde_json::json!("pass");
+        }
         println!(
             "{}",
             serde_json::to_string(&payload)
@@ -592,14 +639,28 @@ fn run() -> Result<(), CliError> {
             }
         }
         rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
-        eprintln!("check: lowered patch applies cleanly");
+        // WI-2a `--verify build` under `--check`: temp-copy verification.
+        if cli.verify.as_deref() == Some("build") {
+            verify_in_temp_copy(
+                &cli.repo,
+                &updated,
+                &changed,
+                &rename_from,
+                &is_symlink,
+                &patch,
+            )?;
+            eprintln!("check: lowered patch applies cleanly; build check passed (temp copy, worktree untouched)");
+        } else {
+            eprintln!("check: lowered patch applies cleanly");
+        }
         return Ok(());
     }
 
     // Default: apply the lowered patch with `git apply`, exactly as SPEC 26.1
     // prescribes (convert first, then apply the normal Git patch).
     rsmpl_git::apply_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
-    // WI-2 `--verify build`: post-apply only, never under `--check`.
+    // WI-2a `--verify build`: post-apply run; failure keeps the patch
+    // applied and reports `applied: true` in JSON.
     if cli.verify.as_deref() == Some("build") {
         run_verify_build(&cli.repo)?;
     }
@@ -692,16 +753,29 @@ fn bindings_json(bindings: &[(String, String)]) -> (serde_json::Value, usize) {
     (serde_json::Value::Object(map), omitted)
 }
 
-/// WI-2 `--verify build`: `cargo check --quiet` in `repo` after a
+/// WI-2a `--verify build`: `cargo check --quiet` in `repo` after a
 /// successful apply. Failure exits 2 with the first `error` diagnostic
-/// line (the patch stays applied — the agent decides the next step).
+/// line (the patch stays applied — the agent decides the next step;
+/// JSON carries `applied: true`).
 fn run_verify_build(repo: &std::path::Path) -> Result<(), CliError> {
+    match run_verify_build_in(repo) {
+        Ok(()) => Ok(()),
+        Err(short) => Err(CliError::verify(
+            format!("--verify build: {short} (patch stays applied)"),
+            true,
+        )),
+    }
+}
+
+/// Core `cargo check --quiet` probe in `dir`: `Ok` on success, `Err(short)`
+/// with the first `error` diagnostic line (300 chars) on failure.
+fn run_verify_build_in(dir: &std::path::Path) -> Result<(), String> {
     let out = std::process::Command::new("cargo")
         .arg("check")
         .arg("--quiet")
-        .current_dir(repo)
+        .current_dir(dir)
         .output()
-        .map_err(|e| CliError::io(format!("--verify build: cannot run `cargo check`: {e}")))?;
+        .map_err(|e| format!("cannot run `cargo check`: {e}"))?;
     if out.status.success() {
         return Ok(());
     }
@@ -711,8 +785,193 @@ fn run_verify_build(repo: &std::path::Path) -> Result<(), CliError> {
         .find(|l| l.contains("error"))
         .map(str::trim)
         .unwrap_or("cargo check failed");
-    let short: String = first.chars().take(300).collect();
-    Err(CliError::io(format!("--verify build: {short}")))
+    Err(first.chars().take(300).collect())
+}
+
+/// WI-2a: verify the in-memory post-images in a temp copy of `repo` so
+/// `--check --verify build` answers "would this build?" without touching
+/// the worktree. Copies the tree (minus `.git`/`target`/`.history`),
+/// overlays `updated` contents for every `changed` path (plus rename
+/// cleanup), runs `cargo check --quiet` there, then removes the temp dir.
+/// Failure is `applied: false` (worktree untouched by construction).
+#[allow(clippy::too_many_arguments)]
+fn verify_in_temp_copy(
+    repo: &std::path::Path,
+    updated: &std::collections::HashMap<String, String>,
+    changed: &[(String, usize, usize, String)],
+    rename_from: &std::collections::HashMap<String, String>,
+    is_symlink: &std::collections::HashSet<String>,
+    patch: &rsmpl_patch::Patch,
+) -> Result<(), CliError> {
+    let tmp = materialize_verify_tree(repo, updated, changed, rename_from, is_symlink, patch)?;
+    let result = run_verify_build_in(&tmp);
+    // Cleanup always; a removal fault warns but never masks the verdict.
+    if let Err(e) = std::fs::remove_dir_all(&tmp) {
+        eprintln!(
+            "warning: verify: cannot remove temp copy {}: {e}",
+            tmp.display()
+        );
+    }
+    match result {
+        Ok(()) => Ok(()),
+        Err(short) => Err(CliError::verify(
+            format!("--verify build: {short} (worktree untouched; verified in temp copy)"),
+            false,
+        )),
+    }
+}
+
+/// Materialize the post-image tree for temp-copy verification (std only).
+fn materialize_verify_tree(
+    repo: &std::path::Path,
+    updated: &std::collections::HashMap<String, String>,
+    changed: &[(String, usize, usize, String)],
+    rename_from: &std::collections::HashMap<String, String>,
+    is_symlink: &std::collections::HashSet<String>,
+    patch: &rsmpl_patch::Patch,
+) -> Result<std::path::PathBuf, CliError> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CTR: AtomicU32 = AtomicU32::new(0);
+    let ctr = CTR.fetch_add(1, Ordering::Relaxed);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!(
+        "applyrs-verify-{}-{ctr}-{secs}",
+        std::process::id()
+    ));
+    copy_tree_excluding(repo, &tmp)?;
+    let deleted: std::collections::HashSet<&str> = patch
+        .files
+        .iter()
+        .filter(|s| s.is_deleted_file)
+        .map(|s| s.target_path.as_str())
+        .collect();
+    for (rel, _, _, _) in changed {
+        let dst = tmp.join(rel);
+        if deleted.contains(rel.as_str()) {
+            // Deleted files lower as removals: drop the temp copy so the
+            // check sees absence, not an empty file.
+            match std::fs::remove_file(&dst) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(CliError::io_file(
+                        format!("verify: cannot remove {}: {e}", dst.display()),
+                        rel,
+                    ));
+                }
+            }
+            continue;
+        }
+        let new_text = updated.get(rel).cloned().unwrap_or_default();
+        if is_symlink.contains(rel) {
+            let _ = std::fs::remove_file(&dst);
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    CliError::io_file(
+                        format!("verify: cannot create {}: {e}", parent.display()),
+                        rel,
+                    )
+                })?;
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&new_text, &dst).map_err(|e| {
+                let _ = std::fs::remove_dir_all(&tmp);
+                CliError::io_file(format!("verify: cannot link {}: {e}", dst.display()), rel)
+            })?;
+            #[cfg(not(unix))]
+            {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(CliError::io(
+                    "verify: symlink targets unsupported on this platform".to_string(),
+                ));
+            }
+        } else {
+            if let Some(parent) = dst.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        CliError::io_file(
+                            format!("verify: cannot create {}: {e}", parent.display()),
+                            rel,
+                        )
+                    })?;
+                }
+            }
+            if let Err(e) = std::fs::write(&dst, new_text) {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(CliError::io_file(
+                    format!("verify: cannot write {}: {e}", dst.display()),
+                    rel,
+                ));
+            }
+        }
+    }
+    // Renames: the old-side file was copied with the tree; drop it so the
+    // temp check sees the move, not a duplicate definition.
+    for (new_rel, old_rel) in rename_from {
+        if changed.iter().any(|(p, _, _, _)| p == new_rel) {
+            let _ = std::fs::remove_file(tmp.join(old_rel));
+        }
+    }
+    Ok(tmp)
+}
+
+/// Recursive tree copy minus `.git`/`target`/`.history` (lexical, std
+/// only). Symlinks are recreated as symlinks (never followed); unreadable
+/// entries warn and are skipped so verification degrades to the readable
+/// tree instead of failing on unrelated files.
+fn copy_tree_excluding(repo: &std::path::Path, tmp: &std::path::Path) -> Result<(), CliError> {
+    let mut stack = vec![(repo.to_path_buf(), tmp.to_path_buf())];
+    while let Some((src_dir, dst_dir)) = stack.pop() {
+        std::fs::create_dir_all(&dst_dir).map_err(|e| {
+            CliError::io(format!("verify: cannot create {}: {e}", dst_dir.display()))
+        })?;
+        let entries = match std::fs::read_dir(&src_dir) {
+            Ok(rd) => rd,
+            Err(e) => {
+                eprintln!("warning: verify: cannot list {}: {e}", src_dir.display());
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == ".git" || name == "target" || name == ".history" {
+                continue;
+            }
+            let src = entry.path();
+            let dst = dst_dir.join(&name);
+            let meta = match std::fs::symlink_metadata(&src) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("warning: verify: cannot stat {}: {e}", src.display());
+                    continue;
+                }
+            };
+            if meta.file_type().is_symlink() {
+                match std::fs::read_link(&src) {
+                    Ok(target) => {
+                        #[cfg(unix)]
+                        if let Err(e) = std::os::unix::fs::symlink(&target, &dst) {
+                            eprintln!("warning: verify: cannot link {}: {e}", dst.display());
+                        }
+                        #[cfg(not(unix))]
+                        eprintln!("warning: verify: skipping symlink {}", src.display());
+                    }
+                    Err(e) => eprintln!("warning: verify: cannot read link {}: {e}", src.display()),
+                }
+            } else if meta.is_dir() {
+                stack.push((src, dst));
+            } else if meta.is_file() {
+                if let Err(e) = std::fs::copy(&src, &dst) {
+                    eprintln!("warning: verify: cannot copy {}: {e}", src.display());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Bound the *reported* diff for token budget (SPEC D.2.1).

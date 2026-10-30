@@ -5744,12 +5744,18 @@ prints one JSON object to stdout:
   edits and byte-compares (Section 24.6); a mismatch is an engine bug
   and fails the run loud, never a warning. Failures never reach this
   payload (exit 2 with the `{error}` envelope below).
-- `--verify build` (opt-in, never under `--check`, never by default)
-  additionally runs `cargo check --quiet` in `--repo` after a
-  successful apply. Failure exits 2 with the first `error` diagnostic
-  line in the reason; the patch stays applied (the agent decides the
-  next step). Any other `--verify` value is an `RSMPL_IO_CONFLICT`
-  usage error.
+- `--verify build` (opt-in, never by default) additionally runs
+  `cargo check --quiet`. Without `--check` it runs in `--repo` after a
+  successful apply; failure exits 2 with the first `error` diagnostic
+  line in the reason and the patch stays applied (JSON carries
+  `"applied": true`). With `--check` it materializes the in-memory
+  post-images into a temp copy of `--repo` (tree copied minus `.git`,
+  `target`, `.history`; symlinks recreated, never followed) and runs
+  `cargo check --quiet` there; the worktree stays byte-identical and
+  failure exits 2 with `"applied": false`. Success adds additive
+  `"build": "pass"` to the JSON payload (omitted when not verified).
+  Empty lowerings skip verification. Any other `--verify` value is an
+  `RSMPL_IO_CONFLICT` usage error.
 - `history` is the `<repo>/.history/{id}.rsmpl` archive path of the raw
   patch input (`null` when archiving warned), reported alongside the
   stderr `history:` line (Section D.1).

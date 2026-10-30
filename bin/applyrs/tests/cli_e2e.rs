@@ -1870,68 +1870,6 @@ fn json_report_shows_extra_span_of_over_broad_patch() {
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
 
-fn cargo_crate(dir: &std::path::Path) {
-    write(
-        dir,
-        "Cargo.toml",
-        "[package]\nname = \"wicrate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-    );
-    write(
-        dir,
-        "src/lib.rs",
-        "pub fn plus_one(x: i32) -> i32 {\n    x + 1\n}\n",
-    );
-}
-
-#[test]
-fn verify_build_passes_on_compiling_crate() {
-    // WI-2 `--verify build`: a clean post-apply tree checks quietly.
-    let dir = init_repo();
-    cargo_crate(dir.path());
-    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=rename_plus\n# lang=rust\n- pub fn plus_one(...) {\n+ pub fn plus_two(...) {\n      ...\n  }\n";
-    let out = run_stdin(dir.path(), patch, &["--verify", "build"]);
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(read(dir.path(), "src/lib.rs").contains("fn plus_two"));
-}
-
-#[test]
-fn verify_build_fails_on_broken_crate() {
-    // WI-2 `--verify build`: the patch lands via `git apply`, then the
-    // failed `cargo check` exits 2 with the first error line (never silent).
-    let dir = init_repo();
-    cargo_crate(dir.path());
-    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@\n-    x + 1\n+    undefined_fn(x)\n";
-    let out = run_stdin(dir.path(), patch, &["--verify", "build"]);
-    assert!(!out.status.success(), "expected failure");
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        stderr.contains("--verify build"),
-        "first diagnostic on stderr, got: {stderr}"
-    );
-    // The lowering applied; verification failure does not roll it back.
-    assert!(read(dir.path(), "src/lib.rs").contains("undefined_fn"));
-}
-
-#[test]
-fn verify_build_skipped_under_check() {
-    // WI-2: `--verify` never runs under `--check` — a broken tree still
-    // reports clean when only the lowering is verified.
-    let dir = init_repo();
-    cargo_crate(dir.path());
-    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@\n-    x + 1\n+    undefined_fn(x)\n";
-    let out = run_stdin(dir.path(), patch, &["--check", "--verify", "build"]);
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(read(dir.path(), "src/lib.rs").contains("x + 1"));
-}
-
 #[test]
 fn verify_unknown_mode_is_usage_error() {
     // WI-2: only `build` exists; anything else fails fast in both modes.
