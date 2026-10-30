@@ -123,6 +123,24 @@ fn trailing_block_ellipsis_compiles() {
     );
 }
 
+// WI-6b: the `...` position validator walks pattern lines byte-wise —
+// multi-byte text on the same line (an em dash, CJK ident, emoji)
+// must slice on char boundaries, never panic inside a codepoint.
+#[test]
+fn ellipsis_check_is_char_boundary_safe() {
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    let patch = format!(
+        "{head}@@ -2,1 @@ rule=x\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }} // caf\u{00e9} \u{2014} done\n+ if E {{ bar(); ... }} // caf\u{00e9} \u{2014} done\n"
+    );
+    assert!(
+        matches!(
+            compile(&hunk_of(&patch)).unwrap().kind,
+            PatternKind::General { .. }
+        ),
+        "unicode beside ... must compile, not panic"
+    );
+}
+
 #[test]
 fn split_leading_attrs_peels_doc_lines() {
     // T155: `///`/`//!` peel alongside `#[...]` and normalize to the

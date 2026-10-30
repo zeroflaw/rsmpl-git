@@ -104,8 +104,8 @@ expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>`, `T` inferred),
 2–4-line `let` sequences (per-position `P0`/`E0` holes, SPEC 16.4.2).
 A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
 set: full supported-vs-rejected table with exact errors is SPEC 18.6
-(mixed `let-else`, concrete-head `P @`,
-macro types stay ordinary hunks; blocks, `if`, `match`, loops, closures,
+(mixed `let-else`, concrete-head `P @`, macro types stay ordinary hunks
+(block macros opaque, `fn` items strict-header + body); blocks, `if`, `match`, loops, closures,
 `async`/`try`/`unsafe` blocks, `yield`, `break`/`continue`, `let` expressions, agreed `let-else`,
 and placeholder-head `P @` match structurally); ellipsis positions are SPEC 16.
 

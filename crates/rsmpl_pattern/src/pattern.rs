@@ -545,16 +545,19 @@ fn validate_ellipsis_positions(minus: &str, plus: &str) -> Result<(), Structured
             let t = line.trim();
             // `...` must appear as a standalone token or inside delimiters.
             // A cheap check: no identifier char directly adjacent: `foo...bar`.
+            // Byte-safe: `str::get` never panics on multi-byte text (an
+            // em dash or CJK ident adjacent to `...` slices on char
+            // boundaries, never inside a codepoint).
             let bytes = t.as_bytes();
             let mut i = 0;
             while i + 2 < bytes.len() {
-                if &t[i..i + 3] == "..." {
-                    let before = if i > 0 { bytes[i - 1] as char } else { ' ' };
-                    let after = if i + 3 < bytes.len() {
-                        bytes[i + 3] as char
+                if t.get(i..i + 3) == Some("...") {
+                    let before = if i > 0 {
+                        t[..i].chars().next_back().unwrap_or(' ')
                     } else {
                         ' '
                     };
+                    let after = t[i + 3..].chars().next().unwrap_or(' ');
                     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
                     if ident(before) && ident(after) {
                         return Err(StructuredError::new(
@@ -854,9 +857,18 @@ fn classify(
     // never `NAME!(...)`) so it falls through to the expression router.
     let leading_bang = m.trim_start().starts_with('!');
     // T428: only a genuine macro bang (`name!` + body opener, strings
-    // skipped) routes macro — `foo(!E)`, `a != b` fall through to the
-    // call/general routers.
-    if is_macro_mode || (!leading_bang && find_macro_bang(m).is_some()) {
+    // skipped) routes to macro — `foo(!E)`, `a != b` fall through to the
+    // call/general routers. WI-6b: the bang must open the whole pattern
+    // (`name!(...)` with no whitespace before the name) — a `!` nested
+    // inside a block (`if E { log!("hit"); F }`) is a macro *statement*,
+    // not a macro pattern, and falls through to the general router
+    // (mirrors the `classify_call_pattern` whole-name guard).
+    let whole_is_invocation = !leading_bang
+        && find_macro_bang(m).is_some_and(|bang| {
+            let before = m[..bang].trim();
+            !before.is_empty() && !before.contains(char::is_whitespace)
+        });
+    if is_macro_mode || whole_is_invocation {
         return Ok(PatternKind::Macro {
             minus_raw: m.to_string(),
             plus_raw: p.to_string(),

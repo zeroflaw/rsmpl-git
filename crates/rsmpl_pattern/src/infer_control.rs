@@ -338,7 +338,15 @@ fn assign_block(block: &syn::Block, kinds: &mut HashMap<String, HashSet<MetavarK
                 }
             }
             syn::Stmt::Expr(e, _) => assign_expr_ast(e, kinds),
-            syn::Stmt::Item(_) | syn::Stmt::Macro(_) => {}
+            // WI-6b: holes may live inside an inner `fn` body (the
+            // engine matches it structurally); signatures stay strict
+            // and macros stay opaque, so neither assigns kinds here.
+            syn::Stmt::Item(it) => {
+                if let syn::Item::Fn(f) = it {
+                    assign_block(&f.block, kinds);
+                }
+            }
+            syn::Stmt::Macro(_) => {}
         }
     }
 }

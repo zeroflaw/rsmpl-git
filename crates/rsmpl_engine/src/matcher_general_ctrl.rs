@@ -14,7 +14,9 @@
 //!
 //! Everything not listed here (macro types) still rejects in
 //! `match_expr` and stays an ordinary hunk (`async`/`try`/`unsafe`/
-//! `yield` live in `matcher_general_async`, WI-6 slice 1).
+//! `yield` live in `matcher_general_async`, WI-6 slice 1; StmtMacro
+//! whole-shape opaque and Stmt Item fn-only structural live below,
+//! WI-6b).
 
 use syn::spanned::Spanned;
 
@@ -154,11 +156,51 @@ fn match_stmt(pat: &syn::Stmt, tgt: &syn::Stmt, cx: &mut MatchCx) -> bool {
         (syn::Stmt::Expr(a, a_semi), syn::Stmt::Expr(b, b_semi)) => {
             a_semi.is_some() == b_semi.is_some() && match_expr(a, b, cx)
         }
-        // Items compare strictly token-equal: a block that renames an
-        // item is two changes, never guessed here.
-        (syn::Stmt::Item(a), syn::Stmt::Item(b)) => render_eq(a, b),
-        // Macro bodies stay opaque (SPEC 21 stands).
+        // WI-6b: macro statements match only whole-shape (path,
+        // delimiters, and body token-equal - interiors stay opaque and
+        // never host holes, SPEC 21 stands); a divergent macro vetoes
+        // while an identical one lets the surrounding pattern match.
+        (syn::Stmt::Macro(a), syn::Stmt::Macro(b)) => match_macro_stmt(a, b),
+        // WI-6b: `fn` items match with attributes/visibility/signature
+        // strict (a signature hole never matches - rename the item
+        // separately) and the body structural, so holes may live inside
+        // the inner function; every other item kind stays strictly
+        // token-equal (an item rename inside a block is two changes).
+        (syn::Stmt::Item(a), syn::Stmt::Item(b)) => match_item_stmt(a, b, cx),
         _ => false,
+    }
+}
+
+/// Match a macro-statement block member opaquely: attributes pairwise
+/// strict, semicolon presence agreement, and the whole invocation (path,
+/// delimiters, body) token-equal. No holes are bound inside.
+fn match_macro_stmt(pat: &syn::StmtMacro, tgt: &syn::StmtMacro) -> bool {
+    pat.attrs.len() == tgt.attrs.len()
+        && pat
+            .attrs
+            .iter()
+            .zip(tgt.attrs.iter())
+            .all(|(a, b)| render_eq(a, b))
+        && pat.semi_token.is_some() == tgt.semi_token.is_some()
+        && render_eq(&pat.mac, &tgt.mac)
+}
+
+/// Match an item-statement block member: `fn` vs `fn` compares the
+/// header strictly and the body via `match_block` (trailing ... rides
+/// along); anything else is token-equal, as before.
+fn match_item_stmt(pat: &syn::Item, tgt: &syn::Item, cx: &mut MatchCx) -> bool {
+    match (pat, tgt) {
+        (syn::Item::Fn(a), syn::Item::Fn(b)) => {
+            a.attrs.len() == b.attrs.len()
+                && a.attrs
+                    .iter()
+                    .zip(b.attrs.iter())
+                    .all(|(x, y)| render_eq(x, y))
+                && render_eq(&a.vis, &b.vis)
+                && render_eq(&a.sig, &b.sig)
+                && match_block(&a.block, &b.block, cx)
+        }
+        _ => render_eq(pat, tgt),
     }
 }
 
@@ -731,5 +773,84 @@ mod tests {
         assert!(out.contains("bar();"), "got: {out}");
         assert!(out.contains("extra();"), "got: {out}");
         assert!(!out.contains("foo();"), "got: {out}");
+    }
+
+    // WI-6b: an identical macro statement lets the surrounding block
+    // pattern match (the macro itself is opaque — no holes inside).
+    #[test]
+    fn stmt_macro_opaque_allows_surrounding_rewrite() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n# expr F\n- if E {{ log!(\"hit\"); F }} else {{ 0 }}\n+ if E {{ log!(\"hit\"); F + 1 }} else {{ 0 }}\n"
+        );
+        let src = "fn a(c: bool, v: i32) -> i32 {\n    if c {\n        log!(\"hit\");\n        v\n    } else {\n        0\n    }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("log!(\"hit\");"), "got: {out}");
+        assert!(out.contains("v + 1"), "got: {out}");
+    }
+
+    // WI-6b: a divergent macro body vetoes (opaque means token-equal).
+    #[test]
+    fn stmt_macro_body_divergence_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n# expr F\n- if E {{ log!(\"hit\"); F }} else {{ 0 }}\n+ if E {{ log!(\"hit\"); F + 1 }} else {{ 0 }}\n"
+        );
+        let src = "fn a(c: bool, v: i32) -> i32 {\n    if c {\n        log!(\"miss\");\n        v\n    } else {\n        0\n    }\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-6b: a divergent macro path vetoes.
+    #[test]
+    fn stmt_macro_path_divergence_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n# expr F\n- if E {{ log!(\"hit\"); F }} else {{ 0 }}\n+ if E {{ log!(\"hit\"); F + 1 }} else {{ 0 }}\n"
+        );
+        let src = "fn a(c: bool, v: i32) -> i32 {\n    if c {\n        warn!(\"hit\");\n        v\n    } else {\n        0\n    }\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-6b: `;` presence agrees — a semicolon-less macro invocation is
+    // an expression statement, never a macro statement.
+    #[test]
+    fn stmt_macro_semi_divergence_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ log!(\"hit\"); }}\n+ if E {{ log!(\"hit\"); }}\n"
+        );
+        let src = "fn a(c: bool) {\n    if c {\n        log!(\"hit\")\n    }\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-6b: holes may live inside an inner `fn` body (header strict,
+    // body structural).
+    #[test]
+    fn stmt_fn_item_body_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr F\n- {{ fn helper() -> i32 {{ F }} helper() }}\n+ {{ fn helper() -> i32 {{ F + 1 }} helper() }}\n"
+        );
+        let src = "fn a() -> i32 {\n    let w = {\n        fn helper() -> i32 {\n            1\n        }\n        helper()\n    };\n    w\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("1 + 1"), "got: {out}");
+    }
+
+    // WI-6b: an inner-`fn` signature divergence vetoes (rename the item
+    // separately — never guessed here).
+    #[test]
+    fn stmt_fn_item_sig_divergence_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr F\n- {{ fn helper() -> String {{ F }} helper() }}\n+ {{ fn helper() -> String {{ F + 1 }} helper() }}\n"
+        );
+        let src = "fn a() -> i32 {\n    let w = {\n        fn helper() -> i32 {\n            1\n        }\n        helper()\n    };\n    w\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-6b: non-`fn` items stay strictly token-equal (unchanged).
+    #[test]
+    fn stmt_non_fn_item_token_equal_fires() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr F\n- {{ const C: i32 = 1; F }}\n+ {{ const C: i32 = 1; F + 1 }}\n"
+        );
+        let src =
+            "fn a() -> i32 {\n    let w = {\n        const C: i32 = 1;\n        C\n    };\n    w\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("C + 1"), "got: {out}");
     }
 }

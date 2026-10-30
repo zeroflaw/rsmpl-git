@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=stmt_interior
+# sweep
+- if E { log!("hit"); F } else { 0 }
++ if E { log!("hit"); F + 1 } else { 0 }

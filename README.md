@@ -156,6 +156,7 @@ context would be larger, so these are lower bounds.)
 | 23-let-else-init-rewrite (4 sites, 1 hunk) | 122 B / 5 ln | 359 B / 12 ln | 66% |
 | 24-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 155 B / 7 ln | 630 B / 18 ln | 75% |
 | 25-async-block-rewrite (1 hunk rewrites `E + 1`→`E + 2` inside `async` blocks over 4 sites) | 93 B / 5 ln | 363 B / 15 ln | 74% |
+| 26-stmt-interior-rewrite (1 hunk rewrites `F`→`F + 1` inside `if` bodies with an opaque `log!("hit");` over 4 sites) | 138 B / 5 ln | 616 B / 35 ln | 78% |
 
 `example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):

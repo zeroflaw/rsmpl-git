@@ -94,7 +94,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`T` inferred), 2–4-line `let` sequences (per-position
   `P0`/`E0` holes). Bare `P` never matches `x: T` — write `P: T`.
-  Table: SPEC 18.6 (mixed `let-else`/macro-type shapes stay ordinary hunks, permanent scope; `match`/loops/closures/`async`/`try`/`unsafe`/`yield`/`break`/`continue`/`let` match structurally).
+  Table: SPEC 18.6 (mixed `let-else`/macro-type shapes stay ordinary hunks, permanent scope; macro *statements* match whole-shape opaque and `fn` items header-strict + body-structural inside blocks; `match`/loops/closures/`async`/`try`/`unsafe`/`yield`/`break`/`continue`/`let` match structurally).
 - Ordinary hunks: text edits with no `#` lines; headers stay two-sided
   (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11; blank insertion needs bare `+`, `- foo` removal a `-- ` body line, SPEC 11).
 - Macros: plain call patterns never reach inside macro invocations;
