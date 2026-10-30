@@ -328,6 +328,7 @@ dependencies = [
  "quote",
  "rsmpl_patch",
  "rsmpl_pattern",
+ "serde_json",
  "syn 2.0.119",
  "thiserror",
 ]

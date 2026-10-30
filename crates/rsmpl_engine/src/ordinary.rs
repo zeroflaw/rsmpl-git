@@ -81,7 +81,13 @@ pub fn ordinary_hunk_edits(
                     return Err(fail(format!(
                         "context mismatch at line {cur_line}: expected `{}`",
                         bl.text
-                    )));
+                    ))
+                    .with_repair(serde_json::json!({
+                        "action": "fix_context",
+                        "line": cur_line,
+                        "expected": bl.text,
+                        "actual": actual
+                    })));
                 }
                 cur_line += 1;
             }
@@ -102,7 +108,13 @@ pub fn ordinary_hunk_edits(
                     return Err(fail(format!(
                         "removal mismatch at line {cur_line}: expected `{}`",
                         bl.text
-                    )));
+                    ))
+                    .with_repair(serde_json::json!({
+                        "action": "fix_context",
+                        "line": cur_line,
+                        "expected": bl.text,
+                        "actual": actual
+                    })));
                 }
                 let ls = index
                     .line_start(cur_line)
@@ -187,6 +199,40 @@ mod tests {
         );
         let idx = LineIndex::new(src);
         assert!(ordinary_hunk_edits(&idx, src, &h).is_err());
+    }
+
+    #[test]
+    fn context_mismatch_carries_fix_context_repair() {
+        // WI-10-context-repair: the envelope names the actual file line
+        // so an agent self-corrects without re-reading the file.
+        let src = "fn main() {}\n";
+        let h = ordinary_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n WRONG-CTX\n",
+        );
+        let idx = LineIndex::new(src);
+        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        assert_eq!(err.code, ErrorCode::GitHunkConflict);
+        let repair = err.repair.expect("mismatch must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("fix_context"));
+        assert_eq!(repair["line"], serde_json::json!(1));
+        assert_eq!(repair["expected"], serde_json::json!("WRONG-CTX"));
+        assert_eq!(repair["actual"], serde_json::json!("fn main() {}"));
+    }
+
+    #[test]
+    fn removal_mismatch_carries_fix_context_repair() {
+        let src = "fn a() {}\nfn b() {}\n";
+        let h = ordinary_of(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n fn a() {}\n-WRONG\n+fn b2() {}\n",
+        );
+        let idx = LineIndex::new(src);
+        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        assert_eq!(err.code, ErrorCode::GitHunkConflict);
+        let repair = err.repair.expect("mismatch must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("fix_context"));
+        assert_eq!(repair["line"], serde_json::json!(2));
+        assert_eq!(repair["expected"], serde_json::json!("WRONG"));
+        assert_eq!(repair["actual"], serde_json::json!("fn b() {}"));
     }
 
     #[test]

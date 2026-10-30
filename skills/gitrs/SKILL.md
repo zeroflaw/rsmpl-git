@@ -137,8 +137,8 @@ gitrs apply --file change.rsmpl                       # apply for real
 
 JSON failures (`--format json`) print `{version, error: {code, rule, file,
 range, reason, suggestion, repair}}` to stdout only, exit 2. `repair` is null
-except on the ordinary-hunk count mismatch, which carries a `fix_header` payload
-with the counted lines plus a drop-in corrected header (SPEC D.2).
+except on two ordinary-hunk errors (SPEC D.2): count mismatch (`fix_header` with
+counts plus drop-in header) and content mismatch (`fix_context` with line + texts).
 
 ## Dogfood rule
 

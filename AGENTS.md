@@ -164,8 +164,10 @@ itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
 
 With `--format json`, failures print `{version, error: {code, rule, file, range,
 reason, suggestion, repair}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
-`repair` is `null` except on the ordinary-hunk count mismatch, which carries `fix_header`
-counts plus a drop-in corrected header (SPEC D.2).
+`repair` is `null` except on two ordinary-hunk errors, which carry machine
+self-correction (SPEC D.2): the count mismatch (`fix_header` with counts plus
+a drop-in corrected header) and the content mismatch (`fix_context` with the
+failing line plus expected/actual text for first-try repair).
 
 ## Full reference
 
