@@ -273,6 +273,19 @@ pub fn count_ellipsis_markers(text: &str) -> usize {
     n
 }
 
+/// Qualifier-led fn routing (WI-6 slice 1): `async {` / `unsafe {` open
+/// block expressions, not fn headers — only treat an `async `/`unsafe `-led
+/// line as fn-like when `fn`, `trait`, or `impl` appears before the first
+/// `{` (or anywhere when the line has no `{`, e.g. a terse header).
+/// Callers check the `async `/`unsafe ` prefix first; this decides the rest.
+pub fn qualifier_leads_to_fn(t: &str) -> bool {
+    let head = t.split_once('{').map(|(h, _)| h).unwrap_or(t);
+    head.contains("fn ")
+        || head.contains("fn(")
+        || head.contains("trait ")
+        || head.contains("impl ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +333,19 @@ mod tests {
         );
         assert!(!has_ellipsis_marker("declares __RSMPL_ELLIPSIS_FOO here"));
         assert_eq!(count_ellipsis_markers("__RSMPL_ELLIPSIS_FOO"), 0);
+    }
+
+    #[test]
+    fn qualifier_routing_tells_blocks_from_headers() {
+        // WI-6 slice 1: block expressions are not fn-like.
+        assert!(!qualifier_leads_to_fn("async { foo() }"));
+        assert!(!qualifier_leads_to_fn("async move { foo() }"));
+        assert!(!qualifier_leads_to_fn("unsafe { foo() }"));
+        // Headers stay fn-like, before or without a `{`.
+        assert!(qualifier_leads_to_fn("async fn foo() {"));
+        assert!(qualifier_leads_to_fn("unsafe fn foo() {"));
+        assert!(qualifier_leads_to_fn("unsafe trait T {"));
+        assert!(qualifier_leads_to_fn("unsafe impl S {"));
+        assert!(qualifier_leads_to_fn("async fn foo()"));
     }
 }

@@ -880,8 +880,9 @@ fn verbatim_shape_ok(minus: &syn::Expr, plus: &syn::Expr) -> bool {
     // bounded Expr variant set — a top-level Call/MethodCall pair takes
     // the call matcher (concrete args compare opaquely, closures fine),
     // but any other top-level shape compiles to a General hunk where an
-    // unsupported node (macros/async — blocks/`if` since WI-5a,
-    // match/loops/closures/`let` since WI-5b, `return` since T418)
+    // unsupported node (macros only — blocks/`if` since WI-5a,
+    // match/loops/closures/`let` since WI-5b, `return` since T418,
+    // `async`/`try`/`unsafe`/`yield` since WI-6 slice 1)
     // never matches. Reject the pair so the section stays ordinary
     // (2382b02 `return ...` failed `--check` live before T418).
     if !matches!(minus, syn::Expr::Call(_) | syn::Expr::MethodCall(_)) && m.unsupported > 0 {

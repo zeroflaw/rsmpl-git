@@ -43,6 +43,7 @@ below).
 | 22-match-scrutinee-rewrite | 1 hunk rewrites `_ => 2`→`_ => 3` in `match` arms over 4 sites (WI-5b: scrutinee hole binds per site, arms concrete) | 131 B / 5 ln | 463 B / 12 ln | 72% |
 | 23-let-else-init-rewrite | 1 hunk rewrites `return 0`→`return 1` in `let-else` diverges over 4 sites (WI-5b: `P`/`E` holes bind per site, diverge concrete) | 122 B / 5 ln | 359 B / 12 ln | 66% |
 | 24-sequence-sweep | 1 hunk rewrites 3 blocks × 2 hetero lets (WI-5c: type-add + joint positions, per-position `P{j}`/`E{j}` holes) | 155 B / 7 ln | 630 B / 18 ln | 75% |
+| 25-async-block-rewrite | 1 hunk rewrites `E + 1`→`E + 2` inside `async` block bodies over 4 sites (WI-6 slice 1: diet `E` infers, qualifier-strict) | 93 B / 5 ln | 363 B / 15 ln | 74% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even

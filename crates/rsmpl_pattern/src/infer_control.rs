@@ -115,6 +115,12 @@ pub(crate) fn is_control_expr(e: &syn::Expr) -> bool {
             | syn::Expr::ForLoop(_)
             | syn::Expr::Closure(_)
             | syn::Expr::Let(_)
+            // WI-6 slice 1: block/value shapes the engine matches
+            // structurally now (holes inside infer by position).
+            | syn::Expr::Async(_)
+            | syn::Expr::TryBlock(_)
+            | syn::Expr::Unsafe(_)
+            | syn::Expr::Yield(_)
     )
 }
 
@@ -481,8 +487,17 @@ pub(crate) fn assign_expr_ast(e: &syn::Expr, kinds: &mut HashMap<String, HashSet
             assign_pat_ast(&el.pat, kinds);
             assign_expr_ast(&el.expr, kinds);
         }
-        // Macro bodies, unsafe/async blocks, yield, and const blocks
-        // stay literal: v1 has no interior abstraction there.
+        // WI-6 slice 1: bodies/values recurse like any other block shape.
+        syn::Expr::Async(ea) => assign_block(&ea.block, kinds),
+        syn::Expr::TryBlock(et) => assign_block(&et.block, kinds),
+        syn::Expr::Unsafe(eu) => assign_block(&eu.block, kinds),
+        syn::Expr::Yield(ey) => {
+            if let Some(x) = &ey.expr {
+                assign_expr_ast(x, kinds);
+            }
+        }
+        // Macro bodies and const blocks stay literal: v1 has no
+        // interior abstraction there.
         _ => {}
     }
 }

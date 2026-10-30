@@ -15,7 +15,7 @@ use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
 use crate::quote_utils::{
     count_ellipsis_markers, has_ellipsis_marker, is_ellipsis_marker_ident, mask_literal_spans,
-    unmask_literal_spans, validate_quoting,
+    qualifier_leads_to_fn, unmask_literal_spans, validate_quoting,
 };
 
 /// Shape of a generalized (non-call) pattern (T10 v1 subset).
@@ -1764,8 +1764,10 @@ fn looks_like_fn(text: &str, table: &MetavarTable) -> bool {
         let t = l.trim().trim_start_matches("#[");
         t.starts_with("fn ")
             || t.starts_with("pub ")
-            || t.starts_with("async ")
-            || t.starts_with("unsafe ")
+            // WI-6 slice 1: `async {` / `unsafe {` open block expressions,
+            // not fn headers — only route when a fn/trait/impl follows.
+            || (t.starts_with("async ") && qualifier_leads_to_fn(t))
+            || (t.starts_with("unsafe ") && qualifier_leads_to_fn(t))
             || t.starts_with("const ")
             || t.starts_with("extern ")
             || (t.starts_with("pub("))

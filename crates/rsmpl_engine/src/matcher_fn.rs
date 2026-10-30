@@ -209,8 +209,10 @@ pub(crate) fn extract_fn_block(text: &str, slot_leads: &[String]) -> String {
         if (slot_leads.iter().any(|m| m == head) && t.contains("fn "))
             || t.starts_with("fn ")
             || t.starts_with("pub ")
-            || t.starts_with("async ")
-            || t.starts_with("unsafe ")
+            // WI-6 slice 1: `async {` / `unsafe {` open block expressions,
+            // not fn headers — only route when a fn/trait/impl follows.
+            || (t.starts_with("async ") && rsmpl_pattern::qualifier_leads_to_fn(t))
+            || (t.starts_with("unsafe ") && rsmpl_pattern::qualifier_leads_to_fn(t))
             || t.starts_with("const ")
             || t.starts_with("extern ")
             || t.starts_with("pub(")

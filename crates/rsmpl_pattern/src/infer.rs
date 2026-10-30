@@ -9,7 +9,7 @@ use rsmpl_patch::{ErrorCode, MetavarKind, StructuredError};
 use std::collections::{HashMap, HashSet};
 
 use crate::metavar::MetavarTable;
-use crate::quote_utils::mask_literal_spans;
+use crate::quote_utils::{mask_literal_spans, qualifier_leads_to_fn};
 
 use super::infer_control::{
     assign_control_line, assign_expr_ast, assign_expr_text, assign_type_ast, is_control_expr,
@@ -399,8 +399,10 @@ fn fn_like(text: &str) -> bool {
         t.starts_with("fn ")
             || t.contains(" fn ")
             || t.starts_with("pub ")
-            || t.starts_with("async ")
-            || t.starts_with("unsafe ")
+            // WI-6 slice 1: `async {` / `unsafe {` open block expressions,
+            // not fn headers — only route when a fn/trait/impl follows.
+            || (t.starts_with("async ") && qualifier_leads_to_fn(t))
+            || (t.starts_with("unsafe ") && qualifier_leads_to_fn(t))
             || t.starts_with("const ")
             || t.starts_with("extern ")
             || t.starts_with("pub(")

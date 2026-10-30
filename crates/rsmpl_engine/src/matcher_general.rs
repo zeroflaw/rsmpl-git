@@ -12,11 +12,12 @@
 //!   (paths, literals, binary/unary/cast/reference/paren, calls, method
 //!   calls, assignment, field access, indexing, arrays, tuples, struct
 //!   literals, ranges, `await`, `?`, `return`, `if` with condition +
-//!   then-block + else branch, blocks as concrete-length statement
-//!   sequences (WI-5a), plus `match` (scrutinee + arms), `loop`/`while`/
-//!   `for` (label-strict, bodies structural), closures (qualifiers
-//!   strict, params/return/body structural), and `let` expressions
-//!   (WI-5b)). Anything else rejects the candidate.
+//!   then-block + else branch, `async`/`try`/`unsafe` blocks and `yield`
+//!   (WI-6 slice 1), blocks as concrete-length statement sequences
+//!   (WI-5a), plus `match` (scrutinee + arms), `loop`/`while`/`for`
+//!   (label-strict, bodies structural), closures (qualifiers strict,
+//!   params/return/body structural), and `let` expressions (WI-5b)).
+//!   Anything else rejects the candidate.
 //! - `Type`: a general Rust type over a bounded variant set (paths with
 //!   generic args, references, slices, arrays, tuples, parens, raw
 //!   pointers, fn pointers, `impl Trait`, `dyn Trait`, `_`).
@@ -449,9 +450,22 @@ pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> 
         (syn::Expr::Try(a), syn::Expr::Try(b)) => match_expr(&a.expr, &b.expr, cx),
         (syn::Expr::Return(a), syn::Expr::Return(b)) => opt_expr_eq(&a.expr, &b.expr, cx),
         // WI-5a/5b: `if` + blocks + `match`/loops/closures/`let`
-        // expressions match structurally in `matcher_general_ctrl`.
-        // Anything else (async/try/unsafe blocks, yield, macro types)
-        // still rejects here and stays an ordinary hunk.
+        // expressions match structurally in `matcher_general_ctrl`;
+        // WI-6 slice 1: `async`/`try`/`unsafe`/`yield` match
+        // structurally in `matcher_general_async`. Anything else
+        // (macro types) still rejects here and stays an ordinary hunk.
+        (syn::Expr::Async(a), syn::Expr::Async(b)) => {
+            crate::matcher_general_async::match_async(a, b, cx)
+        }
+        (syn::Expr::TryBlock(a), syn::Expr::TryBlock(b)) => {
+            crate::matcher_general_async::match_try_block(a, b, cx)
+        }
+        (syn::Expr::Unsafe(a), syn::Expr::Unsafe(b)) => {
+            crate::matcher_general_async::match_unsafe(a, b, cx)
+        }
+        (syn::Expr::Yield(a), syn::Expr::Yield(b)) => {
+            crate::matcher_general_async::match_yield(a, b, cx)
+        }
         (syn::Expr::If(a), syn::Expr::If(b)) => crate::matcher_general_ctrl::match_if(a, b, cx),
         (syn::Expr::Block(a), syn::Expr::Block(b)) => {
             // Labels compare strictly (a labeled block is a different
@@ -491,7 +505,11 @@ pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> 
     }
 }
 
-fn opt_expr_eq(a: &Option<Box<syn::Expr>>, b: &Option<Box<syn::Expr>>, cx: &mut MatchCx) -> bool {
+pub(crate) fn opt_expr_eq(
+    a: &Option<Box<syn::Expr>>,
+    b: &Option<Box<syn::Expr>>,
+    cx: &mut MatchCx,
+) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(x), Some(y)) => match_expr(x, y, cx),

@@ -9,11 +9,12 @@
 //! `match_while`, `match_for`, `match_closure` (+ param helper),
 //! `match_let_expr`, and the `@`-subpattern helper `match_pat`.
 //! The parent keeps `match_expr`/`match_type` plus collection,
-//! substitution, and application; the two modules call each other
-//! (circular within the crate is fine).
+//! substitution, and application; the three general-matcher modules
+//! call each other (circular within the crate is fine).
 //!
-//! Everything not listed here (async/try/unsafe blocks, yield, macro
-//! types) still rejects in `match_expr` and stays an ordinary hunk.
+//! Everything not listed here (macro types) still rejects in
+//! `match_expr` and stays an ordinary hunk (`async`/`try`/`unsafe`/
+//! `yield` live in `matcher_general_async`, WI-6 slice 1).
 
 use syn::spanned::Spanned;
 

@@ -102,6 +102,12 @@ pub(crate) fn supported_expr(e: &syn::Expr) -> bool {
             | syn::Expr::Let(_)
             | syn::Expr::Break(_)
             | syn::Expr::Continue(_)
+            // WI-6 slice 1: `async`/`try`/`unsafe` blocks (bodies
+            // structural) and `yield` (optional value structural).
+            | syn::Expr::Async(_)
+            | syn::Expr::TryBlock(_)
+            | syn::Expr::Unsafe(_)
+            | syn::Expr::Yield(_)
     )
 }
 
@@ -204,11 +210,18 @@ mod tests {
         ] {
             assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
-        // Rejected: macro/async shapes fall to `_ => false` in the
-        // engine and never match.
-        for bad in ["m!(x)", "async { x }"] {
-            assert!(!supported_expr(&expr(bad)), "{bad} must be unsupported");
+        // WI-6 slice 1: `async`/`try`/`unsafe`/`yield` match
+        // structurally now — only macros fall to `_ => false`.
+        for ok in [
+            "async { x }",
+            "try { x }",
+            "unsafe { x }",
+            "yield x",
+            "yield",
+        ] {
+            assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
+        assert!(!supported_expr(&expr("m!(x)")), "m!(x) must be unsupported");
     }
 
     #[test]

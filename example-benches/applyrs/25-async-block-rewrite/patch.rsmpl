@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=async_body
+# sweep
+- async { E + 1 }
++ async { E + 2 }
