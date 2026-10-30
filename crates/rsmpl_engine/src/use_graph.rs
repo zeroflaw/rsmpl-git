@@ -20,10 +20,15 @@
 //! index). The hunk's range is ignored for uses: a follow rewrites the
 //! whole file, which is the point (no range discovery).
 
+use std::collections::HashMap;
+
+use rsmpl_patch::{ErrorCode, StructuredError};
+use rsmpl_pattern::PatternKind;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
-use crate::lines::LineIndex;
+use crate::edits::{edit_spans, TextEdit};
+use crate::lines::{FileState, LineIndex};
 use crate::matcher_item::span_bytes;
 
 /// Successful resolution: byte ranges to rewrite plus skip notes.
@@ -680,6 +685,152 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 }
 
+/// WI-6a `# follow=uses`: after the definition rewrite, resolve same-file
+/// use sites and append their ident-span edits under the same rule
+/// (SPEC 14.8). Zero new def edits (optional zero-match) means nothing to
+/// WI-6b1: one follow-only entry per non-definition file touched by
+/// `# follow=uses`: (file, rewritten use-site count, line spans).
+pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>)>;
+
+/// WI-6b1 `# follow=uses` workspace step (SPEC 14.8): after the definition
+/// rewrite, resolve use sites across every loaded `.rs` file (unique-
+/// definition fast path) and append their ident-span edits under the same
+/// rule. Zero new def edits (optional zero-match) means nothing to follow
+/// — a no-op, never a veto.
+///
+/// Returns extra bindings (`follow_skipped` when `# fallback=syntax` left
+/// sites untouched) plus the follow-only entries. The caller reports the
+/// definition file as usual and each extra entry as its own `RuleReport`
+/// with the same rule name (SPEC D.2).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn follow_uses_workspace(
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    states: &HashMap<String, FileState>,
+    file_edits: &mut HashMap<String, Vec<TextEdit>>,
+    unparseable: &[(String, String)],
+    def_path: &str,
+    edits_before: usize,
+    found: usize,
+) -> Result<(HashMap<String, String>, FollowExtras), StructuredError> {
+    let mut bindings = HashMap::new();
+    let no_follow: FollowExtras = Vec::new();
+    if found == 0 {
+        return Ok((bindings, no_follow));
+    }
+    let (old, new) = match &compiled.kind {
+        PatternKind::Fn {
+            minus_name,
+            plus_name,
+            ..
+        } => (minus_name.clone(), plus_name.clone()),
+        PatternKind::ItemRename {
+            minus_name,
+            plus_name,
+            ..
+        } => (minus_name.clone(), plus_name.clone()),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+            )
+            .with_rule(rh.rule_name())
+            .with_file(def_path)
+            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
+        }
+    };
+    // Ranges this hunk already rewrote: a same-named definition outside
+    // them shadows (the resolver decides veto vs skip, never guesses).
+    let renamed: Vec<(usize, usize)> = file_edits
+        .get(def_path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    // Deterministic file order for reports and vetoes.
+    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
+    let mut paths: Vec<&String> = states.keys().collect();
+    paths.sort();
+    for p in paths {
+        let st = &states[p];
+        if let Some(parsed) = st.parsed.as_ref() {
+            refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
+        }
+    }
+    let outcome = resolve_workspace(
+        &refs,
+        &old,
+        def_path,
+        &renamed,
+        rh.fallback_syntax(),
+    )
+    .map_err(|veto| {
+        StructuredError::new(ErrorCode::SymbolConflict, veto.reason)
+            .with_rule(rh.rule_name())
+            .with_file(def_path)
+            .with_suggestion(
+                "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped`) instead of failing",
+            )
+    })?;
+    // Unparseable-workspace tripwire (SPEC 14.8): a file the resolver could
+    // not search that names `old` outside strings/comments fails loud
+    // without fallback (never a silent stale site), or is listed and left
+    // untouched with it. Token-exact via `proc_macro2` lexing; when even
+    // lexing fails, assume a mention (fail loud).
+    let mut tripwire: Vec<String> = Vec::new();
+    for (path, text) in unparseable {
+        if raw_mentions(text, &old) {
+            tripwire.push(path.clone());
+        }
+    }
+    tripwire.sort();
+    tripwire.dedup();
+    if !tripwire.is_empty() && !rh.fallback_syntax() {
+        let path = &tripwire[0];
+        return Err(StructuredError::new(
+            ErrorCode::SymbolConflict,
+            format!("use of `{old}` may hide in unparseable file {path}: cannot search it syntactically"),
+        )
+        .with_rule(rh.rule_name())
+        .with_file(def_path)
+        .with_suggestion(
+            "add `# fallback=syntax` to skip unsearchable files (listed in `follow_skipped`) instead of failing",
+        ));
+    }
+    // Append use-span edits per file; record pre-push lengths so extra
+    // reports span exactly the pushed edits.
+    let mut before_lens: HashMap<String, usize> = HashMap::new();
+    for (f, spans) in &outcome.per_file {
+        before_lens.insert(f.clone(), file_edits.get(f).map(|v| v.len()).unwrap_or(0));
+        let vec = file_edits.get_mut(f).expect("workspace file state");
+        for (a, b) in spans {
+            vec.push(TextEdit::new(*a, *b, new.clone()));
+        }
+    }
+    let mut extras: FollowExtras = Vec::new();
+    for (f, spans) in &outcome.per_file {
+        if f == def_path {
+            continue;
+        }
+        if spans.is_empty() {
+            continue;
+        }
+        let st = states.get(f).expect("workspace file state");
+        let edits = file_edits.get(f).expect("workspace file state");
+        let before = before_lens.get(f).copied().unwrap_or(0);
+        let line_spans = edit_spans(&st.index, &edits[before..]);
+        extras.push((f.clone(), spans.len(), line_spans));
+    }
+    extras.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut skipped = outcome.skipped;
+    for path in &tripwire {
+        skipped.push(format!(
+            "{path}: unparseable file left untouched (may name `{old}`)"
+        ));
+    }
+    if !skipped.is_empty() {
+        bindings.insert("follow_skipped".to_string(), skipped.join("; "));
+    }
+    Ok((bindings, extras))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

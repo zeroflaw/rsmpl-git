@@ -92,6 +92,18 @@ impl LineIndex {
     }
 }
 
+/// Parsed original state for one file.
+///
+/// `parsed` is `None` for ordinary-only files (T137): a file touched by
+/// no RSmPL hunk is plain text — no Rust parse of the original or the
+/// rewritten file. Any file with >=1 RSmPL hunk keeps `Some` and the
+/// current strict Rust behavior.
+pub(crate) struct FileState {
+    pub(crate) original: String,
+    pub(crate) index: LineIndex,
+    pub(crate) parsed: Option<syn::File>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

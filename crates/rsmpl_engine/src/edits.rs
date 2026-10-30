@@ -2,6 +2,8 @@
 
 use rsmpl_patch::{ErrorCode, StructuredError};
 
+use crate::lines::LineIndex;
+
 /// A replacement of `original[start..end]` with `replacement`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
@@ -181,6 +183,74 @@ fn norm(s: &str) -> String {
     s.replace(",)", ")").replace(",]", "]").replace(",}", "}")
 }
 
+/// Per-match original-source line spans for one hunk's new edits (T27).
+///
+/// Each `TextEdit` covers `original[start..end]`; the span is the 1-based
+/// inclusive `[line_of(start), line_of(end)]` pair. Two normalizations keep
+/// spans tight: insertions (`start == end`) report `[anchor, anchor]`, and an
+/// `end` landing exactly on a line start (whole-line deletes) is attributed
+/// to the previous line so deleting line 5 reports `[5, 5]`, not `[5, 6]`.
+pub(crate) fn edit_spans(index: &LineIndex, new_edits: &[TextEdit]) -> Vec<(u32, u32)> {
+    new_edits
+        .iter()
+        .map(|e| {
+            let s = index.line_of(e.start);
+            let en = if e.end > e.start && index.line_start(index.line_of(e.end)) == Some(e.end) {
+                index.line_of(e.end).saturating_sub(1).max(s)
+            } else {
+                index.line_of(e.end)
+            };
+            (s, en)
+        })
+        .collect()
+}
+
+/// Reject incompatible overlapping edits (SPEC 10.6, 23.5).
+///
+/// Same-point insertions are allowed (deterministic stable order, document
+/// order). An insertion strictly inside a deleted/replaced range is rejected,
+/// as are partially overlapping replacements.
+pub(crate) fn check_overlaps(edits: &[TextEdit], path: &str) -> Result<(), StructuredError> {
+    for i in 0..edits.len() {
+        for j in (i + 1)..edits.len() {
+            let (a, b) = (&edits[i], &edits[j]);
+            if a.is_insertion() && b.is_insertion() {
+                continue; // same-point insertions: deterministic order
+            }
+            if a.overlaps(b) {
+                return Err(StructuredError::new(
+                    ErrorCode::GitHunkConflict,
+                    "overlapping edits cannot be merged",
+                )
+                .with_file(path)
+                .with_suggestion(
+                    "apply the overlapping rewrites in separate runs, or make the ranges disjoint",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// WI-2 untouched-outside-spans evidence (SPEC 24.6): re-derive
+/// `updated` from `original` plus only `edits` and byte-compare.
+/// A mismatch is an engine bug — fail loud, never a warning.
+pub(crate) fn check_untouched(
+    original: &str,
+    updated: &str,
+    edits: &[TextEdit],
+    path: &str,
+) -> Result<(), StructuredError> {
+    let rederived = apply_edits(original, edits.to_vec()).map_err(|e| e.with_file(path))?;
+    if rederived != updated {
+        return Err(StructuredError::new(
+            ErrorCode::ParseConflict,
+            "rewritten file failed untouched verification (engine bug: materialization is not a pure function of original plus reported spans)",
+        )
+        .with_file(path));
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

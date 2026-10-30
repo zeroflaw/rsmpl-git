@@ -21,6 +21,7 @@ mod matcher_macro;
 mod matcher_use;
 mod ordinary;
 mod plan;
+mod suggest;
 mod use_graph;
 mod validate;
 

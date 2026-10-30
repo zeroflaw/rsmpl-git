@@ -1,6 +1,7 @@
 //! Match-count and range validation (SPEC 24, 25).
 
 use rsmpl_patch::{Allow, ErrorCode, FileSection, Hunk, Scope, StructuredError};
+use rsmpl_pattern::PatternKind;
 
 use crate::lines::LineIndex;
 
@@ -126,6 +127,73 @@ fn range_err(rule: &str, file: &str, start: u32, len: u32, n: u32) -> Structured
     .with_suggestion(format!("read `{file}` to list valid ranges"))
 }
 
+/// v0.1 capability gate (SPEC 22-23): only `format=preserve` and AST matching
+/// (plus macro token-tree patterns).
+pub(crate) fn gate_directives(
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    path: &str,
+) -> Result<(), StructuredError> {
+    if rh.format_mode() != rsmpl_patch::FormatMode::Preserve {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "only `# format=preserve` is supported in v0.1",
+        )
+        .with_rule(rh.rule_name())
+        .with_file(path)
+        .with_suggestion("remove the directive and run `cargo fmt` after apply"));
+    }
+    // WI-6a: `# follow=uses` is legal only on fn and item rename hunks
+    // (SPEC 18.6); every other shape keeps the SPEC 14.8 follow-up hunks.
+    if rh.follows_uses()
+        && !matches!(
+            &compiled.kind,
+            PatternKind::Fn { .. } | PatternKind::ItemRename { .. }
+        )
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+        )
+        .with_rule(rh.rule_name())
+        .with_file(path)
+        .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
+    }
+    let is_macro = matches!(
+        &compiled.kind,
+        PatternKind::Macro { .. }
+            | PatternKind::Expr {
+                minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
+                ..
+            }
+    ) || rh.macro_mode() == rsmpl_patch::MacroMode::TokenTree;
+    if rh.parse_mode() == rsmpl_patch::ParseMode::Tokens && !is_macro {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "`# mode=tokens` is only supported for macro token-tree patterns in v0.1",
+        )
+        .with_rule(rh.rule_name())
+        .with_file(path));
+    }
+    Ok(())
+}
+
+pub(crate) fn unbound_plus(
+    rh: &rsmpl_patch::RsmplHunk,
+    names: &[String],
+    path: &str,
+) -> StructuredError {
+    StructuredError::new(
+        ErrorCode::PatternConflict,
+        format!(
+            "metavariable(s) used in `+` pattern without binding: {}",
+            names.join(", ")
+        ),
+    )
+    .with_rule(rh.rule_name())
+    .with_file(path)
+    .with_suggestion("bind them in `-`/context or declare `# use=`")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
