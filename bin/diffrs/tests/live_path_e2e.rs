@@ -1061,3 +1061,61 @@ fn verbatim_sweep_guard_occurrence_stays_ordinary() {
         changed
     );
 }
+
+#[test]
+fn quoted_rename_gets_preimage_totality() {
+    // WI-7-pre_small: `pre_images` C-decodes `rename from/to`, so a
+    // quoted-path rename maps `base:<old>` under the new-path key and the
+    // content compresses with pre-image totality (not section-visible).
+    // Before the fix the quoted value missed the `.rs` gate / `git show`.
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    let base = "fn m() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    old_fn(aaa);\n    old_fn(bbb);\n    let d = 4;\n    let e = 5;\n}\n";
+    let changed = "fn m() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    new_fn(aaa);\n    new_fn(bbb);\n    let d = 4;\n    let e = 5;\n}\n";
+    write(dir.path(), "q\"old.rs", base);
+    commit_all(dir.path());
+    std::fs::rename(dir.path().join("q\"old.rs"), dir.path().join("q\"new.rs")).unwrap();
+    std::fs::write(dir.path().join("q\"new.rs"), changed).unwrap();
+    git(dir.path(), &["add", "-A"]);
+
+    let out = run(dir.path(), &["--staged", "--format", "json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let patch = payload["patch"].as_str().unwrap().to_string();
+    assert!(patch.contains("rename from"), "got: {patch}");
+    assert!(
+        patch.contains("rule="),
+        "quoted rename stayed ordinary: {patch}"
+    );
+    let hunks = payload["hunks"].as_array().unwrap();
+    assert!(!hunks.is_empty(), "no hunks: {patch}");
+    assert!(
+        hunks.iter().any(|h| h["totality"] == "pre-image"),
+        "all section-visible: {hunks:?} patch: {patch}"
+    );
+
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &patch);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("q\"new.rs")).unwrap(),
+        changed
+    );
+    assert!(
+        !dir.path().join("q\"old.rs").exists(),
+        "old side not removed"
+    );
+}

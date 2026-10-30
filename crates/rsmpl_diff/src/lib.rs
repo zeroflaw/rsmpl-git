@@ -94,9 +94,12 @@ fn pre_images(
                 flush_rename(&mut rename_old, &mut rename_new);
                 let _ = rest;
             } else if let Some(from) = line.strip_prefix("rename from ") {
-                rename_old = Some(from.to_string());
+                // T398: C-quoted values decode via the shared quotepath
+                // rule (same as with_ab_prefix); verbatim quotes miss
+                // git show and the .rs suffix gate (section-visible fallback).
+                rename_old = Some(rsmpl_patch::decode_git_path_token(from.trim()));
             } else if let Some(to) = line.strip_prefix("rename to ") {
-                rename_new = Some(to.to_string());
+                rename_new = Some(rsmpl_patch::decode_git_path_token(to.trim()));
             }
         }
         flush_rename(&mut rename_old, &mut rename_new);

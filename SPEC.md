@@ -6464,7 +6464,7 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    whose content hunks compress under any existing detector emit the
    semantic hunks against the new path inside the preserved rename
    section — the engine seeds rename content from the old side, SPEC
-   6/T377 — with pre-image totality read from the old path; a rename
+   6/T377 — with pre-image totality read from the old path (C-decoded via the shared quotepath rule, same as the parser); a rename
    with no compressible content stays passthrough byte-for-byte, T377) stays
    ordinary-hunk passthrough.
   Pure deletions/additions stay ordinary by design (T424 verdict — no

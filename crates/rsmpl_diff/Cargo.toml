@@ -8,3 +8,4 @@ license.workspace = true
 thiserror = { workspace = true }
 rsmpl_diff_source = { workspace = true }
 rsmpl_diff_infer = { workspace = true }
+rsmpl_patch = { workspace = true }

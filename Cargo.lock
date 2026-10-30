@@ -296,6 +296,7 @@ version = "0.1.0"
 dependencies = [
  "rsmpl_diff_infer",
  "rsmpl_diff_source",
+ "rsmpl_patch",
  "thiserror",
 ]
 
