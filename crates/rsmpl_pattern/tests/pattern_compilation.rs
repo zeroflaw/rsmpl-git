@@ -1248,6 +1248,8 @@ fn const_evolution_template_accepts_visibility() {
     assert!(parse_const_evolution_template("pub type New = ...;").is_none());
     assert!(parse_const_evolution_template("pub static New = ...;").is_none());
     assert!(parse_const_evolution_template("pub static mut New = ...;").is_none());
+    assert!(parse_const_evolution_template("pub mod New { ... }").is_none());
+    assert!(parse_const_evolution_template("pub unsafe mod New { ... }").is_none());
     // Missing marker, missing `=`, garbage prefix, multi-line all rejected.
     assert!(parse_const_evolution_template("pub const New").is_none());
     assert!(parse_const_evolution_template("pub const New ...;").is_none());
@@ -1295,4 +1297,36 @@ fn static_evolution_template_accepts_visibility_and_mut() {
         (pre.trim(), name.as_str(), is_mut),
         ("pub", "mutate", false)
     );
+}
+#[test]
+fn mod_evolution_template_accepts_visibility_and_unsafe() {
+    // WI-8 slice 7: `mod` evolution pastes accept visibility
+    // prefixes, an optional `unsafe`, and require a `...` body marker.
+    use rsmpl_pattern::parse_mod_evolution_template;
+    for prefix in ["", "pub", "pub(crate)", "pub unsafe", "pub(crate) unsafe"] {
+        let tmpl = if prefix.is_empty() {
+            "mod New { ... }".to_string()
+        } else {
+            format!("{prefix} mod New {{ ... }}")
+        };
+        let (pre, name) =
+            parse_mod_evolution_template(&tmpl).unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+        assert_eq!(name, "New", "got: {tmpl:?}");
+        assert_eq!(pre.trim(), prefix, "got: {tmpl:?}");
+    }
+    // `fn`/`struct`/`enum`/`union`/`type`/`const`/`static` templates are
+    // different parsers — never cross-accept.
+    assert!(parse_mod_evolution_template("pub fn new(...) { ... }").is_none());
+    assert!(parse_mod_evolution_template("pub struct New { ... }").is_none());
+    assert!(parse_mod_evolution_template("pub enum New { ... }").is_none());
+    assert!(parse_mod_evolution_template("pub union New { ... }").is_none());
+    assert!(parse_mod_evolution_template("pub type New = ...;").is_none());
+    assert!(parse_mod_evolution_template("pub const New = ...;").is_none());
+    assert!(parse_mod_evolution_template("pub static New = ...;").is_none());
+    assert!(parse_mod_evolution_template("pub static mut New = ...;").is_none());
+    // Missing marker, garbage prefix, multi-line all rejected.
+    assert!(parse_mod_evolution_template("pub mod New").is_none());
+    assert!(parse_mod_evolution_template("pub mod New { }").is_none());
+    assert!(parse_mod_evolution_template("a;b mod New { ... }").is_none());
+    assert!(parse_mod_evolution_template("pub mod New { ... }\nfoo").is_none());
 }

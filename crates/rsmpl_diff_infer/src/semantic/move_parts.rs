@@ -27,6 +27,7 @@ pub(crate) enum EvolvedKind {
     Type,
     Const,
     Static,
+    Mod,
 }
 
 #[derive(Clone)]
@@ -35,7 +36,7 @@ pub(crate) struct EvolvedPair {
     pub(crate) prefix: String,
     pub(crate) name: String,
     /// WI-8 slice 6: the plus-side `mut` for `Static` pairs (the
-    /// template carries it verbatim); always `false` for the other six
+    /// template carries it verbatim); always `false` for the other seven
     /// kinds.
     pub(crate) static_mut: bool,
 }
@@ -47,7 +48,7 @@ pub(crate) struct MovePair {
     pub(crate) item: MoveItem,
     pub(crate) plus_first: usize,
     pub(crate) plus_last: usize,
-    /// WI-8a + WI-8 slices 1-6: plus-side header evolution (kind +
+    /// WI-8a + WI-8 slices 1-7: plus-side header evolution (kind +
     /// prefix + new name); `None` for byte-identical pairs
     /// (bare-`bind` paste).
     pub(crate) evolved: Option<EvolvedPair>,

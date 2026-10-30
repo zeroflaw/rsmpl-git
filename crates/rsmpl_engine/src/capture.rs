@@ -102,11 +102,12 @@ pub(crate) fn paste_capture(
     Ok(())
 }
 
-/// WI-8a + WI-8 slices 1-6: splice a captured item under an
+/// WI-8a + WI-8 slices 1-7: splice a captured item under an
 /// evolution-template header (`pub fn New(...) { ... }`,
 /// `pub struct New { ... }`, `pub enum New { ... }`,
 /// `pub union New { ... }`, `pub type New = ...;`,
-/// `pub const New = ...;`, or `pub static [mut ]New = ...;`). The
+/// `pub const New = ...;`, `pub static [mut ]New = ...;`, or
+/// `pub mod New { ... }`). The
 /// template's prefix and new ident replace the capture's header line;
 /// every other line stays byte-verbatim. Returns the spliced item text.
 fn splice_evolved_header(
@@ -115,6 +116,9 @@ fn splice_evolved_header(
     rule: &str,
 ) -> Result<String, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    if rsmpl_pattern::parse_mod_evolution_template(template.trim()).is_some() {
+        return splice_mod_header(captured, template, rule);
+    }
     if rsmpl_pattern::parse_static_evolution_template(template.trim()).is_some() {
         return splice_static_header(captured, template, rule);
     }
@@ -136,7 +140,7 @@ fn splice_evolved_header(
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, or a single-line `static` header with `= ...;` (got `{}`)",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, or a single-line `static` header with `= ...;`, or a single-line `mod` header with `...` (got `{}`)",
                 template.trim()
             ))
         })?;
@@ -149,7 +153,7 @@ fn splice_evolved_header(
         [syn::Item::Fn(f)] => f.sig.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `fn` item for a `fn` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `fn` item for a `fn` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }
@@ -237,7 +241,7 @@ fn splice_struct_header(
         [syn::Item::Struct(s)] => s.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `struct` item for a `struct` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `struct` item for a `struct` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }
@@ -330,7 +334,7 @@ fn splice_enum_header(
         [syn::Item::Enum(e)] => e.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `enum` item for an `enum` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `enum` item for an `enum` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }
@@ -423,7 +427,7 @@ fn splice_union_header(
         [syn::Item::Union(u)] => u.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `union` item for a `union` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `union` item for a `union` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }
@@ -516,7 +520,7 @@ fn splice_type_header(
         [syn::Item::Type(t)] => t.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `type` item for a `type` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `type` item for a `type` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }
@@ -609,7 +613,7 @@ fn splice_static_header(
         [syn::Item::Static(s)] => s.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `static` item for a `static` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `static` item for a `static` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }
@@ -736,6 +740,122 @@ fn static_line_ident(line: &str) -> Option<String> {
     None
 }
 
+/// WI-8 slice 7: splice a captured `mod` item under an
+/// evolution-template header (`pub mod New { ... }`,
+/// `pub unsafe mod New { ... }`). The template's visibility prefix
+/// (+ optional `unsafe`) and new ident replace the capture's
+/// `mod <Old>` header span; leading indent and the full captured
+/// suffix (`;` or `{}` — declaration or empty inline) stay verbatim.
+fn splice_mod_header(
+    captured: &str,
+    template: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let (new_prefix, new_name) = rsmpl_pattern::parse_mod_evolution_template(template.trim())
+        .ok_or_else(|| {
+            fail(format!(
+                "evolution paste template must be a single-line `mod` header with `...` (got `{}`)",
+                template.trim()
+            ))
+        })?;
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name = match file.items.as_slice() {
+        [syn::Item::Mod(m)] => m.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `mod` item for a `mod` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
+                    .to_string(),
+            ));
+        }
+    };
+    // First `mod <Old>` header line: word-bounded match so a body
+    // occurrence (e.g. a doc comment) never wins over the header.
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if mod_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx =
+        target.ok_or_else(|| fail(format!("captured text has no `mod {old_name}` header line")))?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, rest) = line.split_at(ws_len);
+    let mut mod_at = None;
+    let mut search = rest;
+    let mut base = 0;
+    while let Some(pos) = search.find("mod") {
+        let before_ok = pos == 0
+            || !search.as_bytes()[pos - 1].is_ascii_alphanumeric()
+                && search.as_bytes()[pos - 1] != b'_';
+        let after = &search[pos + 3..];
+        let after_ok = after.starts_with(char::is_whitespace);
+        let boundary = after.trim_start()[old_name.len()..]
+            .chars()
+            .next()
+            .map(|c| c != '_' && !c.is_ascii_alphanumeric())
+            .unwrap_or(true);
+        if before_ok && after_ok && after.trim_start().starts_with(old_name.as_str()) && boundary {
+            mod_at = Some(base + pos);
+            break;
+        }
+        search = &search[pos + 3..];
+        base += pos + 3;
+    }
+    let mod_at =
+        mod_at.ok_or_else(|| fail(format!("captured text has no `mod {old_name}` header line")))?;
+    let after_mod = &rest[mod_at + 3..];
+    let trimmed = after_mod.trim_start();
+    let suffix = trimmed[old_name.len()..].to_string();
+    let pre = new_prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("mod {new_name}")
+    } else {
+        format!("{pre} mod {new_name}")
+    };
+    lines[idx] = format!("{ws}{head}{suffix}");
+    Ok(lines.join("\n"))
+}
+
+/// The ident of a `mod <Ident>` header line (`None` when the line
+/// holds no word-bounded `mod` + ident pair).
+fn mod_line_ident(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        if bytes[i..].starts_with(b"mod")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 3).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 3;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if start != j {
+                return Some(line[start..j].to_string());
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
 /// WI-8 slice 5: splice a captured `const` item under an
 /// evolution-template header (`pub const New = ...;`). The
 /// template's visibility prefix and new ident replace the capture's
@@ -763,7 +883,7 @@ fn splice_const_header(
         [syn::Item::Const(c)] => c.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `const` item for a `const` template (only fn/struct/enum/union/type/const/static headers evolve)"
+                "evolution paste needs a captured `const` item for a `const` template (only fn/struct/enum/union/type/const/static/mod headers evolve)"
                     .to_string(),
             ));
         }

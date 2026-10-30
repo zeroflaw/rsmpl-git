@@ -585,3 +585,113 @@ fn const_template_on_static_capture_is_loud() {
     .expect_err("kind mismatch must fail loud");
     assert!(err.contains("captured `const`"), "got: {err}");
 }
+
+// WI-8 slice 7: mod evolution pastes (declaration-form and empty
+// inline mods only — inline mods with nested items stay ordinary, the
+// scalar `- I` cut cannot isolate them).
+
+const MOD_SRC: &str = "mod old {}\n";
+const B_MOD: &str = "fn other() {}\n";
+
+fn cut_and_paste_mod(template: &str) -> String {
+    format!(
+        "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ {template}\n"
+    )
+}
+
+#[test]
+fn mod_name_and_vis_evolve_cross_file() {
+    let files = apply_multi(
+        &cut_and_paste_mod("pub mod new { ... }"),
+        vec![("a.rs", MOD_SRC), ("b.rs", B_MOD)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub mod new {}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn mod_decl_form_evolves_cross_file() {
+    // A `mod old;` declaration splices under a template with the `;`
+    // suffix byte-verbatim.
+    let files = apply_multi(
+        &cut_and_paste_mod("pub mod new { ... }"),
+        vec![("a.rs", "mod old;\n"), ("b.rs", B_MOD)],
+    )
+    .unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub mod new;\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn mod_unsafe_form_rides_verbatim() {
+    // An `unsafe mod` capture splices under an `unsafe` template with
+    // the empty body byte-verbatim.
+    let src = "unsafe mod old {}\n";
+    let files = apply_multi(
+        &cut_and_paste_mod("pub unsafe mod new { ... }"),
+        vec![("a.rs", src), ("b.rs", B_MOD)],
+    )
+    .unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub unsafe mod new {}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn mod_unsafe_added_by_template() {
+    // Authored paste may add `unsafe` via the template: the template
+    // prefix wins, the captured suffix rides verbatim.
+    let files = apply_multi(
+        &cut_and_paste_mod("pub unsafe mod new { ... }"),
+        vec![("a.rs", MOD_SRC), ("b.rs", B_MOD)],
+    )
+    .unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub unsafe mod new {}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn mod_malformed_template_is_loud() {
+    let err = apply_multi(
+        &cut_and_paste_mod("pub mod new"),
+        vec![("a.rs", MOD_SRC), ("b.rs", B_MOD)],
+    )
+    .expect_err("malformed mod template must fail loud");
+    assert!(err.contains("evolution paste template"), "got: {err}");
+}
+
+#[test]
+fn mod_template_on_struct_capture_is_loud() {
+    // Kind mismatch: a `mod` template cannot splice a `struct` capture.
+    let err = apply_multi(
+        &cut_and_paste_struct("pub mod New { ... }"),
+        vec![("a.rs", STRUCT_SRC), ("b.rs", B_STRUCT)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `mod`"), "got: {err}");
+}
+
+#[test]
+fn struct_template_on_mod_capture_is_loud() {
+    // Converse kind mismatch: a `struct` template cannot splice a
+    // `mod` capture.
+    let err = apply_multi(
+        &cut_and_paste_mod("pub struct New { ... }"),
+        vec![("a.rs", MOD_SRC), ("b.rs", B_MOD)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `struct`"), "got: {err}");
+}

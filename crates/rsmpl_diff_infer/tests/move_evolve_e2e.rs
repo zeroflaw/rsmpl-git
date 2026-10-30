@@ -834,3 +834,136 @@ fn static_expr_edited_pair_stays_ordinary() {
         out.rsmpl
     );
 }
+
+/// A long-enough mod to clear the T375 byte-win guard: doc attrs pad
+/// the item (they ride with it), while the inline body stays empty —
+/// inline mods with nested items stay ordinary (the scalar `- I` cut
+/// cannot isolate them).
+fn big_mod(vis: &str, name: &str) -> String {
+    let mut s = String::new();
+    for i in 0..12 {
+        s.push_str(&format!("/// pad {i} for byte-win padding text\n"));
+    }
+    if !vis.is_empty() {
+        s.push_str(vis);
+        s.push(' ');
+    }
+    s.push_str(&format!("mod {name} {{}}\n"));
+    s
+}
+
+#[test]
+fn mod_name_change_fires_with_template_paste_and_round_trips() {
+    // WI-8 slice 7: `mod old {}` → `pub mod new {}` (doc-padded empty mod)
+    // moving files compresses to a cut + mod-template paste and
+    // round-trips byte-identical.
+    let minus_item = big_mod("", "old");
+    let plus_item = big_mod("pub", "new");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind="),
+        "evolved mod cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub mod new { ... }"),
+        "mod template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn mod_unsafe_gain_fires_with_unsafe_template_and_round_trips() {
+    // WI-8 slice 7: `mod old` → `pub unsafe mod new` rides the
+    // `unsafe` verbatim in the prefix, like `fn` qualifiers ride
+    // the prefix.
+    let minus_item = big_mod("", "old");
+    let plus_item = big_mod("pub unsafe", "new");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("+ pub unsafe mod new { ... }"),
+        "unsafe mod template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn mod_content_edited_pair_stays_ordinary() {
+    // A nested item on either side vetoes the mod move: the scalar
+    // `- I` cut would match the nested item too, so the pair stays a
+    // full delete+insert.
+    let minus_item = big_mod("", "old");
+    let plus_item = "pub mod new {\n    pub fn f() {}\n}\n".to_string();
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_item.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        !out.rsmpl.contains("# bind="),
+        "nested items veto the mod move, got:\n{}",
+        out.rsmpl
+    );
+}

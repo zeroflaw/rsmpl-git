@@ -1,5 +1,5 @@
-//! WI-8a + WI-8 slices 1-6: `fn`, `struct`, `enum`, `union`, `type`,
-//! `const`, and `static` move + header evolution pairing.
+//! WI-8a + WI-8 slices 1-7: `fn`, `struct`, `enum`, `union`, `type`,
+//! `const`, `static`, and `mod` move + header evolution pairing.
 //!
 //! Byte-identical pairing (`moves::try_move_sweep`) misses moves that
 //! also rename the item or change its header — the common case
@@ -7,26 +7,30 @@
 //! `enum Old` → `pub enum New`, `union Old` → `pub union New`,
 //! `type Old` → `pub type New`,
 //! `const Old` → `pub const New`,
-//! `static Old` → `pub static New` in a new
-//! module file). This module pairs `fn`/`struct`/`enum`/`union`/`type`/`const`/`static` items
+//! `const Old` → `pub const New`,
+//! `static Old` → `pub static New`,
+//! `mod old` → `pub mod new` in a new
+//! module file). This module pairs `fn`/`struct`/`enum`/`union`/`type`/`const`/`static`/`mod` items
 //! whose bodies (and signatures/fields/variants/aliased types/const
-//! type+expr/static type+expr) are token-equal but
+//! type+expr/static type+expr/empty-or-absent mod content) are token-equal but
 //! whose header prefix (vis + qualifiers, verbatim) and/or name evolve,
 //! and builds the single-line header template the engine's evolution
 //! paste (`# use=N` + `+ <prefix>fn <New>(...) { ... }` /
 //! `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` /
 //! `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` /
-//! `+ <prefix>const <New> = ...;` /
+//! `+ <prefix>const <New> = ...;` / `+ <prefix>mod <New> { ... }` /
 //! `+ <prefix>static [mut ]<New> = ...;`) splices the captured body under.
 //!
-//! Scope is deliberately narrow (WI-8a + slices 1-6): `fn`, `struct`,
-//! `enum`, `union`, `type`, `const`, and `static` items only; generics, params/fields/variants/
-//! aliased type/const type+expr/static type+expr, return type, `where` clause, attrs, and bodies must be token-equal.
+//! Scope is deliberately narrow (WI-8a + slices 1-7): `fn`, `struct`,
+//! `enum`, `union`, `type`, `const`, `static`, and `mod` items only; generics, params/fields/variants/
+//! aliased type/const type+expr/static type+expr/empty-or-absent mod content, return type, `where` clause, attrs, and bodies must be token-equal.
 //! The evolving prefix is verbatim plus-side text, never an inferred
 //! hole, so qualifier evolution (`fn` → `pub async fn`) rides the same
 //! safe mechanism as vis/name. `static mut` mutability rides verbatim
 //! in the template the same way (a `static` vs `static mut` delta is an
-//! evolution, not a veto). Everything else (other item kinds,
+//! evolution, not a veto). `unsafe mod` rides the same way (an
+//! `unsafe` delta is part of the verbatim prefix before `mod`).
+//! Everything else (other item kinds,
 //! attr/signature/field/variant/aliased-type/body deltas) stays ordinary — the
 //! byte-exact path owns identical items (an evolved pair requires a
 //! prefix, name, or (for `static`) mutability delta).
@@ -990,6 +994,146 @@ pub(crate) fn static_evolution_template(prefix: &str, name: &str, is_mut: bool) 
     }
 }
 
+/// Evolved `mod` pair check (WI-8 slice 7): same shape modulo the
+/// visibility prefix (which carries an optional `unsafe` qualifier)
+/// and the ident. Attrs must be token-equal; content must be absent on
+/// both sides (`mod foo;` declarations) or empty on both sides
+/// (`mod foo {}` — a `;`-vs-braced delta vetoes, and any nested item
+/// vetoes: the scalar `- I` cut cannot isolate a mod with nested
+/// items, it would match them too). Returns the plus-side ident when
+/// the pair evolves (a vis, name, or unsafety delta is required — the
+/// byte-exact path owns identical items). `unsafe` rides verbatim in
+/// the prefix like `fn` qualifiers ride the prefix.
+pub(crate) fn mod_evolved_match(minus: &syn::ItemMod, plus: &syn::ItemMod) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    let vis_same = tok(&minus.vis) == tok(&plus.vis);
+    let name_same = minus.ident == plus.ident;
+    let unsafety_same = minus.unsafety.is_some() == plus.unsafety.is_some();
+    if vis_same && name_same && unsafety_same {
+        return None;
+    }
+    if minus.semi.is_some() != plus.semi.is_some() {
+        return None;
+    }
+    match (&minus.content, &plus.content) {
+        (None, None) => {}
+        // Only empty inline mods evolve (see above): any nested item
+        // on either side vetoes, even identical content.
+        (Some((_, a)), Some((_, b))) if a.is_empty() && b.is_empty() => {}
+        _ => return None,
+    }
+    Some(plus.ident.to_string())
+}
+
+/// All evolved `mod` hits of one minus item text in a pure-plus
+/// hunk body (WI-8 slice 7). Mirrors `find_static_evolved_hits`;
+/// spans coincide with parsed `mod` item spans by construction.
+pub(crate) fn find_mod_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemMod>(minus_text) else {
+        return Vec::new();
+    };
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Mod(plus) = it else {
+            continue;
+        };
+        if mod_evolved_match(&minus, plus).is_none() {
+            continue;
+        }
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let name = plus.ident.to_string();
+        let Some(prefix) = mod_header_prefix(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1, e - 1, prefix, name));
+    }
+    out
+}
+
+/// The verbatim text before the `mod <name>` keyword on the item's
+/// header line (visibility + optional `unsafe`, leading whitespace
+/// stripped). Attr/doc lines never match: the header is always a
+/// code line.
+pub(crate) fn mod_header_prefix(item_lines: &[String], name: &str) -> Option<String> {
+    for line in item_lines {
+        let text = line.get(1..).unwrap_or("");
+        let t = text.trim_start();
+        if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
+            continue;
+        }
+        if let Some(m_pos) = find_mod_name(text, name) {
+            return Some(text[..m_pos].trim_start().to_string());
+        }
+    }
+    None
+}
+
+/// Byte offset of a word-bounded `mod <name>` pair (`None` when
+/// the line holds no such pair: comments, strings, or other idents).
+fn find_mod_name(line: &str, name: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        if bytes[i..].starts_with(b"mod")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 3).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 3;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if line.get(start..j) == Some(name) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Single-line mod evolution-paste template: the plus-side
+/// visibility (+ optional `unsafe`) verbatim, `{ ... }` body marker.
+/// `prefix` is trimmed; an empty prefix yields a bare `mod` header.
+/// The `{ ... }` tail is a shape marker only — the splice keeps the
+/// captured suffix (`;` or `{}`) verbatim, so the declaration and
+/// empty-inline forms round-trip.
+pub(crate) fn mod_evolution_template(prefix: &str, name: &str) -> String {
+    let pre = prefix.trim_end();
+    if pre.is_empty() {
+        format!("mod {name} {{ ... }}")
+    } else {
+        format!("{pre} mod {name} {{ ... }}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1398,6 +1542,79 @@ mod tests {
         assert_eq!(
             static_header_prefix(&lines, "helper"),
             Some("pub ".to_string())
+        );
+    }
+
+    fn item_mod(text: &str) -> syn::ItemMod {
+        syn::parse_str(text).expect("test mod must parse")
+    }
+
+    #[test]
+    fn mod_vis_and_name_evolve_fires() {
+        let minus = item_mod("mod old {}");
+        let plus = item_mod("pub mod new {}");
+        assert_eq!(mod_evolved_match(&minus, &plus), Some("new".to_string()));
+    }
+
+    #[test]
+    fn mod_name_only_and_vis_only_fire() {
+        let minus = item_mod("mod old {}");
+        let plus = item_mod("mod new {}");
+        assert_eq!(mod_evolved_match(&minus, &plus), Some("new".to_string()));
+        let plus = item_mod("pub(crate) mod old {}");
+        assert_eq!(mod_evolved_match(&minus, &plus), Some("old".to_string()));
+    }
+
+    #[test]
+    fn mod_decl_forms_fire() {
+        let minus = item_mod("mod old;");
+        let plus = item_mod("pub mod new;");
+        assert_eq!(mod_evolved_match(&minus, &plus), Some("new".to_string()));
+    }
+
+    #[test]
+    fn mod_unsafe_delta_rides_verbatim() {
+        let minus = item_mod("mod old {}");
+        let plus = item_mod("pub unsafe mod new {}");
+        assert_eq!(mod_evolved_match(&minus, &plus), Some("new".to_string()));
+        let minus_u = item_mod("unsafe mod old {}");
+        let plus_u = item_mod("mod old {}");
+        assert_eq!(
+            mod_evolved_match(&minus_u, &plus_u),
+            Some("old".to_string())
+        );
+    }
+
+    #[test]
+    fn mod_identical_and_deltas_veto() {
+        let base = item_mod("mod old {}");
+        let same = item_mod("mod old {}");
+        assert_eq!(mod_evolved_match(&base, &same), None);
+        // Any nested item vetoes, even identical content (the scalar
+        // `- I` cut cannot isolate a mod with nested items).
+        let plus = item_mod("pub mod new {\n    pub fn f() {}\n}");
+        assert_eq!(mod_evolved_match(&base, &plus), None);
+        let nested = item_mod("mod old {\n    pub fn f() {}\n}");
+        let nested_same = item_mod("mod old {\n    pub fn f() {}\n}");
+        assert_eq!(mod_evolved_match(&nested, &nested_same), None);
+        let nested_plus = item_mod("pub mod new {\n    pub fn f() {}\n}");
+        assert_eq!(mod_evolved_match(&nested, &nested_plus), None);
+        // Semi-vs-braced delta.
+        let minus_d = item_mod("mod old;");
+        let plus_d = item_mod("pub mod new {\n}");
+        assert_eq!(mod_evolved_match(&minus_d, &plus_d), None);
+        // Attr delta.
+        let plus_a = item_mod("#[allow(dead_code)]\npub mod new {}");
+        assert_eq!(mod_evolved_match(&base, &plus_a), None);
+    }
+
+    #[test]
+    fn mod_template_shapes() {
+        assert_eq!(mod_evolution_template("pub ", "New"), "pub mod New { ... }");
+        assert_eq!(mod_evolution_template("", "New"), "mod New { ... }");
+        assert_eq!(
+            mod_evolution_template("pub unsafe ", "New"),
+            "pub unsafe mod New { ... }"
         );
     }
 }
