@@ -220,3 +220,49 @@ fn blank_insertion_needs_plus_prefix() {
         serde_json::json!("fix_header")
     );
 }
+
+#[test]
+fn bullet_removal_needs_double_dash_prefix() {
+    // WI-10 tooling note, companion: removing a `- foo` bullet needs a
+    // `-- ` body line (diff `-` + content `- foo`); ` - foo` is context.
+    let dir = init_repo();
+    write(dir.path(), "notes.md", "# Title\n- foo\n- bar\n");
+    let patch = "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n@@ -1,3 +1,2 @@\n # Title\n-- foo\n - bar\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(dir.path(), "notes.md"), "# Title\n- bar\n");
+    // Space-prefixed twin with the deletion header: ` - foo` reads as
+    // context, so the header counts mismatch -- loud, fail-safe.
+    let spaced = "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n@@ -1,3 +1,2 @@\n # Title\n - foo\n - bar\n";
+    let (stderr, v) = check_rejected(spaced, "notes.md", "# Title\n- foo\n- bar\n");
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("fix_header"), "got: {stderr}");
+    assert_eq!(
+        v["error"]["repair"]["action"],
+        serde_json::json!("fix_header")
+    );
+    // Same twin with corrected counts: green but a no-op (context keeps
+    // `- foo`), proving the silent-wrong-intent risk the rule prevents.
+    let ctx_patch = "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n@@ -1,3 +1,3 @@\n # Title\n - foo\n - bar\n";
+    let dir2 = init_repo();
+    write(dir2.path(), "notes.md", "# Title\n- foo\n- bar\n");
+    let out = run_stdin(dir2.path(), ctx_patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir2.path(), ctx_patch, &[]);
+    assert!(out.status.success());
+    assert_eq!(read(dir2.path(), "notes.md"), "# Title\n- foo\n- bar\n");
+}
