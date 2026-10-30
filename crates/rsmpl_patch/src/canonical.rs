@@ -58,10 +58,21 @@ pub fn canonicalize_with_spans(
     patch_text: &str,
     spans: &HashMap<(String, String), Vec<(u32, u32)>>,
 ) -> Result<String, ParseError> {
-    let mut patch = parse_patch(patch_text)?;
+    let patch = parse_patch(patch_text)?;
+    Ok(canonicalize_with_spans_parsed(patch, spans))
+}
+
+/// [`canonicalize_with_spans`] over an already-parsed patch (WI-1b: the
+/// tree-aware comparator spell-normalizes before ranging, so it threads
+/// the mutated patch through instead of re-parsing the original text).
+/// Infallible: the input already parsed.
+pub fn canonicalize_with_spans_parsed(
+    mut patch: Patch,
+    spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+) -> String {
     normalize_ranges_with_spans(&mut patch, spans);
     order_files(&mut patch);
-    Ok(emit_canonical(&mut patch))
+    emit_canonical(&mut patch)
 }
 
 /// Apply the D.5 range rule to `allow == many` hunks with known spans.

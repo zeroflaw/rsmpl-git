@@ -238,7 +238,8 @@ fn commit_all(dir: &Path, what: &str) {
 /// fixture pre-image. WI-1d re-authored the diet family to canonical
 /// ranged diet, so each entry below asserts the fixed point with an
 /// already-canonical authored S; WI-1a additionally unifies authored
-/// sweep vs inferred ranged spellings of the same sites.
+/// sweep vs inferred ranged spellings of the same sites, and WI-1b
+/// unifies authored `# symbol` hunks vs inferred concrete paths.
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
@@ -246,6 +247,7 @@ const CYCLE_OK: &[&str] = &[
     "16-repeat-fold",
     "17-scope-file",
     "26-macro-sweep",
+    "25-symbol-sweep",
     "20-returns-none",
     "23-slot-sweep",
     "28-attrs-sweep",
@@ -331,12 +333,8 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "hetero: divergent let shapes stay ordinary (anti-unification is WI-4)",
     ),
     (
-        "25-symbol-sweep",
-        "nodet: qualified-path call sweep vetoed, stays ordinary (WI-3)",
-    ),
-    (
         "27-call-sweep",
-        "hetero: two-calls-per-line sites stay ordinary (line-oriented call totality; WI-3/WI-4)",
+        "hetero: two-calls-per-line sites stay ordinary (line-oriented call totality; owned by WI-4)",
     ),
     (
         "30-trait-sweep",

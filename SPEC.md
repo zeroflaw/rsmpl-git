@@ -3542,7 +3542,7 @@ Fallback directive:
 # fallback=syntax
 ```
 
-In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
+In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (it is also the canonical spelling: tree-aware comparison per D.5 normalizes symbol hunks to it) (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
 A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic in v0.1) — except on a `# follow=uses` hunk, where it is the WI-6a skip switch (Section 14.8).
 
 A sole symbol ident carrying explicit turbofish (`Old::<u8>(E)` with `# symbol Old=crate::old_api`) expands to the seeded path and binds the turbofish args structurally (SPEC 18.6 R3); other symbol spellings keep exact-path behavior.
@@ -6697,11 +6697,23 @@ metavariables, terse renames), directives in fixed order, files in
 canonical order with hunks in document order, one hunk per detector
 class per file. Two comparators share this form: pure
 `rsmpl_patch::canonicalize` (parse → re-emit) preserves the authored
-locality spelling, while `rsmpl_engine::canonicalize_with_tree`
-matches every `allow == many` hunk against the pre-image tree and
-re-emits it under the range rule below (tight when its sites span at
-most 64 lines, else the `# sweep` dummy) — so an authored sweep and
-an inferred ranged hunk over the same sites share one form. Anchors,
+ locality spelling, while `rsmpl_engine::canonicalize_with_tree`
+ matches every `allow == many` hunk against the pre-image tree and
+ re-emits it under the range rule below (tight when its sites span at
+ most 64 lines, else the `# sweep` dummy) — so an authored sweep and
+ an inferred ranged hunk over the same sites share one form. The
+ tree-aware form also unifies symbol spelling: an authored
+ `# symbol Old=crate::old_api` call hunk (`- Old(E)` / `+ New(E)`
+ with `# fallback=syntax`) is rewritten to the concrete-path diet
+ form the inferrer emits (`- crate::old_api(E0)` /
+ `+ crate::new_api(E0)`), dropping the `# symbol` lines, the
+ `# fallback=syntax` line (kept only beside `# follow=uses`, where it
+ is the WI-6a skip switch), and redundant `# expr` declarations
+ (declared expr metavars rename positionally in first-appearance
+ order). Only single-pair bare-symbol call hunks normalize this way;
+ method shapes, `let` wrappers, multi-pair bodies, and hunks without
+ `# fallback=syntax` keep their authored spelling (their error shapes
+ must survive comparison, never silently heal). Anchors,
 `allow == one` hunks, ordinary hunks, non-contained/file scopes, and
 hunks with no matched spans keep their authored ranges. Hunks keep
 document order rather than range-sorting: an insertion anchor at a
@@ -6717,7 +6729,9 @@ Tree-aware comparison derives the same rule from matched spans: the
 union of a hunk's engine-reported site spans (`min` to `max`) decides
 — at most 64 lines cites that tight range, wider spreads become the
 sweep dummy; when the patch fails to apply (zero-match, overlap,
-unparseable target) comparison falls back to the pure form, and the
+unparseable target) comparison falls back to the pure form over the
+spell-normalized patch (ranges stay authored, symbol spelling still
+unifies), and the
 tree legs of the harness still pin real breakage. Rule ids are `r1…`
 in
 canonical hunk order, except cross-file shared intents
@@ -6787,10 +6801,8 @@ cycle must still be tree-lossless).
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
-`19`, `21`, `22`); spelled-differently multi-site shapes whose
-unification is owned elsewhere (`25` qualified-path call sweeps —
-`# symbol` vs inferred concrete paths, owned by WI-1b);
-heterogeneous sites no template fires on stay ordinary (`12` statement
+`19`, `21`, `22`); heterogeneous sites no template fires on stay
+ordinary (`12` statement
 sequences — owned by WI-5, `24` divergent `let` shapes — owned by WI-5
 joint-let, `27` two-calls-per-line sites under line-oriented call
 totality — owned by WI-4, `14` divergent single-file renames whose

@@ -13,7 +13,9 @@ mod parser;
 mod sweep;
 mod trailing_blank;
 
-pub use canonical::{canonicalize, canonicalize_with_spans, TIGHT_RANGE_MAX_LINES};
+pub use canonical::{
+    canonicalize, canonicalize_with_spans, canonicalize_with_spans_parsed, TIGHT_RANGE_MAX_LINES,
+};
 pub use errors::{ErrorCode, StructuredError};
 pub use model::*;
 pub use parser::{
