@@ -246,25 +246,96 @@ fn restricted_vis_only_move_raises_template_and_round_trips() {
     assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
 }
 
+fn big_struct(vis: &str, name: &str) -> String {
+    let mut s = String::new();
+    if !vis.is_empty() {
+        s.push_str(vis);
+        s.push(' ');
+    }
+    s.push_str(&format!("struct {name} {{\n"));
+    for i in 0..40 {
+        s.push_str(&format!("    v{i}: u32,\n"));
+    }
+    s.push_str("}\n");
+    s
+}
+
 #[test]
-fn struct_name_change_stays_ordinary_wi_8b() {
-    // Non-`fn` evolution is WI-8b territory: stays ordinary.
-    let minus_item = "struct Old {\n    x: i32,\n}\n";
-    let plus_item = "struct New {\n    x: i32,\n}\n";
+fn struct_name_change_fires_with_template_paste_and_round_trips() {
+    // WI-8 slice 1: `struct Old` → `pub struct New` (same fields) moving
+    // files compresses to a cut + struct-template paste and round-trips
+    // byte-identical.
+    let minus_item = big_struct("", "Old");
+    let plus_item = big_struct("pub", "New");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind="),
+        "evolved struct cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub struct New { ... }"),
+        "struct template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn struct_field_edited_pair_stays_ordinary() {
+    // Same vis/name evolution, but a field changes type: two changes,
+    // not one move — stays a full delete+insert.
+    let minus_item = big_struct("", "Old");
+    let mut plus_lines: Vec<String> = big_struct("pub", "New")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    plus_lines[2] = "    v1: i64,".to_string();
+    let plus_item = plus_lines.join("\n") + "\n";
     let a_old = format!("fn keep() {{}}\n{minus_item}");
     let b_old = "fn other() {}\n".to_string();
     let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
     let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
     let raw = format!(
         "{}{}",
-        section("a.rs", &format!("@@ -2,3 +2,0 @@\n{minus}")),
-        section("b.rs", &format!("@@ -1,0 +2,4 @@\n+\n{plus}"))
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_item.lines().count() + 1)
+        )
     );
     let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
     let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
     assert!(
         !out.rsmpl.contains("# bind="),
-        "struct evolution is WI-8b, got:\n{}",
+        "field edits veto the struct move, got:\n{}",
         out.rsmpl
     );
 }

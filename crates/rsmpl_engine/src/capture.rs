@@ -66,9 +66,9 @@ impl CaptureStore {
 /// blank-joined after pass 2 (SPEC 20.4) and materialize in document order
 /// (SPEC 23.5: first hunk topmost).
 /// WI-8a: what a `# use=` paste inserts — the bare capture name
-/// (verbatim move) or a single-line `fn` header template (a single-line
-/// `fn` header with `(...)` + `...`) that the captured body is spliced
-/// under (evolution move).
+/// (verbatim move) or a single-line header template (a single-line
+/// `fn`/`struct` header with `...`) that the captured body/fields are
+/// spliced under (evolution move).
 pub(crate) struct PasteTarget<'a> {
     pub(crate) name: &'a str,
     pub(crate) template: Option<&'a str>,
@@ -102,20 +102,24 @@ pub(crate) fn paste_capture(
     Ok(())
 }
 
-/// WI-8a: splice a captured `fn` item under an evolution-template
-/// header (`pub fn New(...) { ... }`). The template's prefix before
-/// `fn` (vis + qualifiers) and new ident replace the capture's header
-/// line; every other line (multi-line params, body) stays byte-verbatim.
+/// WI-8a + WI-8 slice 1: splice a captured item under an
+/// evolution-template header (`pub fn New(...) { ... }` or
+/// `pub struct New { ... }`). The template's prefix and new ident
+/// replace the capture's header line; every other line stays
+/// byte-verbatim. Returns the spliced item text.
 fn splice_evolved_header(
     captured: &str,
     template: &str,
     rule: &str,
 ) -> Result<String, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    if rsmpl_pattern::parse_struct_evolution_template(template.trim()).is_some() {
+        return splice_struct_header(captured, template, rule);
+    }
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...` (got `{}`)",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...` or a single-line `struct` header with `...` (got `{}`)",
                 template.trim()
             ))
         })?;
@@ -188,6 +192,128 @@ fn splice_evolved_header(
     Ok(lines.join("\n"))
 }
 
+/// WI-8 slice 1: splice a captured `struct` item under an
+/// evolution-template header (`pub struct New { ... }`). The
+/// template's visibility prefix and new ident replace the capture's
+/// `struct <Old>` header span; generics, where-clauses, and fields
+/// (named/unnamed/unit) ride byte-verbatim as the suffix after the
+/// old ident.
+fn splice_struct_header(
+    captured: &str,
+    template: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let (new_prefix, new_name) =
+        rsmpl_pattern::parse_struct_evolution_template(template.trim()).ok_or_else(|| {
+            fail(format!(
+                "evolution paste template must be a single-line `struct` header with `...` (got `{}`)",
+                template.trim()
+            ))
+        })?;
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name = match file.items.as_slice() {
+        [syn::Item::Struct(s)] => s.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `struct` item for a `struct` template (only fn/struct headers evolve)"
+                    .to_string(),
+            ));
+        }
+    };
+    // First `struct <Old>` header line: word-bounded match so a body
+    // occurrence (e.g. a doc comment) never wins over the header.
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if struct_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx = target.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `struct {old_name}` header line"
+        ))
+    })?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, rest) = line.split_at(ws_len);
+    let mut struct_at = None;
+    let mut search = rest;
+    let mut base = 0;
+    while let Some(pos) = search.find("struct") {
+        let before_ok = pos == 0
+            || !search.as_bytes()[pos - 1].is_ascii_alphanumeric()
+                && search.as_bytes()[pos - 1] != b'_';
+        let after = &search[pos + 6..];
+        let after_ok = after.starts_with(char::is_whitespace);
+        let boundary = after.trim_start()[old_name.len()..]
+            .chars()
+            .next()
+            .map(|c| c != '_' && !c.is_ascii_alphanumeric())
+            .unwrap_or(true);
+        if before_ok && after_ok && after.trim_start().starts_with(old_name.as_str()) && boundary {
+            struct_at = Some(base + pos);
+            break;
+        }
+        search = &search[pos + 6..];
+        base += pos + 6;
+    }
+    let struct_at = struct_at.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `struct {old_name}` header line"
+        ))
+    })?;
+    let after_struct = &rest[struct_at + 6..];
+    let trimmed = after_struct.trim_start();
+    let suffix = trimmed[old_name.len()..].to_string();
+    let pre = new_prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("struct {new_name}")
+    } else {
+        format!("{pre} struct {new_name}")
+    };
+    lines[idx] = format!("{ws}{head}{suffix}");
+    Ok(lines.join("\n"))
+}
+
+/// The ident of a `struct <Ident>` header line (`None` when the line
+/// holds no word-bounded `struct` + ident pair).
+fn struct_line_ident(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 6 <= bytes.len() {
+        if bytes[i..].starts_with(b"struct")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 6).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 6;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if start != j {
+                return Some(line[start..j].to_string());
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
 /// The ident of a `fn <Ident>` header line (`None` when the line holds
 /// no word-bounded `fn` + ident pair).
 fn fn_line_ident(line: &str) -> Option<String> {

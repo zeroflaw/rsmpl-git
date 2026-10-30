@@ -1119,3 +1119,27 @@ fn evolution_template_accepts_restricted_visibility() {
     assert!(parse_evolution_template("pub fn new(x: i32)").is_none());
     assert!(parse_evolution_template("pub(crate) fn new(x: i32)").is_none());
 }
+
+#[test]
+fn struct_evolution_template_accepts_visibility() {
+    // WI-8 slice 1: `struct` evolution pastes accept visibility
+    // prefixes and require a `...` body marker.
+    use rsmpl_pattern::parse_struct_evolution_template;
+    for prefix in ["", "pub", "pub(crate)", "pub(super)", "pub(in crate::x)"] {
+        let tmpl = if prefix.is_empty() {
+            "struct New { ... }".to_string()
+        } else {
+            format!("{prefix} struct New {{ ... }}")
+        };
+        let (pre, name) = parse_struct_evolution_template(&tmpl)
+            .unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+        assert_eq!(name, "New", "got: {tmpl:?}");
+        assert_eq!(pre.trim(), prefix, "got: {tmpl:?}");
+    }
+    // `fn` templates are a different parser — never cross-accept.
+    assert!(parse_struct_evolution_template("pub fn new(...) { ... }").is_none());
+    // Missing marker, garbage prefix, multi-line all rejected.
+    assert!(parse_struct_evolution_template("pub struct New").is_none());
+    assert!(parse_struct_evolution_template("a;b struct New { ... }").is_none());
+    assert!(parse_struct_evolution_template("pub struct New {\n ... \n}").is_none());
+}

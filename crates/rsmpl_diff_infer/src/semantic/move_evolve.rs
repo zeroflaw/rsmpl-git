@@ -1,22 +1,24 @@
-//! WI-8a: `fn` move + header evolution pairing.
+//! WI-8a + WI-8 slice 1: `fn` and `struct` move + header evolution
+//! pairing.
 //!
 //! Byte-identical pairing (`moves::try_move_sweep`) misses moves that
-//! also rename the fn or change its header — the common case
-//! (`fn foo` → `pub async fn bar` in a new module file). This module
-//! pairs `fn` items whose bodies and signatures are token-equal but
-//! whose header prefix (vis + qualifiers, verbatim) and/or name
-//! evolve, and builds the single-line header template the engine's
-//! evolution paste (`# use=N` + `+ <prefix>fn <New>(...) { ... }`)
-//! splices the captured body under.
+//! also rename the item or change its header — the common case
+//! (`fn foo` → `pub async fn bar`, `struct Old` → `pub struct New` in a
+//! new module file). This module pairs `fn`/`struct` items whose bodies
+//! (and signatures/fields) are token-equal but whose header prefix
+//! (vis + qualifiers, verbatim) and/or name evolve, and builds the
+//! single-line header template the engine's evolution paste
+//! (`# use=N` + `+ <prefix>fn <New>(...) { ... }` /
+//! `+ <prefix>struct <New> { ... }`) splices the captured body under.
 //!
-//! Scope is deliberately narrow (WI-8a): `fn` items only; generics,
-//! params, return type, `where` clause, attrs, and bodies must be
-//! token-equal. The evolving prefix is verbatim plus-side text, never
-//! an inferred hole, so qualifier evolution (`fn` → `pub async fn`)
-//! rides the same safe mechanism as vis/name. Everything else (other
-//! item kinds, attr/signature/body deltas) stays ordinary — the
-//! byte-exact path owns identical items (an evolved pair requires a
-//! prefix or name delta).
+//! Scope is deliberately narrow (WI-8a + slice 1): `fn` and `struct`
+//! items only; generics, params/fields, return type, `where` clause,
+//! attrs, and bodies must be token-equal. The evolving prefix is
+//! verbatim plus-side text, never an inferred hole, so qualifier
+//! evolution (`fn` → `pub async fn`) rides the same safe mechanism as
+//! vis/name. Everything else (other item kinds, attr/signature/field/
+//! body deltas) stays ordinary — the byte-exact path owns identical
+//! items (an evolved pair requires a prefix or name delta).
 
 use quote::ToTokens;
 use syn::spanned::Spanned;
@@ -67,6 +69,40 @@ pub(crate) fn fn_evolved_match(minus: &syn::ItemFn, plus: &syn::ItemFn) -> Optio
     Some(plus.sig.ident.to_string())
 }
 
+/// Evolved `struct` pair check (WI-8 slice 1): same shape modulo the
+/// visibility prefix and the ident. Generics, where-clauses, attrs,
+/// and fields must be token-equal. Returns the plus-side ident when
+/// the pair evolves (a vis or name delta is required — the byte-exact
+/// path owns identical items).
+pub(crate) fn struct_evolved_match(
+    minus: &syn::ItemStruct,
+    plus: &syn::ItemStruct,
+) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    let vis_same = tok(&minus.vis) == tok(&plus.vis);
+    let name_same = minus.ident == plus.ident;
+    if vis_same && name_same {
+        return None;
+    }
+    if tok(&minus.generics) != tok(&plus.generics) {
+        return None;
+    }
+    if tok(&minus.fields) != tok(&plus.fields) {
+        return None;
+    }
+    if minus.semi_token.is_some() != plus.semi_token.is_some() {
+        return None;
+    }
+    Some(plus.ident.to_string())
+}
 /// All evolved hits of one minus item text in a pure-plus hunk body.
 /// Returns `(plus_first, plus_last, plus_prefix, plus_name)` with
 /// 0-based hunk-body spans; the spans coincide with parsed `fn` item
@@ -101,6 +137,46 @@ pub(crate) fn find_evolved_hits(
         }
         let name = plus.sig.ident.to_string();
         let Some(prefix) = header_prefix(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1, e - 1, prefix, name));
+    }
+    out
+}
+
+/// All evolved `struct` hits of one minus item text in a pure-plus
+/// hunk body (WI-8 slice 1). Mirrors `find_evolved_hits`; spans
+/// coincide with parsed `struct` item spans by construction.
+pub(crate) fn find_struct_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemStruct>(minus_text) else {
+        return Vec::new();
+    };
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Struct(plus) = it else {
+            continue;
+        };
+        if struct_evolved_match(&minus, plus).is_none() {
+            continue;
+        }
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let name = plus.ident.to_string();
+        let Some(prefix) = struct_header_prefix(&plus_body[(s - 1)..e], &name) else {
             continue;
         };
         out.push((s - 1, e - 1, prefix, name));
@@ -162,6 +238,65 @@ pub(crate) fn evolution_template(prefix: &str, name: &str) -> String {
         format!("fn {name}(...) {{ ... }}")
     } else {
         format!("{pre} fn {name}(...) {{ ... }}")
+    }
+}
+
+/// The verbatim text before the `struct <name>` keyword on the
+/// item's header line (visibility, leading whitespace stripped).
+/// Attr/doc lines never match: the header is always a code line.
+pub(crate) fn struct_header_prefix(item_lines: &[String], name: &str) -> Option<String> {
+    for line in item_lines {
+        let text = line.get(1..).unwrap_or("");
+        let t = text.trim_start();
+        if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
+            continue;
+        }
+        if let Some(s_pos) = find_struct_name(text, name) {
+            return Some(text[..s_pos].trim_start().to_string());
+        }
+    }
+    None
+}
+
+/// Byte offset of a word-bounded `struct <name>` pair (`None` when
+/// the line holds no such pair: comments, strings, other idents).
+fn find_struct_name(line: &str, name: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 6 <= bytes.len() {
+        if bytes[i..].starts_with(b"struct")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 6).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 6;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if line.get(start..j) == Some(name) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Single-line struct evolution-paste template: the plus-side
+/// visibility verbatim, `{ ... }` body marker. `prefix` is trimmed;
+/// an empty prefix yields a bare `struct` header. The `{ ... }` tail
+/// is a shape marker only — the splice keeps the captured suffix
+/// (generics/fields) verbatim, so tuple/unit structs round-trip.
+pub(crate) fn struct_evolution_template(prefix: &str, name: &str) -> String {
+    let pre = prefix.trim_end();
+    if pre.is_empty() {
+        format!("struct {name} {{ ... }}")
+    } else {
+        format!("{pre} struct {name} {{ ... }}")
     }
 }
 
@@ -258,5 +393,54 @@ mod tests {
             "+}".to_string(),
         ];
         assert_eq!(header_prefix(&lines, "helper"), Some("pub ".to_string()));
+    }
+
+    fn item_struct(text: &str) -> syn::ItemStruct {
+        syn::parse_str(text).expect("test struct must parse")
+    }
+
+    #[test]
+    fn struct_vis_and_name_evolve_fires() {
+        let minus = item_struct("struct Old {\n    x: i32,\n}");
+        let plus = item_struct("pub struct New {\n    x: i32,\n}");
+        assert_eq!(struct_evolved_match(&minus, &plus), Some("New".to_string()));
+    }
+
+    #[test]
+    fn struct_name_only_and_vis_only_fire() {
+        let minus = item_struct("struct Old {\n    x: i32,\n}");
+        let plus = item_struct("struct New {\n    x: i32,\n}");
+        assert_eq!(struct_evolved_match(&minus, &plus), Some("New".to_string()));
+        let plus = item_struct("pub(crate) struct Old {\n    x: i32,\n}");
+        assert_eq!(struct_evolved_match(&minus, &plus), Some("Old".to_string()));
+    }
+
+    #[test]
+    fn struct_identical_and_deltas_veto() {
+        let base = item_struct("struct Old {\n    x: i32,\n}");
+        let same = item_struct("struct Old {\n    x: i32,\n}");
+        assert_eq!(struct_evolved_match(&base, &same), None);
+        // Field delta.
+        let plus = item_struct("pub struct New {\n    y: i64,\n}");
+        assert_eq!(struct_evolved_match(&base, &plus), None);
+        // Generic delta.
+        let minus_g = item_struct("struct Old<T> {\n    x: T,\n}");
+        let plus_g = item_struct("pub struct New<T: Clone> {\n    x: T,\n}");
+        assert_eq!(struct_evolved_match(&minus_g, &plus_g), None);
+        // Tuple-vs-braced shape delta (fields differ).
+        let plus_t = item_struct("pub struct New(u8);");
+        assert_eq!(struct_evolved_match(&base, &plus_t), None);
+        // Attr delta.
+        let plus_a = item_struct("#[derive(Clone)]\npub struct New {\n    x: i32,\n}");
+        assert_eq!(struct_evolved_match(&base, &plus_a), None);
+    }
+
+    #[test]
+    fn struct_template_shapes() {
+        assert_eq!(
+            struct_evolution_template("pub ", "New"),
+            "pub struct New { ... }"
+        );
+        assert_eq!(struct_evolution_template("", "New"), "struct New { ... }");
     }
 }

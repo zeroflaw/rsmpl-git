@@ -18,6 +18,19 @@ pub(crate) struct MoveItem {
     pub(crate) last: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvolvedKind {
+    Fn,
+    Struct,
+}
+
+#[derive(Clone)]
+pub(crate) struct EvolvedPair {
+    pub(crate) kind: EvolvedKind,
+    pub(crate) prefix: String,
+    pub(crate) name: String,
+}
+
 #[derive(Clone)]
 pub(crate) struct MovePair {
     pub(crate) minus_hunk_key: (usize, usize),
@@ -25,9 +38,10 @@ pub(crate) struct MovePair {
     pub(crate) item: MoveItem,
     pub(crate) plus_first: usize,
     pub(crate) plus_last: usize,
-    /// WI-8a: plus-side header evolution (prefix, new name); `None`
-    /// for byte-identical pairs (bare-`bind` paste).
-    pub(crate) evolved: Option<(String, String)>,
+    /// WI-8a + WI-8 slice 1: plus-side header evolution (kind +
+    /// prefix + new name); `None` for byte-identical pairs
+    /// (bare-`bind` paste).
+    pub(crate) evolved: Option<EvolvedPair>,
 }
 
 pub(crate) struct HunkParts {

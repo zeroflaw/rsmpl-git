@@ -1,4 +1,5 @@
-//! Evolution-paste template parsing (WI-8a): single-line `fn` headers.
+//! Evolution-paste template parsing (WI-8a `fn` + WI-8 slice 1
+//! `struct` single-line headers).
 //!
 //! Used by the `Insertion` classifier and the engine capture splice.
 
@@ -51,9 +52,75 @@ pub fn parse_evolution_template(text: &str) -> Option<(String, String)> {
     Some((prefix.to_string(), rest[..ident_len].to_string()))
 }
 
+/// WI-8 slice 1 struct evolution-paste template: a single-line
+/// `struct` header with a `...` body marker
+/// (`pub struct New { ... }`). Returns the verbatim prefix before
+/// `struct` (visibility) and the new ident. The `{ ... }` tail is a
+/// shape marker only — the splice keeps the captured item's suffix
+/// (generics/where/fields) byte-verbatim, same as the fn `(...)`
+/// abstraction. `None` when the line is not a struct-template shape.
+pub fn parse_struct_evolution_template(text: &str) -> Option<(String, String)> {
+    let line = text.trim();
+    if line.lines().count() != 1 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Word-bounded `struct` followed by whitespace.
+    let mut struct_pos = None;
+    let mut i = 0;
+    while i + 6 <= bytes.len() {
+        if bytes[i..].starts_with(b"struct")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 6).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            struct_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let struct_pos = struct_pos?;
+    let prefix = &line[..struct_pos];
+    if !valid_struct_evolution_prefix(prefix) {
+        return None;
+    }
+    let rest = line[struct_pos + 6..].trim_start();
+    let mut ident_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            ident_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if ident_len == 0 {
+        return None;
+    }
+    let tail = &rest[ident_len..];
+    if !tail.contains("...") {
+        return None;
+    }
+    Some((prefix.to_string(), rest[..ident_len].to_string()))
+}
+/// The verbatim text before `struct` in a struct evolution-paste
+/// template: a Rust visibility (`pub`, `pub(crate)`, `pub(in path)`,
+/// or empty for a private struct). Validated by parsing, not by
+/// character vetoes.
+fn valid_struct_evolution_prefix(prefix: &str) -> bool {
+    let pre = prefix.trim();
+    if pre.is_empty() {
+        return true;
+    }
+    if pre.contains(['{', ';']) {
+        return false;
+    }
+    syn::parse_str::<syn::ItemStruct>(&format!("{pre} struct __RsmplDummy__ {{}}")).is_ok()
+}
+
 /// The verbatim text before `fn` in an evolution-paste template: a Rust
 /// visibility + qualifier prefix (`pub`, `pub(crate)`, `pub(in path)`,
 /// `const`/`async`/`unsafe`/`extern "C"` combos, or empty for a bare
+/// `fn`). Validated by parsing, not by character vetoes, so restricted
 /// `fn`). Validated by parsing, not by character vetoes, so restricted
 /// visibilities (which contain parens) are accepted while garbage
 /// (`foo(`, `a;b`, `"x"`) still fails to parse as a header prefix.

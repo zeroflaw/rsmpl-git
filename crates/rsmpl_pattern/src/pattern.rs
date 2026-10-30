@@ -18,7 +18,7 @@ use crate::pattern_ellipsis::validate_ellipsis_positions;
 use crate::quote_utils::validate_quoting;
 
 pub use crate::pattern_classify::{is_trait_header, trait_header_ident};
-pub use crate::pattern_evolution::parse_evolution_template;
+pub use crate::pattern_evolution::{parse_evolution_template, parse_struct_evolution_template};
 pub use crate::pattern_general::split_leading_attrs;
 
 /// Shape of a generalized (non-call) pattern (T10 v1 subset).
