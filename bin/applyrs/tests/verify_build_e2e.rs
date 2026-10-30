@@ -70,8 +70,9 @@ fn verify_build_check_mode_fails_without_touching_tree() {
 
 #[test]
 fn verify_build_check_mode_passes_leaving_tree_clean() {
-    // WI-2a: a compiling post-image passes under `--check` and leaves the
-    // tree byte-identical (only `.history/` is added beside the check).
+    // WI-2a + WI-1c: a compiling post-image passes under `--check` and
+    // leaves the tree byte-identical (`--check` writes no `.history/`
+    // unless `--history` is passed).
     let dir = init_repo();
     cargo_crate(dir.path());
     let before = read(dir.path(), "src/lib.rs");

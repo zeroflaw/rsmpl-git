@@ -1,8 +1,9 @@
-//! T253: `--patch '<diff>'` inline source + `.history/` auto-archive.
+//! T253 + WI-1c: `--patch '<diff>'` inline source + `.history/` auto-archive.
 //!
 //! The agent check loop needs no `Write` round-trip: the patch travels as an
-//! argv string, the tool archives it to `<repo>/.history/{id}.rsmpl` (last
-//! 128 kept) and reports the path on stderr plus the JSON `history` key.
+//! argv string. Real applies archive it to `<repo>/.history/{id}.rsmpl`
+//! (last 128 kept) and report the path on stderr plus the JSON `history`
+//! key; `--check` skips the archive unless `--history` is passed.
 
 mod common;
 use common::*;
@@ -24,14 +25,28 @@ fn history_entries(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 #[test]
-fn patch_inline_check_applies_and_archives() {
+fn patch_inline_check_skips_history_unless_flagged() {
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
+    // WI-1c: `--check` leaves the worktree untouched by default.
     let out = run(dir.path(), &["--patch", RENAME, "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!stderr.contains("history: "), "got: {stderr}");
+    assert!(
+        history_entries(dir.path()).is_empty(),
+        "no archive on --check"
+    );
+    // Opt-in: `--check --history` archives exactly once.
+    let out = run(dir.path(), &["--patch", RENAME, "--check", "--history"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -63,9 +78,34 @@ fn patch_inline_apply_for_real_and_json_reports_history() {
         "src/lib.rs",
         "fn foo(x: i32) -> i32 {\n    x + 1\n}\n",
     );
+    // WI-1c: `--check` JSON carries `"history": null` and no stderr line.
     let out = run(
         dir.path(),
         &["--patch", RENAME, "--format", "json", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert!(v["history"].is_null(), "got: {}", v["history"]);
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("history: "),
+        "no history line on --check"
+    );
+    assert!(history_entries(dir.path()).is_empty());
+    // Opt-in `--check --history` JSON still reports the path.
+    let out = run(
+        dir.path(),
+        &[
+            "--patch",
+            RENAME,
+            "--format",
+            "json",
+            "--check",
+            "--history",
+        ],
     );
     assert!(
         out.status.success(),
@@ -79,7 +119,7 @@ fn patch_inline_apply_for_real_and_json_reports_history() {
         String::from_utf8_lossy(&out.stderr).contains("history: "),
         "stderr keeps history line in JSON mode"
     );
-    // Real apply via --patch (no --check).
+    // Real apply via --patch (no --check) always archives.
     let out = run(dir.path(), &["--patch", RENAME]);
     assert!(
         out.status.success(),
@@ -124,7 +164,7 @@ fn history_prunes_to_128() {
         )
         .unwrap();
     }
-    let out = run_stdin(dir.path(), RENAME, &["--check"]);
+    let out = run_stdin(dir.path(), RENAME, &["--check", "--history"]);
     assert!(
         out.status.success(),
         "stderr: {}",

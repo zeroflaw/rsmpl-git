@@ -9,7 +9,7 @@
 //! cat change.rsmpl | applyrs --check
 //! # From a file, printing the lowered diff without applying:
 //! applyrs --file change.rsmpl --check
-//! # Inline, no temp file (archived to `<repo>/.history/{id}.rsmpl`):
+//! # Inline, no temp file (applies archive to `<repo>/.history/{id}.rsmpl`; `--check` needs `--history`):
 //! applyrs --patch "$(cat change.rsmpl)" --check
 //! # Machine-readable report:
 //! applyrs --file change.rsmpl --format json --check
@@ -47,8 +47,9 @@ struct Cli {
     #[arg(long, conflicts_with = "patch")]
     file: Option<PathBuf>,
 
-    /// Inline patch text (no temp file needed; archived to
-    /// `<repo>/.history/{id}.rsmpl`, SPEC D.1). Conflicts with `--file`.
+    /// Inline patch text (no temp file needed; applies archive to
+    /// `<repo>/.history/{id}.rsmpl`, SPEC D.1; `--check` archives only
+    /// with `--history`). Conflicts with `--file`.
     /// Prefer `--file` for large patches (shell quoting/arg-length limits).
     #[arg(long, value_name = "PATCH")]
     patch: Option<String>,
@@ -78,6 +79,12 @@ struct Cli {
     /// `--check`, never by default (SPEC D.2).
     #[arg(long, value_name = "MODE")]
     verify: Option<String>,
+
+    /// Archive the raw patch to `<repo>/.history/{id}.rsmpl` on `--check`
+    /// runs too (SPEC D.1). Real applies always archive; `--check` skips
+    /// the archive unless this flag is passed (clean measurement).
+    #[arg(long)]
+    history: bool,
 }
 
 /// CLI failure: structured patch/IO errors (JSON-enveloped with
@@ -221,11 +228,17 @@ fn run() -> Result<(), CliError> {
         }
     };
 
-    // T253: archive every raw patch input to `<repo>/.history/{id}.rsmpl`
-    // (last 128 kept) and report the path. Runs before parsing so even
-    // authoring failures leave audit. History IO never fails the run:
-    // write/prune faults are `warning:` lines on stderr.
-    let history_path = save_history(&cli.repo, &patch_text);
+    // T253 + WI-1c: real applies archive every raw patch input to
+    // `<repo>/.history/{id}.rsmpl` (last 128 kept) and report the path;
+    // `--check` skips the archive unless `--history` is passed (clean
+    // measurement). Runs before parsing so even authoring failures leave
+    // audit when archiving. History IO never fails the run: write/prune
+    // faults are `warning:` lines on stderr.
+    let history_path = if !cli.check || cli.history {
+        save_history(&cli.repo, &patch_text)
+    } else {
+        None
+    };
     let history_display = history_path
         .as_ref()
         .map(|p| p.to_string_lossy().to_string());

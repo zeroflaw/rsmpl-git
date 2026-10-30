@@ -5899,13 +5899,16 @@ gitrs apply --patch "$(cat change.rsmpl)" --check # inline, no temp file
 same empty-patch `RSMPL_PARSE_CONFLICT`. Canonical stdin spelling is
 bare stdin (no flags); `--file -` is the explicit alias.
 
-Every run archives the raw patch text to `<repo>/.history/{id}.rsmpl`
+Every apply archives the raw patch text to `<repo>/.history/{id}.rsmpl`
 (`<repo>` = the `--repo` value, default `.`; id =
 `{unix_secs:010}-{nanos:09}-{pid:06}-{ctr:04}`, lexicographic order ==
 chronological) and reports it on stderr as `history: <path>` plus the
-additive JSON `"history"` key (Section D.2, `version` stays 1). Only the
+additive JSON `"history"` key (Section D.2). `--check` skips the archive
+unless `--history` is passed (clean measurement: a dry run leaves the
+worktree untouched); a skipped archive reports JSON `"history": null`
+and no stderr `history:` line. Only the
 last 128 entries are kept (oldest pruned first). Archiving runs before
-parsing, so failures leave audit too; history IO faults are stderr
+parsing, so failures leave audit too (when archiving is active); history IO faults are stderr
 `warning:` lines only and never fail the run. `.history/` is untracked
 audit noise (usually untracked; tracked/staged copies skip the same way),
 never a lowering input (the lowering is assembled in-memory
@@ -6041,8 +6044,9 @@ prints one JSON object to stdout:
   Empty lowerings skip verification. Any other `--verify` value is an
   `RSMPL_IO_CONFLICT` usage error.
 - `history` is the `<repo>/.history/{id}.rsmpl` archive path of the raw
-  patch input (`null` when archiving warned), reported alongside the
-  stderr `history:` line (Section D.1).
+  patch input (`null` when archiving warned or when a `--check` run
+  skipped the archive without `--history`), reported alongside the
+  stderr `history:` line when present (Section D.1).
 - The v1 `check` boolean is gone: `--check` vs apply never changes the
   report shape (the flag chooses check vs land, `checked` reports the
   gates either way).
@@ -6228,9 +6232,9 @@ exactly which bytes land on which stream. The contract, per mode:
 | Mode | stdout | stderr |
 |---|---|---|
 | text apply | empty (quiet by default) | `history: …` + `applied N file(s): …; semantics verified|partial` (kept: one line of human reassurance) |
-| text `--check` | reported diff (empty when omitted/no changes) | `history: …` + budget markers + `check: lowered patch applies cleanly; semantics verified|partial` |
+| text `--check` | reported diff (empty when omitted/no changes) | (`history: …` only with `--history`) + budget markers + `check: lowered patch applies cleanly; semantics verified|partial` |
 | JSON apply | report object (incl. `"history"`) | `history: …` + `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
-| JSON `--check` | report object with `"checked"` (incl. `"history"`) | `history: …` + `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
+| JSON `--check` | report object with `"checked"` (incl. `"history"`, `null` unless `--history`) | (`history: …` only with `--history`) + `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
 
 Rules:
 

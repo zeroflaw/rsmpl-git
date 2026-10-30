@@ -57,7 +57,7 @@ gitrs apply --file change.rsmpl --repo /tmp/empty --check  # lint only; `no matc
 gitrs apply --file change.rsmpl --output lowered.patch
 ```
 
-Every run archives the raw patch to `<repo>/.history/{id}.rsmpl` (last 128 kept).
+Every apply archives the raw patch to `<repo>/.history/{id}.rsmpl` (last 128 kept); `--check` archives only with `--history`.
 Range discovery is a targeted file read: cite `@@ -start,len` (`L = end-start+1`);
 small file already held? `@@ -1,1 @@` + `# scope=file` searches the whole file (SPEC 17.3/D.3).
 
