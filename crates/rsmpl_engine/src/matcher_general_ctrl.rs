@@ -819,6 +819,33 @@ mod tests {
         assert!(apply(&patch, src).is_err());
     }
 
+    // WI-6b-follow: an explicit `# expr LOG` hole never leaks into an
+    // opaque macro statement — the declared ident substitutes to a
+    // placeholder the whole-shape `render_eq` never matches, so the
+    // hunk vetoes loud against a lowercase target (and never binds).
+    #[test]
+    fn stmt_macro_declared_hole_never_binds() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n# expr F\n# expr LOG\n- if E {{ LOG!(\"hit\"); F }} else {{ 0 }}\n+ if E {{ LOG!(\"hit\"); F + 1 }} else {{ 0 }}\n"
+        );
+        let src = "fn a(c: bool, v: i32) -> i32 {\n    if c {\n        log!(\"hit\");\n        v\n    } else {\n        0\n    }\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    // WI-6b-follow: even same-spelling `LOG!(...)` stays unmatchable —
+    // the pattern holds `__RSMPL_LOG`, never literal `LOG`, so the
+    // opaque comparison vetoes instead of binding the macro path.
+    #[test]
+    fn stmt_macro_declared_hole_same_spelling_still_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n# expr F\n# expr LOG\n- if E {{ LOG!(\"hit\"); F }} else {{ 0 }}\n+ if E {{ LOG!(\"hit\"); F + 1 }} else {{ 0 }}\n"
+        );
+        let src = "fn a(c: bool, v: i32) -> i32 {\n    if c {\n        LOG!(\"hit\");\n        v\n    } else {\n        0\n    }\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
     // WI-6b: holes may live inside an inner `fn` body (header strict,
     // body structural).
     #[test]
