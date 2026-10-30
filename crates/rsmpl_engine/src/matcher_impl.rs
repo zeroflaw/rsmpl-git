@@ -165,7 +165,11 @@ pub fn apply_impl_context_hunk(
                 "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
             )
             .with_rule(&rule)
-            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C11",
+                "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+            )));
         }
         if hunk.attrs_policy() != AttrsPolicy::Strip
             && !minus_pat.attrs_written.is_empty()
@@ -185,7 +189,11 @@ pub fn apply_impl_context_hunk(
                 "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
             )
             .with_rule(&rule)
-            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C12",
+                "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+            )));
         }
         let minus_name = pattern_name(&minus_pat.name);
         let plus_name = pattern_name(&plus_pat.name);

@@ -736,7 +736,11 @@ pub(crate) fn follow_uses_workspace(
             )
             .with_rule(rh.rule_name())
             .with_file(def_path)
-            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
+            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename")
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C17",
+                "remove `# follow=uses`, or rewrite this hunk as a fn/item rename",
+            )));
         }
     };
     // Ranges this hunk already rewrote: a same-named definition outside
@@ -769,6 +773,7 @@ pub(crate) fn follow_uses_workspace(
             .with_suggestion(
                 "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped`) instead of failing",
             )
+            .with_repair(StructuredError::add_directive_repair("# fallback=syntax"))
     })?;
     // Unparseable-workspace tripwire (SPEC 14.8): a file the resolver could
     // not search that names `old` outside strings/comments fails loud
@@ -793,7 +798,8 @@ pub(crate) fn follow_uses_workspace(
         .with_file(def_path)
         .with_suggestion(
             "add `# fallback=syntax` to skip unsearchable files (listed in `follow_skipped`) instead of failing",
-        ));
+        )
+        .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
     }
     // Append use-span edits per file; record pre-push lengths so extra
     // reports span exactly the pushed edits.

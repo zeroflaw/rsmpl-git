@@ -30,7 +30,18 @@ use crate::{
 use crate::{ordinary_hunk_edits, RuleReport};
 
 /// Apply `patch` to `files` (path -> contents) in place.
+///
+/// WI-3b: the engine boundary fills any missing machine `repair`
+/// (`fill_generic_repair`) so no conflict is prose-only; specific gates
+/// pin exact payloads underneath.
 pub fn apply_with_captures(
+    files: &mut HashMap<String, String>,
+    patch: &Patch,
+) -> Result<crate::ApplyReport, StructuredError> {
+    apply_inner(files, patch).map_err(crate::validate::fill_generic_repair)
+}
+
+fn apply_inner(
     files: &mut HashMap<String, String>,
     patch: &Patch,
 ) -> Result<crate::ApplyReport, StructuredError> {
@@ -161,7 +172,11 @@ pub fn apply_with_captures(
                     "only one `# bind=<Name>` per hunk is supported in v0.1",
                 )
                 .with_rule(rh.rule_name())
-                .with_file(path));
+                .with_file(path)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "bind",
+                    "use one `# bind=<Name>` per hunk (scalar captures only)",
+                )));
             }
             let compiled = rsmpl_pattern::compile(rh)
                 .map_err(|e| e.with_rule(rh.rule_name()).with_file(path))?;
@@ -172,7 +187,11 @@ pub fn apply_with_captures(
                     "v0.1 `# bind=` is only supported on item-capture cut hunks (`- I`)",
                 )
                 .with_rule(rh.rule_name())
-                .with_file(path));
+                .with_file(path)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "bind",
+                    "write an item-capture cut hunk (`- I` with `# bind=<Name>`)",
+                )));
             }
             let parsed = state.parsed.as_ref().expect(
                 "T137: RSmPL cut hunk on a file with no parsed AST (ordinary-only files carry no semantic hunks)",
@@ -370,7 +389,11 @@ pub fn apply_with_captures(
                             "v0.1 `# use=` is only supported on pure insertion hunks (`+ Name`)",
                         )
                         .with_rule(rule.clone())
-                        .with_file(path));
+                        .with_file(path)
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "use",
+                            "paste with a pure insertion hunk (`+ Name` with `# use=<Name>`)",
+                        )));
                     }
                     // T62: on a hard zero-match, probe the same pattern
                     // whole-file (scope overridden, count-only, edits

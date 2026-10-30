@@ -5834,14 +5834,30 @@ prints one JSON object to stdout:
   or output files, stdin failures, and flag-usage errors.
 - `repair` is the machine-readable self-correction payload (WI-10 direction,
 - additive under the `version` rule above: text mode prints it as a trailing
-- `repair: {...}` line only when present). Five producers populate it.
+- `repair: {...}` line only when present). Seven producers populate it.
 - Zero-match with exactly one whole-file match (25.4): `{"action":"widen_scope",
 - "directive":"# scope=file","range":"@@ -1,1 @@"}` — apply the directive +
 - range verbatim and retry (mechanical first-retry, no prose parsing).
 - Zero-match otherwise (25.4): `{"action":"read_file","file":F,"range":R}`
 - with `"candidate":T67-excerpt` when a nearest candidate exists (verbatim
-- string in v0.1; a structured `{line,text}` split is WI-3b).
+- string in v0.1; a structured `{line,text}` split is WI-3c).
 - Too-many (25.4): `{"action":"add_directive","directive":"# allow=many"}`.
+- Pattern-shape (18.6 C-table): `{"action":"fix_pattern","code":"C1"-"C18",
+- "write_instead":"<SPEC 18.6 text>"}` — `code` is the C-table row, `write_instead`
+- the exact diagnostic telling the agent what to write instead (mechanical:
+- replace the rejected spelling with `write_instead`, retry). Gates outside
+- the C-table (unknown `# root=`, unsupported `# <kind>`, `# attributes`,
+- `# repeat` misuse, `unbound` metavariables, `ellipsis`, `tokens`,
+- `format`, `bind`/`use` shape errors) use the same shape with a gate-name
+- `code` (`"root"`, `"kind"`, `"attributes"`, `"repeat"`, `"unbound"`,
+- `"ellipsis"`, `"tokens"`, `"format"`, `"bind"`, `"use"`, `"pattern"` for
+- the long tail); the engine boundary fills any `PatternConflict` that
+- reaches it without a specific code as `"pattern"` with the reason echoed.
+- Symbol/capture: symbol gates (C13, follow veto, unparseable tripwire)
+- carry `{"action":"add_directive","directive":"# fallback=syntax"}` (apply
+- verbatim, retry); unbound/duplicate captures carry
+- `{"action":"fix_name","name":N,"available":[...]}` (rename to a listed
+- capture, or add a `# bind=N` hunk when empty).
 - Ordinary-hunk count mismatch (T367, 25.2): `{"action":"fix_header",
 - "expected_old":N,"expected_new":M,"claimed_old":A,"claimed_new":B,
 - "expected_header":"@@ -s,N +t,M @@"}` — `N`/`M` are the counted body lines

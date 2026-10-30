@@ -903,6 +903,10 @@ fn validate_patch(patch: &Patch) -> Result<()> {
                         )
                         .with_rule(rh.rule_name())
                         .with_file(&f.target_path)
+                        .with_repair(StructuredError::fix_name_repair(
+                            b,
+                            &bind_to_hunk.keys().cloned().collect::<Vec<_>>(),
+                        ))
                         .into());
                     }
                     if rh.allow() == Allow::Many {
@@ -912,6 +916,10 @@ fn validate_patch(patch: &Patch) -> Result<()> {
                         )
                         .with_rule(rh.rule_name())
                         .with_file(&f.target_path)
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "bind",
+                            "drop `# allow=many` (scalar captures bind one item)",
+                        ))
                         .into());
                     }
                     bind_to_hunk.insert(b.to_string(), (f.target_path.clone(), rh.rule_name()));
@@ -943,6 +951,10 @@ fn validate_patch(patch: &Patch) -> Result<()> {
                         )
                         .with_rule(rh.rule_name())
                         .with_file(&f.target_path)
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "bind",
+                            "split the cut and the paste into two hunks",
+                        ))
                         .into());
                     }
                 }
@@ -958,6 +970,10 @@ fn validate_patch(patch: &Patch) -> Result<()> {
                         .with_rule(rh.rule_name())
                         .with_file(&f.target_path)
                         .with_suggestion("remove `# repeat` from the cut/paste hunk".to_string())
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "repeat",
+                            "remove `# repeat` from the cut/paste hunk",
+                        ))
                         .into());
                     }
                     if rh.minus_text().trim().is_empty() || rh.plus_text().trim().is_empty() {
@@ -968,6 +984,10 @@ fn validate_patch(patch: &Patch) -> Result<()> {
                         .with_rule(rh.rule_name())
                         .with_file(&f.target_path)
                         .with_suggestion("remove `# repeat`, or write a rewrite hunk".to_string())
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "repeat",
+                            "remove `# repeat`, or write a rewrite hunk",
+                        ))
                         .into());
                     }
                 }

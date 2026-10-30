@@ -18,6 +18,40 @@ pub struct ZeroMatchHint {
     pub preview: Option<String>,
 }
 
+/// WI-3b: fill a missing machine `repair` for engine-boundary errors.
+///
+/// Specific gates pin exact payloads; this covers the long tail so no
+/// `PatternConflict`/`SymbolConflict`/`CaptureConflict` is prose-only:
+/// pattern/capture conflicts gain `fix_pattern` with the reason echoed
+/// as `write_instead` (reasons already say what to write instead);
+/// symbol conflicts gain `add_directive # fallback=syntax` (every v0.1
+/// symbol gate's documented fix).
+pub fn fill_generic_repair(err: StructuredError) -> StructuredError {
+    if err.repair.is_some() {
+        return err;
+    }
+    match err.code {
+        ErrorCode::PatternConflict => {
+            let write_instead = err.message.clone();
+            err.with_repair(StructuredError::fix_pattern_repair(
+                "pattern",
+                &write_instead,
+            ))
+        }
+        ErrorCode::SymbolConflict => {
+            err.with_repair(StructuredError::add_directive_repair("# fallback=syntax"))
+        }
+        ErrorCode::CaptureConflict => {
+            let write_instead = err.message.clone();
+            err.with_repair(StructuredError::fix_pattern_repair(
+                "capture",
+                &write_instead,
+            ))
+        }
+        _ => err,
+    }
+}
+
 /// Validate `allow` / `optional` match counts (SPEC 17.5, 24.3).
 ///
 /// `hint.wide` is the whole-file (`# scope=file`) probe count for the same
@@ -186,7 +220,11 @@ pub(crate) fn gate_directives(
         )
         .with_rule(rh.rule_name())
         .with_file(path)
-        .with_suggestion("remove the directive and run `cargo fmt` after apply"));
+        .with_suggestion("remove the directive and run `cargo fmt` after apply")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "format",
+            "remove the directive and run `cargo fmt` after apply",
+        )));
     }
     // WI-6a: `# follow=uses` is legal only on fn and item rename hunks
     // (SPEC 18.6); every other shape keeps the SPEC 14.8 follow-up hunks.
@@ -202,7 +240,11 @@ pub(crate) fn gate_directives(
         )
         .with_rule(rh.rule_name())
         .with_file(path)
-        .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename"));
+        .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C17",
+            "remove `# follow=uses`, or rewrite this hunk as a fn/item rename",
+        )));
     }
     let is_macro = matches!(
         &compiled.kind,
@@ -218,7 +260,11 @@ pub(crate) fn gate_directives(
             "`# mode=tokens` is only supported for macro token-tree patterns in v0.1",
         )
         .with_rule(rh.rule_name())
-        .with_file(path));
+        .with_file(path)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "tokens",
+            "remove `# mode=tokens`, or write a macro token-tree pattern",
+        )));
     }
     Ok(())
 }
@@ -238,6 +284,10 @@ pub(crate) fn unbound_plus(
     .with_rule(rh.rule_name())
     .with_file(path)
     .with_suggestion("bind them in `-`/context or declare `# use=`")
+    .with_repair(StructuredError::fix_pattern_repair(
+        "unbound",
+        "bind them in `-`/context or declare `# use=`",
+    ))
 }
 #[cfg(test)]
 mod tests {
@@ -443,6 +493,41 @@ mod tests {
             repair["candidate"],
             serde_json::json!("fn foo at line 5: 'fn foo() {}'")
         );
+    }
+
+    #[test]
+    fn generic_repair_fills_bare_conflicts_and_preserves_specific() {
+        // Bare pattern conflict gains generic fix_pattern.
+        let bare = StructuredError::new(ErrorCode::PatternConflict, "some shape rejected");
+        let filled = fill_generic_repair(bare);
+        let repair = filled.repair.expect("must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("fix_pattern"));
+        assert_eq!(repair["code"], serde_json::json!("pattern"));
+        // Bare symbol conflict gains the fallback directive.
+        let bare = StructuredError::new(ErrorCode::SymbolConflict, "unresolved");
+        let filled = fill_generic_repair(bare);
+        let repair = filled.repair.expect("must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("add_directive"));
+        assert_eq!(repair["directive"], serde_json::json!("# fallback=syntax"));
+        // Bare capture conflict gains generic fix_pattern.
+        let bare = StructuredError::new(ErrorCode::CaptureConflict, "not bound");
+        let filled = fill_generic_repair(bare);
+        assert_eq!(
+            filled.repair.expect("must carry repair")["action"],
+            serde_json::json!("fix_pattern")
+        );
+        // Specific payloads are never overwritten.
+        let specific = StructuredError::new(ErrorCode::PatternConflict, "c3").with_repair(
+            StructuredError::fix_pattern_repair("C3", "write a `let` statement pattern"),
+        );
+        let kept = fill_generic_repair(specific);
+        assert_eq!(
+            kept.repair.expect("must keep repair")["code"],
+            serde_json::json!("C3")
+        );
+        // Non-conflict errors stay repair-free.
+        let io = StructuredError::new(ErrorCode::IoConflict, "bad flag");
+        assert!(fill_generic_repair(io).repair.is_none());
     }
 
     #[test]

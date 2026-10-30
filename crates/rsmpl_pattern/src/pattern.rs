@@ -124,7 +124,29 @@ impl CompiledPattern {
 }
 
 /// Compile an RSmPL hunk's pattern body.
+///
+/// WI-3b: any `PatternConflict` reaching this boundary without a specific
+/// `repair` gains a generic `fix_pattern` payload (`code: "pattern"`,
+/// `write_instead` = the reason, which already says what to write
+/// instead). Specific C-table gates above pin exact codes; this covers
+/// the long tail (slot/type/macro sub-compilers) so no failure is
+/// prose-only.
 pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
+    compile_inner(hunk).map_err(|e| {
+        if e.code == ErrorCode::PatternConflict && e.repair.is_none() {
+            let write_instead = e.message.clone();
+            e.with_repair(StructuredError::fix_pattern_repair(
+                "pattern",
+                &write_instead,
+            ))
+        } else {
+            e
+        }
+    })
+}
+
+/// Compile an RSmPL hunk's pattern body (inner; see `compile`).
+fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     let table = MetavarTable::from_directives(&hunk.directives)?;
     let root = hunk
         .directives
@@ -145,7 +167,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                 format!(
                     "unknown `# root=` value `{r}` (only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4)"
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "root",
+                "only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4",
+            )));
         }
     }
 
@@ -166,7 +192,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                     "`# {} {name}` is not supported in v0.1 (see SPEC 15.1 for the implemented kinds)",
                     kind.as_str()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "kind",
+                "see SPEC 15.1 for the implemented kinds",
+            )));
         }
     }
 
@@ -184,7 +214,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             format!(
                 "`# attributes {name}` is not supported in v0.1 (attribute lists cannot be abstracted; write the `#[...]` lines literally on both sides to constrain them, or omit them — attributes are preserved by default, SPEC 14.6)"
             ),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "attributes",
+            "write the `#[...]` lines literally on both sides to constrain them, or omit them — attributes are preserved by default, SPEC 14.6",
+        )));
     }
 
     let minus_raw = full_minus_text(hunk);
@@ -249,7 +283,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`# returns=none` requires a function-item pattern".to_string(),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C9",
+            "`# returns=none` requires a function-item pattern",
+        )));
     }
     // C14 (T24): `# symbol` is call-shape-only in v0.1. Call-callee,
     // call-argument, and method-receiver symbols match by exact full-path
@@ -293,7 +331,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             format!(
                 "`# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern",
             ),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C14",
+            "use a call-shape hunk or a concrete path pattern",
+        )));
     }
 
     // T147: a `# symbol` naming the *method ident* of a method call can
@@ -316,11 +358,15 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         {
             if table.symbols.contains_key(name) {
                 return Err(StructuredError::new(
-                    ErrorCode::PatternConflict,
-                    format!(
-                        "`# symbol {name}` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3)",
-                    ),
-                ));
+                ErrorCode::PatternConflict,
+                format!(
+                    "`# symbol {name}` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3)",
+                ),
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C14",
+                "remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3)",
+            )));
             }
         }
     }
@@ -340,7 +386,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)".to_string(),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C15",
+            "remove the line, or add `# symbol Name=path` (SPEC 19.3)",
+        )));
     }
     // T169: non-default `# attrs=` on call/method-call/macro shapes is
     // never read — `matcher_expr`/`matcher_macro` ignore the policy
@@ -362,7 +412,11 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)".to_string(),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C15",
+            "remove the line (SPEC 14.6)",
+        )));
     }
     // general-expression matchers; on any other shape it would be a
     // silent no-op. T126 extended the fold to `General::Expr`
@@ -399,10 +453,14 @@ pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                     "`# repeat` requires a call/method-call or general-expression rewrite pattern (other shapes are future work)"
                 }
             };
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                reason.to_string(),
-            ));
+            return Err(
+                StructuredError::new(ErrorCode::PatternConflict, reason.to_string()).with_repair(
+                    StructuredError::fix_pattern_repair(
+                        "repeat",
+                        "emit one ordered hunk per nesting level",
+                    ),
+                ),
+            );
         }
     }
 
@@ -590,7 +648,11 @@ fn classify(
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,
                     "`# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable)",
-                ));
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C16",
+                    "write `- I` for a declared `# item I` metavariable",
+                )));
             }
             "expr" => {
                 let (minus, maps, lits) = classify_call_pattern(m, table)?;
@@ -617,7 +679,11 @@ fn classify(
                     None => Err(StructuredError::new(
                         ErrorCode::PatternConflict,
                         "`# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`)",
-                    )),
+                    )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "C3",
+                        "write a `let` statement pattern",
+                    ))),
                 };
             }
             "type" => {
@@ -626,7 +692,11 @@ fn classify(
                     None => Err(StructuredError::new(
                         ErrorCode::PatternConflict,
                         "`# root=type` requires a Rust type pattern",
-                    )),
+                    )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "C5",
+                        "write a Rust type pattern",
+                    ))),
                 };
             }
             _ => {}
@@ -815,7 +885,11 @@ fn try_general(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C1",
+            "use a call pattern or a concrete shape",
+        )));
     }
     let (minus_attrs, minus_rest) = split_leading_attrs(minus_raw);
     let (plus_attrs, plus_rest) = split_leading_attrs(plus_raw);
@@ -869,7 +943,11 @@ fn try_general(
                     return Err(StructuredError::new(
                         ErrorCode::PatternConflict,
                         "`# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`)",
-                    ));
+                    )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "C3",
+                        "write a `let` statement pattern",
+                    )));
                 }
             }
         }
@@ -910,7 +988,11 @@ fn try_general(
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,
                     "v1 expression deletion (empty `+` side) is only supported for `...;` statement shapes; match a `let` statement or write an explicit replacement",
-                ));
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C6",
+                    "match a `let` statement or write an explicit replacement",
+                )));
             }
             return Ok(Some(build_general(
                 GeneralShape::Expr,
@@ -926,7 +1008,11 @@ fn try_general(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "`# root=expr` requires a Rust expression pattern",
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C4",
+                "write a Rust expression pattern",
+            )));
         }
         // Fall through: the text may still be a `Type` (step 5 re-derives it).
     }
@@ -955,7 +1041,11 @@ fn try_general(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`# root=type` requires a Rust type pattern",
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C5",
+            "write a Rust type pattern",
+        )));
     }
     // WI-9c(c): a minus side that parses as two or more Rust statements is
     // a statement sequence, which v1 general patterns cannot express (no
@@ -977,7 +1067,11 @@ fn try_general(
                     "multi-statement sequences are not supported in v1 general patterns (the minus side parses as {} Rust statements, not one); write one hunk per statement or item, or use an ordinary hunk",
                     block.stmts.len()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C18",
+                "write one hunk per statement or item, or use an ordinary hunk",
+            )));
         }
     }
     Ok(None)
@@ -991,7 +1085,11 @@ fn check_type_deletion(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type",
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C7",
+            "write an explicit replacement type",
+        )));
     }
     Ok(Some(build()))
 }
@@ -1111,6 +1209,10 @@ fn embedded_pat_err() -> StructuredError {
         ErrorCode::PatternConflict,
         "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
     )
+    .with_repair(StructuredError::fix_pattern_repair(
+        "C8",
+        "use a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts",
+    ))
 }
 
 /// Split leading attribute lines (`#[...]`, possibly multi-line, and

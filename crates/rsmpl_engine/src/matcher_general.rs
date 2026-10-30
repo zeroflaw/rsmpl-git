@@ -799,7 +799,11 @@ pub fn apply_general_hunk(
             ErrorCode::PatternConflict,
             "leading attributes are only supported on `let` statement patterns in v1",
         )
-        .with_rule(&rule));
+        .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C10",
+            "write a `let` statement pattern, or drop the leading attributes",
+        )));
     }
     if !plus_attrs.is_empty() && minus_attrs.is_empty() {
         return Err(StructuredError::new(
@@ -807,7 +811,11 @@ pub fn apply_general_hunk(
             "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
         )
         .with_rule(&rule)
-        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C11",
+            "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+        )));
     }
     // `# attrs=strip` skips the mirror gate: mirrored minus attrs are
     // eligibility-ignored (like the fn/item `check_attrs` Strip arm) and
@@ -822,7 +830,11 @@ pub fn apply_general_hunk(
             "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
         )
         .with_rule(&rule)
-        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C12",
+            "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+        )));
     }
 
     let reverse: HashMap<String, String> = match &compiled.kind {

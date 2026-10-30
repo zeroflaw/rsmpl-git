@@ -310,7 +310,11 @@ pub fn apply_item_rename_hunk(
                 ErrorCode::PatternConflict,
                 "plus side writes attributes the minus side omitted (ambiguous merge); write the attributes on both sides or neither",
             )
-            .with_rule(hunk.rule_name()));
+            .with_rule(hunk.rule_name())
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C11",
+                "write the attributes on both sides or neither",
+            )));
         }
     }
     // Plus-side attribute text must mirror the minus side (same contract
@@ -327,7 +331,11 @@ pub fn apply_item_rename_hunk(
                 "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
             )
             .with_rule(hunk.rule_name())
-            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`"));
+            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C12",
+                "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+            )));
         }
     }
     let rule = hunk.rule_name();

@@ -84,6 +84,45 @@ impl StructuredError {
         self
     }
 
+    /// WI-3b: C-table `fix_pattern` repair payload.
+    ///
+    /// `code` is the SPEC 18.6 compile-gate code (`C1`, `C3`…`C18`);
+    /// `write_instead` is the exact SPEC 18.6 diagnostic text telling the
+    /// agent what to write instead. Prose `reason`/`suggestion` stay
+    /// unchanged — this only adds the machine payload.
+    pub fn fix_pattern_repair(code: &str, write_instead: &str) -> serde_json::Value {
+        serde_json::json!({
+            "action": "fix_pattern",
+            "code": code,
+            "write_instead": write_instead,
+        })
+    }
+
+    /// WI-3b: symbol/capture `add_directive` repair payload.
+    ///
+    /// Mirrors the existing prose suggestion verbatim (e.g.
+    /// `# fallback=syntax`); the agent applies the directive and retries
+    /// without parsing English.
+    pub fn add_directive_repair(directive: &str) -> serde_json::Value {
+        serde_json::json!({
+            "action": "add_directive",
+            "directive": directive,
+        })
+    }
+
+    /// WI-3b: capture `fix_name` repair payload.
+    ///
+    /// `name` is the offending capture name; `available` lists the bound
+    /// captures the agent can use instead (possibly empty, meaning the
+    /// agent must add a `# bind=` hunk first).
+    pub fn fix_name_repair(name: &str, available: &[String]) -> serde_json::Value {
+        serde_json::json!({
+            "action": "fix_name",
+            "name": name,
+            "available": available,
+        })
+    }
+
     /// Machine-readable form for `--format json` failure envelopes (SPEC D.2):
     /// `{"code","rule","file","range","reason","suggestion","repair"}`.
     /// Absent optionals serialize as `null` so agents see a stable key set.
@@ -169,6 +208,26 @@ mod tests {
             serde_json::json!("read the file to list valid ranges")
         );
         assert!(v["repair"].is_null(), "got: {v}");
+    }
+
+    #[test]
+    fn repair_constructors_pin_shapes() {
+        // WI-3b: exact payload shapes agents match on.
+        let fp = StructuredError::fix_pattern_repair("C3", "write a `let` statement pattern");
+        assert_eq!(fp["action"], serde_json::json!("fix_pattern"));
+        assert_eq!(fp["code"], serde_json::json!("C3"));
+        assert_eq!(
+            fp["write_instead"],
+            serde_json::json!("write a `let` statement pattern")
+        );
+        let ad = StructuredError::add_directive_repair("# fallback=syntax");
+        assert_eq!(ad["action"], serde_json::json!("add_directive"));
+        assert_eq!(ad["directive"], serde_json::json!("# fallback=syntax"));
+        let fn_ =
+            StructuredError::fix_name_repair("Helper", &["Bound".to_string(), "Other".to_string()]);
+        assert_eq!(fn_["action"], serde_json::json!("fix_name"));
+        assert_eq!(fn_["name"], serde_json::json!("Helper"));
+        assert_eq!(fn_["available"], serde_json::json!(["Bound", "Other"]));
     }
 
     #[test]

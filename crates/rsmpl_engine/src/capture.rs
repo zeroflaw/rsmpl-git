@@ -27,12 +27,15 @@ impl CaptureStore {
         file: &str,
     ) -> Result<(), StructuredError> {
         if self.map.contains_key(name) {
+            let mut known: Vec<String> = self.map.keys().cloned().collect();
+            known.sort();
             return Err(StructuredError::new(
                 ErrorCode::CaptureConflict,
                 format!("duplicate `# bind={name}` (scalar captures must be unique)"),
             )
             .with_rule(rule)
-            .with_file(file));
+            .with_file(file)
+            .with_repair(StructuredError::fix_name_repair(name, &known)));
         }
         self.map.insert(name.to_string(), text);
         Ok(())
@@ -42,6 +45,7 @@ impl CaptureStore {
         self.map.get(name).map(|s| s.as_str()).ok_or_else(|| {
             let mut known: Vec<&str> = self.map.keys().map(|s| s.as_str()).collect();
             known.sort();
+            let owned: Vec<String> = known.iter().map(|s| s.to_string()).collect();
             StructuredError::new(
                 ErrorCode::CaptureConflict,
                 format!("capture `{name}` is not bound by any hunk"),
@@ -53,6 +57,7 @@ impl CaptureStore {
             } else {
                 format!("available captures: {}", known.join(", "))
             })
+            .with_repair(StructuredError::fix_name_repair(name, &owned))
         })
     }
 }

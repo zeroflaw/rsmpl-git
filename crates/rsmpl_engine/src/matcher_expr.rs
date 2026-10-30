@@ -556,14 +556,22 @@ pub fn apply_expr_hunk(
                 "`...` in `+` path has nothing to replay (plus side must be concrete, SPEC 16.5)".to_string(),
             )
             .with_rule(&rule)
-            .with_suggestion("write a concrete `+` path (e.g. `+ crate::new(E)`) — path `...` replays nothing, only argument `...` replays"));
+            .with_suggestion("write a concrete `+` path (e.g. `+ crate::new(E)`) — path `...` replays nothing, only argument `...` replays")
+            .with_repair(StructuredError::fix_pattern_repair(
+                "ellipsis",
+                "write a concrete `+` path (e.g. `+ crate::new(E)`)",
+            )));
         }
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "`...` in `+` has no matching `- ...` to replay".to_string(),
         )
         .with_rule(&rule)
-        .with_suggestion("drop the `+ ...` or add a `- ...` absorbing the replayed args"));
+        .with_suggestion("drop the `+ ...` or add a `- ...` absorbing the replayed args")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "ellipsis",
+            "drop the `+ ...` or add a `- ...` absorbing the replayed args",
+        )));
     }
 
     // Symbol gate (SPEC 19.3): without a semantic environment, fail unless
@@ -579,7 +587,8 @@ pub fn apply_expr_hunk(
                 format!("symbol `{sym}` could not be resolved (no semantic environment in v0.1)"),
             )
             .with_rule(&rule)
-            .with_suggestion("add `# fallback=syntax` to allow syntactic matching"));
+            .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
+            .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
         }
     }
 
