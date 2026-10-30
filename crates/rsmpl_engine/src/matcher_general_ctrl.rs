@@ -8,12 +8,12 @@
 //! `match_if`, `match_match` (+ `match_arm`), `match_loop`,
 //! `match_while`, `match_for`, `match_closure` (+ param helper),
 //! `match_let_expr`, and the `@`-subpattern helper `match_pat`.
-//! The parent keeps `match_expr`/`match_type` plus collection,
+//! The parent keeps `match_expr` plus collection,
 //! substitution, and application; the three general-matcher modules
 //! call each other (circular within the crate is fine).
 //!
-//! Everything not listed here (macro types) still rejects in
-//! `match_expr` and stays an ordinary hunk (`async`/`try`/`unsafe`/
+//! Everything not listed here still rejects in `match_expr` and stays an
+//! ordinary hunk (`async`/`try`/`unsafe`/
 //! `yield` live in `matcher_general_async`, WI-6 slice 1; StmtMacro
 //! whole-shape opaque and Stmt Item fn-only structural live below,
 //! WI-6b).
@@ -22,10 +22,8 @@ use syn::spanned::Spanned;
 
 use crate::edits::fragments_equal;
 
-use super::matcher_general::{
-    as_placeholder, match_expr, match_return_type, match_type, render, render_eq,
-    single_placeholder_type, MatchCx,
-};
+use super::matcher_general::{as_placeholder, match_expr, render, render_eq, MatchCx};
+use super::matcher_types::{match_return_type, match_type, single_placeholder_type};
 
 /// Split a `let` pattern into (inner pattern, optional ascribed type).
 fn decompose_pat(pat: &syn::Pat) -> (&syn::Pat, Option<&syn::Type>) {
