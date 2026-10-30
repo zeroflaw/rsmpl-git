@@ -47,7 +47,13 @@ pub fn ensure_match_count(
         .with_rule(rule)
         .with_file(file)
         .with_range(range)
-        .with_suggestion(zero_match_suggestion(file, hint.wide))),
+        .with_suggestion(zero_match_suggestion(file, hint.wide))
+        .with_repair(zero_match_repair(
+            file,
+            range,
+            hint.wide,
+            hint.preview.as_deref(),
+        ))),
         (1, _, _) => Ok(()),
         (_, Allow::Many, _) => Ok(()),
         (_, Allow::One, _) => Err(StructuredError::new(
@@ -57,7 +63,11 @@ pub fn ensure_match_count(
         .with_rule(rule)
         .with_file(file)
         .with_range(range)
-        .with_suggestion("add `# allow=many` if multiple rewrites are intended")),
+        .with_suggestion("add `# allow=many` if multiple rewrites are intended")
+        .with_repair(serde_json::json!({
+            "action": "add_directive",
+            "directive": "# allow=many",
+        }))),
     }
 }
 
@@ -98,6 +108,41 @@ fn zero_match_reason(preview: Option<&str>) -> String {
     match preview {
         Some(p) => format!("no match found — nearest {p}"),
         None => "no match found".to_string(),
+    }
+}
+
+/// WI-3a: machine repair for the zero-match path (SPEC D.2).
+///
+/// Exactly one whole-file match → `widen_scope` (directive + dummy range
+/// the agent applies verbatim, mirroring the suggestion). Otherwise →
+/// `read_file` naming the file/range, with the T67 `preview` excerpt
+/// attached as `candidate` when present (verbatim string in v0.1; a
+/// structured `{line, text}` split defers to WI-3b).
+fn zero_match_repair(
+    file: &str,
+    range: &str,
+    wide: Option<usize>,
+    preview: Option<&str>,
+) -> serde_json::Value {
+    if wide == Some(1) {
+        return serde_json::json!({
+            "action": "widen_scope",
+            "directive": "# scope=file",
+            "range": "@@ -1,1 @@",
+        });
+    }
+    match preview {
+        Some(p) => serde_json::json!({
+            "action": "read_file",
+            "file": file,
+            "range": range,
+            "candidate": p,
+        }),
+        None => serde_json::json!({
+            "action": "read_file",
+            "file": file,
+            "range": range,
+        }),
     }
 }
 
@@ -332,5 +377,91 @@ mod tests {
         .files
         .remove(0);
         assert!(ensure_file_range(&index, &section, "src/lib.rs").is_err());
+    }
+
+    #[test]
+    fn zero_match_single_wide_carries_widen_scope_repair() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            ZeroMatchHint {
+                wide: Some(1),
+                preview: None,
+            },
+        )
+        .unwrap_err();
+        let repair = err.repair.expect("zero-match must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("widen_scope"));
+        assert_eq!(repair["directive"], serde_json::json!("# scope=file"));
+        assert_eq!(repair["range"], serde_json::json!("@@ -1,1 @@"));
+    }
+
+    #[test]
+    fn zero_match_plain_carries_read_file_repair() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            ZeroMatchHint {
+                wide: None,
+                preview: None,
+            },
+        )
+        .unwrap_err();
+        let repair = err.repair.expect("zero-match must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("read_file"));
+        assert_eq!(repair["file"], serde_json::json!("src/lib.rs"));
+        assert_eq!(repair["range"], serde_json::json!("1..2"));
+        assert!(repair.get("candidate").is_none(), "got: {repair}");
+    }
+
+    #[test]
+    fn zero_match_preview_attaches_candidate() {
+        let err = ensure_match_count(
+            0,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..2",
+            ZeroMatchHint {
+                wide: None,
+                preview: Some("fn foo at line 5: 'fn foo() {}'".to_string()),
+            },
+        )
+        .unwrap_err();
+        let repair = err.repair.expect("zero-match must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("read_file"));
+        assert_eq!(
+            repair["candidate"],
+            serde_json::json!("fn foo at line 5: 'fn foo() {}'")
+        );
+    }
+
+    #[test]
+    fn too_many_carries_add_directive_repair() {
+        let err = ensure_match_count(
+            3,
+            rsmpl_patch::Allow::One,
+            false,
+            "r",
+            "src/lib.rs",
+            "1..10",
+            ZeroMatchHint {
+                wide: None,
+                preview: None,
+            },
+        )
+        .unwrap_err();
+        let repair = err.repair.expect("too-many must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("add_directive"));
+        assert_eq!(repair["directive"], serde_json::json!("# allow=many"));
     }
 }

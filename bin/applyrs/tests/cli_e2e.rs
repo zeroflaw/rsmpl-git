@@ -1908,11 +1908,7 @@ fn identity_sweep_fails_postcondition_loud() {
     // `RSMPL_MATCH_CONFLICT` instead of an empty lowering with a clean
     // report, and the worktree stays untouched.
     let dir = init_repo();
-    write(
-        dir.path(),
-        "src/lib.rs",
-        "fn a() {\n    foo(1);\n}\n",
-    );
+    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
     let sweep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# allow=many\n# expr E\n- foo(E)\n+ foo(E)\n";
     let out = run_stdin(dir.path(), sweep, &["--format", "json", "--check"]);
     assert!(!out.status.success(), "identity sweep must fail");
@@ -1925,7 +1921,10 @@ fn identity_sweep_fails_postcondition_loud() {
         "got: {v}"
     );
     assert!(
-        v["error"]["reason"].as_str().unwrap().contains("postcondition"),
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("postcondition"),
         "got: {v}"
     );
     assert_eq!(read(dir.path(), "src/lib.rs"), "fn a() {\n    foo(1);\n}\n");

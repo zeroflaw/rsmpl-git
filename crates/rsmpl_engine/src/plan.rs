@@ -1030,7 +1030,11 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- nosuchcall(E)\n+ bar(E)\n";
         let err = apply_multi(patch, vec![("src/lib.rs", src.as_str())]).unwrap_err();
         assert!(err.contains("nearest source at line 2"), "got: {err}");
-        let excerpt = err.split("nearest ").nth(1).expect("preview");
+        // WI-3a: the rendered diagnostic now carries a trailing
+        // `repair:` line duplicating the excerpt as `candidate` — measure
+        // only the reason's first line (the T67 cap is per-excerpt).
+        let tail = err.split("nearest ").nth(1).expect("preview");
+        let excerpt = tail.lines().next().expect("reason line");
         assert!(excerpt.chars().count() <= 330, "got: {err}");
         assert!(excerpt.contains('…'), "got: {err}");
     }
