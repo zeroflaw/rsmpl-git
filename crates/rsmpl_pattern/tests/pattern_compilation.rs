@@ -1168,3 +1168,29 @@ fn enum_evolution_template_accepts_visibility() {
     assert!(parse_enum_evolution_template("a;b enum New { ... }").is_none());
     assert!(parse_enum_evolution_template("pub enum New {\n ... \n}").is_none());
 }
+
+#[test]
+fn union_evolution_template_accepts_visibility() {
+    // WI-8 slice 3: `union` evolution pastes accept visibility
+    // prefixes and require a `...` body marker.
+    use rsmpl_pattern::parse_union_evolution_template;
+    for prefix in ["", "pub", "pub(crate)", "pub(super)", "pub(in crate::x)"] {
+        let tmpl = if prefix.is_empty() {
+            "union New { ... }".to_string()
+        } else {
+            format!("{prefix} union New {{ ... }}")
+        };
+        let (pre, name) =
+            parse_union_evolution_template(&tmpl).unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+        assert_eq!(name, "New", "got: {tmpl:?}");
+        assert_eq!(pre.trim(), prefix, "got: {tmpl:?}");
+    }
+    // `fn`/`struct`/`enum` templates are different parsers — never cross-accept.
+    assert!(parse_union_evolution_template("pub fn new(...) { ... }").is_none());
+    assert!(parse_union_evolution_template("pub struct New { ... }").is_none());
+    assert!(parse_union_evolution_template("pub enum New { ... }").is_none());
+    // Missing marker, garbage prefix, multi-line all rejected.
+    assert!(parse_union_evolution_template("pub union New").is_none());
+    assert!(parse_union_evolution_template("a;b union New { ... }").is_none());
+    assert!(parse_union_evolution_template("pub union New {\n ... \n}").is_none());
+}

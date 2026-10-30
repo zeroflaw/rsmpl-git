@@ -286,3 +286,62 @@ fn struct_template_on_enum_capture_is_loud() {
     .expect_err("kind mismatch must fail loud");
     assert!(err.contains("captured `struct`"), "got: {err}");
 }
+
+// WI-8 slice 3: union evolution pastes.
+
+const UNION_SRC: &str = "union Old {\n    x: i32,\n}\n";
+const B_UNION: &str = "fn other() {}\n";
+
+fn cut_and_paste_union(template: &str) -> String {
+    format!(
+        "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ {template}\n"
+    )
+}
+
+#[test]
+fn union_name_and_vis_evolve_cross_file() {
+    let files = apply_multi(
+        &cut_and_paste_union("pub union New { ... }"),
+        vec![("a.rs", UNION_SRC), ("b.rs", B_UNION)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub union New {\n    x: i32,\n}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn union_malformed_template_is_loud() {
+    let err = apply_multi(
+        &cut_and_paste_union("pub union New"),
+        vec![("a.rs", UNION_SRC), ("b.rs", B_UNION)],
+    )
+    .expect_err("malformed union template must fail loud");
+    assert!(err.contains("evolution paste template"), "got: {err}");
+}
+
+#[test]
+fn union_template_on_struct_capture_is_loud() {
+    // Kind mismatch: a `union` template cannot splice a `struct` capture.
+    let err = apply_multi(
+        &cut_and_paste_struct("pub union New { ... }"),
+        vec![("a.rs", STRUCT_SRC), ("b.rs", B_STRUCT)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `union`"), "got: {err}");
+}
+
+#[test]
+fn struct_template_on_union_capture_is_loud() {
+    // Converse kind mismatch: a `struct` template cannot splice a
+    // `union` capture.
+    let err = apply_multi(
+        &cut_and_paste_union("pub struct New { ... }"),
+        vec![("a.rs", UNION_SRC), ("b.rs", B_UNION)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `struct`"), "got: {err}");
+}

@@ -1,5 +1,6 @@
 //! Evolution-paste template parsing (WI-8a `fn` + WI-8 slice 1
-//! `struct` + WI-8 slice 2 `enum` single-line headers).
+//! `struct` + WI-8 slice 2 `enum` + WI-8 slice 3 `union` single-line
+//! headers).
 //!
 //! Used by the `Insertion` classifier and the engine capture splice.
 
@@ -180,6 +181,71 @@ fn valid_enum_evolution_prefix(prefix: &str) -> bool {
         return false;
     }
     syn::parse_str::<syn::ItemEnum>(&format!("{pre} enum __RsmplDummy__ {{}}")).is_ok()
+}
+
+/// WI-8 slice 3 union evolution-paste template: a single-line
+/// `union` header with a `...` body marker
+/// (`pub union New { ... }`). Returns the verbatim prefix before
+/// `union` (visibility) and the new ident. The `{ ... }` tail is a
+/// shape marker only — the splice keeps the captured item's suffix
+/// (generics/where/fields) byte-verbatim, same as the `struct`
+/// abstraction. `None` when the line is not a union-template shape.
+pub fn parse_union_evolution_template(text: &str) -> Option<(String, String)> {
+    let line = text.trim();
+    if line.lines().count() != 1 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Word-bounded `union` followed by whitespace.
+    let mut union_pos = None;
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if bytes[i..].starts_with(b"union")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 5).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            union_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let union_pos = union_pos?;
+    let prefix = &line[..union_pos];
+    if !valid_union_evolution_prefix(prefix) {
+        return None;
+    }
+    let rest = line[union_pos + 5..].trim_start();
+    let mut ident_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            ident_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if ident_len == 0 {
+        return None;
+    }
+    let tail = &rest[ident_len..];
+    if !tail.contains("...") {
+        return None;
+    }
+    Some((prefix.to_string(), rest[..ident_len].to_string()))
+}
+/// The verbatim text before `union` in a union evolution-paste
+/// template: a Rust visibility (`pub`, `pub(crate)`, `pub(in path)`,
+/// or empty for a private union). Validated by parsing, not by
+/// character vetoes.
+fn valid_union_evolution_prefix(prefix: &str) -> bool {
+    let pre = prefix.trim();
+    if pre.is_empty() {
+        return true;
+    }
+    if pre.contains(['{', ';']) {
+        return false;
+    }
+    syn::parse_str::<syn::ItemUnion>(&format!("{pre} union __RsmplDummy__ {{ x: i32 }}")).is_ok()
 }
 
 /// The verbatim text before `fn` in an evolution-paste template: a Rust
