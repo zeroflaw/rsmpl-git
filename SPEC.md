@@ -2801,7 +2801,7 @@ Kind by position:
 | two pre-`fn` tokens (`V Q fn`) | first `visibility`, second `qualifier_list` |
 | one pre-`fn` token (`V fn`) | ambiguous (`visibility` vs `qualifier_list`) — declare explicitly |
 | `let P: T = E;` | pattern `pat`, `: T` region `type`, `= E` region `expr` |
-| call/method callee, receiver, method, bare args | `expr` (macro `!` bodies never infer; `use`-paths and item-rename names never infer) |
+| call/method callee, receiver, method, bare args | `expr` (macro `!` arg names infer only when occurring on both sides — single-side uppercase idents stay literal deltas; macro names never infer; `use`-paths and item-rename names never infer) |
 | type argument interiors (`Vec<T>`, `Box<[T]>`) | `type` for the inner names only; the leading constructor (`Vec`, `Box`) stays literal, as do one-sided concrete additions (`+ Send`) |
 | otherwise (`# root=type/expr`) | the forced kind; unforced general text follows `try_general` routing (type-parseable → `type`, else `expr`) |
 
@@ -6337,8 +6337,8 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    stay plain (macro names never infer — probed clean, no backticks).
    Token-tree matching is
   verbatim-only by design, so the body is never spelled. Leading-`::`
-  (no engine spelling, probed), hetero same-name body rewrites and
-  macro-body-descent interiors (WI-9b), and divergent new names stay
+  (no engine spelling, probed), varying-across-sites hetero body rewrites
+  and macro-body-descent interiors (WI-9b2), and divergent new names stay
   ordinary. Pre-image
   totality counts every invocation of the exact rendered path (any
   delimiter/body — the `...` pattern matches all; bare twins never
@@ -6359,7 +6359,22 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   normalizes to `!(...)`, probed corrupt); renames (name delta),
   hetero pairs (per-site differing bodies), and macro-body-descent
   edits (changed lines nested inside a macro body the pattern never
-  enters) stay ordinary for WI-9b.
+  enters) stay ordinary for WI-9b2. WI-9b1 hetero emission: when every
+  stable (minus==plus) non-string arg longer than its hole name can hole
+  to a shared diet `E{i}` hole (`E0` first, bumped past idents in the
+  surviving literals/path so SPEC 15.7 equality never fuses hole to
+  literal) and the shorter hetero pair passes its real-pair totality
+  probe, the hunk emits hetero (`- assert_eq!(E0, TEXT_SECTION)` /
+  `+ assert_eq!(E0, TEXT_STRIPPED)` — diet, no declarations: the
+  both-sides inference rule gives `E0` → `expr` while single-side
+  `TEXT_*` stay literal deltas); otherwise the concrete probe decides
+  and concrete fires. String-literal args never hole (opaque positions);
+  numeric/unit args no longer than the hole name stay literal (tighter +
+  shorter); bracket/brace interiors stay ordinary as above. Totality for
+  hetero pairs is the real-pair probe (`template_pair_holds`: the emitted
+  minus/plus diet pair applied to a scratch pre-image must match exactly
+  N — a self-rewrite probe would infer literal uppercase deltas as holes
+  and count a more general domain than the hunk matches).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

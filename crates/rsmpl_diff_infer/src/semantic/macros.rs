@@ -292,21 +292,36 @@ pub(crate) fn try_macro_interior_section(
         // text (byte-faithful, original spacing) instead of the
         // token-normalized grouping key (`out.rsmpl` renders as
         // `out . rsmpl` through `TokenStream` display — still
-        // engine-matchable, but noisier and T375-poorer).
+        // engine-matchable, but noisier and T375-poorer). WI-9b1 hetero:
+        // stable non-string args hole to shared `E{i}` when the shorter
+        // hetero pair passes its real-pair totality probe (self-rewrite
+        // would infer literal uppercase deltas as holes and count a more
+        // general domain — `template_pair_holds` runs the emitted hunk's
+        // own diet inference instead); else the concrete probe decides.
         let (m0, p0) = (&pairs[members[0]].1, &pairs[members[0]].2);
-        let (emit_minus, emit_plus) = emit_pair(m0, p0, minus, plus);
-        if !crate::totality::template_expr_holds(path, file_old, &emit_minus, n_eff) {
-            // Release this group's claims: the hunks stay ordinary.
-            for claim in joined.iter_mut() {
-                if claim
-                    .as_ref()
-                    .is_some_and(|(gm, gp)| gm == minus && gp == plus)
-                {
-                    *claim = None;
+        let (concrete_minus, concrete_plus) = emit_pair(m0, p0, minus, plus);
+        let hetero = hetero_pair(m0, p0).filter(|(hm, hp)| {
+            hm.len() + hp.len() < concrete_minus.len() + concrete_plus.len()
+                && crate::totality::template_pair_holds(path, file_old, hm, hp, n_eff)
+        });
+        let (emit_minus, emit_plus) = match hetero {
+            Some(pair) => pair,
+            None => {
+                if !crate::totality::template_expr_holds(path, file_old, &concrete_minus, n_eff) {
+                    // Release this group's claims: the hunks stay ordinary.
+                    for claim in joined.iter_mut() {
+                        if claim
+                            .as_ref()
+                            .is_some_and(|(gm, gp)| gm == minus && gp == plus)
+                        {
+                            *claim = None;
+                        }
+                    }
+                    continue;
                 }
+                (concrete_minus, concrete_plus)
             }
-            continue;
-        }
+        };
         // WI-1b: precise emission sites are the member pair old lines
         // plus joined stranded old lines for this group.
         let mut sites: Vec<usize> = Vec::new();
@@ -556,6 +571,211 @@ fn parse_macro_interior_pair(old_line: &str, new_line: &str) -> Option<(String, 
     ))
 }
 
+/// Split macro inner-args text into top-level comma-group byte spans
+/// (string-aware like the engine `split_top_level`: commas/parens inside
+/// `"..."` split nothing). Returns `None` on unbalanced delimiters
+/// (e.g. a `'('` char literal — the engine deliberately skips `'` for
+/// lifetime ambiguity, T419); hetero then bails to concrete.
+fn split_top_spans(body: &str) -> Option<Vec<(usize, usize)>> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+        } else if b == b'"' {
+            in_str = true;
+        } else if matches!(b, b'(' | b'[' | b'{') {
+            depth += 1;
+        } else if matches!(b, b')' | b']' | b'}') {
+            depth -= 1;
+            if depth < 0 {
+                return None;
+            }
+        } else if b == b',' && depth == 0 {
+            out.push((start, i));
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if in_str || depth != 0 {
+        return None;
+    }
+    out.push((start, body.len()));
+    // Drop empty groups (leading/trailing/double commas carry no arg —
+    // engine `split_macro_args` retains the same way).
+    let spans: Vec<(usize, usize)> = out
+        .into_iter()
+        .filter(|(s, e)| !body[*s..*e].trim().is_empty())
+        .collect();
+    Some(spans)
+}
+
+/// Trimmed byte range of a group span (leading/trailing whitespace excluded).
+fn trim_range(s: &str, ms: usize, me: usize) -> (usize, usize) {
+    let bytes = s.as_bytes();
+    let mut ts = ms;
+    while ts < me && bytes[ts].is_ascii_whitespace() {
+        ts += 1;
+    }
+    let mut te = me;
+    while te > ts && bytes[te - 1].is_ascii_whitespace() {
+        te -= 1;
+    }
+    (ts, te)
+}
+
+/// True for string-literal args (`".."`, `r".."`, `b".."`, `br".."`):
+/// strings are opaque positions (WI-9 string-literal-only rule) and never
+/// hole, even when stable. Char literals and lifetimes hole like any other
+/// non-string arg under totality.
+fn is_string_arg(arg: &str) -> bool {
+    let t = arg.trim();
+    let u = t
+        .strip_prefix("br\"")
+        .or_else(|| t.strip_prefix("rb\""))
+        .or_else(|| t.strip_prefix('r'))
+        .or_else(|| t.strip_prefix('b'))
+        .unwrap_or(t);
+    u.len() >= 2 && u.starts_with('"') && u.ends_with('"')
+}
+
+/// Scan ident-like tokens (mirrors the inference candidate scan).
+fn scan_arg_idents(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '$' || c.is_ascii_alphabetic() || c == '_' {
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let d = bytes[j] as char;
+                if d.is_ascii_alphanumeric() || d == '_' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            out.push(text[i..j].to_string());
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Hetero (per-arg-hole) emission for an identical interior class
+/// (WI-9b1): same group as the concrete path, but every stable
+/// (minus==plus, trimmed) non-string arg longer than its hole name
+/// becomes a shared `E{i}` hole (`E0` first, bumped past idents occurring
+/// in surviving literals or the path so SPEC 15.7 equality can never fuse
+/// a hole to a literal). Delta positions stay literal with first-site raw
+/// spelling (separators preserved verbatim, so literal bytes are exactly
+/// the evidence bytes). Returns `None` when nothing holes (hetero ==
+/// concrete), arity diverges, or spans unbalance — the caller falls back
+/// to concrete.
+fn hetero_pair(minus_evidence: &str, plus_evidence: &str) -> Option<(String, String)> {
+    let o_mac = parse_macro_expr(minus_evidence)?;
+    let n_mac = parse_macro_expr(plus_evidence)?;
+    let o_path = macro_path(&o_mac)?;
+    let n_path = macro_path(&n_mac)?;
+    if o_path != n_path {
+        return None;
+    }
+    let m_args = macro_raw_args(minus_evidence)?;
+    let p_args = macro_raw_args(plus_evidence)?;
+    let m_spans = split_top_spans(&m_args)?;
+    let p_spans = split_top_spans(&p_args)?;
+    if m_spans.len() != p_spans.len() || m_spans.is_empty() {
+        return None;
+    }
+    // Occupied hole names: every ident in the path and in ANY arg slice
+    // (holed or not). A hole name never coincides with a literal ident, so
+    // SPEC 15.7 equality can never fuse a hole to a literal — including
+    // positions demoted back to literal below (their idents already block).
+    let mut occupied: Vec<String> = scan_arg_idents(&o_path);
+    for ((ms, me), (ps, pe)) in m_spans.iter().zip(p_spans.iter()) {
+        occupied.extend(scan_arg_idents(m_args[*ms..*me].trim()));
+        occupied.extend(scan_arg_idents(p_args[*ps..*pe].trim()));
+    }
+    let mut next_hole = 0u32;
+    let mut fresh = |used: &mut Vec<String>| loop {
+        let name = if next_hole == 0 {
+            "E0".to_string()
+        } else {
+            format!("E{next_hole}")
+        };
+        next_hole += 1;
+        if !used
+            .iter()
+            .any(|u| u == &name || u.trim_start_matches('$') == name)
+        {
+            used.push(name.clone());
+            return name;
+        }
+    };
+    let mut holed_any = false;
+    // Rebuild inner text group by group, preserving separators verbatim:
+    // each group slice is replaced whole (hole) or kept byte-exact.
+    let mut m_rebuilt = String::new();
+    let mut p_rebuilt = String::new();
+    let mut m_cursor = 0;
+    let mut p_cursor = 0;
+    for ((ms, me), (ps, pe)) in m_spans.iter().zip(p_spans.iter()) {
+        let (m_g, p_g) = (m_args[*ms..*me].trim(), p_args[*ps..*pe].trim());
+        m_rebuilt.push_str(&m_args[m_cursor..*ms]);
+        p_rebuilt.push_str(&p_args[p_cursor..*ps]);
+        // Hole only when strictly shorter (byte-win): the `> 2` pre-check
+        // keeps demotions from consuming hole names (the post-`fresh`
+        // length check only fires at `E10`+, where a skipped name is
+        // harmless — idents already block). The hole replaces just the
+        // trimmed group text so surrounding spacing stays byte-exact.
+        if m_g == p_g && !is_string_arg(m_g) && m_g.len() > 2 {
+            let hole = fresh(&mut occupied);
+            if m_g.len() > hole.len() {
+                let (mts, mte) = trim_range(&m_args, *ms, *me);
+                let (pts, pte) = trim_range(&p_args, *ps, *pe);
+                m_rebuilt.push_str(&m_args[*ms..mts]);
+                m_rebuilt.push_str(&hole);
+                m_rebuilt.push_str(&m_args[mte..*me]);
+                p_rebuilt.push_str(&p_args[*ps..pts]);
+                p_rebuilt.push_str(&hole);
+                p_rebuilt.push_str(&p_args[pte..*pe]);
+                holed_any = true;
+                m_cursor = *me;
+                p_cursor = *pe;
+                continue;
+            }
+        }
+        m_rebuilt.push_str(&m_args[*ms..*me]);
+        p_rebuilt.push_str(&p_args[*ps..*pe]);
+        m_cursor = *me;
+        p_cursor = *pe;
+    }
+    m_rebuilt.push_str(&m_args[m_cursor..]);
+    p_rebuilt.push_str(&p_args[p_cursor..]);
+    if !holed_any {
+        return None;
+    }
+    Some((
+        format!("{o_path}!({m_rebuilt})"),
+        format!("{n_path}!({p_rebuilt})"),
+    ))
+}
+
 /// Spell an interior pair with the first site's raw argument text
 /// (original spacing) instead of the token-normalized grouping key.
 /// Falls back to the normalized pair when the raw slice fails (never
@@ -609,6 +829,7 @@ fn macro_raw_args(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;
+    use super::{is_string_arg, split_top_spans};
     use std::collections::HashMap;
 
     fn section(path: &str, body: &str) -> String {
@@ -920,10 +1141,11 @@ mod tests {
 
     #[test]
     fn macro_interior_fires() {
-        // WI-9a: two identical same-name interior pairs compress to one
-        // concrete `# allow=many` hunk (plain `!` routing, no `# macro`
-        // directive). Tokens render normalized; the engine replays them
-        // byte-exact (validated_live).
+        // WI-9b1: two identical same-name interior pairs compress to one
+        // hetero `# allow=many` hunk (plain `!` routing, no `# macro`
+        // directive, no `# expr` — diet infers the shared `E0` via the
+        // both-sides rule while single-side `TEXT_*` stay literal deltas).
+        // The engine replays it byte-exact (validated_live).
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n }\n",
@@ -937,12 +1159,13 @@ mod tests {
         assert!(out.contains("rule=r1"), "got: {out}");
         assert!(out.contains("# allow=many\n"), "got: {out}");
         assert!(!out.contains("# macro"), "plain routing, got: {out}");
+        assert!(!out.contains("# expr"), "diet, got: {out}");
         assert!(
-            out.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)\n"),
-            "raw spelling, got: {out}"
+            out.contains("- assert_eq!(E0, TEXT_SECTION)\n"),
+            "hetero hole, got: {out}"
         );
         assert!(
-            out.contains("+ assert_eq!(out.rsmpl, TEXT_STRIPPED)\n"),
+            out.contains("+ assert_eq!(E0, TEXT_STRIPPED)\n"),
             "got: {out}"
         );
     }
@@ -1072,10 +1295,123 @@ mod tests {
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
         validated_live(&out, &pre);
         assert!(out.contains("rule=r1"), "got: {out}");
-        assert!(out.contains("assert_eq!(out.rsmpl"), "got: {out}");
+        assert!(
+            out.contains("- assert_eq!(E0, TEXT_SECTION)\n"),
+            "hetero hole, got: {out}"
+        );
         assert!(
             out.contains("+fn extra_tail() {}"),
             "tail stays, got: {out}"
         );
+    }
+
+    #[test]
+    fn macro_hetero_string_arg_stays_concrete() {
+        // String-literal-only rule: a stable string arg never holes even
+        // when longer than the hole name — the pair stays concrete.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    log!(long_stable_prefix, \"a,b\");\n-    log!(long_stable_prefix, \"a,b\");\n+    log!(long_stable_prefix, \"c\");\n+    log!(long_stable_prefix, \"c\");\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    log!(long_stable_prefix, \"a,b\");\n    log!(long_stable_prefix, \"a,b\");\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- log!(E0, \"a,b\")\n"),
+            "stable non-string holes, string stays, got: {out}"
+        );
+        assert!(out.contains("+ log!(E0, \"c\")\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_hetero_short_stable_stays_literal() {
+        // Byte-win gate: a stable arg no longer than its hole name
+        // (`1` vs `E0`) stays literal — hetero degrades to concrete.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = same_mac!(1);\n-    let second_value = same_mac!(1);\n+    let first_value = same_mac!(2);\n+    let second_value = same_mac!(2);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_value = same_mac!(1);\n    let second_value = same_mac!(1);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- same_mac!(1)\n"), "got: {out}");
+        assert!(!out.contains("E0"), "no holes expected, got: {out}");
+    }
+
+    #[test]
+    fn macro_hetero_twin_falls_back_to_concrete() {
+        // An untouched `assert_eq!(other_value, TEXT_SECTION)` matches the
+        // hetero minus (`E0` binds anything) but not the tighter concrete
+        // minus — the real-pair probe counts 3 ≠ 2 and vetoes hetero, the
+        // concrete self-probe still counts exactly 2, so the sweep fires
+        // concrete instead of staying ordinary (precision-first fallback).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n    assert_eq!(other_value, TEXT_SECTION);\n}\n",
+        )]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)\n"),
+            "concrete fallback, got: {out}"
+        );
+        assert!(!out.contains("E0"), "hetero vetoed, got: {out}");
+    }
+
+    #[test]
+    fn macro_hetero_hole_name_freshness() {
+        // A literal `E0` arg blocks the name: the holed neighbor takes
+        // `E1`, so SPEC 15.7 equality can never fuse hole to literal.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    check!(E0, stable_longer_argument, FIRST_DELTA);\n-    check!(E0, stable_longer_argument, FIRST_DELTA);\n+    check!(E0, stable_longer_argument, SECOND_DELTA);\n+    check!(E0, stable_longer_argument, SECOND_DELTA);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    check!(E0, stable_longer_argument, FIRST_DELTA);\n    check!(E0, stable_longer_argument, FIRST_DELTA);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- check!(E0, E1, FIRST_DELTA)\n"),
+            "fresh hole, got: {out}"
+        );
+        assert!(
+            out.contains("+ check!(E0, E1, SECOND_DELTA)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn split_top_spans_string_aware() {
+        // Commas/parens inside strings split nothing (T428 precedent).
+        let spans = split_top_spans("long_stable_prefix, \"a,b\"").unwrap();
+        assert_eq!(spans.len(), 2);
+        let spans = split_top_spans("foo(bar(1, 2)), \"c,d\", e").unwrap();
+        assert_eq!(spans.len(), 3);
+        // Unbalanced delimiters bail (hetero falls back to concrete).
+        assert!(split_top_spans("foo(bar").is_none());
+        assert!(split_top_spans("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn is_string_arg_prefixes() {
+        assert!(is_string_arg("\"a,b\""));
+        assert!(is_string_arg("r\"a,b\""));
+        assert!(is_string_arg("b\"x\""));
+        assert!(!is_string_arg("TEXT_SECTION"));
+        assert!(!is_string_arg("out.rsmpl"));
+        assert!(!is_string_arg("'a'"));
     }
 }

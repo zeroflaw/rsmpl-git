@@ -1,6 +1,7 @@
-//! WI-9a shape pins for `test-fixtures/diffrs/{27,82}-*`: same-name
-//! concrete macro-interior sweep (fires) and the bracket-delimiter
-//! veto (stays ordinary). Split out of
+//! WI-9a/WI-9b1 shape pins for `test-fixtures/diffrs/{27,82,83,84}-*`:
+//! same-name macro-interior sweep (27 fires hetero, 82 bracket-delimiter
+//! veto stays ordinary, 83 hetero fire with a stable long arg, 84
+//! single-site stays ordinary). Split out of
 //! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
 //! (helpers duplicated, not shared — T246 precedent). The generic
 //! native → semantic → native round-trip for these fixtures already
@@ -188,10 +189,11 @@ fn convert_fixture(name: &str) -> (String, String) {
 #[test]
 fn wi9_macro_interior_fires() {
     // Fixture 27 (was `27-macro-invocation-veto`, the T450 stays-
-    // ordinary pin; WI-9a flips it): two identical
+    // ordinary pin; WI-9a flips it, WI-9b1 makes it hetero): two identical
     // `assert_eq!(.., TEXT_SECTION)` → `TEXT_STRIPPED` sites plus a pure
-    // addition join to one concrete `# allow=many` hunk; the tail stays
-    // an ordinary insertion.
+    // addition join to one hetero `# allow=many` hunk (diet `E0` for the
+    // stable arg, literal `TEXT_*` delta); the tail stays an ordinary
+    // insertion.
     let (native_input, semantic) = convert_fixture("27-macro-interior-fires");
     assert!(
         semantic.contains("rule=r1"),
@@ -202,11 +204,15 @@ fn wi9_macro_interior_fires() {
         "plain `!` routing, no directive, got: {semantic}"
     );
     assert!(
-        semantic.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)\n"),
+        !semantic.contains("# expr"),
+        "diet holes, no declarations, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- assert_eq!(E0, TEXT_SECTION)\n"),
         "minus pattern missing, got: {semantic}"
     );
     assert!(
-        semantic.contains("+ assert_eq!(out.rsmpl, TEXT_STRIPPED)\n"),
+        semantic.contains("+ assert_eq!(E0, TEXT_STRIPPED)\n"),
         "plus pattern missing, got: {semantic}"
     );
     assert!(
@@ -222,6 +228,66 @@ fn wi9_macro_interior_fires() {
         "interior sweep must beat native bytes ({} vs {})",
         semantic.len(),
         native_input.len()
+    );
+}
+
+#[test]
+fn wi9_macro_hetero_fires() {
+    // Fixture 83 (WI-9b1): two balanced same-name interior pairs whose
+    // stable arg (`request_context`, 15 chars) holes to a diet `E0`
+    // while the `FIRST_/SECOND_MODE` delta stays literal — hetero beats
+    // concrete on bytes and the real-pair totality probe counts exactly 2.
+    let (native_input, semantic) = convert_fixture("83-macro-hetero-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "hetero interior must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# expr"),
+        "diet holes, no declarations, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- check!(E0, FIRST_MODE)\n"),
+        "hetero minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ check!(E0, SECOND_MODE)\n"),
+        "hetero plus missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    check!(request_context, FIRST_MODE);"),
+        "interior minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "hetero sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi9_macro_hetero_single_site_stays_ordinary() {
+    // Fixture 84: one hetero-capable pair is N=1 — the N≥2 gate keeps it
+    // ordinary (same posture as the WI-9a single-site pin).
+    let (native_input, semantic) = convert_fixture("84-macro-hetero-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "single site must stay ordinary, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    check!(request_context, FIRST_MODE);"),
+        "minus lines must be preserved, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+    check!(request_context, SECOND_MODE);"),
+        "plus lines must be preserved, got: {semantic}"
+    );
+    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
+    assert!(
+        semantic == normalize_native(&native_input),
+        "ordinary passthrough must equal normalized native, got: {semantic}"
     );
 }
 

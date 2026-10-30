@@ -777,7 +777,7 @@ fn assign_call_slots(
     masked_plus: &str,
     base: &MetavarTable,
 ) -> Result<(), StructuredError> {
-    for text in [masked_minus, masked_plus] {
+    for (side, text) in [masked_minus, masked_plus].into_iter().enumerate() {
         for line in text.lines() {
             let t = line.trim();
             if t.is_empty() || t.starts_with("let ") || t.starts_with("fn ") {
@@ -905,11 +905,29 @@ fn assign_call_slots(
                     }
                 }
                 // Macro invocations (`foo!(...)`) carry token-tree bodies,
-                // not expression args: leave their holes to explicit
-                // `# macro`/`# token_tree` declarations (diet does not
-                // infer macro interiors in WI-1c). Macro names stay
-                // literal (explicit `# macro M` binds via placeholders).
+                // so only shared (both-sides) arg names infer as `expr`
+                // holes (WI-9b1): single-side uppercase idents (e.g.
+                // `TEXT_SECTION` vs `TEXT_STRIPPED`) stay literal deltas
+                // and plus-only holes stay unbound-rejected. Strings are
+                // already blanked in the inference view and macro names
+                // stay literal (explicit `# macro M` binds via
+                // placeholders; WI-7-upper names-never-infer).
                 if callee.ends_with('!') {
+                    let other = if side == 0 { masked_plus } else { masked_minus };
+                    if let Some(args) = balanced_args(&t[paren..]) {
+                        for n in names_in(&args, kinds) {
+                            // Declared non-`expr` names (e.g. `# macro M`)
+                            // keep their declared kind — inferring `expr`
+                            // here would mask the shape's own agreement
+                            // error with a spurious conflict.
+                            if base.kind_of(&n).is_some_and(|k| k != MetavarKind::Expr) {
+                                continue;
+                            }
+                            if occurs_in(other, &n) {
+                                add_kind(kinds, &n, MetavarKind::Expr);
+                            }
+                        }
+                    }
                     continue;
                 }
                 if let Some(args) = balanced_args(&t[paren..]) {

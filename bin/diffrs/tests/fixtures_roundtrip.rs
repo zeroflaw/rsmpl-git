@@ -1131,13 +1131,14 @@ fn native_to_semantic_to_native_round_trip() {
                 native_input.len()
             );
         } else if name == "27-macro-interior-fires" {
-            // WI-9a (was T450 veto): same-name concrete macro interiors
-            // now compress — 2x assert_eq!(out.rsmpl, TEXT_SECTION) ->
-            // TEXT_STRIPPED in singleton hunks join with the stranded
-            // claim (the pure addition forces the unbalanced section).
-            // The T450 engine-blind gate (verbatim macro veto) is
-            // bypassed by the dedicated interior section driver, whose
-            // concrete patterns route to the macro matcher (probed).
+            // WI-9a (was T450 veto) + WI-9b1 hetero: same-name macro
+            // interiors now compress hetero — 2x assert_eq!(..) sites join
+            // with the stranded claim (the pure addition forces the
+            // unbalanced section). The stable `out.rsmpl` arg holes to a
+            // diet `E0` (both-sides rule; single-side `TEXT_*` stay literal
+            // deltas); the T450 engine-blind gate (verbatim macro veto) is
+            // bypassed by the interior section driver, whose patterns route
+            // to the macro matcher (probed).
             assert!(
                 semantic.contains("rule=r1"),
                 "macro interior must fire, got: {semantic}"
@@ -1147,11 +1148,11 @@ fn native_to_semantic_to_native_round_trip() {
                 "plain `!` routing, no directive, got: {semantic}"
             );
             assert!(
-                semantic.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)"),
+                semantic.contains("- assert_eq!(E0, TEXT_SECTION)"),
                 "interior minus lines must be consumed, got: {semantic}"
             );
             assert!(
-                semantic.contains("+ assert_eq!(out.rsmpl, TEXT_STRIPPED)"),
+                semantic.contains("+ assert_eq!(E0, TEXT_STRIPPED)"),
                 "interior plus lines must be consumed, got: {semantic}"
             );
             assert!(

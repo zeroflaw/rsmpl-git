@@ -613,6 +613,48 @@ pub(crate) fn template_type_holds(
     report.rules.iter().map(|r| r.matches).sum::<usize>() == n
 }
 
+/// Paired-template totality (WI-9b1): the hetero macro pair
+/// (`hetero_minus` / `hetero_plus`, e.g. `- assert_eq!(E0, TEXT_SECTION)`
+/// / `+ assert_eq!(E0, TEXT_STRIPPED)`) must match exactly `n` sites in
+/// the pre-image file. Unlike the self-rewrite probes, this one applies
+/// the REAL pair: a self-rewrite (`- M` / `+ M`) would see every shared
+/// name (including uppercase literal deltas like `TEXT_SECTION`) on both
+/// sides and infer them as holes, counting a more general domain than
+/// the emitted hunk matches. The real-pair probe runs the emitted
+/// hunk's own diet inference (shared-names rule: `E0` → `expr`,
+/// single-side idents stay literal) and counts minus matches on a
+/// scratch tree. `None` pre-image keeps the legacy allow; probe
+/// parse/apply failure vetoes. Conservative by construction: whole-file
+/// count, so an untouched twin anywhere vetoes (same posture as
+/// `template_expr_holds`).
+pub(crate) fn template_pair_holds(
+    path: &str,
+    file_old: Option<&str>,
+    hetero_minus: &str,
+    hetero_plus: &str,
+    n: usize,
+) -> bool {
+    if n == 0 || hetero_minus.contains('\n') || hetero_plus.contains('\n') {
+        return false;
+    }
+    let Some(pre) = file_old else {
+        return true;
+    };
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {hetero_minus}\n+ {hetero_plus}\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+}
+
 /// Generic expression-template totality (WI-7-upper): the emitted minus
 /// expression template `minus_template` (e.g. a verbatim `Old(alpha)`
 /// whose uppercase callee infers as an `expr` hole) must match exactly
@@ -625,7 +667,10 @@ pub(crate) fn template_type_holds(
 /// `None` pre-image keeps the legacy allow; probe parse/apply failure
 /// vetoes. Conservative by construction: the sweep probe counts
 /// whole-file matches, so a twin outside the emitted range still vetoes
-/// (same posture as `template_fn_holds`).
+/// (same posture as `template_fn_holds`). Only valid when every shared
+/// name in the template is a hole in the emitted hunk too — hetero
+/// macro pairs with literal uppercase deltas must use
+/// `template_pair_holds` (self-rewrite would infer the deltas).
 pub(crate) fn template_expr_holds(
     path: &str,
     file_old: Option<&str>,
