@@ -9,11 +9,7 @@ use crate::expr_pattern::{classify_call_pattern, find_macro_bang, ExprPatternKin
 use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
 use crate::pattern::{GeneralShape, PatternKind};
-use crate::pattern_evolution::{
-    parse_const_evolution_template, parse_enum_evolution_template, parse_evolution_template,
-    parse_mod_evolution_template, parse_static_evolution_template, parse_struct_evolution_template,
-    parse_trait_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
-};
+use crate::pattern_evolution::is_evolution_template;
 use crate::pattern_general::try_general;
 use crate::quote_utils::qualifier_leads_to_fn;
 
@@ -275,29 +271,22 @@ pub(crate) fn classify(
         // header template (`+ pub const New = ...;`), `static`
         // header template (`+ pub static [mut ]New = ...;`), `mod`
         // header template (`+ pub mod New { ... }`), or `trait`
-        // header template (`+ pub trait New { ... }`) is an
-        // evolution paste — the engine splices the captured body under
-        // the template header. Anything else with `# use=` stays a literal
-        // insertion.
+        // header template (`+ pub trait New { ... }`); WI-8 slice 9
+        // adds the concrete-signature `fn` template
+        // (`+ pub fn New(x: i64) -> i64 { ... }`) for
+        // signature-evolving moves. Each is an evolution paste — the
+        // engine splices the captured body under the template header.
+        // Anything else with `# use=` stays a literal insertion.
         let use_name = if uses.len() == 1
             && p.lines().count() == 1
-            && (p.trim() == uses[0]
-                || parse_evolution_template(p.trim()).is_some()
-                || parse_struct_evolution_template(p.trim()).is_some()
-                || parse_enum_evolution_template(p.trim()).is_some()
-                || parse_union_evolution_template(p.trim()).is_some()
-                || parse_type_evolution_template(p.trim()).is_some()
-                || parse_const_evolution_template(p.trim()).is_some()
-                || parse_static_evolution_template(p.trim()).is_some()
-                || parse_mod_evolution_template(p.trim()).is_some()
-                || parse_trait_evolution_template(p.trim()).is_some())
+            && (p.trim() == uses[0] || is_evolution_template(p.trim()))
         {
             Some(uses[0].to_string())
         } else if uses.len() == 1 && p.lines().count() == 1 && has_fn_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "evolution paste template must be a single-line `fn` header with `(...)` + `...` (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}` or paste the bare capture name for a verbatim move",
+                    "evolution paste template must be a single-line `fn` header with `(...)` + `...` or a concrete signature + `{{ ... }}` (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}`, `+ <vis>fn <New>(args) -> ret {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));

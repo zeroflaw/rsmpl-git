@@ -54,6 +54,84 @@ pub fn parse_evolution_template(text: &str) -> Option<(String, String)> {
     Some((prefix.to_string(), rest[..ident_len].to_string()))
 }
 
+/// WI-8 slice 9 concrete-signature `fn` evolution-paste template: a
+/// single-line `fn` header with a fully spelled signature and a `...`
+/// body marker (`pub fn New(x: i64) -> i64 { ... }`). Returns the
+/// verbatim prefix before `fn` (vis + qualifiers) and the new ident.
+/// The signature between the ident and the `{ ... }` marker rides
+/// verbatim from the plus side — the engine's full-header splice
+/// replaces the captured header line with it, so signature-evolving
+/// moves (`fn old(x: i32) -> i32` → `pub fn new(x: i64) -> i64`) apply
+/// byte-identical. `None` when the line is not a concrete template:
+/// the abstract `(...)` form (owned by `parse_evolution_template`),
+/// marker-less lines, multi-line text, and bad prefixes all decline.
+pub fn parse_fn_full_header_template(text: &str) -> Option<(String, String)> {
+    let line = text.trim();
+    if line.lines().count() != 1 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Word-bounded `fn` followed by whitespace (never the `fn` inside
+    // another ident, e.g. `myfn`).
+    let mut fn_pos = None;
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if bytes[i..].starts_with(b"fn")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 2).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            fn_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let fn_pos = fn_pos?;
+    let prefix = &line[..fn_pos];
+    if !valid_evolution_prefix(prefix) {
+        return None;
+    }
+    let rest = line[fn_pos + 2..].trim_start();
+    let mut ident_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            ident_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if ident_len == 0 {
+        return None;
+    }
+    let tail = &rest[ident_len..];
+    // The abstract `(...)` marker form belongs to
+    // `parse_evolution_template`, never here.
+    if tail.contains("(...)") {
+        return None;
+    }
+    // A concrete signature plus the `{ ... }` body marker: parens for
+    // params, a brace opening the marker, `...` inside it, `}` closing
+    // the line. Marker-less concrete lines (e.g. `pub fn n(x: i32)`)
+    // decline — they stay loud downstream, as before.
+    if !(tail.contains('(') && tail.contains(')') && tail.contains('{') && tail.contains("...")) {
+        return None;
+    }
+    if !line.trim_end().ends_with('}') {
+        return None;
+    }
+    // The header part (everything before the first `{` — signatures
+    // never contain braces) must parse as an `fn` item once closed.
+    // This validates the vis/qualifier prefix, generics, params,
+    // return type, and `where` clause in one probe, so the engine can
+    // splice it without re-validating.
+    let brace = line.find('{')?;
+    let header_part = line[..brace].trim_end();
+    if syn::parse_str::<syn::ItemFn>(&format!("{header_part} {{}}")).is_err() {
+        return None;
+    }
+    Some((prefix.to_string(), rest[..ident_len].to_string()))
+}
+
 /// WI-8 slice 1 struct evolution-paste template: a single-line
 /// `struct` header with a `...` body marker
 /// (`pub struct New { ... }`). Returns the verbatim prefix before
@@ -598,6 +676,25 @@ fn valid_trait_evolution_prefix(prefix: &str) -> bool {
     syn::parse_str::<syn::ItemTrait>(&format!("{pre} trait __RsmplDummy__ {{}}")).is_ok()
 }
 
+/// WI-8 slice 9: whether single-line `text` is any evolution-paste
+/// template (the nine abstract shapes plus the concrete-signature `fn`
+/// form). Shared by the classifier's Insertion gate and the
+/// `unbound_plus` exemption — an evolution paste is verbatim plus-side
+/// text spliced under a capture, never a match pattern, so its idents
+/// (`T`, `Vec`, ...) are never metavariable holes.
+pub fn is_evolution_template(text: &str) -> bool {
+    let t = text.trim();
+    parse_evolution_template(t).is_some()
+        || parse_fn_full_header_template(t).is_some()
+        || parse_struct_evolution_template(t).is_some()
+        || parse_enum_evolution_template(t).is_some()
+        || parse_union_evolution_template(t).is_some()
+        || parse_type_evolution_template(t).is_some()
+        || parse_const_evolution_template(t).is_some()
+        || parse_static_evolution_template(t).is_some()
+        || parse_mod_evolution_template(t).is_some()
+        || parse_trait_evolution_template(t).is_some()
+}
 /// The verbatim text before `fn` in an evolution-paste template: a Rust
 /// visibility + qualifier prefix (`pub`, `pub(crate)`, `pub(in path)`,
 /// `const`/`async`/`unsafe`/`extern "C"` combos, or empty for a bare

@@ -27,6 +27,19 @@ fn section(path: &str, body: &str) -> String {
     format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{body}")
 }
 
+/// WI-8 slice 9: a `fn` item with the given single-line `header`
+/// (ending with `{`) and 40 filler lines inside the body (clearing
+/// T375) — so the item parses whole and only the header varies across
+/// a pair.
+fn sig_fn(header: &str) -> String {
+    let mut s = format!("{header}\n");
+    for i in 0..40 {
+        s.push_str(&format!("    let v{i} = {i};\n"));
+    }
+    s.push_str("}\n");
+    s
+}
+
 fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
         .iter()
@@ -171,15 +184,131 @@ fn body_edited_pair_stays_ordinary() {
 }
 
 #[test]
-fn param_edited_pair_stays_ordinary() {
-    let minus_fn = "fn big(x: i32) {\n    x\n}\n".to_string()
-        + &(0..40)
-            .map(|i| format!("    let v{i} = {i};\n"))
-            .collect::<String>();
-    let plus_fn = "pub fn huge(x: i64) {\n    x\n}\n".to_string()
-        + &(0..40)
-            .map(|i| format!("    let v{i} = {i};\n"))
-            .collect::<String>();
+fn param_edited_pair_fires_with_concrete_template_and_round_trips() {
+    // WI-8 slice 9: a param delta used to veto the move (this pin
+    // asserted `# bind=` absent); now the pair raises to cut +
+    // concrete-signature paste and round-trips byte-identical.
+    let minus_fn = sig_fn("fn big(x: i32) {");
+    let plus_fn = sig_fn("pub fn huge(x: i64) {");
+    let a_old = format!("fn keep() {{}}\n{minus_fn}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_fn}");
+    let minus: String = minus_fn.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_fn.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_fn.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_fn.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind=M1"),
+        "evolved cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub fn huge(x: i64) { ... }"),
+        "concrete template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        !out.rsmpl.contains("-fn big"),
+        "minus lines must be consumed, got:\n{}",
+        out.rsmpl
+    );
+    let post_refs = [("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    let pre_refs = [("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn return_only_edited_pair_fires_with_concrete_template_and_round_trips() {
+    // WI-8 slice 9: same name and vis, return type evolves — the
+    // template carries the new signature with the old name.
+    let minus_fn = sig_fn("fn big(x: i32) -> i32 {");
+    let plus_fn = sig_fn("pub fn big(x: i32) -> i64 {");
+    let a_old = format!("fn keep() {{}}\n{minus_fn}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_fn}");
+    let minus: String = minus_fn.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_fn.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_fn.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_fn.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("+ pub fn big(x: i32) -> i64 { ... }"),
+        "concrete template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let post_refs = [("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    let pre_refs = [("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn generics_where_edited_pair_fires_with_concrete_template_and_round_trips() {
+    // WI-8 slice 9: generics + `where` evolve on one line — the concrete
+    // header carries them verbatim (this also pins the `unbound_plus`
+    // exemption: `T` in the template is text, never a hole).
+    let minus_fn = sig_fn("fn big(x: i32) -> i32 {");
+    let plus_fn = sig_fn("pub fn big<T>(x: T) -> T where T: Clone {");
+    let a_old = format!("fn keep() {{}}\n{minus_fn}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_fn}");
+    let minus: String = minus_fn.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_fn.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_fn.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_fn.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl
+            .contains("+ pub fn big<T>(x: T) -> T where T: Clone { ... }"),
+        "concrete template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let post_refs = [("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    let pre_refs = [("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn multiline_header_sig_pair_stays_ordinary() {
+    // WI-8 slice 9 narrowing: a signature delta across a multi-line
+    // header cannot be spelled single-line, so the pair stays a full
+    // delete+insert even though the matcher would fire.
+    let fillers: String = (0..40).map(|i| format!("    let v{i} = {i};\n")).collect();
+    let minus_fn = format!("fn big(\n    x: i32,\n) -> i32 {{\n{fillers}}}\n");
+    let plus_fn = format!("pub fn huge(\n    x: i64,\n) -> i64 {{\n{fillers}}}\n");
     let a_old = format!("fn keep() {{}}\n{minus_fn}");
     let b_old = "fn other() {}\n".to_string();
     let minus: String = minus_fn.lines().map(|l| format!("-{l}\n")).collect();
@@ -199,7 +328,7 @@ fn param_edited_pair_stays_ordinary() {
     let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
     assert!(
         !out.rsmpl.contains("# bind="),
-        "param edits veto the move, got:\n{}",
+        "multi-line headers veto the move, got:\n{}",
         out.rsmpl
     );
 }

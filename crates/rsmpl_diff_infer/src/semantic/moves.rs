@@ -106,166 +106,15 @@ pub(crate) fn try_move_sweep(
                 }
             }
             if hits.is_empty() {
-                // WI-8a + WI-8 slices 1-8: no byte-identical run — try an
-                // evolved header (`fn` prefix/vis/quals/name,
-                // `struct`/`enum`/`union`/`type`/`const`/`static`/`mod`/`trait` vis/name,
-                // plus `static mut` mutability and `unsafe mod`/`unsafe trait`) over the same body.
-                for (psi, phi) in &plus_hunks {
-                    let pbody = &parsed[*psi].hunks[*phi].body;
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Fn,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_struct_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Struct,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_enum_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Enum,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_union_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Union,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_type_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Type,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_const_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Const,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name, static_mut) in
-                        super::move_evolve::find_static_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Static,
-                                prefix,
-                                name,
-                                static_mut,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_mod_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Mod,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                    for (first, last, prefix, name) in
-                        super::move_evolve::find_trait_evolved_hits(&item.text, pbody)
-                    {
-                        pairs.push(MovePair {
-                            minus_hunk_key: (*msi, *mhi),
-                            plus_hunk_key: (*psi, *phi),
-                            item: item.clone(),
-                            plus_first: first,
-                            plus_last: last,
-                            evolved: Some(super::move_parts::EvolvedPair {
-                                kind: super::move_parts::EvolvedKind::Trait,
-                                prefix,
-                                name,
-                                static_mut: false,
-                            }),
-                        });
-                    }
-                }
+                // WI-8a + WI-8 slices 1-9: no byte-identical run — the
+                // evolved-header cascade lives in `move_pair_evolve`
+                // (D5 split; push order preserved for run-dedup).
+                pairs.extend(super::move_pair_evolve::evolved_pairs_for_item(
+                    item,
+                    &parsed[..],
+                    &plus_hunks[..],
+                    (*msi, *mhi),
+                ));
                 continue;
             }
             for (psi, phi, first, last) in hits {
@@ -468,43 +317,49 @@ pub(crate) fn try_move_sweep(
         };
         let paste_rule = super::unique_rule(used_rules, &format!("paste_{}", p.item.ident));
         let anchor = parsed[p.plus_hunk_key.0].hunks[p.plus_hunk_key.1].old_start;
-        // WI-8a + WI-8 slices 1-8: evolved pairs paste the plus-side
+        // WI-8a + WI-8 slices 1-9: evolved pairs paste the plus-side
         // header template (the engine splices the captured body under
         // it); identical pairs keep the bare-`bind` verbatim paste.
         let paste = match &p.evolved {
             Some(ev) => {
-                let tmpl = match ev.kind {
-                    super::move_parts::EvolvedKind::Fn => {
-                        super::move_evolve::evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Struct => {
-                        super::move_evolve::struct_evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Enum => {
-                        super::move_evolve::enum_evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Union => {
-                        super::move_evolve::union_evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Type => {
-                        super::move_evolve::type_evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Const => {
-                        super::move_evolve::const_evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Static => {
-                        super::move_evolve::static_evolution_template(
-                            &ev.prefix,
-                            &ev.name,
-                            ev.static_mut,
-                        )
-                    }
-                    super::move_parts::EvolvedKind::Mod => {
-                        super::move_evolve::mod_evolution_template(&ev.prefix, &ev.name)
-                    }
-                    super::move_parts::EvolvedKind::Trait => {
-                        super::move_evolve::trait_evolution_template(&ev.prefix, &ev.name)
-                    }
+                // WI-8 slice 9: a concrete template overrides the
+                // kind-built abstract shape (signature-evolving `fn`
+                // moves carry the plus-side header verbatim).
+                let tmpl = match &ev.template {
+                    Some(t) => t.clone(),
+                    None => match ev.kind {
+                        super::move_parts::EvolvedKind::Fn => {
+                            super::move_evolve::evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Struct => {
+                            super::move_evolve::struct_evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Enum => {
+                            super::move_evolve::enum_evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Union => {
+                            super::move_evolve::union_evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Type => {
+                            super::move_evolve::type_evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Const => {
+                            super::move_evolve::const_evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Static => {
+                            super::move_evolve::static_evolution_template(
+                                &ev.prefix,
+                                &ev.name,
+                                ev.static_mut,
+                            )
+                        }
+                        super::move_parts::EvolvedKind::Mod => {
+                            super::move_evolve::mod_evolution_template(&ev.prefix, &ev.name)
+                        }
+                        super::move_parts::EvolvedKind::Trait => {
+                            super::move_evolve::trait_evolution_template(&ev.prefix, &ev.name)
+                        }
+                    },
                 };
                 format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {tmpl}\n")
             }

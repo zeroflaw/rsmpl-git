@@ -40,6 +40,11 @@ pub(crate) struct EvolvedPair {
     /// template carries it verbatim); always `false` for the other eight
     /// kinds.
     pub(crate) static_mut: bool,
+    /// WI-8 slice 9: a verbatim concrete paste line that overrides the
+    /// kind-built template (signature-evolving `fn` moves paste the
+    /// plus-side header concretely); `None` for the eight abstract
+    /// shapes, whose paste is built from `kind` + `prefix` + `name`.
+    pub(crate) template: Option<String>,
 }
 
 #[derive(Clone)]

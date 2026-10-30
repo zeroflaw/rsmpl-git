@@ -1121,6 +1121,42 @@ fn evolution_template_accepts_restricted_visibility() {
 }
 
 #[test]
+fn fn_full_header_template_accepts_concrete_signatures() {
+    // WI-8 slice 9: signature-evolving moves paste the plus-side header
+    // concretely (`+ pub fn new(x: i64) -> i64 { ... }`). The parser
+    // accepts fully spelled single-line headers and declines the
+    // abstract `(...)` form (owned by `parse_evolution_template`),
+    // marker-less lines, multi-line text, and bad prefixes.
+    use rsmpl_pattern::parse_fn_full_header_template;
+    for tmpl in [
+        "fn new(x: i64) -> i64 { ... }",
+        "pub fn new(x: i64) -> i64 { ... }",
+        "pub(crate) async fn new<T>(x: T) -> T where T: Clone { ... }",
+        "fn old() { ... }",
+    ] {
+        let (pre, name) =
+            parse_fn_full_header_template(tmpl).unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+        assert!(!name.is_empty(), "got: {tmpl:?}");
+        assert!(tmpl.starts_with(pre.trim()), "got: {tmpl:?}");
+    }
+    let (pre, name) = parse_fn_full_header_template("pub fn new(x: i64) -> i64 { ... }").unwrap();
+    assert_eq!((pre.trim(), name.as_str()), ("pub", "new"));
+    // The abstract form belongs to the abstract parser.
+    assert!(parse_fn_full_header_template("pub fn new(...) { ... }").is_none());
+    assert!(parse_fn_full_header_template("fn new(...) { ... }").is_none());
+    // Marker-less concrete lines decline (they stay loud downstream).
+    assert!(parse_fn_full_header_template("pub fn new(x: i32)").is_none());
+    assert!(parse_fn_full_header_template("pub fn new(x: i32) {}").is_none());
+    assert!(parse_fn_full_header_template("pub fn new(x: i32) -> i32 { }").is_none());
+    // Multi-line text and bad prefixes decline.
+    assert!(parse_fn_full_header_template("pub fn new(\n    x: i32,\n) -> i32 { ... }").is_none());
+    assert!(parse_fn_full_header_template("foo( fn new(x: i32) { ... }").is_none());
+    assert!(parse_fn_full_header_template("fn (x: i32) { ... }").is_none());
+    // Non-`fn` templates never cross-accept.
+    assert!(parse_fn_full_header_template("pub struct New { ... }").is_none());
+}
+
+#[test]
 fn struct_evolution_template_accepts_visibility() {
     // WI-8 slice 1: `struct` evolution pastes accept visibility
     // prefixes and require a `...` body marker.

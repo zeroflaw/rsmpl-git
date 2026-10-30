@@ -26,6 +26,8 @@ mod macro_parts;
 mod macros;
 mod methods;
 mod move_evolve;
+mod move_evolve_sig;
+mod move_pair_evolve;
 mod move_parts;
 mod moves;
 mod paths;

@@ -146,6 +146,91 @@ fn multiline_plus_with_use_is_loud() {
     assert!(err.contains("# use="), "got: {err}");
 }
 
+// WI-8 slice 9: concrete-signature `fn` evolution pastes.
+
+#[test]
+fn concrete_signature_evolve_applies_cross_file() {
+    // A signature-evolving paste spells the plus-side header
+    // concretely: params, return, vis, and name all come from the
+    // template while the captured body rides byte-verbatim.
+    let files = apply_multi(
+        &cut_and_paste("pub fn new_name(x: i64) -> i64 { ... }"),
+        vec![("a.rs", SRC), ("b.rs", B_SRC)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "fn keep() {}\n", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"],
+        "fn other() {}\npub fn new_name(x: i64) -> i64 {\n    let y = x + 1;\n    y * 2\n}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn concrete_signature_with_generics_and_where_applies() {
+    // Generics and `where` clauses ride inside the concrete header
+    // when they fit on one line.
+    let src = "fn old_name<T>(x: T) -> T {\n    x\n}\n";
+    let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ pub fn new_name<T>(x: T) -> T where T: Clone { ... }\n";
+    let files = apply_multi(patch, vec![("a.rs", src), ("b.rs", B_SRC)]).unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub fn new_name<T>(x: T) -> T where T: Clone {\n    x\n}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn concrete_template_on_multiline_capture_is_loud() {
+    // The full-header splice replaces exactly one header line: a
+    // multi-line-header capture fails loud instead of leaving stale
+    // signature lines behind.
+    let src = "fn old_name(\n    x: i32,\n    y: i32,\n) -> i32 {\n    x + y\n}\n";
+    let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,6 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ pub fn new_name(x: i64, y: i64) -> i64 { ... }\n";
+    let err = apply_multi(patch, vec![("a.rs", src), ("b.rs", B_SRC)])
+        .expect_err("multi-line-header capture must fail loud");
+    assert!(err.contains("single-line-header"), "got: {err}");
+}
+
+#[test]
+fn concrete_template_on_single_line_item_is_loud() {
+    // A single-line item has no body lines to ride: splicing would drop
+    // the body, so it fails loud.
+    let src = "fn old_name(x: i32) -> i32 { x }\n";
+    let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ pub fn new_name(x: i64) -> i64 { ... }\n";
+    let err = apply_multi(patch, vec![("a.rs", src), ("b.rs", B_SRC)])
+        .expect_err("single-line item must fail loud");
+    assert!(
+        err.contains("single-line") || err.contains("multi-line"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn concrete_template_without_body_marker_is_loud() {
+    // Braces without `...` are not a template (locks the marker
+    // requirement for the concrete form).
+    let err = apply_multi(
+        &cut_and_paste("pub fn new_name(x: i32) { }"),
+        vec![("a.rs", SRC), ("b.rs", B_SRC)],
+    )
+    .expect_err("marker-less concrete line must fail loud");
+    assert!(err.contains("evolution paste template"), "got: {err}");
+}
+
+#[test]
+fn concrete_template_on_struct_capture_is_loud() {
+    // Kind mismatch: a concrete `fn` template cannot splice a `struct`
+    // capture.
+    let err = apply_multi(
+        &cut_and_paste_struct("pub fn New(x: i32) -> i32 { ... }"),
+        vec![("a.rs", STRUCT_SRC), ("b.rs", B_STRUCT)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `fn`"), "got: {err}");
+}
+
 // WI-8 slice 1: struct evolution pastes.
 
 const STRUCT_SRC: &str = "struct Old {\n    x: i32,\n    y: i64,\n}\n";

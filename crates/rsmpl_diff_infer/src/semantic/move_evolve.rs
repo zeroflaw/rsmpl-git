@@ -43,11 +43,11 @@
 use quote::ToTokens;
 use syn::spanned::Spanned;
 
-fn tok<T: ToTokens>(node: &T) -> String {
+pub(crate) fn tok<T: ToTokens>(node: &T) -> String {
     node.to_token_stream().to_string()
 }
 
-fn opt_tok<T: ToTokens>(node: &Option<T>) -> String {
+pub(crate) fn opt_tok<T: ToTokens>(node: &Option<T>) -> String {
     node.as_ref().map(tok).unwrap_or_default()
 }
 

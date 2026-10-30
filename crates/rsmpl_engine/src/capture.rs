@@ -102,8 +102,9 @@ pub(crate) fn paste_capture(
     Ok(())
 }
 
-/// WI-8a + WI-8 slices 1-8: splice a captured item under an
+/// WI-8a + WI-8 slices 1-8 + WI-8 slice 9: splice a captured item under an
 /// evolution-template header (`pub fn New(...) { ... }`,
+/// `pub fn New(x: i64) -> i64 { ... }` (slice 9 concrete signature),
 /// `pub struct New { ... }`, `pub enum New { ... }`,
 /// `pub union New { ... }`, `pub type New = ...;`,
 /// `pub const New = ...;`, `pub static [mut ]New = ...;`,
@@ -116,6 +117,14 @@ fn splice_evolved_header(
     rule: &str,
 ) -> Result<String, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    // WI-8 slice 9: the concrete-signature `fn` template carries the new
+    // signature verbatim — checked before the abstract `(...)` form (a
+    // concrete template never contains `(...)`, so the two shapes are
+    // disjoint, but the concrete splice replaces the whole header line
+    // while the abstract splice keeps the captured suffix).
+    if rsmpl_pattern::parse_fn_full_header_template(template.trim()).is_some() {
+        return splice_fn_full_header(captured, template, rule);
+    }
     if rsmpl_pattern::parse_trait_evolution_template(template.trim()).is_some() {
         return splice_trait_header(captured, template, rule);
     }
@@ -143,7 +152,7 @@ fn splice_evolved_header(
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, or a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...` (got `{}`)",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...` or a concrete signature + `{{ ... }}` (got `{}`), a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...`",
                 template.trim()
             ))
         })?;
@@ -213,6 +222,84 @@ fn splice_evolved_header(
         format!("{pre} fn {new_name}")
     };
     lines[idx] = format!("{ws}{head}{suffix}");
+    Ok(lines.join("\n"))
+}
+
+/// WI-8 slice 9: splice a captured `fn` item under a concrete-signature
+/// evolution-template header (`pub fn New(x: i64) -> i64 { ... }`). The
+/// whole captured header line is replaced with the template's header
+/// part (everything before the `{ ... }` marker) — the new signature
+/// rides verbatim from the plus side, never from the capture. Attr,
+/// doc, and body lines ride byte-verbatim. Single-line items and
+/// multi-line headers fail loud: replacing one line of a multi-line
+/// header (or the only line of a single-line item) would silently
+/// corrupt the signature or drop the body.
+fn splice_fn_full_header(
+    captured: &str,
+    template: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name = match file.items.as_slice() {
+        [syn::Item::Fn(f)] => f.sig.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `fn` item for a concrete-signature `fn` template"
+                    .to_string(),
+            ));
+        }
+    };
+    // First `fn <Old>` header line: word-bounded match so a body
+    // occurrence of the name never wins over the header.
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        // Doc/comment lines may textually contain `fn <name>`
+        // (e.g. `/// calls fn helper`) — only code lines evolve.
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if fn_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx =
+        target.ok_or_else(|| fail(format!("captured text has no `fn {old_name}` header line")))?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    // The captured header must open and close on this one line (`... {`
+    // with nothing after the brace): a multi-line header would leave
+    // stale signature lines behind, and a single-line item has no body
+    // lines to ride.
+    if !lines[idx].trim_end().ends_with('{') {
+        return Err(fail(format!(
+            "concrete-signature evolution paste needs a single-line-header `fn {old_name}` capture (multi-line headers stay ordinary)"
+        )));
+    }
+    if idx + 1 >= lines.len() {
+        return Err(fail(format!(
+            "concrete-signature evolution paste needs a multi-line `fn {old_name}` capture (single-line items stay ordinary)"
+        )));
+    }
+    // The template header part (everything before the first `{` — the
+    // signature never contains braces) replaces the whole line,
+    // preserving the capture's indentation.
+    let tmpl = template.trim();
+    let brace = tmpl.find('{').ok_or_else(|| {
+        fail(format!(
+            "evolution paste template must be a single-line `fn` header with a concrete signature + `{{ ... }}` (got `{tmpl}`)"
+        ))
+    })?;
+    let header_part = tmpl[..brace].trim_end();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, _) = line.split_at(ws_len);
+    lines[idx] = format!("{ws}{header_part} {{");
     Ok(lines.join("\n"))
 }
 

@@ -3711,13 +3711,24 @@ of the bare name (WI-8a `fn` items, WI-8 slice 1 `struct` items,
 WI-8 slice 2 `enum` items, WI-8 slice 3 `union` items,
 WI-8 slice 4 `type` items, WI-8 slice 5 `const` items,
 WI-8 slice 6 `static` items, WI-8 slice 7 `mod` items,
-WI-8 slice 8 `trait` items):
+WI-8 slice 8 `trait` items, WI-8 slice 9 signature-evolving `fn`
+items):
 
 ```diff
 diff --git src/new.rs
 @@ -5,0 @@ rule=paste_helper
 # use=Helper
 + pub fn renamed(...) { ... }
+```
+
+A signature-evolving `fn` paste (WI-8 slice 9) spells the plus-side
+header concretely instead of `(...)`:
+
+```diff
+diff --git src/new.rs
+@@ -5,0 @@ rule=paste_helper
+# use=Helper
++ pub fn renamed(x: i64) -> i64 { ... }
 ```
 
 ```diff
@@ -3787,7 +3798,10 @@ exactly the header line's vis + `fn <Old>` / `struct <Old>` /
 `static [mut ]<Old>` / `mod <Old>` / `trait <Old>` prefix with the template's verbatim prefix
 (plus the template's `mut`, if present) and new
 name, and keeps every other line byte-verbatim (multi-line params,
-attrs, docs, body for `fn`; generics, where-clauses, and fields
+attrs, docs, body for the `(...)` `fn` form; the whole header line for
+the concrete-signature `fn` form — the template carries the new
+params, return, generics, and `where` verbatim while the body lines
+ride; generics, where-clauses, and fields
 for `struct`; generics, where-clauses, and variants for `enum`;
 generics, where-clauses, and fields for `union`;
 generics, where-clauses, and the aliased type for `type`;
@@ -3800,6 +3814,12 @@ empty traits only for `trait` (any trait item vetoes — the scalar `- I`
 cut cannot isolate them, same narrowing as `mod`; `auto trait` and
 `impl Trait for` restrictions veto — they stay ordinary), with `unsafe`
 riding verbatim in the prefix like `fn` qualifiers).
+A concrete-signature `fn` template requires a single-line-header
+capture (the header line ends with `{`, with body lines after it):
+multi-line headers and single-line items fail loud
+(`RSMPL_PATTERN_CONFLICT`) — the splice replaces exactly one header
+line, so anything else would silently corrupt the signature or drop
+the body.
 The `fn` prefix is any valid Rust visibility + qualifier
 combination, including restricted visibilities such as
 `pub(crate)` / `pub(in path)`; the `struct`/`enum`/`union`/`type`/`const`/`static`/`mod`/`trait` prefix is any
@@ -3829,7 +3849,7 @@ Names are patch-local.
 
 In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST object. Collection-valued captures are not part of v0.1 and there is no syntax such as `# bind_list=Name`, `# bind_many=Name`, or `# use_list=Name`.
 
-> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, or the single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` / `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` / `+ <prefix>const <New> = ...;` / `+ <prefix>static [mut ]<New> = ...;` / `+ <prefix>mod <New> { ... }` / `+ <prefix>trait <New> { ... }` evolution paste). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file.
+> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, the single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>fn <New>(concrete signature) { ... }` / `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` / `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` / `+ <prefix>const <New> = ...;` / `+ <prefix>static [mut ]<New> = ...;` / `+ <prefix>mod <New> { ... }` / `+ <prefix>trait <New> { ... }` evolution paste). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file. An evolution paste is verbatim plus-side text, never a match pattern: its idents (`T`, `Vec`, …) are not metavariable holes, so the unbound-plus gate never fires for it.
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
@@ -6909,12 +6929,19 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   line threshold). Mixed-hunk input is unreachable (the source always runs
   `git diff --unified=0`, so declining mixed hunks is defensive only);
   inter-run gap relaxation stays vetoed (the same-anchor paste join
-  restores exactly one blank); WI-8a pairs `fn` moves whose header prefix
-  (vis + qualifiers, verbatim) and/or name evolve while attrs, generics,
-  params, return, `where`, and bodies stay token-equal — the paste carries
-  the plus-side header template `+ <prefix>fn <New>(...) { ... }` and the
-  engine splices the captured body under it (identical pairs keep the
-  bare-`bind` paste); WI-8 slice 1 pairs `struct` moves whose visibility
+   restores exactly one blank); WI-8a pairs `fn` moves whose header prefix
+   (vis + qualifiers, verbatim) and/or name evolve while attrs, generics,
+   params, return, `where`, and bodies stay token-equal — the paste carries
+   the plus-side header template `+ <prefix>fn <New>(...) { ... }` and the
+   engine splices the captured body under it (identical pairs keep the
+   bare-`bind` paste); WI-8 slice 9 pairs `fn` moves whose signature
+   additionally evolves (generics, params, return, and/or `where` differ
+   while attrs and bodies stay token-equal) — the paste carries the
+   concrete plus-side header `+ <prefix>fn <New>(args) -> ret { ... }`
+   and the engine replaces the captured header line with it (both sides
+   must carry the header on a single code line ending with `{` with body
+   lines after it; multi-line headers and single-line items stay
+   ordinary); WI-8 slice 1 pairs `struct` moves whose visibility
   and/or name evolve while attrs, generics, and fields stay token-equal
    (paste `+ <vis>struct <New> { ... }`); WI-8 slice 2 pairs `enum`
    moves whose visibility and/or name evolve while attrs, generics, and
@@ -6942,10 +6969,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     token-equal and both sides declare empty traits (any trait item
     vetoes, the scalar cut cannot isolate it — same narrowing as
     `mod`) (paste `+ <vis>trait <New> { ... }`, with `unsafe`
-    riding verbatim in the prefix like `fn` qualifiers; any `auto`
-    token or `impl Trait for` restriction vetoes).
-    Everything else (other item kinds, attr/signature/body deltas) stays
-    ordinary.
+     riding verbatim in the prefix like `fn` qualifiers; any `auto`
+     token or `impl Trait for` restriction vetoes).
+     Everything else (other item kinds, attr/body deltas, multi-line
+     `fn` headers) stays ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,

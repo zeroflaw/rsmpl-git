@@ -19,8 +19,9 @@ use crate::quote_utils::validate_quoting;
 
 pub use crate::pattern_classify::{is_trait_header, trait_header_ident};
 pub use crate::pattern_evolution::{
-    parse_const_evolution_template, parse_enum_evolution_template, parse_evolution_template,
-    parse_mod_evolution_template, parse_static_evolution_template, parse_struct_evolution_template,
+    is_evolution_template, parse_const_evolution_template, parse_enum_evolution_template,
+    parse_evolution_template, parse_fn_full_header_template, parse_mod_evolution_template,
+    parse_static_evolution_template, parse_struct_evolution_template,
     parse_trait_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
 };
 pub use crate::pattern_general::split_leading_attrs;
@@ -287,6 +288,22 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         hunk,
         root.as_deref(),
     )?;
+
+    // WI-8 slice 9: an evolution paste is verbatim plus-side text
+    // spliced under a capture, never a match pattern — its idents
+    // (`T`, `Vec`, ...) are not metavariable holes, so the unbound-plus
+    // gate never fires for it (the abstract `(...)` form never needed
+    // this because it carries no uppercase idents).
+    if matches!(
+        &kind,
+        PatternKind::Insertion {
+            use_name: Some(_),
+            ..
+        }
+    ) && is_evolution_template(plus_raw.trim())
+    {
+        unbound_plus.clear();
+    }
 
     // `# returns=none` only meaningful on fn patterns (free functions
     // and impl/trait-context methods share the constraint; T209).
