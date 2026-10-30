@@ -498,6 +498,73 @@ fn validate_ellipsis_positions(minus: &str, plus: &str) -> Result<(), Structured
     Ok(())
 }
 
+/// WI-8a evolution-paste template: a single-line `fn` header with
+/// `(...)` params and a `...` body (`pub fn New(...) { ... }`).
+/// Returns the verbatim prefix before `fn` (vis + qualifiers) and the
+/// new ident. `None` when the line is not a template shape.
+pub fn parse_evolution_template(text: &str) -> Option<(String, String)> {
+    let line = text.trim();
+    if line.lines().count() != 1 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Word-bounded `fn` followed by whitespace (never the `fn` inside
+    // another ident, e.g. `myfn`).
+    let mut fn_pos = None;
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if bytes[i..].starts_with(b"fn")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 2).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            fn_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let fn_pos = fn_pos?;
+    let prefix = &line[..fn_pos];
+    if prefix.contains(['(', '{', ';', '"']) {
+        return None;
+    }
+    let rest = line[fn_pos + 2..].trim_start();
+    let mut ident_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            ident_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if ident_len == 0 {
+        return None;
+    }
+    let tail = &rest[ident_len..];
+    if !tail.contains("(...)") || !tail.contains("...") {
+        return None;
+    }
+    Some((prefix.to_string(), rest[..ident_len].to_string()))
+}
+
+/// Word-bounded `fn` keyword followed by whitespace (a line that looks
+/// like an `fn` header, valid template or not).
+fn has_fn_keyword(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if bytes[i..].starts_with(b"fn")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 2).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 #[allow(clippy::too_many_lines)]
 fn classify(
     minus_raw: &str,
@@ -576,8 +643,23 @@ fn classify(
     // Insertion: no minus, plus present.
     if m.is_empty() && !p.is_empty() {
         let uses = hunk.uses();
-        let use_name = if uses.len() == 1 && p.lines().count() == 1 && p.trim() == uses[0] {
+        // WI-8a: `# use=N` with a single-line `fn` header template
+        // (`+ pub fn New(...) { ... }`) is an evolution paste — the
+        // engine splices the captured body under the template header.
+        // Anything else with `# use=` stays a literal insertion.
+        let use_name = if uses.len() == 1
+            && p.lines().count() == 1
+            && (p.trim() == uses[0] || parse_evolution_template(p.trim()).is_some())
+        {
             Some(uses[0].to_string())
+        } else if uses.len() == 1 && p.lines().count() == 1 && has_fn_keyword(p.trim()) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "evolution paste template must be a single-line `fn` header with `(...)` + `...` (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}` or paste the bare capture name for a verbatim move",
+                    p.trim()
+                ),
+            ));
         } else {
             None
         };

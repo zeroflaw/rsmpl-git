@@ -252,6 +252,7 @@ const CYCLE_OK: &[&str] = &[
     "36-verbatim-call-sweep",
     "37-verbatim-unary-sweep",
     "38-method-to-method-sweep",
+    "39-move-evolve",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5

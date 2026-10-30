@@ -1,0 +1,14 @@
+diff --git src/old.rs
+--- a/src/old.rs
++++ b/src/old.rs
+@@ -3,23 @@ rule=move_big_to_huge
+# bind=M1
+- I
+diff --git src/new.rs
+--- a/src/new.rs
++++ b/src/new.rs
+@@ -1,0 +2,1 @@
++
+@@ -1,0 @@ rule=paste_big_as_huge
+# use=M1
++ pub fn huge(...) { ... }

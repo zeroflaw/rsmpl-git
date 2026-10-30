@@ -3588,6 +3588,25 @@ exactly one blank line between items; a lone paste ends with a single
 at the same anchor keep document order too but are never blank-joined —
 the author controls their blanks explicitly.
 
+An evolution paste carries a single-line `fn` header template instead
+of the bare name (WI-8a: `fn` items only):
+
+```diff
+diff --git src/new.rs
+@@ -5,0 @@ rule=paste_helper
+# use=Helper
++ pub fn renamed(...) { ... }
+```
+
+The engine parses the captured item (which must be an `fn`), replaces
+exactly the header line's vis + `fn <Old>` prefix with the template's
+verbatim prefix and new name, and keeps every other line byte-verbatim
+(multi-line params, attrs, docs, body). A single-line plus that looks
+like an `fn` header but is not a valid template (no `(...)` or no
+`...`) fails loud with `RSMPL_PATTERN_CONFLICT`; a multi-line plus
+with `# use=` fails loud with `RSMPL_CAPTURE_CONFLICT` — captures are
+never silently ignored.
+
 ### 20.3 Capture naming and forward references
 
 The value of `# bind=Helper` creates a named capture.
@@ -3598,7 +3617,7 @@ Names are patch-local.
 
 In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST object. Collection-valued captures are not part of v0.1 and there is no syntax such as `# bind_list=Name`, `# bind_many=Name`, or `# use_list=Name`.
 
-> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (`+ Name`). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file.
+> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, or the single-line `+ <prefix>fn <New>(...) { ... }` WI-8a evolution paste). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file.
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
@@ -6365,8 +6384,13 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   line threshold). Mixed-hunk input is unreachable (the source always runs
   `git diff --unified=0`, so declining mixed hunks is defensive only);
   inter-run gap relaxation stays vetoed (the same-anchor paste join
-  restores exactly one blank); vis-evolution needs engine move+evolve
-  support and stays deferred. Everything else stays ordinary.
+  restores exactly one blank); WI-8a pairs `fn` moves whose header prefix
+  (vis + qualifiers, verbatim) and/or name evolve while attrs, generics,
+  params, return, `where`, and bodies stay token-equal — the paste carries
+  the plus-side header template `+ <prefix>fn <New>(...) { ... }` and the
+  engine splices the captured body under it (identical pairs keep the
+  bare-`bind` paste). Everything else (other item kinds, attr/signature/
+  body deltas) stays ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,

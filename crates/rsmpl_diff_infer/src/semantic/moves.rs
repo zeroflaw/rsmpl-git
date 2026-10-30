@@ -106,6 +106,23 @@ pub(crate) fn try_move_sweep(
                 }
             }
             if hits.is_empty() {
+                // WI-8a: no byte-identical run — try an evolved `fn`
+                // header (prefix/vis/quals/name) over the same body.
+                for (psi, phi) in &plus_hunks {
+                    let pbody = &parsed[*psi].hunks[*phi].body;
+                    for (first, last, prefix, name) in
+                        super::move_evolve::find_evolved_hits(&item.text, pbody)
+                    {
+                        pairs.push(MovePair {
+                            minus_hunk_key: (*msi, *mhi),
+                            plus_hunk_key: (*psi, *phi),
+                            item: item.clone(),
+                            plus_first: first,
+                            plus_last: last,
+                            evolved: Some((prefix, name)),
+                        });
+                    }
+                }
                 continue;
             }
             for (psi, phi, first, last) in hits {
@@ -120,6 +137,7 @@ pub(crate) fn try_move_sweep(
                     item: item.clone(),
                     plus_first: first,
                     plus_last: last,
+                    evolved: None,
                 });
             }
         }
@@ -307,7 +325,16 @@ pub(crate) fn try_move_sweep(
         };
         let paste_rule = super::unique_rule(used_rules, &format!("paste_{}", p.item.ident));
         let anchor = parsed[p.plus_hunk_key.0].hunks[p.plus_hunk_key.1].old_start;
-        let paste = format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {bind}\n");
+        // WI-8a: evolved pairs paste the plus-side header template
+        // (the engine splices the captured body under it); identical
+        // pairs keep the bare-`bind` verbatim paste.
+        let paste = match &p.evolved {
+            Some((prefix, name)) => {
+                let tmpl = super::move_evolve::evolution_template(prefix, name);
+                format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {tmpl}\n")
+            }
+            None => format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {bind}\n"),
+        };
         named.push((p.clone(), cut, paste));
     }
     let mut out_sections = sections.to_vec();
@@ -529,6 +556,9 @@ struct MovePair {
     item: MoveItem,
     plus_first: usize,
     plus_last: usize,
+    /// WI-8a: plus-side header evolution (prefix, new name); `None`
+    /// for byte-identical pairs (bare-`bind` paste).
+    evolved: Option<(String, String)>,
 }
 
 struct HunkParts {

@@ -23,6 +23,7 @@ pub(crate) mod group;
 mod literal;
 mod macros;
 mod methods;
+mod move_evolve;
 mod moves;
 mod paths;
 mod peel;

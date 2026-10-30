@@ -1,0 +1,56 @@
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -2,24 +1,0 @@ fn keep() {}
+-
+-fn big() {
+-    let v0 = 0;
+-    let v1 = 1;
+-    let v2 = 2;
+-    let v3 = 3;
+-    let v4 = 4;
+-    let v5 = 5;
+-    let v6 = 6;
+-    let v7 = 7;
+-    let v8 = 8;
+-    let v9 = 9;
+-    let v10 = 10;
+-    let v11 = 11;
+-    let v12 = 12;
+-    let v13 = 13;
+-    let v14 = 14;
+-    let v15 = 15;
+-    let v16 = 16;
+-    let v17 = 17;
+-    let v18 = 18;
+-    let v19 = 19;
+-    v0 + v19
+-}
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,0 +2,24 @@ fn other() {}
++
++pub fn huge() {
++    let v0 = 0;
++    let v1 = 1;
++    let v2 = 2;
++    let v3 = 3;
++    let v4 = 4;
++    let v5 = 5;
++    let v6 = 6;
++    let v7 = 7;
++    let v8 = 8;
++    let v9 = 9;
++    let v10 = 10;
++    let v11 = 11;
++    let v12 = 12;
++    let v13 = 13;
++    let v14 = 14;
++    let v15 = 15;
++    let v16 = 16;
++    let v17 = 17;
++    let v18 = 18;
++    let v19 = 19;
++    v0 + v19
++}

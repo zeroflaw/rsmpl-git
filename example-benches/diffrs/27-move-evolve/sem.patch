@@ -1,0 +1,14 @@
+diff --git a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -3,23 @@ rule=r1
+# bind=M1
+- I
+diff --git b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,0 +2,1 @@
++
+@@ -1,0 @@ rule=r2
+# use=M1
++ pub fn huge(...) { ... }
