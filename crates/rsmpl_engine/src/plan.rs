@@ -19,7 +19,10 @@ use rsmpl_pattern::PatternKind;
 use crate::capture::{paste_capture, CaptureStore, PasteTarget};
 use crate::edits::{apply_edits, check_overlaps, coalesce_deletes, edit_spans, TextEdit};
 use crate::lines::{FileState, LineIndex};
-use crate::postcheck::{noop_sweep_error, sweep_edits_are_noop, sweep_hunk_needs_postcheck};
+use crate::postcheck::{
+    instantiation_error, is_rewrite_kind, noop_sweep_error, plus_instantiated,
+    sweep_edits_are_noop, sweep_hunk_needs_postcheck,
+};
 use crate::suggest::candidate_preview;
 use crate::use_graph::follow_uses_workspace;
 use crate::use_graph_orphan::collect_orphans;
@@ -28,7 +31,7 @@ use crate::{
     matcher_expr, matcher_fn, matcher_general, matcher_impl, matcher_item, matcher_macro,
     matcher_use,
 };
-use crate::{ordinary_hunk_edits, RuleReport};
+use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
 
 /// Apply `patch` to `files` (path -> contents) in place.
 ///
@@ -46,7 +49,15 @@ fn apply_inner(
     files: &mut HashMap<String, String>,
     patch: &Patch,
 ) -> Result<crate::ApplyReport, StructuredError> {
-    let mut report = crate::ApplyReport::default();
+    let has_ordinary = patch
+        .files
+        .iter()
+        .flat_map(|s| &s.hunks)
+        .any(|h| matches!(h, Hunk::Ordinary(_)));
+    let mut report = crate::ApplyReport {
+        has_ordinary,
+        ..Default::default()
+    };
 
     // ---- Pass 0: parse all targeted files. ----
     // T137: ordinary-only files skip the Rust parse entirely (original +
@@ -164,6 +175,16 @@ fn apply_inner(
     // order (section order, then hunk order), so entries are sorted
     // after pass 2 before being committed to `report.rules`.
     let mut rule_order: Vec<((usize, usize), RuleReport)> = Vec::new();
+    // WI-1b: rewrite hunks awaiting the plus-instantiation check, run
+    // after pass-3 materialization against the post-images.
+    type ProbeJob = (
+        (usize, usize),
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        usize,
+        Vec<HashMap<String, String>>,
+    );
+    let mut probe_pending: Vec<ProbeJob> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     for (sec_idx, section) in patch.files.iter().enumerate() {
@@ -280,6 +301,7 @@ fn apply_inner(
                     sites: Vec::new(),
                     follow_skipped: None,
                     orphans: Vec::new(),
+                    semantics: RuleSemantics::ReparseOnly,
                 },
             ));
         }
@@ -489,6 +511,30 @@ fn apply_inner(
                     } else {
                         Vec::new()
                     };
+                    // WI-1b provisional semantics (confirmed by the
+                    // post-materialization instantiation check below).
+                    // Optional zero-edit: not-applicable. Non-rewrites
+                    // (insert/cut/raw): reparse-only. Rewrites: instantiated
+                    // or postcondition (sweep gate ran).
+                    let sweep_gate_ran = found > 0 && sweep_hunk_needs_postcheck(rh, &compiled);
+                    let (provisional, needs_probe) = if found == 0 {
+                        (RuleSemantics::NotApplicable, false)
+                    } else if !is_rewrite_kind(&compiled) {
+                        (RuleSemantics::ReparseOnly, false)
+                    } else if sweep_gate_ran {
+                        (RuleSemantics::Postcondition, true)
+                    } else {
+                        (RuleSemantics::Instantiated, true)
+                    };
+                    if needs_probe {
+                        probe_pending.push((
+                            (sec_idx, hunk_idx),
+                            rh.clone(),
+                            compiled.clone(),
+                            found,
+                            def_bindings.clone(),
+                        ));
+                    }
                     rule_order.push((
                         (sec_idx, hunk_idx),
                         RuleReport {
@@ -499,6 +545,7 @@ fn apply_inner(
                             sites,
                             follow_skipped,
                             orphans,
+                            semantics: provisional,
                         },
                     ));
                     // WI-6b1: one follow-only entry per non-definition file
@@ -507,6 +554,9 @@ fn apply_inner(
                     // them adjacent to the definition entry in document
                     // order (the sort below is stable); file order inside
                     // is sorted at the source.
+                    // WI-1b: follow-only extras are conservatively
+                    // reparse-only (the definition probe covers the rename;
+                    // per-use plus shapes differ).
                     for (file, matches, spans) in extra_reports {
                         rule_order.push((
                             (sec_idx, hunk_idx),
@@ -518,6 +568,7 @@ fn apply_inner(
                                 sites: Vec::new(),
                                 follow_skipped: None,
                                 orphans: Vec::new(),
+                                semantics: RuleSemantics::ReparseOnly,
                             },
                         ));
                     }
@@ -564,6 +615,7 @@ fn apply_inner(
     // Commit rule reports in patch document order (T36/T45 contract:
     // section order, then hunk order within a section).
     rule_order.sort_by_key(|(pos, _)| *pos);
+    probe_pending.sort_by_key(|(pos, _, _, _, _)| *pos);
     report.rules.extend(rule_order.into_iter().map(|(_, r)| r));
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
@@ -594,6 +646,47 @@ fn apply_inner(
             })?;
         }
         files.insert(path.clone(), updated);
+    }
+
+    // WI-1b: plus-instantiation postcondition (SPEC 24.6). Every rewrite
+    // hunk's plus template, instantiated with its recorded per-site
+    // bindings, must appear in the post-image (whitespace-normalized
+    // substring). Failures are loud `RSMPL_MATCH_CONFLICT`;
+    // unverifiable plus shapes (`...` replay, string-bearing templates,
+    // unextractable impl names) downgrade to `reparse-only` (honest,
+    // never over-claimed).
+    // `probe_pending` and the provisional `instantiated|postcondition`
+    // entries are both in document order, so zip in order.
+    {
+        let mut jobs = probe_pending.into_iter();
+        for r in report.rules.iter_mut() {
+            if r.semantics != RuleSemantics::Instantiated
+                && r.semantics != RuleSemantics::Postcondition
+            {
+                continue;
+            }
+            let Some((_, rh, compiled, found, bindings_list)) = jobs.next() else {
+                // Count mismatch (should not happen): stay honest.
+                r.semantics = RuleSemantics::ReparseOnly;
+                continue;
+            };
+            let range_desc = format!(
+                "{}..{}",
+                rh.header.old_start,
+                rh.header.old_start + rh.header.old_len
+            );
+            let post_text = files.get(&r.file).cloned().unwrap_or_default();
+            match plus_instantiated(&compiled, &rh, &bindings_list, &post_text) {
+                Some(true) => {}
+                Some(false) => {
+                    let _ = found;
+                    return Err(instantiation_error(&r.rule, &r.file, &range_desc));
+                }
+                None => {
+                    r.semantics = RuleSemantics::ReparseOnly;
+                }
+            }
+        }
     }
 
     // WI-2c: the semantic leg beyond reparse is the pass-2 sweep change

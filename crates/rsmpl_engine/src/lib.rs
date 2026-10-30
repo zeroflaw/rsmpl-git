@@ -45,6 +45,31 @@ pub use plan::apply_with_captures;
 pub use validate::{ensure_match_count, ZeroMatchHint};
 
 /// Per-rule application outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuleSemantics {
+    /// Plus-instantiation probe re-matched in the post-image (rewrite only).
+    Instantiated,
+    /// Sweep change gate + instantiation both ran (file-scope sweeps).
+    Postcondition,
+    /// Only reparse validated (insertions, cuts, pastes, follow-only extras).
+    #[default]
+    ReparseOnly,
+    /// Optional zero-edit hunks (no edits, nothing to verify).
+    NotApplicable,
+}
+
+impl RuleSemantics {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Instantiated => "instantiated",
+            Self::Postcondition => "postcondition",
+            Self::ReparseOnly => "reparse-only",
+            Self::NotApplicable => "not-applicable",
+        }
+    }
+}
+
+/// Per-rule application outcome.
 #[derive(Debug, Clone, Default)]
 pub struct RuleReport {
     pub rule: String,
@@ -67,6 +92,8 @@ pub struct RuleReport {
     /// Report-only orphan evidence (WI-7c, SPEC 14.8): same-name uses a
     /// definition-only rename leaves behind. Never fails the run.
     pub orphans: Vec<OrphanReport>,
+    /// WI-1b: which postcondition verified this rule (SPEC 24.6, D.2).
+    pub semantics: RuleSemantics,
 }
 
 /// One orphaned use site (WI-7c): repo-relative `file`, 1-based `line`,
@@ -94,6 +121,10 @@ pub struct SiteReport {
 #[derive(Debug, Clone, Default)]
 pub struct ApplyReport {
     pub rules: Vec<RuleReport>,
+    /// True when the patch carries any ordinary (non-semantic) hunk.
+    /// Ordinary hunks are reparse-validated only and force the global
+    /// `checked.semantics` to `partial` (WI-1b, SPEC 24.6).
+    pub has_ordinary: bool,
 }
 
 /// Apply `patch` to `files` (path -> contents) in place.

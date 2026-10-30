@@ -93,7 +93,7 @@ fn json_report_overhead_within_absolute_budget() {
     }
     assert_eq!(
         v["checked"],
-        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
 }

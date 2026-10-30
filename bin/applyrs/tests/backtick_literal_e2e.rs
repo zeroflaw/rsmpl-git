@@ -102,7 +102,7 @@ fn backtick_literal_json_success_carries_no_backticks() {
     let payload: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
     assert_eq!(
         payload["checked"],
-        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"})
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"})
     );
     assert_eq!(payload["rules"][0]["matches"], 1);
 }

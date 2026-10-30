@@ -132,7 +132,7 @@ fn main() {
             // T85 success silence): the stdout envelope carries the
             // machine signal; stderr keeps `warning:` lines only.
             // Text mode keeps the human stderr diagnostic.
-            let mut payload = serde_json::json!({"version": 2, "error": e.err().to_json()});
+            let mut payload = serde_json::json!({"version": 3, "error": e.err().to_json()});
             if let Some(applied) = e.applied() {
                 payload["applied"] = serde_json::json!(applied);
             }
@@ -581,17 +581,18 @@ fn run() -> Result<(), CliError> {
                 build_passed = true;
             }
         }
-        // WI-2c v2 envelope: `checked` replaces `check` + `verified`;
-        // per-site `sites` is the only bindings evidence (first-site
-        // `bindings` removed). `build` is `pass` iff `--verify build`
-        // ran, else `skipped` (failures exit 2 with `applied`, never a
-        // success payload).
+        // WI-1b v3 envelope: `checked.semantics` is `"verified"|"partial"`
+        // (never boolean); each rule carries its own `semantics`
+        // (`instantiated|postcondition|reparse-only|not-applicable`).
+        // `build` is `pass` iff `--verify build` ran, else `skipped`.
         let build_status = if build_passed { "pass" } else { "skipped" };
+        let global_semantics = global_semantics(&report);
         let mut payload = serde_json::json!({
-            "version": 2,
+            "version": 3,
             "rules": report.rules.iter().map(|r| {
                 let mut entry = serde_json::json!({
-                    "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>()
+                    "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>(),
+                    "semantics": r.semantics.as_str(),
                 });
                 // WI-2b/2c: per-site evidence, one entry per emitted edit
                 // in span order. Omitted when no site binds (renames,
@@ -636,7 +637,7 @@ fn run() -> Result<(), CliError> {
             "diff_truncated": diff_truncated,
             "diff_lines": total_lines,
             "diff_shown": reported.lines().count(),
-            "checked": {"lowering": true, "semantics": true, "build": build_status},
+            "checked": {"lowering": true, "semantics": global_semantics, "build": build_status},
             "history": history_display,
         });
         // WI-7a + WI-7c: workspace provenance whenever the workspace
@@ -689,6 +690,8 @@ fn run() -> Result<(), CliError> {
         }
         rsmpl_git::check_with_git(&cli.repo, &lowered).map_err(CliError::Structured)?;
         // WI-2a `--verify build` under `--check`: temp-copy verification.
+        // WI-1b: the `check:` line carries the global semantics word.
+        let semantics = global_semantics(&report);
         if cli.verify.as_deref() == Some("build") {
             verify_in_temp_copy(
                 &cli.repo,
@@ -699,9 +702,9 @@ fn run() -> Result<(), CliError> {
                 &patch,
                 orphans_hint.as_deref(),
             )?;
-            eprintln!("check: lowered patch applies cleanly; build check passed (temp copy, worktree untouched)");
+            eprintln!("check: lowered patch applies cleanly; semantics {semantics}; build check passed (temp copy, worktree untouched)");
         } else {
-            eprintln!("check: lowered patch applies cleanly");
+            eprintln!("check: lowered patch applies cleanly; semantics {semantics}");
         }
         if let Some(line) = orphan_text_line(&report) {
             eprintln!("{line}");
@@ -719,8 +722,14 @@ fn run() -> Result<(), CliError> {
     }
     // Single source of truth (T65): diff-based `changed` (old-vs-new
     // contents differ), the same set JSON reports as `files[].path`.
+    // WI-1b: the applied line carries the global semantics word.
     let names: Vec<&str> = changed.iter().map(|(p, _, _, _)| p.as_str()).collect();
-    eprintln!("applied {} file(s): {}", names.len(), names.join(", "));
+    let semantics = global_semantics(&report);
+    eprintln!(
+        "applied {} file(s): {}; semantics {semantics}",
+        names.len(),
+        names.join(", ")
+    );
     if let Some(line) = orphan_text_line(&report) {
         eprintln!("{line}");
     }
@@ -849,6 +858,24 @@ fn section_modes(patch: &rsmpl_patch::Patch, rel: &str) -> Option<(String, Strin
 fn post_sha_hex(text: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+/// WI-1b: global `checked.semantics` (SPEC 24.6, D.2). `verified` iff
+/// every rule is `instantiated`/`postcondition` and no ordinary hunk is
+/// present; otherwise `partial` (insertions, cuts, pastes, follow-only
+/// extras, optional zero-edits, and ordinary hunks all force `partial`).
+/// Empty patches verify vacuously.
+fn global_semantics(report: &rsmpl_engine::ApplyReport) -> &'static str {
+    if report.has_ordinary {
+        return "partial";
+    }
+    for r in &report.rules {
+        match r.semantics.as_str() {
+            "instantiated" | "postcondition" => {}
+            _ => return "partial",
+        }
+    }
+    "verified"
 }
 
 /// WI-2b/2c + WI-1a: token-bounded per-site evidence (SPEC D.2). One entry

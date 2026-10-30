@@ -93,10 +93,10 @@ fn json_check_has_no_stderr_check_line() {
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(
         v["checked"],
-        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
-    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
         !stderr.contains("check:"),

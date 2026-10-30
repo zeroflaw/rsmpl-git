@@ -4340,6 +4340,24 @@ if:
    legitimately remain; byte-identical fixed-point instantiations per
    Section 18.6 R4 `P @` stay valid matches), `optional` zero-edit
    hunks are skipped by design, and insertions/cuts never participate.
+3. the plus-instantiation gate holds (WI-1b): every rewrite hunk with
+   at least one match has its plus template, instantiated with the
+   recorded per-site bindings, present in the post-image
+   (whitespace-insensitive, trailing commas ignored, backticks stripped,
+   `$`-sigils resolved, string literals and code-level `...` replay
+   excluded as unverifiable). A rewrite that did not land as authored
+   (e.g. the post-image still names the old ident) fails loud with
+   `RSMPL_MATCH_CONFLICT` (`postcondition: plus pattern did not
+   re-match ...`), never a silent `verified`. Unverifiable plus shapes
+   downgrade the rule to `reparse-only` (honest, never over-claimed).
+   Per-rule evidence is `semantics`: `instantiated` (instantiation ran),
+   `postcondition` (sweep gate + instantiation both ran),
+   `reparse-only` (insertions, cuts, pastes, follow-only extras, or
+   unverifiable plus), `not-applicable` (`optional` zero-edit hunks).
+   The global `checked.semantics` is `verified` iff every rule is
+   `instantiated`/`postcondition` and no ordinary hunk is present;
+   otherwise `partial` (insertions, cuts, ordinary hunks, follow-only
+   extras, and optional zero-edits all force `partial`).
 
 ---
 
@@ -5902,21 +5920,23 @@ prints one JSON object to stdout:
 
 ```json
 {
-  "version": 2,
-  "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "sites": [{"span": [10, 12], "bindings": {"E": "old_call"}}]}],
+  "version": 3,
+  "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "semantics": "instantiated", "sites": [{"span": [10, 12], "bindings": {"E": "old_call"}}]}],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1, "post_sha": "<sha-256 hex of the post-image>"}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
   "diff_lines": 12,
   "diff_shown": 12,
-  "checked": {"lowering": true, "semantics": true, "build": "skipped"},
+  "checked": {"lowering": true, "semantics": "verified", "build": "skipped"},
   "history": "<repo>/.history/{id}.rsmpl"
 }
 ```
 
 - `rules` is the per-rule match report (text mode prints only one-line
   `applied`/`check` summaries; agents needing match counts use JSON).
-  Each entry carries `spans`: original-source 1-based inclusive
+  Each entry carries `semantics` (`instantiated` | `postcondition` |
+  `reparse-only` | `not-applicable`, Section 24.6) plus `spans`:
+  original-source 1-based inclusive
   `[start, end]` line ranges in application order, one per emitted edit, so
   agents can verify what matched without re-reading the file.
   Ident/call/cut/paste rewrites emit one edit per match
@@ -5948,11 +5968,11 @@ prints one JSON object to stdout:
   hunk still shows its extra span before apply. Budget (bytes beyond
   the reported `diff` string, `--diff-max-lines 0`): fixed envelope
   ≈90 B (`checked` + keys) + ≈80 B per `files[]` entry (64-hex
-  `post_sha` dominates) + ≈110 B per `rules[]` entry (single-span,
-  no bindings) + ≈90 B per span (`[s,e]` plus per-site `{span,
+  `post_sha` dominates) + ≈135 B per `rules[]` entry (single-span,
+  no bindings; includes the `semantics` word) + ≈90 B per span (`[s,e]` plus per-site `{span,
   bindings}` evidence — that growth is evidence, not overhead) + at most
   8×83 B per binding site (80 chars plus the 3-byte `…` marker when cut). Operational pin:
-  overhead ≤ `200 + 150·F + 150·R + 90·S` bytes (`F` = files,
+  overhead ≤ `200 + 150·F + 175·R + 90·S` bytes (`F` = files,
   `R` = rules, `S` = total spans). There is deliberately no relative
   % bound: a sub-KB report can exceed any % while staying within
   bytes, and a multi-KB report is where the pin applies.
@@ -5984,10 +6004,12 @@ prints one JSON object to stdout:
   when more than 8 lines name the old ident (each `text` truncated to
   80 chars with a trailing `…` when cut) plus `orphans_truncated_chars`
   counting cut texts (absent when zero); absent when no use names the
-  old ident. Additive within `version: 2`.
-- `version` is the JSON report schema version (`2` = this contract:
-  `checked` object, `sites`-only evidence, `follow_skipped` key; `v1`
-  had boolean `check`, first-site `bindings`, and `verified`). Agents
+   old ident. Additive within `version: 3` (like the other per-rule
+   evidence keys; `version: 2` added them within v2).
+- `version` is the JSON report schema version (`3` = this contract:
+  `checked.semantics` word (`verified`|`partial`), per-rule `semantics`
+  words; `v2` had boolean `semantics`, `v1` had boolean `check`,
+  first-site `bindings`, and `verified`). Agents
   pin parsing on it; any future breaking JSON change bumps it
   (additive keys like `history`, `post_sha`, `sites_truncated`,
   `bindings_truncated_chars`, `follow_files`, `follow_source`,
@@ -5997,8 +6019,11 @@ prints one JSON object to stdout:
   every successful run, each computed by a check that can fail on real
   input (never true by construction). `lowering` is the `git apply
   --check` verdict on the full lowering (empty lowerings skip git and
-  report `true`); `semantics` is the Section 24.6 gate (reparse plus
-  the sweep change gate); `build` is `"pass"` iff `--verify build`
+  report `true`); `semantics` is `"verified"` iff every rule is
+  `instantiated`/`postcondition` and no ordinary hunk is present, else
+  `"partial"` (Section 24.6: insertions, cuts, pastes, follow-only
+  extras, optional zero-edits, and ordinary hunks all force `partial`);
+  `build` is `"pass"` iff `--verify build`
   ran, else `"skipped"` (a build failure exits 2 with the `{error}`
   envelope below, never a success payload). Failures never reach this
   payload (exit 2 with the `{error}` envelope below).
@@ -6202,8 +6227,8 @@ exactly which bytes land on which stream. The contract, per mode:
 
 | Mode | stdout | stderr |
 |---|---|---|
-| text apply | empty (quiet by default) | `history: …` + `applied N file(s): …` (kept: one line of human reassurance) |
-| text `--check` | reported diff (empty when omitted/no changes) | `history: …` + budget markers + `check: lowered patch applies cleanly` |
+| text apply | empty (quiet by default) | `history: …` + `applied N file(s): …; semantics verified|partial` (kept: one line of human reassurance) |
+| text `--check` | reported diff (empty when omitted/no changes) | `history: …` + budget markers + `check: lowered patch applies cleanly; semantics verified|partial` |
 | JSON apply | report object (incl. `"history"`) | `history: …` + `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
 | JSON `--check` | report object with `"checked"` (incl. `"history"`) | `history: …` + `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
 

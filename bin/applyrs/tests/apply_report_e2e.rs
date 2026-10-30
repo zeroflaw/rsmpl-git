@@ -28,10 +28,15 @@ fn json_apply_mutates_worktree() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(
         v["checked"],
-        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("instantiated"),
+        "got: {v}"
+    );
     let after = read(dir.path(), "src/lib.rs");
     assert_ne!(before, after, "JSON apply must touch the worktree");
     assert!(after.contains("bar(1)"), "got: {after}");
@@ -55,7 +60,12 @@ fn json_check_still_applies_nothing() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(
         v["checked"],
-        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("instantiated"),
         "got: {v}"
     );
     let text = read(dir.path(), "src/lib.rs");
@@ -83,7 +93,12 @@ fn json_empty_lowering_without_check_reports_clean() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(
         v["checked"],
-        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        serde_json::json!({"lowering": true, "semantics": "partial", "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("not-applicable"),
         "got: {v}"
     );
     assert_eq!(v["files"].as_array().unwrap().len(), 0, "got: {v}");

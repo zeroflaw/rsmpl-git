@@ -139,7 +139,7 @@ Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 passes it inline (archived to `<repo>/.history/{id}.rsmpl`, last 128 kept,
 path on stderr + JSON `history`). JSON prints `{version, rules, files, diff,`
 `diff_truncated, diff_lines, diff_shown, checked, history}` (SPEC D.2);
-`version` is the report schema (currently `2`); `checked` is `{lowering, semantics, build}` (each computed by a check that can fail); each `rules` entry carries per-match `spans` (`[[start,end], …]`, original-source 1-based lines, one per emitted edit — `len == matches` except evolution delete+insert pairs) plus per-site `sites` (`[{span, bindings}]`, omitted when nothing binds);
+`version` is the report schema (currently `3`); `checked` is `{lowering, semantics, build}` where `semantics` is `"verified"|"partial"` (each computed by a check that can fail); each `rules` entry carries `semantics` (`instantiated|postcondition|reparse-only|not-applicable`) plus per-match `spans` (`[[start,end], …]`, original-source 1-based lines, one per emitted edit — `len == matches` except evolution delete+insert pairs) plus per-site `sites` (`[{span, bindings}]`, omitted when nothing binds);
 JSON success and failure are both stdout-only (no stderr `check:`/`error:`
 lines; stderr keeps `warning:` lines only); `--output` writes
 the full diff before `--check` runs; on an empty lowering it removes a
