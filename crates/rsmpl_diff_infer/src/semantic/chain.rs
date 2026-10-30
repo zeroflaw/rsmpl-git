@@ -30,7 +30,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 /// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more): slot → sig-evolution → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
-/// call-literal → call-peel → let-type-add → type-sweep. Returns the winning semantic section
+/// call-literal → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -176,6 +176,16 @@ pub(crate) fn run_pair_chain(
         super::try_repeat_fold_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((fold, "repeat_fold"));
+    }
+    // WI-1d: uniform one-layer partial strip (`C(C(x))` → `C(x)`,
+    // plain hunk, no `# repeat` — a repeat emission would over-strip
+    // the kept layers). After the fold (full strips stay folded;
+    // disjoint by construction: the fold declines partial pairs and
+    // the strip declines full strips), before the verbatim stage.
+    if let Some(strip) =
+        super::try_partial_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((strip, "partial_strip"));
     }
     None
 }

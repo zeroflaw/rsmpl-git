@@ -60,7 +60,7 @@ pub(crate) use generalized::{
     try_type_sweep,
 };
 pub(crate) use peel::try_call_peel_sweep;
-pub(crate) use repeat::try_repeat_fold_sweep;
+pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the

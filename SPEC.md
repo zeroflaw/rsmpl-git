@@ -6228,7 +6228,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `repeat_fold`, `partial_strip`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -6463,8 +6463,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   qself, and generic args decline, same gates as the qualified sweep)
   applied one or more times around a plus side that is exactly the
   full-strip fixpoint (peeling that callee repeatedly from the minus
-  reaches the plus; partial strips stay ordinary — a `# repeat`
-  emission would over-strip the untouched layers). Call sites inside
+  reaches the plus; partial strips are the `partial_strip` detector
+  below — a `# repeat` emission would over-strip the untouched layers). Call sites inside
   `let` inits unwrap to their init call (T449 precedent — the emission
   stays a bare pattern and the engine rewrites the call sub-expression
   in place); `&`-led sides decline (general-expr territory);
@@ -6480,6 +6480,20 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   must match exactly N outermost sites (nested matches are folds, not
   separate sites; macro/string twins never count — the engine never
   enters them). Detector name `repeat_fold`.
+- Partial-strip sweep (WI-1d): N ≥ 2 `-`/`+` pairs where every minus is
+  the same 1-arg callee applied exactly one layer deeper than the plus
+  (`C(C(x))` → `C(x)`; uniform depth both sides — mixed `2→1` + `3→2`
+  classes stay ordinary, one template cannot spell both depths without
+  overlap ambiguity), same callee/gate discipline as the fold
+  (leading `::`, qself, generics, `&`-led sides decline;
+  all-byte-identical classes stay for verbatim, T422). `let`-init sites
+  unwrap the same way. One plain `# allow=many` hunk with no `# repeat`
+  (`- C(C(E0))` / `+ C(E0)` generalized to depth d, inferred hole;
+  uppercase last segments backticked) — a `# repeat` emission would
+  over-strip the deliberately kept layers (Section 17.8). Totality is
+  the real-pair engine-count check (`template_pair_holds`): the emitted
+  pair must match exactly N sites in the pre-image. Detector name
+  `partial_strip`.
 - Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
   single-segment call whose first arg token-equals the receiver and
