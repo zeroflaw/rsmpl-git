@@ -6282,6 +6282,10 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    Pre-image totality
    keys on method + old-arg tuple (plain callee+arity would over-count
    same-method/different-arg sites that the pattern can never match).
+   An arg hiding a macro invocation anywhere inside stays ordinary
+   (WI-9b2-method-probe): TokenStream-normalized macro text is
+   unmatchable by the engine, so the sweep declines and those pairs
+   fall through to the nested macro sweep (or ordinary).
 - `&`-receiver strip sweep: N ≥ 2 `-`/`+` pairs, each containing
    exactly one shared-reference-to-method call (`syn`-parsed, no
    turbofish/`&mut`/explicit lifetime) with the plus side equal to

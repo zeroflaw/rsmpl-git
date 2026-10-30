@@ -351,6 +351,15 @@ fn parse_method_same_literal_pair(
     if ident_len(&old_method)? != old_method.len() {
         return None;
     }
+    // Trailing macros stay ordinary: the sweep inlines args as
+    // TokenStream-normalized text, which the engine cannot match when a
+    // macro hides inside (same shape as the call_literal veto — probed
+    // raw and normalized spellings match nothing, so diffrs would emit
+    // a patch that fails check).
+    if old_call.args.iter().any(contains_macro_arg) || new_call.args.iter().any(contains_macro_arg)
+    {
+        return None;
+    }
     let olds: Vec<String> = old_call
         .args
         .iter()
@@ -362,6 +371,21 @@ fn parse_method_same_literal_pair(
         .map(|a| a.to_token_stream().to_string())
         .collect();
     Some((old_method, olds, news))
+}
+
+/// True when an argument expression holds a macro invocation anywhere
+/// inside (mirrors the literal.rs helper; local so the probe slice moves
+/// no cross-module items).
+fn contains_macro_arg(e: &syn::Expr) -> bool {
+    struct Finder(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_expr_macro(&mut self, _: &'ast syn::ExprMacro) {
+            self.0 = true;
+        }
+    }
+    let mut f = Finder(false);
+    syn::visit::Visit::visit_expr(&mut f, e);
+    f.0
 }
 
 /// N-site (N ≥ 2) `&`-receiver strip (T359): one `&recv.method(args)` per
@@ -862,6 +886,30 @@ mod tests {
             "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.foo(\"skills/rsmpl-git/SKILL.md\");\n-    &b.foo(\"skills/rsmpl-git/SKILL.md\");\n+    &a.foo(\"skills/gitrs/SKILL.md\");\n+    &b.foo(\"skills/gitrs/SKILL.md\");\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_same_literal_macro_arg_falls_through_to_nested() {
+        // WI-9b2-method-probe: an arg hiding a macro invocation is not a
+        // literal: TokenStream-normalized macro text is unmatchable, so
+        // the method sweep declines and the nested macro sweep claims the
+        // pair (validated_live proves the fall-through applies cleanly).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.push(wrap!(1));\n-    b.push(wrap!(1));\n+    a.push(wrap!(2));\n+    b.push(wrap!(2));\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.push(wrap!(1));\n    b.push(wrap!(1));\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            !out.contains("calls_push_literal"),
+            "method sweep must not claim, got: {out}"
+        );
+        assert!(out.contains("- wrap!(1)\n"), "nested must fire, got: {out}");
+        assert!(out.contains("+ wrap!(2)\n"), "got: {out}");
     }
 
     #[test]
