@@ -651,7 +651,18 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
             )
             .with_file(file)
             .with_range(format!("line {}", at + 1))
-            .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines)");
+            .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines)")
+            .with_repair(serde_json::json!({
+                "action": "fix_header",
+                "expected_old": old_count,
+                "expected_new": new_count,
+                "claimed_old": header.old_len,
+                "claimed_new": header.new_len,
+                "expected_header": format!(
+                    "@@ -{},{} +{},{} @@",
+                    header.old_start, old_count, header.new_start, new_count
+                ),
+            }));
             if let Some(rule) = &header.rule {
                 err = err.with_rule(rule.clone());
             }
@@ -1577,6 +1588,18 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("fix the header counts"));
+        // WI-10 consideration: the mismatch carries machine repair —
+        // exact counts plus a drop-in corrected header line.
+        let repair = s.repair.clone().expect("count mismatch must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("fix_header"));
+        assert_eq!(repair["expected_old"], serde_json::json!(3));
+        assert_eq!(repair["expected_new"], serde_json::json!(3));
+        assert_eq!(repair["claimed_old"], serde_json::json!(5));
+        assert_eq!(repair["claimed_new"], serde_json::json!(3));
+        assert_eq!(
+            repair["expected_header"],
+            serde_json::json!("@@ -1,3 +1,3 @@")
+        );
         // New-side-only mismatch.
         let new_short = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,9 @@\n a\n-b\n+c\n a\n";
         let err = parse_patch(new_short).unwrap_err();
@@ -1588,6 +1611,11 @@ mod tests {
             s.message.contains("header claims -1,3 +1,9"),
             "got: {}",
             s.message
+        );
+        let repair = s.repair.clone().expect("count mismatch must carry repair");
+        assert_eq!(
+            repair["expected_header"],
+            serde_json::json!("@@ -1,3 +1,3 @@")
         );
         // `\ No newline` markers are neither side: exact counts pass.
         let marker_ok = "diff --git a/link b/link\n--- /dev/null\n+++ b/link\n@@ -0,0 +1,1 @@\n+real.txt\n\\ No newline at end of file\n";

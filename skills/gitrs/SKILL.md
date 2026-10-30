@@ -136,7 +136,9 @@ gitrs apply --file change.rsmpl                       # apply for real
 | `RSMPL_IO_CONFLICT` | unreadable path or bad flags (`--format json` → stdout envelope) — fix per suggestion; absolute/`..`-escaping targets rejected |
 
 JSON failures (`--format json`) print `{version, error: {code, rule, file,
-range, reason, suggestion}}` to stdout only, exit 2.
+range, reason, suggestion, repair}}` to stdout only, exit 2. `repair` is null
+except on the ordinary-hunk count mismatch, which carries a `fix_header` payload
+with the counted lines plus a drop-in corrected header (SPEC D.2).
 
 ## Dogfood rule
 

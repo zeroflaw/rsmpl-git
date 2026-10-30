@@ -5792,10 +5792,19 @@ prints one JSON object to stdout:
 
 ```
 
-- The envelope always carries `version` plus all six error keys (`code
-  rule file range reason suggestion`); absent optionals are `null`. `code` is one of the SPEC 25
+- The envelope always carries `version` plus all seven error keys (`code
+  rule file range reason suggestion repair`); absent optionals are `null` (so `repair` is
+  `null` on errors that carry no machine payload). `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
   or output files, stdin failures, and flag-usage errors.
+- `repair` is the machine-readable self-correction payload (WI-10 direction,
+- additive under the `version` rule above: text mode prints it as a trailing
+- `repair: {...}` line only when present). Today only the ordinary-hunk count
+- mismatch (T367, 25.2) populates it: `{"action":"fix_header",
+- "expected_old":N,"expected_new":M,"claimed_old":A,"claimed_new":B,
+- "expected_header":"@@ -s,N +t,M @@"}` — `N`/`M` are the counted body lines
+- (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines), `A`/`B` the claimed
+- header counts, and `expected_header` the drop-in corrected header line.
 - Flag-usage errors (unknown flag, bad value) are enveloped too: with
   `--format json` they print the same stdout-only `RSMPL_IO_CONFLICT`
   envelope (reason = clap's one-line error, suggestion = run

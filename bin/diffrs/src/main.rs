@@ -81,6 +81,7 @@ fn main() {
                             "range": null,
                             "reason": m,
                             "suggestion": "run `diffrs --help` for usage",
+                            "repair": null,
                         }
                     });
                     println!("{payload}");

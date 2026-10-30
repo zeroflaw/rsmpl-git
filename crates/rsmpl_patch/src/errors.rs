@@ -41,6 +41,7 @@ pub struct StructuredError {
     pub range: Option<String>,
     pub message: String,
     pub suggestion: Option<String>,
+    pub repair: Option<serde_json::Value>,
 }
 
 impl StructuredError {
@@ -52,6 +53,7 @@ impl StructuredError {
             range: None,
             message: message.into(),
             suggestion: None,
+            repair: None,
         }
     }
 
@@ -75,8 +77,15 @@ impl StructuredError {
         self
     }
 
+    /// Machine-readable repair payload (SPEC D.2): additive `repair` object
+    /// for errors that carry self-correction data; `None` renders as null.
+    pub fn with_repair(mut self, repair: serde_json::Value) -> Self {
+        self.repair = Some(repair);
+        self
+    }
+
     /// Machine-readable form for `--format json` failure envelopes (SPEC D.2):
-    /// `{"code","rule","file","range","reason","suggestion"}`.
+    /// `{"code","rule","file","range","reason","suggestion","repair"}`.
     /// Absent optionals serialize as `null` so agents see a stable key set.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
@@ -86,6 +95,7 @@ impl StructuredError {
             "range": self.range,
             "reason": self.message,
             "suggestion": self.suggestion,
+            "repair": self.repair,
         })
     }
 
@@ -106,6 +116,9 @@ impl StructuredError {
         out.push_str(&format!("reason: {}\n", self.message));
         if let Some(s) = &self.suggestion {
             out.push_str(&format!("suggestion: {s}\n"));
+        }
+        if let Some(repair) = &self.repair {
+            out.push_str(&format!("repair: {repair}\n"));
         }
         out
     }
@@ -136,6 +149,7 @@ mod tests {
         assert!(v["file"].is_null(), "got: {v}");
         assert!(v["range"].is_null(), "got: {v}");
         assert!(v["suggestion"].is_null(), "got: {v}");
+        assert!(v["repair"].is_null(), "got: {v}");
     }
 
     #[test]
@@ -153,6 +167,29 @@ mod tests {
         assert_eq!(
             v["suggestion"],
             serde_json::json!("read the file to list valid ranges")
+        );
+        assert!(v["repair"].is_null(), "got: {v}");
+    }
+
+    #[test]
+    fn with_repair_round_trips_through_json_and_render() {
+        let repair = serde_json::json!({
+            "action": "fix_header",
+            "expected_old": 3,
+            "expected_new": 3,
+        });
+        let e =
+            StructuredError::new(ErrorCode::ParseConflict, "counts").with_repair(repair.clone());
+        let v = e.to_json();
+        assert_eq!(v["repair"], repair, "got: {v}");
+        let text = e.render();
+        assert!(text.contains("repair:"), "got: {text}");
+        assert!(text.contains("fix_header"), "got: {text}");
+        assert!(
+            !StructuredError::new(ErrorCode::ParseConflict, "counts")
+                .render()
+                .contains("repair:"),
+            "bare render must stay silent"
         );
     }
 }

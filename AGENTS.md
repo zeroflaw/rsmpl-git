@@ -163,7 +163,9 @@ itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
 | `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file or bad flags (`--format json` → stdout envelope, else clap text) — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
 
 With `--format json`, failures print `{version, error: {code, rule, file, range,
-reason, suggestion}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
+reason, suggestion, repair}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
+`repair` is `null` except on the ordinary-hunk count mismatch, which carries `fix_header`
+counts plus a drop-in corrected header (SPEC D.2).
 
 ## Full reference
 

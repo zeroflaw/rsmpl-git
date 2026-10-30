@@ -73,6 +73,29 @@ fn ordinary_hunk_count_mismatch_rejected() {
             .contains("fix the header counts"),
         "got: {v}"
     );
+    // WI-10 consideration: machine repair carries exact counts plus a
+    // drop-in corrected header; swapping it in passes check first try.
+    assert!(stderr.contains("repair:"), "got: {stderr}");
+    assert!(stderr.contains("fix_header"), "got: {stderr}");
+    let repair = &v["error"]["repair"];
+    assert_eq!(repair["action"], serde_json::json!("fix_header"));
+    assert_eq!(repair["expected_old"], serde_json::json!(2));
+    assert_eq!(repair["expected_new"], serde_json::json!(2));
+    assert_eq!(repair["claimed_old"], serde_json::json!(7));
+    assert_eq!(repair["claimed_new"], serde_json::json!(7));
+    let expected_header = repair["expected_header"]
+        .as_str()
+        .expect("repair must carry expected_header");
+    assert_eq!(expected_header, "@@ -1,2 +1,2 @@", "got: {v}");
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    let fixed = patch.replace("@@ -1,7 +1,7 @@", expected_header);
+    let out = run_stdin(dir.path(), &fixed, &["--check"]);
+    assert!(
+        out.status.success(),
+        "self-corrected header must pass check first try, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

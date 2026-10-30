@@ -64,6 +64,7 @@ fn fail(reason: &str, args: &[String]) -> ! {
                 "range": null,
                 "reason": reason,
                 "suggestion": "run `gitrs --help` for usage",
+                "repair": null,
             }
         });
         println!("{payload}");
