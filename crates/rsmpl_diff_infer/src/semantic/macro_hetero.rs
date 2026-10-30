@@ -13,7 +13,7 @@
 //! stable/delta positions, arity mismatch, varying string stables.
 //! Split from `macros.rs` per the D5 hygiene gate.
 
-use super::macros::{
+use super::macro_parts::{
     is_string_arg, macro_delim_open, macro_path, macro_raw_args, parse_macro_expr, scan_arg_idents,
     split_top_spans, trim_range,
 };

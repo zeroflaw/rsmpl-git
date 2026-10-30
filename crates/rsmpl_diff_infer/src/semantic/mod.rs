@@ -22,6 +22,7 @@ mod generalized;
 pub(crate) mod group;
 mod literal;
 mod macro_hetero;
+mod macro_parts;
 mod macros;
 mod methods;
 mod move_evolve;
