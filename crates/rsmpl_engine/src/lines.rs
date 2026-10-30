@@ -1,12 +1,20 @@
 //! Original-source line/byte mapping (SPEC 10.2, 31.3).
 
 /// 1-based line index over the original file text.
+///
+/// Span columns (proc-macro2 fallback) count Unicode scalars, not bytes
+/// (SPEC 31.3): `offset` converts through a per-line char→byte table so
+/// non-ASCII source maps to the right bytes. ASCII lines carry no table
+/// (columns already equal bytes — zero behavior change on the fast path).
 #[derive(Debug, Clone)]
 pub struct LineIndex {
     /// Byte offset at which each 1-based line starts. `starts[0]` == 0.
     starts: Vec<usize>,
     len_lines: usize,
     text_len: usize,
+    /// Char-index → in-line byte-offset table for non-ASCII lines only
+    /// (`None` for pure-ASCII lines), parallel to `starts`.
+    wide: Vec<Option<Vec<usize>>>,
 }
 
 impl LineIndex {
@@ -23,10 +31,29 @@ impl LineIndex {
         if text.ends_with('\n') {
             len_lines -= 1;
         }
+        // Char→byte tables for non-ASCII lines (parallel to `starts`;
+        // the trailing-newline anchor entry maps to the empty tail).
+        let mut wide: Vec<Option<Vec<usize>>> = Vec::with_capacity(starts.len());
+        for (i, &s) in starts.iter().enumerate() {
+            let e = starts
+                .get(i + 1)
+                .map(|n| n.saturating_sub(1))
+                .unwrap_or(text.len());
+            let e = e.min(text.len());
+            let line = if s <= e { &text[s..e] } else { "" };
+            if line.is_ascii() {
+                wide.push(None);
+            } else {
+                let mut t: Vec<usize> = line.char_indices().map(|(b, _)| b).collect();
+                t.push(line.len());
+                wide.push(Some(t));
+            }
+        }
         Self {
             starts,
             len_lines,
             text_len: text.len(),
+            wide,
         }
     }
 
@@ -50,9 +77,10 @@ impl LineIndex {
         }
     }
 
-    /// Byte offset of (1-based line, 0-based byte column).
-    /// Columns come from `proc-macro2` spans (byte-based). Values past the
-    /// line end are clamped to the line end to stay total.
+    /// Byte offset of (1-based line, 0-based char column).
+    /// Columns come from `proc-macro2` fallback spans (Unicode-scalar
+    /// counts, not bytes — SPEC 31.3); the per-line table converts to a
+    /// byte offset. Values past the line end clamp to the line end.
     pub fn offset(&self, line: u32, col: usize) -> Option<usize> {
         let start = self.line_start(line)?;
         let end = if (line as usize) < self.starts.len() {
@@ -60,8 +88,17 @@ impl LineIndex {
         } else {
             usize::MAX
         };
-        let off = start.saturating_add(col);
-        Some(off.min(end.min(self.text_len)))
+        let line_end = end.min(self.text_len);
+        let idx = (line as usize).checked_sub(1)?;
+        let byte_col = match self.wide.get(idx) {
+            Some(Some(t)) => t
+                .get(col)
+                .copied()
+                .unwrap_or_else(|| line_end.saturating_sub(start)),
+            _ => col,
+        };
+        let off = start.saturating_add(byte_col);
+        Some(off.min(line_end))
     }
 
     pub fn eof(&self) -> usize {
@@ -134,5 +171,36 @@ mod tests {
         assert_eq!(idx.line_of(6), 3);
         assert_eq!(idx.line_of(8), 3); // EOF clamps to last line
         assert_eq!(idx.line_of(999), 3);
+    }
+
+    #[test]
+    fn offset_counts_columns_in_chars() {
+        // History-sweep gap: proc-macro2 fallback columns are Unicode
+        // scalars, so a 3-byte em-dash before a span end must not shift
+        // the emitted bytes (a 2-byte char leaves a stray `;` that still
+        // parses; 3+ bytes left a dangling `";`).
+        let text = "fn m() {\n    let r = \"x \u{2014} y\";\n}\n";
+        let idx = LineIndex::new(text);
+        let line = text.lines().nth(1).unwrap();
+        let semi_char = line.chars().position(|c| c == ';').unwrap();
+        let semi_byte = line.find(';').unwrap();
+        assert!(semi_byte > semi_char, "fixture needs multibyte width");
+        let start = idx.line_start(2).unwrap();
+        assert_eq!(idx.offset(2, semi_char), Some(start + semi_byte));
+        assert_eq!(idx.offset(2, semi_char + 1), Some(start + semi_byte + 1));
+        // Past-the-end clamps to the line end (excludes '\n').
+        assert_eq!(idx.offset(2, usize::MAX), Some(start + line.len()));
+    }
+
+    #[test]
+    fn offset_handles_cjk_and_emoji() {
+        let text = "fn m() {\n    let r = \"\u{4e2d}\u{1f600}\";\n}\n";
+        let idx = LineIndex::new(text);
+        let line = text.lines().nth(1).unwrap();
+        let semi_char = line.chars().position(|c| c == ';').unwrap();
+        let semi_byte = line.find(';').unwrap();
+        let start = idx.line_start(2).unwrap();
+        assert_eq!(idx.offset(2, semi_char), Some(start + semi_byte));
+        assert_eq!(idx.offset(1, 1), Some(1));
     }
 }

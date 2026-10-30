@@ -11,6 +11,7 @@ rsmpl_patch = { workspace = true }
 # counts engine matches of the emitted minus template over the
 # pre-image (IMPROVE.md WI-4). No cycle: the engine never depends on
 # inference (it only consumes `rsmpl_patch` + `rsmpl_pattern`).
+rsmpl_pattern = { workspace = true }
 rsmpl_engine = { workspace = true }
 syn = { workspace = true }
 quote = { workspace = true }

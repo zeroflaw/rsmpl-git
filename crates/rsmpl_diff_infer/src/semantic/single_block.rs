@@ -137,7 +137,9 @@ fn slice_node<T: ToTokens>(line: &str, node: &T) -> Option<String> {
     if span.start().line != 1 || span.end().line != 1 {
         return None;
     }
-    let (s, e) = (span.start().column, span.end().column);
+    // Span columns are Unicode scalars (SPEC 31.3), not bytes.
+    let s = rsmpl_pattern::char_col_to_byte(trimmed, span.start().column);
+    let e = rsmpl_pattern::char_col_to_byte(trimmed, span.end().column);
     if s >= e || e > trimmed.len() {
         return None;
     }

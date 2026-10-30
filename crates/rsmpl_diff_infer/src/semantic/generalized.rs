@@ -243,7 +243,11 @@ fn slice_type_text(line: &str, ty: &syn::Type) -> Option<String> {
     if span.start().line != 1 || span.end().line != 1 {
         return None;
     }
-    let (s, e) = (span.start().column, span.end().column);
+    // Span columns are Unicode scalars (SPEC 31.3), not bytes.
+    let (s, e) = (
+        rsmpl_pattern::char_col_to_byte(line, span.start().column),
+        rsmpl_pattern::char_col_to_byte(line, span.end().column),
+    );
     if s >= e || e > line.len() || !line.is_char_boundary(s) || !line.is_char_boundary(e) {
         return None;
     }

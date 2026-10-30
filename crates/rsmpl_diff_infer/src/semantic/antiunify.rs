@@ -700,7 +700,12 @@ fn render_template(first_text: &str, holes: &[Hole]) -> Option<String> {
         if span.start().line != 1 || span.end().line != 1 {
             return None;
         }
-        repls.push((span.start().column, span.end().column, idx));
+        // Span columns are Unicode scalars (SPEC 31.3), not bytes.
+        let (s, e) = (
+            rsmpl_pattern::char_col_to_byte(first_text, span.start().column),
+            rsmpl_pattern::char_col_to_byte(first_text, span.end().column),
+        );
+        repls.push((s, e, idx));
     }
     repls.sort();
     for w in repls.windows(2) {

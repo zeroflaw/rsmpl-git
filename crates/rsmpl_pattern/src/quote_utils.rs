@@ -227,6 +227,17 @@ pub fn char_lit_len(text: &str, start: usize) -> Option<usize> {
     Some(1 + first.len_utf8() + 1)
 }
 
+/// Byte offset of the `col`-th Unicode scalar in `line` (clamped to the
+/// line end). proc-macro2 fallback spans count columns in chars, not
+/// bytes (SPEC 31.3) — every span-column-to-byte conversion goes through
+/// here so non-ASCII source maps to the right bytes.
+pub fn char_col_to_byte(line: &str, col: usize) -> usize {
+    line.char_indices()
+        .nth(col)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len())
+}
+
 /// True when `s` is exactly a minted `...` marker (`__RSMPL_ELLIPSIS_<digits>`).
 /// Metavar placeholders (`__RSMPL_{name}`) with `ELLIPSIS_*` names are fenced
 /// at parse time, but the predicate stays exact so such text never reads as
@@ -347,5 +358,17 @@ mod tests {
         assert!(qualifier_leads_to_fn("unsafe trait T {"));
         assert!(qualifier_leads_to_fn("unsafe impl S {"));
         assert!(qualifier_leads_to_fn("async fn foo()"));
+    }
+
+    #[test]
+    fn char_col_to_byte_counts_chars() {
+        let line = "    let r = \"x \u{2014} y\";";
+        let semi_char = line.chars().position(|c| c == ';').unwrap();
+        assert_eq!(char_col_to_byte(line, semi_char), line.find(';').unwrap());
+        assert_eq!(char_col_to_byte(line, 0), 0);
+        assert_eq!(char_col_to_byte("ascii", 3), 3);
+        assert_eq!(char_col_to_byte(line, usize::MAX), line.len());
+        // A 4-byte emoji counts as one column too.
+        assert_eq!(char_col_to_byte("a\u{1f600}b", 2), 5);
     }
 }

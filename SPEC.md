@@ -5556,6 +5556,11 @@ For semantic symbol resolution, a rustc analyzer backend is recommended.
 
 The engine needs reliable byte-span to line-range mapping.
 
+Span columns (proc-macro2 fallback) count Unicode scalars, not bytes:
+the engine must convert char-column spans to byte offsets before
+splicing (a multibyte char before a span end otherwise shifts the cut
+and corrupts the rewritten file).
+
 Recommended internal representation:
 
 ```text

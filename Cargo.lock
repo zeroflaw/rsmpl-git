@@ -309,6 +309,7 @@ dependencies = [
  "quote",
  "rsmpl_engine",
  "rsmpl_patch",
+ "rsmpl_pattern",
  "syn 2.0.119",
  "thiserror",
 ]

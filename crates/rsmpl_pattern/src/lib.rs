@@ -31,9 +31,9 @@ pub use pattern::{
     split_leading_attrs, trait_header_ident, CompiledPattern, GeneralShape, PatternKind,
 };
 pub use quote_utils::{
-    char_lit_len, count_ellipsis_markers, has_ellipsis_marker, is_ellipsis_marker_ident,
-    mask_literal_spans, qualifier_leads_to_fn, string_end, strip_literal_quotes,
-    unmask_literal_spans, validate_quoting, LiteralToken,
+    char_col_to_byte, char_lit_len, count_ellipsis_markers, has_ellipsis_marker,
+    is_ellipsis_marker_ident, mask_literal_spans, qualifier_leads_to_fn, string_end,
+    strip_literal_quotes, unmask_literal_spans, validate_quoting, LiteralToken,
 };
 pub use terse_fn::is_terse_fn_line;
 pub use use_rename::{classify_use_rename, parse_use_prefix, UsePrefix};
