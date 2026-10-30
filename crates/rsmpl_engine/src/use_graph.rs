@@ -138,6 +138,23 @@ pub fn resolve(
             ));
         }
     }
+    if !collector.globs.is_empty() && !spans.is_empty() {
+        if !fallback {
+            let line = collector.globs[0];
+            return Err(FollowVeto {
+                reason: format!(
+                    "use of `{old}` with a glob import at line {line}: glob interiors are opaque"
+                ),
+            });
+        }
+        for line in &collector.globs {
+            skipped.push(format!(
+                "line {line}: glob import left untouched (opaque); {} use sites left untouched",
+                spans.len()
+            ));
+        }
+        spans.clear();
+    }
     Ok(FollowOutcome { spans, skipped })
 }
 
@@ -203,6 +220,7 @@ pub fn resolve_workspace<'a>(
         defs: Vec<(proc_macro2::Span, &'static str)>,
         uses: Vec<proc_macro2::Span>,
         opaque: Vec<(u32, String)>,
+        globs: Vec<u32>,
     }
     let mut all: Vec<Collected> = Vec::with_capacity(files.len());
     for (path, parsed, original, _) in files {
@@ -213,6 +231,7 @@ pub fn resolve_workspace<'a>(
             defs: c.defs,
             uses: c.uses,
             opaque: c.opaque,
+            globs: c.globs,
         });
     }
     let index_of = |path: &str| {
@@ -344,6 +363,36 @@ pub fn resolve_workspace<'a>(
             // of a span). The skip notes are the report.
         }
     }
+    // WI-6b2-glob: a file pairing `use m::*;` with same-name uses is
+    // unprovable (the glob may import a different `old`): veto loud
+    // without fallback, else drop only that file's spans (shadowing
+    // above already cleared everything globally when present).
+    let mut globbed: Vec<(String, u32)> = Vec::new();
+    for c in &all {
+        if c.globs.is_empty() {
+            continue;
+        }
+        if per_file.iter().any(|(p, s)| p == &c.path && !s.is_empty()) {
+            globbed.push((c.path.clone(), c.globs[0]));
+        }
+    }
+    globbed.sort();
+    if !globbed.is_empty() && shadow.is_empty() {
+        if !fallback {
+            let (path, line) = &globbed[0];
+            return Err(FollowVeto {
+                reason: format!(
+                    "use of `{old}` with a glob import at {path}:{line}: glob interiors are opaque"
+                ),
+            });
+        }
+        for (path, line) in &globbed {
+            per_file.retain(|(p, _)| p != path);
+            skipped.push(format!(
+                "{path}:{line}: glob import left untouched (opaque); use sites in this file left untouched"
+            ));
+        }
+    }
     Ok(WorkspaceOutcome { per_file, skipped })
 }
 
@@ -354,6 +403,7 @@ fn collect<'a>(parsed: &'a syn::File, old: &'a str) -> Collector<'a> {
         defs: Vec::new(),
         uses: Vec::new(),
         opaque: Vec::new(),
+        globs: Vec::new(),
     };
     collector.visit_file(parsed);
     collector
@@ -390,6 +440,8 @@ struct Collector<'a> {
     uses: Vec<proc_macro2::Span>,
     /// (line, context) opaque mentions.
     opaque: Vec<(u32, String)>,
+    /// 1-based lines of `use …::*` glob trees (WI-6b2-glob: opaque).
+    globs: Vec<u32>,
 }
 
 impl Collector<'_> {
@@ -434,6 +486,7 @@ impl Collector<'_> {
 
     /// Walk a `use` tree collecting segments spelling `old` (WI-6a: any
     /// position — `use m::Old`, `use Old as X`, `use m::{Old, Y}`).
+    /// Glob trees record their line as opaque (WI-6b2-glob).
     fn walk_use_tree(&mut self, tree: &syn::UseTree) {
         match tree {
             syn::UseTree::Path(p) => {
@@ -452,7 +505,9 @@ impl Collector<'_> {
                     self.uses.push(r.ident.span());
                 }
             }
-            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Glob(g) => {
+                self.globs.push(g.span().start().line as u32);
+            }
             syn::UseTree::Group(g) => {
                 for member in &g.items {
                     self.walk_use_tree(member);
@@ -851,5 +906,49 @@ mod tests {
         assert_eq!(b.1.len(), 2, "per_file: {:?}", out.per_file);
         assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
         assert!(out.skipped[0].contains("b.rs"), "got: {:?}", out.skipped);
+    }
+
+    #[test]
+    fn glob_with_old_use_vetoes_without_fallback() {
+        let src = "use other::*;\nstruct Old;\nfn f(x: Old) -> Old {\n    x\n}\n";
+        let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("glob"), "got: {}", err.reason);
+    }
+
+    #[test]
+    fn glob_with_old_use_skips_only_that_file_with_fallback() {
+        let files = [
+            ("a.rs", "pub struct Old;\n"),
+            ("b.rs", "use other::*;\nfn f(x: Old) -> Old {\n    x\n}\n"),
+            ("c.rs", "fn g(x: Old) -> Old {\n    x\n}\n"),
+        ];
+        let err = workspace_for_test(&files, "Old", "a.rs", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("glob"), "got: {}", err.reason);
+        assert!(err.reason.contains("b.rs"), "got: {}", err.reason);
+        let out = workspace_for_test(&files, "Old", "a.rs", "struct Old", true).unwrap();
+        assert!(
+            out.per_file.iter().all(|(p, _)| p != "b.rs"),
+            "globbed file must not rewrite: {:?}",
+            out.per_file
+        );
+        let c = out
+            .per_file
+            .iter()
+            .find(|(p, _)| p == "c.rs")
+            .expect("clean file still rewrites");
+        assert_eq!(c.1.len(), 2, "per_file: {:?}", out.per_file);
+        assert!(
+            out.skipped.iter().any(|s| s.contains("b.rs")),
+            "got: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn glob_without_old_use_is_inert() {
+        let src = "use other::*;\nstruct Old;\nfn f(x: i32) -> i32 {\n    x\n}\n";
+        let out = resolve_for_test(src, "Old", "struct Old", false).unwrap();
+        assert!(out.spans.is_empty(), "spans: {:?}", out.spans);
+        assert!(out.skipped.is_empty(), "got: {:?}", out.skipped);
     }
 }

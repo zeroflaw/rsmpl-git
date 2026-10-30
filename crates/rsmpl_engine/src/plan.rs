@@ -1936,4 +1936,61 @@ mod tests {
         assert_eq!(files["src/a.rs"], "pub struct New;\n");
         assert_eq!(report.rules.len(), 1, "report: {:?}", report.rules);
     }
+
+    #[test]
+    fn cross_file_follow_glob_vetoes_then_skips_only_that_file() {
+        // WI-6b2-glob: `src/b.rs` pairs `use other::*;` with `Old` uses —
+        // unprovable without fallback; with it only `b.rs` stays stale.
+        let err = apply_multi_report(
+            XFOLLOW_PATCH,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                (
+                    "src/b.rs",
+                    "use other::*;\nfn f(x: Old) -> Old {\n    x\n}\n",
+                ),
+                ("src/c.rs", "fn g(x: Old) -> Old {\n    x\n}\n"),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("RSMPL_SYMBOL_CONFLICT"), "got: {err}");
+        assert!(err.contains("glob"), "got: {err}");
+        assert!(err.contains("src/b.rs"), "got: {err}");
+        let patch = XFOLLOW_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
+        let (files, report) = apply_multi_report(
+            &patch,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                (
+                    "src/b.rs",
+                    "use other::*;\nfn f(x: Old) -> Old {\n    x\n}\n",
+                ),
+                ("src/c.rs", "fn g(x: Old) -> Old {\n    x\n}\n"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(files["src/a.rs"], "pub struct New;\n");
+        assert!(
+            files["src/b.rs"].contains("x: Old"),
+            "got: {}",
+            files["src/b.rs"]
+        );
+        assert!(
+            files["src/c.rs"].contains("x: New"),
+            "got: {}",
+            files["src/c.rs"]
+        );
+        let joined: String = report
+            .rules
+            .iter()
+            .flat_map(|r| r.bindings.iter().map(|(k, v)| format!("{k}={v}")))
+            .collect::<Vec<_>>()
+            .join(";");
+        assert!(
+            joined.contains("follow_skipped"),
+            "report: {:?}",
+            report.rules
+        );
+        assert!(joined.contains("src/b.rs"), "report: {:?}", report.rules);
+    }
 }

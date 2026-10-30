@@ -2250,8 +2250,10 @@ naming the first shadow (`path:line`); with it all use rewriting is
 skipped and each shadow is listed in `follow_skipped`. Same-file
 shadowing (a local binding, an enum variant) and opaque sites
 (macro/attribute interiors, `qself` paths) veto or skip exactly as before,
-now reported `path:line`-qualified when the workspace holds several
-files; single-file patches keep the historical `line N` wording.
+(macro/attribute interiors, `qself` paths, glob imports paired with a
+same-name use) veto or skip exactly as before, now reported
+`path:line`-qualified when the workspace holds several files;
+single-file patches keep the historical `line N` wording.
 
 Out of scope in v0.1: non-`.rs` files are never searched; symlinked
 files/dirs are skipped; a workspace `.rs` file that does not parse trips a
@@ -2267,7 +2269,8 @@ cannot attribute vetoes the whole hunk with `RSMPL_SYMBOL_CONFLICT`
 naming the site — unless the hunk also carries `# fallback=syntax`, in
 which case unprovable sites are left untouched and listed in the WI-2
 `follow_skipped` binding while provable sites still rewrite (a shadowed
-definition skips *all* use rewriting, since every use is then ambiguous).
+definition skips *all* use rewriting, since every use is then ambiguous;
+a glob skips only that file's uses).
 On any other shape `# follow=uses` is `RSMPL_PATTERN_CONFLICT` (Section
 18.6: other shapes keep the follow-up hunks above).
 
