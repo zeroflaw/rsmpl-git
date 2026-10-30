@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import json
 import os
 import shutil
 import stat
@@ -73,90 +72,25 @@ def toplevel() -> Path | None:
     return Path(out.stdout.decode().strip())
 
 
-def bin_source_roots(top: Path) -> dict[str, list[Path]]:
-    """Per-binary workspace source roots (transitive path-dep closure).
-
-    Derived from `cargo metadata` so dep changes can't rot the mapping;
-    each binary is freshness-checked against only the sources it builds
-    from (e.g. the gitrs dispatcher doesn't depend on rsmpl_diff, so a
-    fresh touch there must not flag gitrs stale).
-    """
-    fallback = {name: [top / "Cargo.toml", top / "Cargo.lock", top / "bin", top / "crates"] for name in BINS}
-    out = run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps",
-         "--manifest-path", str(top / "Cargo.toml")],
-        cwd=top,
-    )
-    if out.returncode != 0:
-        return fallback
-    try:
-        meta = json.loads(out.stdout.decode())
-    except ValueError:
-        return fallback
-    pkgdir: dict[str, Path] = {}
-    pathdeps: dict[str, list[str]] = {}
-    for pkg in meta.get("packages", []):
-        pkgdir[pkg["name"]] = Path(pkg["manifest_path"]).parent
-        pathdeps[pkg["name"]] = [
-            d["name"] for d in pkg.get("dependencies", []) if d.get("source") is None and d.get("path")
-        ]
-    closures: dict[str, list[Path]] = {}
-    for name in BINS:
-        seen: set[str] = set()
-        stack = [name]
-        while stack:
-            cur = stack.pop()
-            if cur in seen or cur not in pkgdir:
-                continue
-            seen.add(cur)
-            stack.extend(pathdeps.get(cur, []))
-        if name not in seen:
-            return fallback
-        closures[name] = [top / "Cargo.toml", top / "Cargo.lock"] + [pkgdir[s] for s in seen]
-    return closures
-
-
-def newest_source_mtime(roots: list[Path]) -> tuple[float, Path]:
-    """Newest mtime under the given source roots."""
-    newest = 0.0
-    newest_path = roots[0] if roots else Path(".")
-    stack = list(roots)
-    while stack:
-        p = stack.pop()
-        try:
-            if p.is_dir() and not p.is_symlink():
-                stack.extend(p.iterdir())
-                continue
-            mt = p.stat().st_mtime
-        except OSError:
-            continue
-        if mt > newest:
-            newest, newest_path = mt, p
-    return newest, newest_path
-
-
 def ensure_release_bins(top: Path) -> dict[str, Path] | None:
-    """Rebuild + freshness-verify the release binaries before use.
+    """Rebuild + verify the release binaries before use.
 
-    `cargo build --release` refreshes stale bins via fingerprints; the
-    per-binary mtime check below then proves each binary on disk
-    postdates the sources it builds from (2s tolerance for coarse
-    filesystem timestamps).
+    A successful `cargo build --release` is the freshness oracle: cargo
+    fingerprints already prove each binary is up to date with its
+    transitive sources (and cargo correctly skips relinking binaries
+    unaffected by e.g. a `Cargo.lock` touch after a dep add, leaving
+    their mtime older than the lockfile — a raw mtime comparison here
+    false-aborts as "stale", so there is deliberately no mtime check).
     """
     build = run(["cargo", "build", "--release", "--bin", "gitrs", "--bin", "applyrs", "--bin", "diffrs"], cwd=top)
     if build.returncode != 0:
         print(f"error: cargo build --release failed:\n{build.stderr.decode(errors='replace')}", file=sys.stderr)
         return None
-    roots = bin_source_roots(top)
     bins: dict[str, Path] = {}
     for name in BINS:
         b = top / "target" / "release" / name
         if not b.is_file() or not os.access(b, os.X_OK):
             print(f"error: release binary missing/not executable: {b}", file=sys.stderr)
-            return None
-        newest, newest_path = newest_source_mtime(roots[name])
-        if b.stat().st_mtime + 2.0 < newest:
-            print(f"error: stale release binary {b} predates {newest_path}", file=sys.stderr)
             return None
         bins[name] = b
     return bins
