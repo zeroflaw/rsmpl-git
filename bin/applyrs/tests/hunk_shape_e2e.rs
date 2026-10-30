@@ -187,3 +187,36 @@ fn plus_prefixed_prose_is_body_line() {
     assert_eq!(v["error"]["repair"]["expected_old"], serde_json::json!(1));
     assert_eq!(v["error"]["repair"]["expected_new"], serde_json::json!(3));
 }
+
+#[test]
+fn blank_insertion_needs_plus_prefix() {
+    // WI-10 tooling note: a truly empty line inside an ordinary hunk body
+    // is an empty context line under the T212 lookahead — author a blank
+    // insertion with `+` on an otherwise empty line, never a bare empty.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,3 @@\n fn a() {}\n+\n fn b() {}\n";
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(dir.path(), "src/lib.rs"), "fn a() {}\n\nfn b() {}\n");
+    // Bare-empty twin: the empty line reads as context (T212), so the
+    // header counts mismatch — loud, fail-safe, worktree untouched.
+    let bare = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,3 @@\n fn a() {}\n\n fn b() {}\n";
+    let (stderr, v) = check_rejected(bare, "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("fix_header"), "got: {stderr}");
+    assert_eq!(
+        v["error"]["repair"]["action"],
+        serde_json::json!("fix_header")
+    );
+}

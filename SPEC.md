@@ -1217,6 +1217,7 @@ An RSmPL-Git engine applies ordinary hunks using standard unified-diff semantics
 
 Ordinary hunks may appear before, between, or after RSmPL hunks.
 Patch prose between hunks or sections (bare lines carrying no ` /+/-/\\` prefix) is skipped and never affects the lowering; a line starting with `@@` is always a hunk-header attempt and fails loud when malformed, while ` /+/-/\\`-leading lines are hunk body lines under standard unified-diff semantics, never prose.
+Inside an ordinary hunk body a truly empty (or whitespace-only) line is an empty context line under the T212 lookahead (it belongs to the hunk only when the next line is a body line); author a blank insertion or deletion with an explicit `+`/`-` prefix on an otherwise empty line, never a bare empty line.
 
 A file section touched only by ordinary hunks is language-agnostic
 (T137): the engine performs no Rust parse of the original file and no

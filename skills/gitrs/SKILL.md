@@ -96,6 +96,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   Table: SPEC 18.6 (mixed `let-else`/async/try/unsafe-block/yield/macro-type shapes stay ordinary hunks, permanent scope; `match`/loops/closures/`break`/`continue`/`let` match structurally).
 - Ordinary hunks: text edits with no `#` lines; headers stay two-sided
   (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11).
+  (A blank insertion needs `+` on an otherwise empty line — a bare empty line parses as context, SPEC 11).
 - Macros: plain call patterns never reach inside macro invocations;
   `# macro=token_tree` is verbatim-only (`- M!(...)` / `+ N!(...)` renames);
   edits inside macro bodies go through ordinary hunks (SPEC 21).
