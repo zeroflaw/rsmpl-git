@@ -52,10 +52,21 @@ pub struct RuleReport {
     /// one span per rewritten use site, so `spans.len() >= matches` there
     /// (`matches` counts definitions). Insertions report `[anchor, anchor]`.
     pub spans: Vec<(u32, u32)>,
-    /// First-match metavariable bindings (SPEC D.2).
+    /// First-match metavariable bindings (SPEC D.2, compat; WI-2c removes).
     pub bindings: Vec<(String, String)>,
     /// Omitted-entry count when the CLI truncates the report (SPEC D.2).
     pub bindings_truncated: usize,
+    /// Per-site evidence (WI-2b, SPEC D.2): one entry per emitted edit in
+    /// span order; empty for shapes that bind nothing (omitted from JSON).
+    pub sites: Vec<SiteReport>,
+}
+
+/// One emitted edit's evidence (WI-2b): its span plus its own bindings,
+/// sorted by name (full text; the CLI truncates at report time).
+#[derive(Debug, Clone, Default)]
+pub struct SiteReport {
+    pub span: (u32, u32),
+    pub bindings: Vec<(String, String)>,
 }
 
 /// Result of applying a patch to an in-memory file tree.

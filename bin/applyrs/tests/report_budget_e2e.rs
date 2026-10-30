@@ -1,9 +1,10 @@
-//! WI-2 follow-up: absolute report-budget pin on a multi-KB realistic report.
+//! WI-2b follow-up: absolute report-budget pin on a multi-KB realistic report.
 //!
 //! Replaces the old "≤15% growth" relative bound (unachievable on sub-KB
 //! reports, never normative) with the SPEC D.2 absolute budget:
 //! overhead (bytes beyond the reported `diff`) ≤
-//! `200 + 150·F + 150·R + 20·S`. The fixture is deliberately multi-KB
+//! `200 + 150·F + 150·R + 90·S` (WI-2b: 20 B per span + ~70 B per site
+//! evidence). The fixture is deliberately multi-KB
 //! (12 files × 10 call sites) so the pin applies where it matters.
 
 mod common;
@@ -59,7 +60,7 @@ fn json_report_overhead_within_absolute_budget() {
     assert_eq!(f, 12, "got: {v}");
     assert_eq!(r, 12, "got: {v}");
     assert_eq!(s, 120, "got: {v}");
-    let budget = 200 + 150 * f + 150 * r + 20 * s;
+    let budget = 200 + 150 * f + 150 * r + 90 * s;
     assert!(
         overhead <= budget,
         "overhead {overhead} B exceeds budget {budget} B (F={f} R={r} S={s}): {v}"
@@ -71,6 +72,19 @@ fn json_report_overhead_within_absolute_budget() {
             assert!(map.len() <= 8, "got: {v}");
             for (_, val) in map {
                 assert!(val.as_str().unwrap().chars().count() <= 80, "got: {v}");
+            }
+        }
+        // WI-2b: per-site evidence mirrors spans; per-site bounds hold.
+        if let Some(sites) = e.get("sites") {
+            let arr = sites.as_array().unwrap();
+            assert_eq!(arr.len(), e["spans"].as_array().unwrap().len(), "got: {v}");
+            for site in arr {
+                assert_eq!(site["span"].as_array().unwrap().len(), 2, "got: {v}");
+                let map = site["bindings"].as_object().unwrap();
+                assert!(map.len() <= 8, "got: {v}");
+                for (_, val) in map {
+                    assert!(val.as_str().unwrap().chars().count() <= 80, "got: {v}");
+                }
             }
         }
     }

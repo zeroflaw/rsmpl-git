@@ -582,6 +582,16 @@ fn run() -> Result<(), CliError> {
                     entry["bindings_truncated"] =
                         serde_json::json!(truncated + r.bindings_truncated);
                 }
+                // WI-2b: per-site evidence, one entry per emitted edit in
+                // span order. Omitted only when no site binds (same rule as
+                // `bindings`). Per-site truncation mirrors `bindings_json`.
+                if !r.sites.is_empty() {
+                    let (sites_val, sites_trunc) = sites_json(&r.sites);
+                    entry["sites"] = sites_val;
+                    if sites_trunc > 0 {
+                        entry["sites_truncated"] = serde_json::json!(sites_trunc);
+                    }
+                }
                 entry
             }).collect::<Vec<_>>(),
             "files": changed.iter().map(|(path, added, removed, post_sha)| serde_json::json!({
@@ -751,6 +761,30 @@ fn bindings_json(bindings: &[(String, String)]) -> (serde_json::Value, usize) {
     }
     let omitted = bindings.len().saturating_sub(map.len());
     (serde_json::Value::Object(map), omitted)
+}
+
+/// WI-2b: token-bounded per-site evidence (SPEC D.2). One entry per emitted
+/// edit in span order — `[{span: [s, e], bindings: {...}}]` — with the same
+/// 8-entry / 80-char per-site truncation as `bindings_json`. Returns the
+/// JSON array plus the summed omitted-entry count (`sites_truncated`).
+fn sites_json(sites: &[rsmpl_engine::SiteReport]) -> (serde_json::Value, usize) {
+    const MAX_ENTRIES: usize = 8;
+    const MAX_CHARS: usize = 80;
+    let mut arr = Vec::with_capacity(sites.len());
+    let mut omitted_total = 0usize;
+    for site in sites {
+        let mut map = serde_json::Map::new();
+        for (k, v) in site.bindings.iter().take(MAX_ENTRIES) {
+            let truncated: String = v.chars().take(MAX_CHARS).collect();
+            map.insert(k.clone(), serde_json::Value::String(truncated));
+        }
+        omitted_total += site.bindings.len().saturating_sub(map.len());
+        arr.push(serde_json::json!({
+            "span": [site.span.0, site.span.1],
+            "bindings": serde_json::Value::Object(map),
+        }));
+    }
+    (serde_json::Value::Array(arr), omitted_total)
 }
 
 /// WI-2a `--verify build`: `cargo check --quiet` in `repo` after a

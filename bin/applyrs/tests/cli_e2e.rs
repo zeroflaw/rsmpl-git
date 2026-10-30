@@ -1833,9 +1833,9 @@ fn ordinary_all_minus_hunk_truncates_but_keeps_file() {
 
 #[test]
 fn json_report_shows_extra_span_of_over_broad_patch() {
-    // WI-2: an over-broad authored sweep matches 3 sites, not the 2 the
-    // author aimed at — the JSON report exposes every span plus the
-    // first-match bindings, so the agent rejects before apply.
+    // WI-2b: an over-broad authored sweep matches 3 sites, not the 2 the
+    // author aimed at — the JSON report exposes every span plus per-site
+    // bindings, so the agent rejects before apply.
     let dir = init_repo();
     write(
         dir.path(),
@@ -1864,6 +1864,17 @@ fn json_report_shows_extra_span_of_over_broad_patch() {
     assert_eq!(
         v["rules"][0]["bindings"],
         serde_json::json!({"E": "1"}),
+        "got: {v}"
+    );
+    // WI-2b per-site evidence in span order: the extra site is visible
+    // with its own bindings before apply.
+    assert_eq!(
+        v["rules"][0]["sites"],
+        serde_json::json!([
+            {"span": [2, 2], "bindings": {"E": "1"}},
+            {"span": [3, 3], "bindings": {"E": "2"}},
+            {"span": [6, 6], "bindings": {"E": "3"}}
+        ]),
         "got: {v}"
     );
     // --check applied nothing: the agent decides from the report alone.
@@ -1917,8 +1928,18 @@ fn json_bindings_truncate_and_omit_empty() {
         serde_json::json!(0),
         "got: {v}"
     );
+    // WI-2b: per-site truncation mirrors `bindings`; both sites truncate.
+    let sites = v["rules"][0]["sites"].as_array().unwrap();
+    assert_eq!(sites.len(), 2, "got: {v}");
+    for site in sites {
+        assert_eq!(
+            site["bindings"]["E"].as_str().unwrap().chars().count(),
+            80,
+            "got: {v}"
+        );
+    }
 
-    // A definition-only rename binds nothing: both keys are absent.
+    // A definition-only rename binds nothing: bindings + sites keys absent.
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
@@ -1935,4 +1956,6 @@ fn json_bindings_truncate_and_omit_empty() {
         v["rules"][0].get("bindings_truncated").is_none(),
         "got: {v}"
     );
+    assert!(v["rules"][0].get("sites").is_none(), "got: {v}");
+    assert!(v["rules"][0].get("sites_truncated").is_none(), "got: {v}");
 }

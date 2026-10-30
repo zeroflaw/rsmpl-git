@@ -250,6 +250,7 @@ pub fn apply_with_captures(
                     spans: vec![(sl, el)],
                     bindings: Vec::new(),
                     bindings_truncated: 0,
+                    sites: Vec::new(),
                 },
             ));
         }
@@ -385,14 +386,29 @@ pub fn apply_with_captures(
                         &range_desc,
                         ZeroMatchHint { wide, preview },
                     )?;
-                    // WI-2: first-match bindings, sorted by name for a
-                    // deterministic report (the CLI bounds tokens, SPEC D.2).
-                    // Definition-shape bindings (call/general-expr/macros)
-                    // merge with `follow_skipped` when both exist.
-                    let mut merged = def_bindings;
-                    merged.extend(follow_bindings);
-                    let mut bindings: Vec<(String, String)> = merged.into_iter().collect();
+                    // WI-2b: per-site bindings in span order + first-site
+                    // compat. `def_bindings` is one map per accepted match;
+                    // `follow_skipped` stays hunk-level (no span).
+                    let mut first_map: HashMap<String, String> =
+                        def_bindings.first().cloned().unwrap_or_default();
+                    first_map.extend(follow_bindings);
+                    let mut bindings: Vec<(String, String)> = first_map.into_iter().collect();
                     bindings.sort_by(|a, b| a.0.cmp(&b.0));
+                    let mut sites: Vec<crate::SiteReport> = Vec::new();
+                    for (i, span) in spans.iter().enumerate() {
+                        if let Some(m) = def_bindings.get(i) {
+                            if m.is_empty() {
+                                continue;
+                            }
+                            let mut b: Vec<(String, String)> =
+                                m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            b.sort_by(|a, b| a.0.cmp(&b.0));
+                            sites.push(crate::SiteReport {
+                                span: *span,
+                                bindings: b,
+                            });
+                        }
+                    }
                     rule_order.push((
                         (sec_idx, hunk_idx),
                         RuleReport {
@@ -402,6 +418,7 @@ pub fn apply_with_captures(
                             spans,
                             bindings,
                             bindings_truncated: 0,
+                            sites,
                         },
                     ));
                     // WI-6b1: one follow-only entry per non-definition file
@@ -420,6 +437,7 @@ pub fn apply_with_captures(
                                 spans,
                                 bindings: Vec::new(),
                                 bindings_truncated: 0,
+                                sites: Vec::new(),
                             },
                         ));
                     }
@@ -516,13 +534,13 @@ fn apply_rsmpl_hunk(
     compiled: &rsmpl_pattern::CompiledPattern,
     captures: &CaptureStore,
     edits: &mut Vec<TextEdit>,
-) -> Result<(usize, HashMap<String, String>), StructuredError> {
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
     let rule = rh.rule_name();
     let parsed = state.parsed.as_ref().expect(
         "T137: RSmPL hunk on a file with no parsed AST (ordinary-only files carry no semantic hunks)",
     );
-    // WI-2: shapes without metavariables report empty bindings; call /
-    // general-expr / macro shapes thread their first-match map through.
+    // WI-2b: shapes without metavariables report empty per-site maps; call /
+    // general-expr / macro shapes thread their per-site maps through.
     let empty = || HashMap::new();
     match &compiled.kind {
         // WI-6b1: definition matching only — `# follow=uses` runs as a
@@ -535,7 +553,7 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         )
-        .map(|n| (n, empty())),
+        .map(|n| (n, vec![empty(); n])),
         PatternKind::Expr {
             minus: rsmpl_pattern::ExprPatternKind::Macro { .. },
             ..
@@ -563,7 +581,7 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         )
-        .map(|n| (n, empty())),
+        .map(|n| (n, vec![empty(); n])),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,
@@ -572,7 +590,7 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         )
-        .map(|n| (n, empty())),
+        .map(|n| (n, vec![empty(); n])),
         PatternKind::General { .. } => matcher_general::apply_general_hunk(
             parsed,
             &state.original,
@@ -589,7 +607,7 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         )
-        .map(|n| (n, empty())),
+        .map(|n| (n, vec![empty(); n])),
         PatternKind::Insertion { text, use_name } => match use_name {
             Some(name) => {
                 paste_capture(
@@ -604,11 +622,11 @@ fn apply_rsmpl_hunk(
                     path,
                     edits,
                 )?;
-                Ok((1, empty()))
+                Ok((1, vec![empty()]))
             }
             None => {
                 matcher_fn::apply_insertion(&state.original, &state.index, rh, compiled, edits)
-                    .map(|n| (n, empty()))
+                    .map(|n| (n, vec![empty(); n]))
             }
         },
         PatternKind::ImplContext { .. } => matcher_impl::apply_impl_context_hunk(
@@ -619,7 +637,7 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         )
-        .map(|n| (n, empty())),
+        .map(|n| (n, vec![empty(); n])),
         PatternKind::Macro { .. } => matcher_macro::apply_macro_hunk(
             parsed,
             &state.original,
@@ -941,6 +959,38 @@ mod tests {
         assert_eq!(r.spans, vec![(2, 2), (5, 5)], "spans: {:?}", r.spans);
         assert!(files["src/lib.rs"].contains("bar(1)"));
         assert!(files["src/lib.rs"].contains("bar(2)"));
+    }
+
+    #[test]
+    fn report_carries_per_site_bindings_in_span_order() {
+        // WI-2b: `sites` carries one entry per emitted edit with its own
+        // bindings — sites 2..N are no longer evidence-free. First-site
+        // `bindings` stays as compat.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,9 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let src = "fn a() {\n    foo(1);\n}\nfn b() {\n    foo(2);\n}\nfn c() {\n    foo(3);\n}\n";
+        let (_, report) = apply_multi_report(patch, vec![("src/lib.rs", src)]).unwrap();
+        assert_eq!(report.rules.len(), 1);
+        let r = &report.rules[0];
+        assert_eq!(r.matches, 3);
+        assert_eq!(r.spans, vec![(2, 2), (5, 5), (8, 8)]);
+        assert_eq!(r.sites.len(), 3, "sites: {:?}", r.sites);
+        for (i, site) in r.sites.iter().enumerate() {
+            assert_eq!(site.span, r.spans[i]);
+            let e = site
+                .bindings
+                .iter()
+                .find(|(k, _)| k == "E")
+                .expect("E binding");
+            assert_eq!(e.1, format!("{}", i + 1), "site {i}: {:?}", site);
+        }
+        // Compat: first-site `bindings` equals sites[0].
+        let first_e = r.bindings.iter().find(|(k, _)| k == "E").expect("first E");
+        assert_eq!(first_e.1, "1");
+        // Rename shapes bind nothing: sites omitted.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n- fn foo\n+ fn bar\n";
+        let (_, report) = apply_multi_report(patch, vec![("src/lib.rs", "fn foo() {}\n")]).unwrap();
+        assert!(report.rules[0].sites.is_empty());
+        assert!(report.rules[0].bindings.is_empty());
     }
 
     #[test]

@@ -763,7 +763,7 @@ pub fn apply_general_hunk(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
-) -> Result<(usize, HashMap<String, String>), StructuredError> {
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
     let (shape, minus_sub, plus_raw, plus_body, minus_attrs, plus_attrs, had_semi) =
         match &compiled.kind {
             PatternKind::General {
@@ -852,7 +852,7 @@ pub fn apply_general_hunk(
 
     let mut accepted: Vec<(usize, usize)> = Vec::new();
     let mut matched = 0;
-    let mut first_bindings: HashMap<String, String> = HashMap::new();
+    let mut all_bindings: Vec<HashMap<String, String>> = Vec::new();
 
     match shape {
         GeneralShape::Stmt => {
@@ -990,9 +990,7 @@ pub fn apply_general_hunk(
                     }
                 }
                 accepted.push((node.start, node.end));
-                if matched == 0 {
-                    first_bindings = cx.bindings.clone();
-                }
+                all_bindings.push(cx.bindings.clone());
                 matched += 1;
                 if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
                     break;
@@ -1086,9 +1084,7 @@ pub fn apply_general_hunk(
                     }
                 }
                 accepted.push((node.start, node.end));
-                if matched == 0 {
-                    first_bindings = cx.bindings.clone();
-                }
+                all_bindings.push(cx.bindings.clone());
                 matched += 1;
                 if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
                     break;
@@ -1141,9 +1137,7 @@ pub fn apply_general_hunk(
                     }
                 }
                 accepted.push((node.start, node.end));
-                if matched == 0 {
-                    first_bindings = cx.bindings.clone();
-                }
+                all_bindings.push(cx.bindings.clone());
                 matched += 1;
                 if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
                     break;
@@ -1151,7 +1145,7 @@ pub fn apply_general_hunk(
             }
         }
     }
-    Ok((matched, first_bindings))
+    Ok((matched, all_bindings))
 }
 
 #[cfg(test)]
