@@ -320,8 +320,11 @@ fn run() -> Result<(), CliError> {
         .iter()
         .flat_map(|s| &s.hunks)
         .any(|h| matches!(h, rsmpl_patch::Hunk::Rsmpl(rh) if rh.follows_uses()));
+    let mut follow_report: Option<(usize, &'static str)> = None;
     if needs_workspace {
-        for rel in workspace_rs_files(&cli.repo) {
+        let (workspace_files, source) = workspace_rs_files_with_source(&cli.repo);
+        follow_report = Some((workspace_files.len(), source));
+        for rel in workspace_files {
             if originals.contains_key(&rel) {
                 continue;
             }
@@ -573,7 +576,7 @@ fn run() -> Result<(), CliError> {
         // ran, else `skipped` (failures exit 2 with `applied`, never a
         // success payload).
         let build_status = if build_passed { "pass" } else { "skipped" };
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "version": 2,
             "rules": report.rules.iter().map(|r| {
                 let mut entry = serde_json::json!({
@@ -605,6 +608,13 @@ fn run() -> Result<(), CliError> {
             "checked": {"lowering": true, "semantics": true, "build": build_status},
             "history": history_display,
         });
+        // WI-7a: workspace provenance for `# follow=uses` runs (additive
+        // within v2): how many files were searched and where the set came
+        // from. Absent when the patch carries no follow hunk.
+        if let Some((n, source)) = follow_report {
+            payload["follow_files"] = serde_json::json!(n);
+            payload["follow_source"] = serde_json::json!(source);
+        }
         println!(
             "{}",
             serde_json::to_string(&payload)
@@ -679,11 +689,69 @@ fn run() -> Result<(), CliError> {
     Ok(())
 }
 
-/// WI-6b1: workspace file set for `# follow=uses` — every repo `.rs` file
-/// outside `.git/`, `target/`, `.history/` (lexical walk, std only;
-/// symlinked files/dirs are skipped, SPEC 14.8). Sorted for deterministic
-/// reports.
-fn workspace_rs_files(repo: &std::path::Path) -> Vec<String> {
+/// WI-7a: workspace file set for `# follow=uses` plus its source for the
+/// JSON report. Inside a git worktree the set is tracked +
+/// untracked-but-not-ignored `.rs` files (`git ls-files --cached
+/// --others --exclude-standard`), so ignored/generated files are neither
+/// searched nor rewritten; outside a worktree it falls back to the
+/// lexical walk and reports `"walk"`.
+fn workspace_rs_files_with_source(repo: &std::path::Path) -> (Vec<String>, &'static str) {
+    if let Some(files) = git_rs_files(repo) {
+        return (files, "git");
+    }
+    (walk_rs_files(repo), "walk")
+}
+
+/// `git ls-files` branch of the workspace set. `None` when git fails
+/// (not a worktree, git missing) so the caller falls back to the walk.
+fn git_rs_files(repo: &std::path::Path) -> Option<Vec<String>> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut files = Vec::new();
+    for part in out.stdout.split(|b| *b == 0) {
+        if part.is_empty() {
+            continue;
+        }
+        let rel = String::from_utf8_lossy(part).replace('\\', "/");
+        if !rel.ends_with(".rs") {
+            continue;
+        }
+        if rel.starts_with(".git/") || rel.starts_with("target/") || rel.starts_with(".history/") {
+            continue;
+        }
+        // Symlink parity with the walk: never search linked files.
+        // `is_file` parity too: `--cached` may list staged-but-deleted
+        // paths the walk would never yield; dropping them here beats a
+        // read-warning downstream.
+        let abs = repo.join(&rel);
+        if abs.is_symlink() || !abs.is_file() {
+            continue;
+        }
+        files.push(rel);
+    }
+    files.sort();
+    files.dedup();
+    Some(files)
+}
+
+/// Lexical-walk branch of the workspace set (fallback outside a git
+/// worktree): every repo `.rs` file outside `.git/`, `target/`,
+/// `.history/` (std only; symlinked files/dirs are skipped, SPEC 14.8).
+/// Sorted for deterministic reports.
+fn walk_rs_files(repo: &std::path::Path) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![repo.to_path_buf()];
     while let Some(dir) = stack.pop() {

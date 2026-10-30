@@ -2237,13 +2237,19 @@ lowered diff is the observable truth as always (Section D.2).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
-Workspace search (WI-6b1): the resolver searches every loaded `.rs`
-file, not just the definition file. `applyrs` loads the whole workspace
-(every repo `.rs` file outside `.git/`, `target/`, `.history/`) whenever
-the patch carries `# follow=uses`, and lowers cross-file rewrites even in
-files the patch never sections. One hunk therefore renames the definition
-plus its uses repo-wide; the JSON report carries one entry per touched
-file under the same rule name (Section D.2).
+Workspace search (WI-7a): the resolver searches every loaded `.rs`
+file, not just the definition file. `applyrs` loads the search set
+whenever the patch carries `# follow=uses` and lowers cross-file
+rewrites even in files the patch never sections. Inside a git worktree
+the set is tracked plus untracked-but-not-ignored `.rs` files (`git
+ls-files --cached --others --exclude-standard`, minus `.git/`/`target/`/
+`.history/` prefixes and symlinks), so ignored and generated files are
+neither searched nor rewritten; outside a worktree it falls back to the
+lexical walk (every repo `.rs` file outside those prefixes). One hunk
+therefore renames the definition plus its uses repo-wide; the JSON
+  report carries one entry per touched file under the same rule name
+  (Section D.2) plus top-level `follow_files` (files in the search set)
+  and `follow_source` (`"git"` or `"walk"`).
 
 Unique-definition rule (precision-first, Section 2.6/D3): cross-file
 follow rewrites only when exactly one definition of the old ident exists
@@ -5814,12 +5820,17 @@ prints one JSON object to stdout:
   changes); `diff_shown` is the line count of the reported `diff` string
   (`0` when omitted or no changes). JSON consumers size the next budget
   as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
+- `follow_files`/`follow_source` report the `# follow=uses` workspace
+  search set (Section 14.8): the count of `.rs` files in the set and
+  `"git"` (tracked + untracked-but-not-ignored) or `"walk"` (lexical
+  fallback outside a worktree). Present only when the patch carries a
+  follow hunk; additive keys that do not bump `version`.
 - `version` is the JSON report schema version (`2` = this contract:
   `checked` object, `sites`-only evidence, `follow_skipped` key; `v1`
   had boolean `check`, first-site `bindings`, and `verified`). Agents
   pin parsing on it; any future breaking JSON change bumps it
-  (additive keys like `history`, `post_sha`, `sites_truncated` do not
-  bump).
+  (additive keys like `history`, `post_sha`, `sites_truncated`,
+  `follow_files`, `follow_source` do not bump).
 - `checked` is the trust envelope: `{lowering, semantics, build}` on
   every successful run, each computed by a check that can fail on real
   input (never true by construction). `lowering` is the `git apply
