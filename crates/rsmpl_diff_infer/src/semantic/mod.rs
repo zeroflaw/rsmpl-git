@@ -35,6 +35,7 @@ pub(crate) mod prov;
 mod repeat;
 pub(crate) mod shape;
 mod slot;
+pub(crate) mod subline;
 mod verbatim;
 // WI-3c: covering-span helpers live in `item_span` (this file was over
 // the 1600-line soft cap); re-exported so `super::`/`crate::semantic::`

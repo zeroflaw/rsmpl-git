@@ -75,8 +75,12 @@ pub(crate) fn try_qualified_call_sweep(
     let mut old_cal: Option<String> = None;
     let mut new_cal: Option<String> = None;
     let mut arity: Option<usize> = None;
+    let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (pre, o, n, a) = parse_qualified_pair(m, p)?;
+        let Some((pre, o, n, a)) = parse_qualified_pair(m, p) else {
+            whole_ok = false;
+            break;
+        };
         if prefix.as_ref().is_some_and(|x| *x != pre) {
             return None;
         }
@@ -94,14 +98,82 @@ pub(crate) fn try_qualified_call_sweep(
         new_cal = Some(n);
         arity = Some(a);
     }
-    let ((leading, pre_segs), old_cal, new_cal, arity) = (prefix?, old_cal?, new_cal?, arity?);
-    if old_cal == new_cal {
+    if whole_ok {
+        let ((leading, pre_segs), old_cal, new_cal, arity) = (prefix?, old_cal?, new_cal?, arity?);
+        if old_cal == new_cal {
+            return None;
+        }
+        let old_path = format!("{}{old_cal}", render_prefix(leading, &pre_segs));
+        if !crate::totality::qualified_call_holds(file_old, &old_path, arity, minuses, changed) {
+            return None;
+        }
+        return Some(emit_qualified_sweep(
+            path, used_rules, leading, &pre_segs, &old_cal, &new_cal, arity, changed,
+        ));
+    }
+    // WI-4 sub-line fallback (mixed whole/sub lines veto;
+    // all-identical pairs defer to verbatim, T422).
+    if super::subline::all_identical_pairs(minuses, pluses) {
+        return None;
+    }
+    let mut sub_pre: Option<(bool, Vec<String>)> = None;
+    let mut sub_old: Option<String> = None;
+    let mut sub_new: Option<String> = None;
+    let mut sub_arity: Option<usize> = None;
+    let mut total = 0usize;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let sites = super::subline::extract_qual_sites(m, p)?;
+        for s in &sites {
+            if sub_pre.as_ref().is_some_and(|x| *x != s.prefix) {
+                return None;
+            }
+            if sub_old.as_ref().is_some_and(|c| *c != s.old_cal) {
+                return None;
+            }
+            if sub_new.as_ref().is_some_and(|c| *c != s.new_cal) {
+                return None;
+            }
+            if sub_arity.is_some_and(|x| x != s.arity) {
+                return None;
+            }
+            sub_pre = Some(s.prefix.clone());
+            sub_old = Some(s.old_cal.clone());
+            sub_new = Some(s.new_cal.clone());
+            sub_arity = Some(s.arity);
+            total += 1;
+        }
+    }
+    let ((leading, pre_segs), old_cal, new_cal, arity) = (sub_pre?, sub_old?, sub_new?, sub_arity?);
+    if old_cal == new_cal || total < 2 {
         return None;
     }
     let old_path = format!("{}{old_cal}", render_prefix(leading, &pre_segs));
-    if !crate::totality::qualified_call_holds(file_old, &old_path, arity, minuses, changed) {
+    if !crate::totality::template_expr_holds(
+        path,
+        file_old,
+        &format!("{old_path}({})", qual_args(arity)),
+        total,
+    ) {
         return None;
     }
+    Some(emit_qualified_sweep(
+        path, used_rules, leading, &pre_segs, &old_cal, &new_cal, arity, changed,
+    ))
+}
+
+/// Shared emission for the whole-line and sub-line qualified paths
+/// (identical hunks).
+#[allow(clippy::too_many_arguments)]
+fn emit_qualified_sweep(
+    path: &str,
+    used_rules: &mut Vec<String>,
+    leading: bool,
+    pre_segs: &[String],
+    old_cal: &str,
+    new_cal: &str,
+    arity: usize,
+    changed: &[usize],
+) -> String {
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
@@ -109,15 +181,24 @@ pub(crate) fn try_qualified_call_sweep(
         vars.push(format!("E{i}"));
     }
     let args = vars.join(", ");
-    let new_path = format!("{}{new_cal}", render_prefix(leading, &pre_segs));
+    let new_path = format!("{}{new_cal}", render_prefix(leading, pre_segs));
     // WI-7-upper: an uppercase last segment infers as an `expr` hole
     // (bare `crate::Old(E0)` leaves plus-side `New` unbound) — backtick
     // the last segment only (full-path quotes are engine-rejected).
     // Lowercase paths pass through untouched (zero churn).
+    let old_path = format!("{}{old_cal}", render_prefix(leading, pre_segs));
     let old_path = super::shape::literal_path_last(&old_path);
     let new_path = super::shape::literal_path_last(&new_path);
     hunk.push_str(&format!("- {old_path}({args})\n+ {new_path}({args})\n"));
-    Some(hunk)
+    hunk
+}
+
+/// Comma-joined `E0…` arg list for the sub-line occurrence probe.
+fn qual_args(arity: usize) -> String {
+    (0..arity)
+        .map(|i| format!("E{i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render a shared prefix (leading `::` + segments + trailing `::`).

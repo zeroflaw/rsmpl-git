@@ -22,8 +22,12 @@ pub(crate) fn try_call_sweep(
     let mut old_cal: Option<String> = None;
     let mut new_cal: Option<String> = None;
     let mut arity: Option<usize> = None;
+    let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n, a) = parse_call_pair(m, p)?;
+        let Some((o, n, a)) = parse_call_pair(m, p) else {
+            whole_ok = false;
+            break;
+        };
         if old_cal.as_ref().is_some_and(|c| *c != o) {
             return None;
         }
@@ -37,13 +41,76 @@ pub(crate) fn try_call_sweep(
         new_cal = Some(n);
         arity = Some(a);
     }
-    let (old_cal, new_cal, arity) = (old_cal?, new_cal?, arity?);
-    if old_cal == new_cal {
+    if !whole_ok {
+        old_cal = None;
+        new_cal = None;
+        arity = None;
+    }
+    if let (Some(old_cal), Some(new_cal), Some(arity)) = (old_cal, new_cal, arity) {
+        if old_cal == new_cal {
+            return None;
+        }
+        if !crate::totality::call_holds(file_old, &old_cal, arity, minuses, changed) {
+            return None;
+        }
+        return Some(emit_call_sweep(
+            path, used_rules, &old_cal, &new_cal, arity, changed,
+        ));
+    }
+    // WI-4 sub-line fallback: no pair parsed whole-line (mixed
+    // whole/sub lines veto — one shape per hunk). All-identical pairs
+    // defer to the tighter verbatim sweep (T422); hetero pairs are
+    // sub-line territory. Totality counts occurrences via the engine
+    // probe.
+    if super::subline::all_identical_pairs(minuses, pluses) {
         return None;
     }
-    if !crate::totality::call_holds(file_old, &old_cal, arity, minuses, changed) {
+    let mut sub_old: Option<String> = None;
+    let mut sub_new: Option<String> = None;
+    let mut sub_arity: Option<usize> = None;
+    let mut total = 0usize;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let sites = super::subline::extract_bare_sites(m, p)?;
+        for s in &sites {
+            if sub_old.as_ref().is_some_and(|c| *c != s.old_cal) {
+                return None;
+            }
+            if sub_new.as_ref().is_some_and(|c| *c != s.new_cal) {
+                return None;
+            }
+            if sub_arity.is_some_and(|x| x != s.arity) {
+                return None;
+            }
+            sub_old = Some(s.old_cal.clone());
+            sub_new = Some(s.new_cal.clone());
+            sub_arity = Some(s.arity);
+            total += 1;
+        }
+    }
+    let (old_cal, new_cal, arity) = (sub_old?, sub_new?, sub_arity?);
+    if old_cal == new_cal || total < 2 {
         return None;
     }
+    if !crate::totality::template_expr_holds(path, file_old, &call_template(&old_cal, arity), total)
+    {
+        return None;
+    }
+    Some(emit_call_sweep(
+        path, used_rules, &old_cal, &new_cal, arity, changed,
+    ))
+}
+
+/// Shared emission for the whole-line and sub-line bare-call paths
+/// (identical hunks: the frame is byte-identical on both sides, so the
+/// bare subterm rewrite reproduces the post-image).
+fn emit_call_sweep(
+    path: &str,
+    used_rules: &mut Vec<String>,
+    old_cal: &str,
+    new_cal: &str,
+    arity: usize,
+    changed: &[usize],
+) -> String {
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
@@ -54,10 +121,20 @@ pub(crate) fn try_call_sweep(
     let args = vars.join(", ");
     // WI-7b: uppercase constructor callees ride backticks (literal),
     // else the engine infers them as `expr` holes (unbound plus).
-    let old_lit = super::shape::literal_callee(&old_cal);
-    let new_lit = super::shape::literal_callee(&new_cal);
+    let old_lit = super::shape::literal_callee(old_cal);
+    let new_lit = super::shape::literal_callee(new_cal);
     hunk.push_str(&format!("- {old_lit}({args})\n+ {new_lit}({args})\n"));
-    Some(hunk)
+    hunk
+}
+
+/// Minus template for the sub-line occurrence probe
+/// (`template_expr_holds` counts engine matches of the bare pattern).
+fn call_template(old_cal: &str, arity: usize) -> String {
+    let mut vars = Vec::new();
+    for i in 0..arity {
+        vars.push(format!("E{i}"));
+    }
+    format!("{old_cal}({})", vars.join(", "))
 }
 
 /// N-site (N >= 2) same-callee trailing-arg-addition call sweep (T447):

@@ -6130,6 +6130,22 @@ emit the `# scope=file` + `@@ -1,1 @@` dummy (Section 17.3).
 Expression/line detectors (call, method, use-prefix, verbatim,
 peel/literal section drivers) cite the changed minus lines directly —
 their matches are single-line, so the minus span is the match span.
+Sub-line pairing (WI-4): when no pair of a section parses whole-line
+but every pair parses as one expression holding the same count (≥1) of
+one family's subterms (bare calls, method calls, or qualified calls)
+that pair in order as that family's delta (callee-only, method-only,
+or last-segment-only, per-site args/receivers token-equal, one shared
+rewrite within the line), and the plus line equals the minus line
+under sequential subterm replacement (any frame delta or unchanged
+same-line twin vetoes), the pair contributes its subterms as sites
+instead of its lines. Totality then counts occurrences of the minus
+subterm in the pre-image (engine-count probe, as verbatim does), not
+changed lines — two calls per line count twice. The emission is the
+same bare-subterm hunk as the whole-line shape (no frame is emitted;
+the frame is byte-identical on both sides so the subterm rewrite
+reproduces the post-image). Single-pair sections stay ordinary for
+call/method/use shapes even with two sites (T375: one pair never wins
+as a sweep); fn/item renames and moves keep firing at N = 1.
 Item-shape detectors (item rename, slot sweep) match whole multi-line
 items, so a header-line range could never contain the match: they emit
 the covering item range (smallest `syn` item spans containing the
@@ -6854,12 +6870,11 @@ Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 `19`, `21`, `22`); heterogeneous sites no template fires on stay
-ordinary (`12` statement
-sequences — owned by WI-5, `24` divergent `let` shapes — owned by WI-5
-joint-let, `27` two-calls-per-line sites under line-oriented call
-totality — owned by WI-4, `14` divergent single-file renames whose
-deltas never share one intent, `30` trait decl/def pairs as WI-7
-grouping territory); zero-edit optional (`05`) re-diffs to empty,
+ ordinary (`12` statement
+ sequences — owned by WI-5, `24` divergent `let` shapes — owned by WI-5
+ joint-let, `14` divergent single-file renames whose
+ deltas never share one intent, `30` trait decl/def pairs as WI-7
+ grouping territory); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only
 non-tree-canonical cycles; every other corpus case is
 canonically lossless, and one further iteration is a byte-identical

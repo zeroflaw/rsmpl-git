@@ -187,6 +187,7 @@ context would be larger, so these are lower bounds.)
 | 25-let-type-add (3 sites, let type-addition with P0/E0 holes, `impl` framing) | 458 B / 12 ln | 90 B / 5 ln | 80% |
 | 26-type-sweep (3 sites, type sweep with T hole, `impl` framing) | 513 B / 12 ln | 77 B / 5 ln | 85% |
 | 27-move-evolve (fn move + vis/name evolve, header-template paste) | 942 B / 56 ln | 183 B / 14 ln | 81% |
+| 28-two-per-line (12 lines x 2 sites, sub-line call sweep) | 656 B / 28 ln | 75 B / 5 ln | 89% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

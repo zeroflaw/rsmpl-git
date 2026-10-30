@@ -1,7 +1,5 @@
 diff --git src/lib.rs
 @@ -1,1 @@ rule=sweep_calls
-# scope=file
-# allow=many
-# expr E
-- foo(E)
-+ bar(E)
+# sweep
+- foo(E0)
++ bar(E0)

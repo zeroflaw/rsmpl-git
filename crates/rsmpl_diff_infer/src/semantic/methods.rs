@@ -30,8 +30,12 @@ pub(crate) fn try_method_to_fn_sweep(
     let mut old_method: Option<String> = None;
     let mut new_func: Option<String> = None;
     let mut arity: Option<usize> = None;
+    let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n, a) = parse_method_to_fn_pair(m, p)?;
+        let Some((o, n, a)) = parse_method_to_fn_pair(m, p) else {
+            whole_ok = false;
+            break;
+        };
         if old_method.as_ref().is_some_and(|c| *c != o) {
             return None;
         }
@@ -45,10 +49,87 @@ pub(crate) fn try_method_to_fn_sweep(
         new_func = Some(n);
         arity = Some(a);
     }
-    let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
-    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
+    if whole_ok {
+        let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
+        if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
+            return None;
+        }
+        return Some(emit_method_to_fn(
+            path,
+            used_rules,
+            &old_method,
+            &new_func,
+            arity,
+            changed,
+        ));
+    }
+    // WI-4 sub-line fallback (mixed whole/sub lines veto;
+    // all-identical pairs defer to verbatim, T422).
+    if super::subline::all_identical_pairs(minuses, pluses) {
         return None;
     }
+    let mut sub_old: Option<String> = None;
+    let mut sub_new: Option<String> = None;
+    let mut sub_arity: Option<usize> = None;
+    let mut total = 0usize;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let sites = super::subline::extract_method_fn_sites(m, p)?;
+        for s in &sites {
+            if sub_old.as_ref().is_some_and(|c| *c != s.old_method) {
+                return None;
+            }
+            if sub_new.as_ref().is_some_and(|c| *c != s.new_func) {
+                return None;
+            }
+            if sub_arity.is_some_and(|x| x != s.arity) {
+                return None;
+            }
+            sub_old = Some(s.old_method.clone());
+            sub_new = Some(s.new_func.clone());
+            sub_arity = Some(s.arity);
+            total += 1;
+        }
+    }
+    let (old_method, new_func, arity) = (sub_old?, sub_new?, sub_arity?);
+    if total < 2 {
+        return None;
+    }
+    if !crate::totality::template_expr_holds(
+        path,
+        file_old,
+        &format!("Receiver.{old_method}({})", m2f_args(arity)),
+        total,
+    ) {
+        return None;
+    }
+    Some(emit_method_to_fn(
+        path,
+        used_rules,
+        &old_method,
+        &new_func,
+        arity,
+        changed,
+    ))
+}
+
+/// Comma-joined `E0…` arg list for the sub-line occurrence probe.
+fn m2f_args(arity: usize) -> String {
+    (0..arity)
+        .map(|i| format!("E{i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Shared emission for the whole-line and sub-line method→function
+/// paths (identical hunks).
+fn emit_method_to_fn(
+    path: &str,
+    used_rules: &mut Vec<String>,
+    old_method: &str,
+    new_func: &str,
+    arity: usize,
+    changed: &[usize],
+) -> String {
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
     let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
@@ -69,10 +150,10 @@ pub(crate) fn try_method_to_fn_sweep(
     // callee would leave `New` unbound.
     hunk.push_str(&format!(
         "- Receiver.{old}({args})\n+ {new}({tail})\n",
-        old = super::shape::literal_callee(&old_method),
-        new = super::shape::literal_callee(&new_func),
+        old = super::shape::literal_callee(old_method),
+        new = super::shape::literal_callee(new_func),
     ));
-    Some(hunk)
+    hunk
 }
 
 /// Parse a `-`/`+` line pair as a method-to-function refactor; return
@@ -152,8 +233,12 @@ pub(crate) fn try_method_to_method_sweep(
     let mut old_method: Option<String> = None;
     let mut new_method: Option<String> = None;
     let mut arity: Option<usize> = None;
+    let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n, a) = parse_method_to_method_pair(m, p)?;
+        let Some((o, n, a)) = parse_method_to_method_pair(m, p) else {
+            whole_ok = false;
+            break;
+        };
         if old_method.as_ref().is_some_and(|c| *c != o) {
             return None;
         }
@@ -167,13 +252,82 @@ pub(crate) fn try_method_to_method_sweep(
         new_method = Some(n);
         arity = Some(a);
     }
-    let (old_method, new_method, arity) = (old_method?, new_method?, arity?);
-    if old_method == new_method {
+    if whole_ok {
+        let (old_method, new_method, arity) = (old_method?, new_method?, arity?);
+        if old_method == new_method {
+            return None;
+        }
+        if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
+            return None;
+        }
+        return Some(emit_method_to_method(
+            path,
+            used_rules,
+            &old_method,
+            &new_method,
+            arity,
+            changed,
+        ));
+    }
+    // WI-4 sub-line fallback (mixed whole/sub lines veto;
+    // all-identical pairs defer to verbatim, T422).
+    if super::subline::all_identical_pairs(minuses, pluses) {
         return None;
     }
-    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
+    let mut sub_old: Option<String> = None;
+    let mut sub_new: Option<String> = None;
+    let mut sub_arity: Option<usize> = None;
+    let mut total = 0usize;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let sites = super::subline::extract_method_sites(m, p)?;
+        for s in &sites {
+            if sub_old.as_ref().is_some_and(|c| *c != s.old_method) {
+                return None;
+            }
+            if sub_new.as_ref().is_some_and(|c| *c != s.new_method) {
+                return None;
+            }
+            if sub_arity.is_some_and(|x| x != s.arity) {
+                return None;
+            }
+            sub_old = Some(s.old_method.clone());
+            sub_new = Some(s.new_method.clone());
+            sub_arity = Some(s.arity);
+            total += 1;
+        }
+    }
+    let (old_method, new_method, arity) = (sub_old?, sub_new?, sub_arity?);
+    if old_method == new_method || total < 2 {
         return None;
     }
+    if !crate::totality::template_expr_holds(
+        path,
+        file_old,
+        &format!("Receiver.{old_method}({})", m2f_args(arity)),
+        total,
+    ) {
+        return None;
+    }
+    Some(emit_method_to_method(
+        path,
+        used_rules,
+        &old_method,
+        &new_method,
+        arity,
+        changed,
+    ))
+}
+
+/// Shared emission for the whole-line and sub-line method→method paths
+/// (identical hunks).
+fn emit_method_to_method(
+    path: &str,
+    used_rules: &mut Vec<String>,
+    old_method: &str,
+    new_method: &str,
+    arity: usize,
+    changed: &[usize],
+) -> String {
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
     let mut hunk = crate::emission_header(path, &rule, changed);
     let mut vars = Vec::new();
@@ -187,10 +341,10 @@ pub(crate) fn try_method_to_method_sweep(
     // pin the literal, lowercase passes through untouched.
     hunk.push_str(&format!(
         "- Receiver.{old}({args})\n+ Receiver.{new}({args})\n",
-        old = super::shape::literal_callee(&old_method),
-        new = super::shape::literal_callee(&new_method),
+        old = super::shape::literal_callee(old_method),
+        new = super::shape::literal_callee(new_method),
     ));
-    Some(hunk)
+    hunk
 }
 
 /// Parse a `-`/`+` line pair as a method-to-method rename; return

@@ -261,6 +261,7 @@ const CYCLE_OK: &[&str] = &[
     "37-verbatim-unary-sweep",
     "38-method-to-method-sweep",
     "39-move-evolve",
+    "27-call-sweep",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -331,10 +332,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "24-pat-sweep",
         "hetero: divergent let shapes stay ordinary (anti-unification is WI-4)",
-    ),
-    (
-        "27-call-sweep",
-        "hetero: two-calls-per-line sites stay ordinary (line-oriented call totality; owned by WI-4)",
     ),
     (
         "30-trait-sweep",
