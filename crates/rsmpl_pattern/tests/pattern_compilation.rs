@@ -1246,9 +1246,53 @@ fn const_evolution_template_accepts_visibility() {
     assert!(parse_const_evolution_template("pub enum New { ... }").is_none());
     assert!(parse_const_evolution_template("pub union New { ... }").is_none());
     assert!(parse_const_evolution_template("pub type New = ...;").is_none());
+    assert!(parse_const_evolution_template("pub static New = ...;").is_none());
+    assert!(parse_const_evolution_template("pub static mut New = ...;").is_none());
     // Missing marker, missing `=`, garbage prefix, multi-line all rejected.
     assert!(parse_const_evolution_template("pub const New").is_none());
     assert!(parse_const_evolution_template("pub const New ...;").is_none());
     assert!(parse_const_evolution_template("a;b const New = ...;").is_none());
     assert!(parse_const_evolution_template("pub const New = ...;\nfoo").is_none());
+}
+
+#[test]
+fn static_evolution_template_accepts_visibility_and_mut() {
+    // WI-8 slice 6: `static` evolution pastes accept visibility
+    // prefixes, an optional `mut`, and require an `= ...;` body marker.
+    use rsmpl_pattern::parse_static_evolution_template;
+    for prefix in ["", "pub", "pub(crate)", "pub(super)", "pub(in crate::x)"] {
+        for (suffix, want_mut) in [("", false), ("mut ", true)] {
+            let tmpl = if prefix.is_empty() {
+                format!("static {suffix}New = ...;")
+            } else {
+                format!("{prefix} static {suffix}New = ...;")
+            };
+            let (pre, name, is_mut) = parse_static_evolution_template(&tmpl)
+                .unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+            assert_eq!(name, "New", "got: {tmpl:?}");
+            assert_eq!(pre.trim(), prefix, "got: {tmpl:?}");
+            assert_eq!(is_mut, want_mut, "got: {tmpl:?}");
+        }
+    }
+    // `fn`/`struct`/`enum`/`union`/`type`/`const` templates are different
+    // parsers — never cross-accept.
+    assert!(parse_static_evolution_template("pub fn new(...) { ... }").is_none());
+    assert!(parse_static_evolution_template("pub struct New { ... }").is_none());
+    assert!(parse_static_evolution_template("pub enum New { ... }").is_none());
+    assert!(parse_static_evolution_template("pub union New { ... }").is_none());
+    assert!(parse_static_evolution_template("pub type New = ...;").is_none());
+    assert!(parse_static_evolution_template("pub const New = ...;").is_none());
+    // Missing marker, missing `=`, garbage prefix, multi-line all rejected.
+    assert!(parse_static_evolution_template("pub static New").is_none());
+    assert!(parse_static_evolution_template("pub static mut New").is_none());
+    assert!(parse_static_evolution_template("pub static New ...;").is_none());
+    assert!(parse_static_evolution_template("a;b static New = ...;").is_none());
+    assert!(parse_static_evolution_template("pub static New = ...;\nfoo").is_none());
+    // `mutate` is an ident, not `mut` + `ate`: no false `mut` split.
+    let (pre, name, is_mut) =
+        parse_static_evolution_template("pub static mutate = ...;").expect("must accept");
+    assert_eq!(
+        (pre.trim(), name.as_str(), is_mut),
+        ("pub", "mutate", false)
+    );
 }

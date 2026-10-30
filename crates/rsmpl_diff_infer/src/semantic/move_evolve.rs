@@ -1,31 +1,35 @@
-//! WI-8a + WI-8 slices 1-5: `fn`, `struct`, `enum`, `union`, `type`,
-//! and `const` move + header evolution pairing.
+//! WI-8a + WI-8 slices 1-6: `fn`, `struct`, `enum`, `union`, `type`,
+//! `const`, and `static` move + header evolution pairing.
 //!
 //! Byte-identical pairing (`moves::try_move_sweep`) misses moves that
 //! also rename the item or change its header — the common case
 //! (`fn foo` → `pub async fn bar`, `struct Old` → `pub struct New`,
 //! `enum Old` → `pub enum New`, `union Old` → `pub union New`,
 //! `type Old` → `pub type New`,
-//! `const Old` → `pub const New` in a new
-//! module file). This module pairs `fn`/`struct`/`enum`/`union`/`type`/`const` items
+//! `const Old` → `pub const New`,
+//! `static Old` → `pub static New` in a new
+//! module file). This module pairs `fn`/`struct`/`enum`/`union`/`type`/`const`/`static` items
 //! whose bodies (and signatures/fields/variants/aliased types/const
-//! type+expr) are token-equal but
+//! type+expr/static type+expr) are token-equal but
 //! whose header prefix (vis + qualifiers, verbatim) and/or name evolve,
 //! and builds the single-line header template the engine's evolution
 //! paste (`# use=N` + `+ <prefix>fn <New>(...) { ... }` /
 //! `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` /
 //! `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` /
-//! `+ <prefix>const <New> = ...;`) splices the captured body under.
+//! `+ <prefix>const <New> = ...;` /
+//! `+ <prefix>static [mut ]<New> = ...;`) splices the captured body under.
 //!
-//! Scope is deliberately narrow (WI-8a + slices 1-5): `fn`, `struct`,
-//! `enum`, `union`, `type`, and `const` items only; generics, params/fields/variants/
-//! aliased type/const type+expr, return type, `where` clause, attrs, and bodies must be token-equal.
+//! Scope is deliberately narrow (WI-8a + slices 1-6): `fn`, `struct`,
+//! `enum`, `union`, `type`, `const`, and `static` items only; generics, params/fields/variants/
+//! aliased type/const type+expr/static type+expr, return type, `where` clause, attrs, and bodies must be token-equal.
 //! The evolving prefix is verbatim plus-side text, never an inferred
 //! hole, so qualifier evolution (`fn` → `pub async fn`) rides the same
-//! safe mechanism as vis/name. Everything else (other item kinds,
+//! safe mechanism as vis/name. `static mut` mutability rides verbatim
+//! in the template the same way (a `static` vs `static mut` delta is an
+//! evolution, not a veto). Everything else (other item kinds,
 //! attr/signature/field/variant/aliased-type/body deltas) stays ordinary — the
 //! byte-exact path owns identical items (an evolved pair requires a
-//! prefix or name delta).
+//! prefix, name, or (for `static`) mutability delta).
 
 use quote::ToTokens;
 use syn::spanned::Spanned;
@@ -823,6 +827,169 @@ pub(crate) fn const_evolution_template(prefix: &str, name: &str) -> String {
     }
 }
 
+/// Evolved `static` pair check (WI-8 slice 6): same shape modulo the
+/// visibility prefix, the ident, and `mut` mutability. Generics do not
+/// exist on free `static` items; attrs, the value type, and the
+/// initializer expr must be token-equal. Returns the plus-side ident
+/// when the pair evolves (a vis, name, or mutability delta is required
+/// — the byte-exact path owns identical items). Mutability rides
+/// verbatim in the template like `fn` qualifiers ride the prefix.
+pub(crate) fn static_evolved_match(
+    minus: &syn::ItemStatic,
+    plus: &syn::ItemStatic,
+) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    let vis_same = tok(&minus.vis) == tok(&plus.vis);
+    let name_same = minus.ident == plus.ident;
+    let minus_mut = matches!(minus.mutability, syn::StaticMutability::Mut(_));
+    let plus_mut = matches!(plus.mutability, syn::StaticMutability::Mut(_));
+    let mut_same = minus_mut == plus_mut;
+    if vis_same && name_same && mut_same {
+        return None;
+    }
+    if tok(&minus.ty) != tok(&plus.ty) {
+        return None;
+    }
+    if tok(&minus.expr) != tok(&plus.expr) {
+        return None;
+    }
+    Some(plus.ident.to_string())
+}
+
+/// All evolved `static` hits of one minus item text in a pure-plus
+/// hunk body (WI-8 slice 6). Mirrors `find_const_evolved_hits`;
+/// spans coincide with parsed `static` item spans by construction.
+/// The trailing flag carries the plus-side `mut` so emission rebuilds
+/// it verbatim in the template.
+pub(crate) fn find_static_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String, bool)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemStatic>(minus_text) else {
+        return Vec::new();
+    };
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Static(plus) = it else {
+            continue;
+        };
+        if static_evolved_match(&minus, plus).is_none() {
+            continue;
+        }
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let name = plus.ident.to_string();
+        let Some(prefix) = static_header_prefix(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        out.push((
+            s - 1,
+            e - 1,
+            prefix,
+            name,
+            matches!(plus.mutability, syn::StaticMutability::Mut(_)),
+        ));
+    }
+    out
+}
+
+/// The verbatim text before the `static <name>` keyword on the item's
+/// header line (visibility, leading whitespace stripped).
+/// Attr/doc lines never match: the header is always a code line.
+pub(crate) fn static_header_prefix(item_lines: &[String], name: &str) -> Option<String> {
+    for line in item_lines {
+        let text = line.get(1..).unwrap_or("");
+        let t = text.trim_start();
+        if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
+            continue;
+        }
+        if let Some(s_pos) = find_static_name(text, name) {
+            return Some(text[..s_pos].trim_start().to_string());
+        }
+    }
+    None
+}
+
+/// Byte offset of a word-bounded `static <name>` pair (`None` when
+/// the line holds no such pair: comments, strings, or other idents).
+/// An optional word-bounded `mut` between the keyword and the ident
+/// (the `static mut` form) is skipped.
+fn find_static_name(line: &str, name: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 6 <= bytes.len() {
+        if bytes[i..].starts_with(b"static")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 6).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 6;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            // Optional `mut` qualifier before the ident.
+            let mut k = j;
+            while bytes.get(k).is_some_and(|c| is_ident(*c)) {
+                k += 1;
+            }
+            if line.get(j..k) == Some("mut")
+                && bytes.get(k).is_some_and(|c| c.is_ascii_whitespace())
+            {
+                j = k;
+                while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                    j += 1;
+                }
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if line.get(start..j) == Some(name) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Single-line static evolution-paste template: the plus-side
+/// visibility verbatim, the plus-side `mut` verbatim, `= ...;` body
+/// marker. `prefix` is trimmed; an empty prefix yields a bare
+/// `static` header. The `= ...;` tail is a shape marker only — the
+/// splice keeps the captured suffix (`: ty = expr;`) verbatim.
+pub(crate) fn static_evolution_template(prefix: &str, name: &str, is_mut: bool) -> String {
+    let pre = prefix.trim_end();
+    let mut_word = if is_mut { "mut " } else { "" };
+    if pre.is_empty() {
+        format!("static {mut_word}{name} = ...;")
+    } else {
+        format!("{pre} static {mut_word}{name} = ...;")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1148,5 +1315,89 @@ mod tests {
             "pub const New = ...;"
         );
         assert_eq!(const_evolution_template("", "New"), "const New = ...;");
+    }
+
+    fn item_static(text: &str) -> syn::ItemStatic {
+        syn::parse_str(text).expect("test static must parse")
+    }
+
+    #[test]
+    fn static_vis_and_name_evolve_fires() {
+        let minus = item_static("static Old: u32 = 1;");
+        let plus = item_static("pub static New: u32 = 1;");
+        assert_eq!(static_evolved_match(&minus, &plus), Some("New".to_string()));
+    }
+
+    #[test]
+    fn static_name_only_and_vis_only_fire() {
+        let minus = item_static("static Old: u32 = 1;");
+        let plus = item_static("static New: u32 = 1;");
+        assert_eq!(static_evolved_match(&minus, &plus), Some("New".to_string()));
+        let plus = item_static("pub(crate) static Old: u32 = 1;");
+        assert_eq!(static_evolved_match(&minus, &plus), Some("Old".to_string()));
+    }
+
+    #[test]
+    fn static_mut_delta_rides_verbatim() {
+        // `static` -> `static mut` is an evolution, not a veto (the
+        // template carries the plus-side `mut` verbatim, like `fn`
+        // qualifiers ride the prefix).
+        let minus = item_static("static Old: u32 = 1;");
+        let plus = item_static("pub static mut New: u32 = 1;");
+        assert_eq!(static_evolved_match(&minus, &plus), Some("New".to_string()));
+        let minus_m = item_static("static mut Old: u32 = 1;");
+        let plus_m = item_static("static Old: u32 = 1;");
+        assert_eq!(
+            static_evolved_match(&minus_m, &plus_m),
+            Some("Old".to_string())
+        );
+    }
+
+    #[test]
+    fn static_identical_and_deltas_veto() {
+        let base = item_static("static Old: u32 = 1;");
+        let same = item_static("static Old: u32 = 1;");
+        assert_eq!(static_evolved_match(&base, &same), None);
+        // Type delta.
+        let plus = item_static("pub static New: i64 = 1;");
+        assert_eq!(static_evolved_match(&base, &plus), None);
+        // Expr delta.
+        let plus = item_static("pub static New: u32 = 2;");
+        assert_eq!(static_evolved_match(&base, &plus), None);
+        // Attr delta.
+        let plus_a = item_static("#[allow(dead_code)]\npub static New: u32 = 1;");
+        assert_eq!(static_evolved_match(&base, &plus_a), None);
+    }
+
+    #[test]
+    fn static_template_shapes() {
+        assert_eq!(
+            static_evolution_template("pub ", "New", false),
+            "pub static New = ...;"
+        );
+        assert_eq!(
+            static_evolution_template("", "New", false),
+            "static New = ...;"
+        );
+        assert_eq!(
+            static_evolution_template("pub ", "New", true),
+            "pub static mut New = ...;"
+        );
+        assert_eq!(
+            static_evolution_template("", "New", true),
+            "static mut New = ...;"
+        );
+    }
+
+    #[test]
+    fn static_header_prefix_skips_mut_and_attrs() {
+        let lines = vec![
+            "+#[allow(dead_code)]".to_string(),
+            "+pub static mut helper: u32 = 1;".to_string(),
+        ];
+        assert_eq!(
+            static_header_prefix(&lines, "helper"),
+            Some("pub ".to_string())
+        );
     }
 }

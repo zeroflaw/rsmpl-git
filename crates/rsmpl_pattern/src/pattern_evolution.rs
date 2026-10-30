@@ -1,6 +1,6 @@
 //! Evolution-paste template parsing (WI-8a `fn` + WI-8 slice 1
 //! `struct` + WI-8 slice 2 `enum` + WI-8 slice 3 `union` + WI-8 slice 4
-//! `type` + WI-8 slice 5 `const` single-line headers).
+//! `type` + WI-8 slice 5 `const` + WI-8 slice 6 `static` single-line headers).
 //!
 //! Used by the `Insertion` classifier and the engine capture splice.
 
@@ -376,6 +376,89 @@ fn valid_const_evolution_prefix(prefix: &str) -> bool {
         return false;
     }
     syn::parse_str::<syn::ItemConst>(&format!("{pre} const __RsmplDummy__: i32 = 0;")).is_ok()
+}
+
+/// WI-8 slice 6 static evolution-paste template: a single-line
+/// `static` header with an `= ...;` body marker
+/// (`pub static mut New = ...;`). Returns the verbatim prefix before
+/// `static` (visibility), the new ident, and whether the template
+/// carries `mut`. The `= ...;` tail is a shape marker only — the splice
+/// keeps the captured item's suffix (`: ty = expr;`) verbatim, same as
+/// the `const` abstraction. `None` when the line is not a
+/// static-template shape.
+pub fn parse_static_evolution_template(text: &str) -> Option<(String, String, bool)> {
+    let line = text.trim();
+    if line.lines().count() != 1 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Word-bounded `static` followed by whitespace.
+    let mut static_pos = None;
+    let mut i = 0;
+    while i + 6 <= bytes.len() {
+        if bytes[i..].starts_with(b"static")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 6).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            static_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let static_pos = static_pos?;
+    let prefix = &line[..static_pos];
+    if !valid_static_evolution_prefix(prefix) {
+        return None;
+    }
+    let mut rest = line[static_pos + 6..].trim_start();
+    // Optional word-bounded `mut` qualifier before the ident (the
+    // `static mut` form).
+    let mut is_mut = false;
+    if let Some(after_mut) = rest.strip_prefix("mut") {
+        if let Some(c) = after_mut.chars().next() {
+            if c.is_whitespace() {
+                let tail = after_mut.trim_start();
+                if let Some(d) = tail.chars().next() {
+                    if d == '_' || d.is_ascii_alphanumeric() {
+                        is_mut = true;
+                        rest = tail;
+                    }
+                }
+            }
+        }
+    }
+    let mut ident_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            ident_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if ident_len == 0 {
+        return None;
+    }
+    let tail = &rest[ident_len..];
+    if !tail.contains('=') || !tail.contains("...") {
+        return None;
+    }
+    Some((prefix.to_string(), rest[..ident_len].to_string(), is_mut))
+}
+/// The verbatim text before `static` in a static evolution-paste
+/// template: a Rust visibility (`pub`, `pub(crate)`, `pub(in path)`,
+/// or empty for a private static). Validated by parsing, not by
+/// character vetoes. The optional `mut` lives after the keyword, so
+/// the bare-`static` probe validates vis-only prefixes for both forms.
+fn valid_static_evolution_prefix(prefix: &str) -> bool {
+    let pre = prefix.trim();
+    if pre.is_empty() {
+        return true;
+    }
+    if pre.contains(['{', ';']) {
+        return false;
+    }
+    syn::parse_str::<syn::ItemStatic>(&format!("{pre} static __RsmplDummy__: i32 = 0;")).is_ok()
 }
 
 /// The verbatim text before `fn` in an evolution-paste template: a Rust

@@ -493,3 +493,95 @@ fn struct_template_on_const_capture_is_loud() {
     .expect_err("kind mismatch must fail loud");
     assert!(err.contains("captured `struct`"), "got: {err}");
 }
+
+// WI-8 slice 6: static evolution pastes.
+
+const STATIC_SRC: &str = "static Old: u32 = 1;\n";
+const B_STATIC: &str = "fn other() {}\n";
+
+fn cut_and_paste_static(template: &str) -> String {
+    format!(
+        "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ {template}\n"
+    )
+}
+
+#[test]
+fn static_name_and_vis_evolve_cross_file() {
+    let files = apply_multi(
+        &cut_and_paste_static("pub static New = ...;"),
+        vec![("a.rs", STATIC_SRC), ("b.rs", B_STATIC)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub static New: u32 = 1;\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn static_mut_form_rides_verbatim() {
+    // A `static mut` capture splices under a `mut` template with the
+    // `: ty = expr;` suffix byte-verbatim.
+    let src = "static mut Old: u32 = 1;\n";
+    let files = apply_multi(
+        &cut_and_paste_static("pub static mut New = ...;"),
+        vec![("a.rs", src), ("b.rs", B_STATIC)],
+    )
+    .unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub static mut New: u32 = 1;\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn static_mut_added_by_template() {
+    // Authored paste may add `mut` via the template: the template's
+    // `mut` wins, the captured suffix rides verbatim.
+    let files = apply_multi(
+        &cut_and_paste_static("pub static mut New = ...;"),
+        vec![("a.rs", STATIC_SRC), ("b.rs", B_STATIC)],
+    )
+    .unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub static mut New: u32 = 1;\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn static_malformed_template_is_loud() {
+    let err = apply_multi(
+        &cut_and_paste_static("pub static New"),
+        vec![("a.rs", STATIC_SRC), ("b.rs", B_STATIC)],
+    )
+    .expect_err("malformed static template must fail loud");
+    assert!(err.contains("evolution paste template"), "got: {err}");
+}
+
+#[test]
+fn static_template_on_const_capture_is_loud() {
+    // Kind mismatch: a `static` template cannot splice a `const` capture.
+    let err = apply_multi(
+        &cut_and_paste_const("pub static New = ...;"),
+        vec![("a.rs", CONST_SRC), ("b.rs", B_CONST)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `static`"), "got: {err}");
+}
+
+#[test]
+fn const_template_on_static_capture_is_loud() {
+    // Converse kind mismatch: a `const` template cannot splice a
+    // `static` capture.
+    let err = apply_multi(
+        &cut_and_paste_static("pub const New = ...;"),
+        vec![("a.rs", STATIC_SRC), ("b.rs", B_STATIC)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `const`"), "got: {err}");
+}
