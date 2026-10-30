@@ -71,6 +71,11 @@ impl GitSource {
         // (binary creates, which native `git diff` dumps raw) become
         // `Binary files … differ` markers for the infer strip.
         let mut raw = tracked_raw(&out.stdout);
+        // Tracked/staged `.history/` audit logs (SPEC D.1/D.4) skip the
+        // same way as untracked ones: tool output, never a lowering
+        // input (warned by the binary, like stripped binaries).
+        let (stripped_raw, stripped_tracked_history) = strip_history_sections(&raw);
+        raw = stripped_raw;
         // `git diff` detects renames by default (`similarity index`
         // + `rename from/to` headers), which applyrs lowers back to
         // rename sections (T377) -- moves stay moves instead of
@@ -102,7 +107,7 @@ impl GitSource {
         // binary, like stripped binaries).
         let (untracked, skipped): (Vec<String>, Vec<String>) =
             untracked.into_iter().partition(|p| !is_history_path(p));
-        let skipped_history = !skipped.is_empty();
+        let skipped_history = !skipped.is_empty() || stripped_tracked_history;
         // Untracked directories (T387): `git status -uall` reports a
         // nested repo as `?? inner/` and an empty dir as `?? dir/` —
         // real `git diff` shows neither, and there is no content to
@@ -254,6 +259,80 @@ fn untracked_files(repo: &Path) -> Result<Vec<String>, String> {
 /// inputs, so the source skips them even when untracked.
 fn is_history_path(path: &str) -> bool {
     path == ".history" || path.starts_with(".history/")
+}
+/// Strip tracked/staged `.history/` sections from a unified diff
+/// (WI-7-history-strip): returns the filtered diff plus whether
+/// anything was stripped (warning parity with the untracked skip).
+/// Split is line-start `diff --git ` so section bytes pass through
+/// untouched; a section strips when its header paths — or either
+/// `rename from/to` line when present — hit top-level `.history/`.
+/// Single-path headers (`diff --git P`) check `P` directly.
+fn strip_history_sections(raw: &str) -> (String, bool) {
+    if raw.is_empty() {
+        return (String::new(), false);
+    }
+    let mut starts: Vec<usize> = vec![0];
+    let mut idx = 0usize;
+    while idx < raw.len() {
+        if raw.as_bytes()[idx] == b'\n' && raw[idx + 1..].starts_with("diff --git ") {
+            starts.push(idx + 1);
+        }
+        idx += 1;
+    }
+    let mut out = String::new();
+    let mut stripped = false;
+    for (i, start) in starts.iter().enumerate() {
+        let end = if i + 1 < starts.len() {
+            starts[i + 1]
+        } else {
+            raw.len()
+        };
+        let section = &raw[*start..end];
+        if section_is_history(section) {
+            stripped = true;
+            continue;
+        }
+        out.push_str(section);
+    }
+    (out, stripped)
+}
+/// One section is history when its header paths or rename lines point
+/// at top-level `.history/` (either side counts: a move out of
+/// `.history/` is still audit noise, never a lowering input).
+fn section_is_history(section: &str) -> bool {
+    let mut lines = section.lines();
+    let header = match lines.next() {
+        Some(h) => h,
+        None => return false,
+    };
+    if let Some(rest) = header.strip_prefix("diff --git ") {
+        if let Some(parts) = rsmpl_patch::split_git_paths(rest) {
+            for part in &parts {
+                let norm = part
+                    .strip_prefix("a/")
+                    .or_else(|| part.strip_prefix("b/"))
+                    .unwrap_or(part);
+                if is_history_path(norm) {
+                    return true;
+                }
+            }
+        }
+    }
+    for line in lines {
+        if line.starts_with("diff --git ") {
+            break;
+        }
+        if let Some(from) = line
+            .strip_prefix("rename from ")
+            .or_else(|| line.strip_prefix("rename to "))
+        {
+            let decoded = rsmpl_patch::decode_git_path_token(from.trim());
+            if is_history_path(&decoded) {
+                return true;
+            }
+        }
+    }
+    false
 }
 /// Mode for an untracked regular file (T364): `100755` when any exec
 /// bit is set, else `100644`. Unix only -- elsewhere everything is
@@ -500,6 +579,49 @@ mod tests {
         assert!(!is_history_path("src/.history/x"));
         assert!(!is_history_path("history.rs"));
         assert!(!is_history_path("src/lib.rs"));
+    }
+
+    #[test]
+    fn strip_history_sections_drops_tracked_history() {
+        // WI-7-history-strip: a tracked `.history/` modify strips
+        // entirely (flag true); mixed output keeps the real section
+        // byte-identical with the flag still set.
+        let hist = "diff --git a/.history/a.rsmpl b/.history/a.rsmpl\n--- a/.history/a.rsmpl\n+++ b/.history/a.rsmpl\n@@ -1 +1 @@\n-x\n+y\n";
+        let (out, stripped) = strip_history_sections(hist);
+        assert_eq!(out, "");
+        assert!(stripped);
+        let real = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
+        let mixed = format!("{real}{hist}");
+        let (out, stripped) = strip_history_sections(&mixed);
+        assert_eq!(out, real);
+        assert!(stripped);
+        let (out, stripped) = strip_history_sections(real);
+        assert_eq!(out, real);
+        assert!(!stripped);
+        assert_eq!(strip_history_sections(""), ("".to_string(), false));
+    }
+
+    #[test]
+    fn strip_history_sections_keeps_nested_and_quoted() {
+        // Nested `src/.history/` is not tool output (kept); a quoted
+        // top-level `.history/` name still strips; rename lines into
+        // `.history/` strip on either side.
+        let nested = "diff --git a/src/.history/x b/src/.history/x\n@@ -1 +1 @@\n-a\n+b\n";
+        let (out, stripped) = strip_history_sections(nested);
+        assert_eq!(out, nested);
+        assert!(!stripped);
+        let quoted = "diff --git \"a/.history/q\\\"x.rsmpl\" \"b/.history/q\\\"x.rsmpl\"\n@@ -1 +1 @@\n-a\n+b\n";
+        let (out, stripped) = strip_history_sections(quoted);
+        assert_eq!(out, "");
+        assert!(stripped);
+        let renamed = "diff --git a/f.rs b/.history/a.rsmpl\nsimilarity index 90%\nrename from f.rs\nrename to .history/a.rsmpl\n";
+        let (out, stripped) = strip_history_sections(renamed);
+        assert_eq!(out, "");
+        assert!(stripped);
+        let single = "diff --git .history/a.rsmpl\n@@ -1 +1 @@\n-a\n+b\n";
+        let (out, stripped) = strip_history_sections(single);
+        assert_eq!(out, "");
+        assert!(stripped);
     }
 
     #[test]

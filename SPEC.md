@@ -5622,7 +5622,8 @@ additive JSON `"history"` key (Section D.2, `version` stays 1). Only the
 last 128 entries are kept (oldest pruned first). Archiving runs before
 parsing, so failures leave audit too; history IO faults are stderr
 `warning:` lines only and never fail the run. `.history/` is untracked
-audit noise, never a lowering input (the lowering is assembled in-memory
+audit noise (usually untracked; tracked/staged copies skip the same way),
+never a lowering input (the lowering is assembled in-memory
 from the old/new file contents; `git apply --check`/apply only ever
 sees the lowered diff) — adding it to `.gitignore` is always safe
 (the reference repo does).
@@ -6012,7 +6013,8 @@ materializes an empty dir, while real git needs submodule machinery
 no patch carries (T386). Untracked directory entries (nested repos,
 empty dirs — real `git diff` hides them) skip the same way instead
 of failing the conversion (T387). Top-level `.history/`
-audit files are skipped the same way (one `warning:`; they are tool
+audit files (tracked, staged, and untracked) are skipped the same way
+(one `warning:`; they are tool
 output, never lowering inputs). Git's trailing
 `@@ -a,b +c,d @@ <funcname>` section titles are dropped (RSmPL
 headers admit only `rule=` tags, Section 8.3; `git apply` likewise
