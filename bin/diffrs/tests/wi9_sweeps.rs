@@ -1,9 +1,10 @@
 //! WI-9a/WI-9b1/WI-9b2b shape pins for
-//! `test-fixtures/diffrs/{27,82,83,84,85,86,87}-*`: same-name
+//! `test-fixtures/diffrs/{27,82,83,84,85,86,87,88}-*`: same-name
 //! macro-interior sweep (27 fires hetero, 82 bracket fires
 //! delimiter-exact, 83 hetero fire with a stable long arg, 84
 //! single-site stays ordinary, 85 concrete twin recovery, 86 nested
-//! `env!` extraction, 87 brace fires delimiter-exact). Split out of
+//! `env!` extraction, 87 brace fires delimiter-exact, 88 nested
+//! multi-token raw-span fire). Split out of
 //! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
 //! (helpers duplicated, not shared — T246 precedent). The generic
 //! native → semantic → native round-trip for these fixtures already
@@ -429,6 +430,46 @@ fn wi9_macro_nested_fires() {
     );
     assert!(
         !semantic.contains("-    let out = Command::new"),
+        "nested minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "nested sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi9_macro_nested_multi_fires() {
+    // Fixture 88 (WI-9b2 nested-raw): two nested multi-token bracket
+    // deltas (my_vec 1, 2 to 1, 3 inside a call arg) compress to one
+    // concrete hunk spelling just the macro pair. TokenStream display
+    // would space the comma and never match byte-exact; raw-span
+    // rendering keeps the source bytes.
+    let (native_input, semantic) = convert_fixture("88-macro-nested-multi-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "nested multi-token interior must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# macro"),
+        "plain routing, no directive, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- my_vec![1, 2]\n"),
+        "nested minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ my_vec![1, 3]\n"),
+        "nested plus missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("E0"),
+        "no holes expected, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    let first_value = wrap"),
         "nested minus lines must be consumed, got: {semantic}"
     );
     assert!(

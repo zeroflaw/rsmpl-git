@@ -690,6 +690,16 @@ fn line_macros(line: &str) -> Option<Vec<syn::ExprMacro>> {
     None
 }
 
+// Raw source text of a parsed macro invocation: the Span byte_range
+// slice of the trimmed diff line the node was parsed from (WI-9b2
+// nested-raw). str::get is the fail-safe -- non-ASCII boundaries or
+// out-of-range spans yield None and callers fall back to the
+// token-normalized rendering, never loud on a rendering detail.
+fn macro_raw_text(trimmed: &str, mac: &syn::ExprMacro) -> Option<String> {
+    use syn::spanned::Spanned as _;
+    trimmed.get(mac.span().byte_range()).map(str::to_string)
+}
+
 /// Sub-line nested-macro interior pair (WI-9b2b, bench-17 `tool.rs`
 /// shape): the whole-line interior parse fails, but both lines parse
 /// as one `Stmt` (fallback `Expr`) holding the same count (≥1) of
@@ -741,8 +751,21 @@ fn parse_nested_macro_pair(old_line: &str, new_line: &str) -> Option<(String, St
         return None;
     };
     let close = delim_close(o_open);
-    let minus = format!("{}!{o_open}{}{close}", macro_path(o)?, o.mac.tokens);
-    let plus = format!("{}!{n_open}{}{close}", macro_path(n)?, n.mac.tokens);
+    // WI-9b2 nested-raw: render the delta pair from raw source bytes via
+    // the nodes' spans (multi-token TokenStream display like 1 , 2
+    // never occurs byte-exact in the line). Slicing failures fall back
+    // to the token-normalized rendering (single-token bodies render
+    // identically either way, so existing groups are byte-stable).
+    let (minus, plus) = match (
+        macro_raw_text(old_line.trim(), o),
+        macro_raw_text(new_line.trim(), n),
+    ) {
+        (Some(m), Some(p)) => (m, p),
+        _ => (
+            format!("{}!{o_open}{}{close}", macro_path(o)?, o.mac.tokens),
+            format!("{}!{n_open}{}{close}", macro_path(n)?, n.mac.tokens),
+        ),
+    };
     if minus == plus {
         return None;
     }
@@ -1764,10 +1787,9 @@ mod tests {
     fn macro_nested_bracket_fires() {
         // WI-9b2-delim: a bracket delta nested in a call arg takes the
         // nested path (the whole-line parse declines — the `let` init is
-        // a call, not a macro) and splices delimiter-exact. Single-token
-        // bodies only: multi-token TokenStream rendering (`1 , 2`) never
-        // occurs byte-exact in the line, so nested multi-token stays
-        // ordinary (WI-9b2 remainder — raw-span rendering).
+        // a call, not a macro) and splices delimiter-exact. Multi-token
+        // bodies render from raw source bytes (WI-9b2 nested-raw), so
+        // only whitespace-variant spellings across sites group apart.
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = wrap(my_vec![7]);\n-    let second_value = wrap(my_vec![7]);\n+    let first_value = wrap(my_vec![8]);\n+    let second_value = wrap(my_vec![8]);\n }\n",
@@ -1780,6 +1802,41 @@ mod tests {
         validated_live(&out, &pre);
         assert!(out.contains("- my_vec![7]\n"), "got: {out}");
         assert!(out.contains("+ my_vec![8]\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_nested_multi_token_fires() {
+        // WI-9b2 nested-raw: a multi-token bracket delta nested in a
+        // call arg renders from raw source bytes (TokenStream display
+        // would be 1 , 2 and never occur byte-exact in the line), so
+        // the pair compresses to one concrete hunk, delimiter-exact.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = wrap(my_vec![1, 2]);\n-    let second_value = wrap(my_vec![1, 2]);\n+    let first_value = wrap(my_vec![1, 3]);\n+    let second_value = wrap(my_vec![1, 3]);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_value = wrap(my_vec![1, 2]);\n    let second_value = wrap(my_vec![1, 2]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- my_vec![1, 2]\n"), "got: {out}");
+        assert!(out.contains("+ my_vec![1, 3]\n"), "got: {out}");
+        assert!(!out.contains("E0"), "concrete, no holes, got: {out}");
+    }
+
+    #[test]
+    fn macro_raw_text_preserves_spacing() {
+        // The raw-span helper slices the trimmed line by span: unusual
+        // spacing survives, unlike TokenStream display (which would
+        // render 1 , 2 with spaces around the comma).
+        let line = "    let v = wrap(my_vec![1,  2]);";
+        let nodes = super::line_macros(line).expect("line must parse");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            super::macro_raw_text(line.trim(), &nodes[0]).as_deref(),
+            Some("my_vec![1,  2]")
+        );
     }
 
     #[test]

@@ -6397,10 +6397,13 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    ordinary (`syn::visit` never enters opaque token streams); nested
    renames, multi-delta lines, and any outside-macro difference stay
    ordinary.
-   Nested multi-token bodies stay ordinary for this sweep: the grouping
-   key renders through TokenStream (`1, 2` → `1 , 2`) and never occurs
-   byte-exact in the line, so there is no substring to anchor on
-   (raw-span rendering is WI-9b2 remainder).
+   Nested multi-token bodies fire: the delta pair renders from raw
+   source bytes via the nested nodes' `Span::byte_range` slices
+   (WI-9b2 nested-raw) instead of the TokenStream grouping key
+   (`1, 2` → `1 , 2`, which never occurs byte-exact in the line), so
+   there is always a byte-exact substring to anchor on; slicing
+   failures fall back to the normalized rendering (single-token bodies
+   render identically either way).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed
