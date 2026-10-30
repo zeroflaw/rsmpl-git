@@ -14,14 +14,18 @@
 //! sites or stay independent (SPEC 15.7 — enforced by requiring
 //! per-site token equality wherever a hole is reused).
 //!
-//! This module generalizes two shapes: **let type-addition** — minus
+//! This module generalizes three shapes: **let type-addition** — minus
 //! `let PAT = INIT;` (no ascription) → plus `let PAT: T = INIT;`
 //! (uniform concrete `T`, per-site preserved `PAT`/`INIT`; a varying
 //! type would need an unbound plus-side `T0` (T442-illegal), so it
 //! vetoes; a per-site init/pattern delta is not this shape (verbatim
-//! and the call sweeps own those)) — and **type rewrite** (WI-4b):
-//! `antiunify_types` over `syn::Type` pairs with hole correspondence.
-//! Signature evolution (WI-4c) reuses this module next.
+//! and the call sweeps own those)); **type rewrite** (WI-4b):
+//! `antiunify_types` over `syn::Type` pairs with hole correspondence;
+//! and **joint let templates** (WI-5 slice 1):
+//! `antiunify_let_template` over typed→typed `let` pairs whose
+//! pattern and type are preserved per site while the initializer
+//! carries one uniform delta (`E0` → `E0.wrapping_add(1)`). Signature
+//! evolution (WI-4c) reuses this module next.
 
 use super::shape::init_ok;
 use quote::ToTokens;
@@ -72,6 +76,275 @@ pub(crate) fn antiunify_let_type_add(minuses: &[&str], pluses: &[&str]) -> Optio
         return None;
     }
     Some(ty)
+}
+
+/// Joint let template (WI-5 slice 1): N ≥ 2 typed→typed `let` pairs
+/// with per-site preserved pattern and type plus one uniform
+/// initializer delta. Returns the full statement template pair
+/// (`let P0: T0 = E0;` → `let P0: T0 = E0.wrapping_add(1);`), or
+/// `None` when the class is not one uniform delta.
+///
+/// Guards: every pair parses as `Stmt::Local` with a `Pat::Type`
+/// ascription on both sides, no `let-else` diverge, no attributes;
+/// per-site pattern and type token-equal (preserved — a per-site
+/// pat/ty delta belongs to another detector, never guessed here);
+/// cross-site hetero pat/ty ride `P0`/`T0`, uniform ones stay concrete
+/// (first-site token text); the initializer is either a uniform
+/// concrete delta (both sides token-uniform, templates differ) or one
+/// `E0` hole with a uniform structural wrapper on the plus side
+/// (method-call with varying receiver, bare call with one varying
+/// arg, or binary with one varying side — each with ≥ 1 literal
+/// anchor, exactly one `E0` occurrence, ordered value correspondence
+/// per SPEC 15.7). All-identical line classes decline (verbatim stays
+/// the tighter winner, T422).
+pub(crate) fn antiunify_let_template(
+    minuses: &[&str],
+    pluses: &[&str],
+) -> Option<(String, String)> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
+        return None;
+    }
+    let mut pats: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut tys: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut minus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
+    let mut plus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (m_pat, m_ty, m_init) = parse_typed_let_full(m)?;
+        let (p_pat, p_ty, p_init) = parse_typed_let_full(p)?;
+        // Preserved per site (SPEC 15.7 hole reuse): the shared `P0`/`T0`
+        // bind per-site-equal text on both sides.
+        if tok(&m_pat) != tok(&p_pat) || tok(&m_ty) != tok(&p_ty) {
+            return None;
+        }
+        pats.push(tok(&m_pat));
+        tys.push(tok(&m_ty));
+        minus_inits.push(m_init);
+        plus_inits.push(p_init);
+    }
+    let pat_tpl = if pats.iter().all(|x| *x == pats[0]) {
+        pats[0].clone()
+    } else {
+        "P0".to_string()
+    };
+    let ty_tpl = if tys.iter().all(|x| *x == tys[0]) {
+        tys[0].clone()
+    } else {
+        "T0".to_string()
+    };
+    let minus_vals: Vec<String> = minus_inits.iter().map(tok).collect();
+    let plus_vals: Vec<String> = plus_inits.iter().map(tok).collect();
+    let minus_uniform = minus_vals.iter().all(|v| *v == minus_vals[0]);
+    let plus_uniform = plus_vals.iter().all(|v| *v == plus_vals[0]);
+    let (minus_init_tpl, plus_init_tpl) = if minus_uniform && plus_uniform {
+        if minus_vals[0] == plus_vals[0] {
+            return None;
+        }
+        (minus_vals[0].clone(), plus_vals[0].clone())
+    } else if !minus_uniform && !plus_uniform {
+        let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits)?;
+        ("E0".to_string(), plus_tpl)
+    } else {
+        // One side uniform, the other varying: an unbound or dropped
+        // hole (T442 posture) — stays ordinary.
+        return None;
+    };
+    let minus_tpl = format!("let {pat_tpl}: {ty_tpl} = {minus_init_tpl};");
+    let plus_tpl = format!("let {pat_tpl}: {ty_tpl} = {plus_init_tpl};");
+    if minus_tpl == plus_tpl {
+        return None;
+    }
+    // Defensive: both sides must re-parse as `let` statements (the
+    // detector's probe re-checks, but a non-parsing template must never
+    // leave this core).
+    if !is_let_stmt(&minus_tpl) || !is_let_stmt(&plus_tpl) {
+        return None;
+    }
+    Some((minus_tpl, plus_tpl))
+}
+
+/// One typed `let` side: inner pattern, ascribed type, init expr.
+/// Attributes, missing inits, and `let-else` diverge veto (later
+/// slices own those classes).
+fn parse_typed_let_full(line: &str) -> Option<(syn::Pat, syn::Type, syn::Expr)> {
+    let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(line.trim()) else {
+        return None;
+    };
+    if !local.attrs.is_empty() {
+        return None;
+    }
+    let syn::Pat::Type(pt) = local.pat else {
+        return None;
+    };
+    let init = local.init?;
+    if init.diverge.is_some() {
+        return None;
+    }
+    Some((*pt.pat, *pt.ty, *init.expr))
+}
+
+fn is_let_stmt(text: &str) -> bool {
+    matches!(syn::parse_str::<syn::Stmt>(text), Ok(syn::Stmt::Local(_)))
+}
+
+/// Plus-side template with exactly one `E0` hole whose per-site values
+/// equal the corresponding minus inits (ordered correspondence).
+/// Slice-1 shapes: method-call with varying receiver, bare call with
+/// one varying argument, binary with one varying side. Every other
+/// shape vetoes (stays ordinary).
+fn antiunify_plus_with_hole(minus: &[syn::Expr], plus: &[syn::Expr]) -> Option<String> {
+    let minus_vals: Vec<String> = minus.iter().map(tok).collect();
+    // Method call: `E0.wrapping_add(1)` — receiver varies per site
+    // (= the minus init), method + turbofish + args uniform anchors.
+    if plus.iter().all(|e| matches!(e, syn::Expr::MethodCall(_))) {
+        let calls: Vec<&syn::ExprMethodCall> = plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::MethodCall(c) => Some(c),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        if calls.iter().any(|c| c.method != calls[0].method) {
+            return None;
+        }
+        let method0 = calls[0].method.to_string();
+        if calls
+            .iter()
+            .any(|c| tok(&c.turbofish) != tok(&calls[0].turbofish))
+        {
+            return None;
+        }
+        if calls.iter().any(|c| c.args.len() != calls[0].args.len()) {
+            return None;
+        }
+        for (i, arg) in calls[0].args.iter().enumerate() {
+            let first = tok(arg);
+            if calls.iter().any(|c| tok(&c.args[i]) != first) {
+                return None;
+            }
+        }
+        for (rx, m) in calls
+            .iter()
+            .map(|c| c.receiver.as_ref())
+            .zip(minus_vals.iter())
+        {
+            if tok(rx) != *m {
+                return None;
+            }
+        }
+        let turbo = tok(&calls[0].turbofish);
+        let turbo = if turbo.is_empty() {
+            String::new()
+        } else {
+            turbo
+        };
+        let args = calls[0].args.iter().map(tok).collect::<Vec<_>>().join(", ");
+        return Some(format!("E0.{method0}{turbo}({args})"));
+    }
+    // Bare call: `foo(E0)` / `foo(x, E0)` — callee uniform anchor,
+    // exactly one varying arg position bound to the minus init.
+    if plus.iter().all(|e| matches!(e, syn::Expr::Call(_))) {
+        let callees: Vec<String> = plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::Call(c) => Some(tok(&c.func)),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        if callees.iter().any(|c| *c != callees[0]) {
+            return None;
+        }
+        let arities: Vec<usize> = plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::Call(c) => Some(c.args.len()),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        if arities.iter().any(|a| *a != arities[0]) {
+            return None;
+        }
+        let mut hole_at: Option<usize> = None;
+        for i in 0..arities[0] {
+            let vals: Vec<String> = plus
+                .iter()
+                .map(|e| match e {
+                    syn::Expr::Call(c) => Some(tok(&c.args[i])),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?;
+            if vals.iter().all(|v| *v == vals[0]) {
+                continue;
+            }
+            if hole_at.is_some() || vals != minus_vals {
+                return None;
+            }
+            hole_at = Some(i);
+        }
+        let idx = hole_at?;
+        let mut rendered: Vec<String> = Vec::with_capacity(arities[0]);
+        for (i, arg) in plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::Call(c) => &c.args,
+                _ => unreachable!(),
+            })
+            .next()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            if i == idx {
+                rendered.push("E0".to_string());
+            } else {
+                rendered.push(tok(arg));
+            }
+        }
+        return Some(format!("{}({})", callees[0], rendered.join(", ")));
+    }
+    // Binary: `E0 + 1` / `1 + E0` — operator + anchor side uniform,
+    // exactly one varying side bound to the minus init.
+    if plus.iter().all(|e| matches!(e, syn::Expr::Binary(_))) {
+        let ops: Vec<String> = plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::Binary(b) => Some(tok(&b.op)),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        if ops.iter().any(|o| *o != ops[0]) {
+            return None;
+        }
+        let lefts: Vec<String> = plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::Binary(b) => Some(tok(&b.left)),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        let rights: Vec<String> = plus
+            .iter()
+            .map(|e| match e {
+                syn::Expr::Binary(b) => Some(tok(&b.right)),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        let left_uniform = lefts.iter().all(|l| *l == lefts[0]);
+        let right_uniform = rights.iter().all(|r| *r == rights[0]);
+        if !left_uniform && !right_uniform {
+            return None;
+        }
+        if !left_uniform && lefts == minus_vals && right_uniform {
+            return Some(format!("E0 {} {}", ops[0], rights[0]));
+        }
+        if !right_uniform && rights == minus_vals && left_uniform {
+            return Some(format!("{} {} E0", lefts[0], ops[0]));
+        }
+        return None;
+    }
+    None
 }
 
 struct UntypedLet {
@@ -929,6 +1202,168 @@ mod tests {
         // Macro types are engine-opaque.
         assert!(syn::parse_str::<syn::Type>("m!(x)").is_ok());
         let out = antiunify_strs(&["m!(x)", "m!(y)"], &["Box<m!(x)>", "Box<m!(y)>"]);
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    fn joint(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
+        antiunify_let_template(minuses, pluses)
+    }
+
+    #[test]
+    fn joint_method_receiver_hole_generalizes() {
+        // The WI-5 slice-1 canonical shape: hetero pat/ty ride P0/T0,
+        // the lit inits ride E0, the method + arg are the anchor.
+        let out = joint(
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+            &[
+                "let a: i32 = 0.wrapping_add(1);",
+                "let b: u32 = 1.wrapping_add(1);",
+            ],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let P0: T0 = E0;".to_string(),
+                "let P0: T0 = E0.wrapping_add(1);".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn joint_uniform_pat_ty_stay_concrete() {
+        let out = joint(
+            &["let a: u32 = f(x);", "let a: u32 = f(y);"],
+            &["let a: u32 = g(f(x));", "let a: u32 = g(f(y));"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let a: u32 = E0;".to_string(),
+                "let a: u32 = g(E0);".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn joint_binary_hole_generalizes() {
+        let out = joint(
+            &["let a: i32 = x;", "let b: u32 = y;"],
+            &["let a: i32 = x + 1;", "let b: u32 = y + 1;"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let P0: T0 = E0;".to_string(),
+                "let P0: T0 = E0 + 1;".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn joint_uniform_concrete_delta_fires() {
+        // No holes in the init: a uniform concrete delta over hetero
+        // pats still compresses (the anchor is the whole template).
+        let out = joint(
+            &["let a: u32 = 0;", "let b: u32 = 0;"],
+            &["let a: u32 = 1;", "let b: u32 = 1;"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let P0: u32 = 0;".to_string(),
+                "let P0: u32 = 1;".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn joint_per_site_pat_delta_vetoes() {
+        let out = joint(
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+            &[
+                "let ax: i32 = 0.wrapping_add(1);",
+                "let b: u32 = 1.wrapping_add(1);",
+            ],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_per_site_ty_delta_vetoes() {
+        let out = joint(
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+            &[
+                "let a: u64 = 0.wrapping_add(1);",
+                "let b: u32 = 1.wrapping_add(1);",
+            ],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_divergent_plus_vetoes() {
+        let out = joint(
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+            &[
+                "let a: i32 = 0.wrapping_add(1);",
+                "let b: u32 = 1.wrapping_add(2);",
+            ],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_receiver_mismatch_vetoes() {
+        // Plus receiver is not the minus init at one site: no ordered
+        // correspondence (SPEC 15.7) — stays ordinary.
+        let out = joint(
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+            &[
+                "let a: i32 = 0.wrapping_add(1);",
+                "let b: u32 = 9.wrapping_add(1);",
+            ],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_untyped_minus_vetoes() {
+        // Minus-untyped classes belong to the type-add slice.
+        let out = joint(
+            &["let a = f(x);", "let b = f(y);"],
+            &["let a: u32 = f(x);", "let b: u32 = f(y);"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_all_identical_declines_for_verbatim() {
+        let out = joint(
+            &["let a: u32 = 0;", "let a: u32 = 0;"],
+            &[
+                "let a: u32 = 0.wrapping_add(1);",
+                "let a: u32 = 0.wrapping_add(1);",
+            ],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_single_vetoes() {
+        let out = joint(&["let a: i32 = 0;"], &["let a: i32 = 0.wrapping_add(1);"]);
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn joint_no_rewrite_vetoes() {
+        let out = joint(
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+            &["let a: i32 = 0;", "let b: u32 = 1;"],
+        );
         assert_eq!(out, None, "got: {out:?}");
     }
 

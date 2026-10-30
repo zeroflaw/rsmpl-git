@@ -6171,7 +6171,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -6361,6 +6361,27 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   (macro/string twins never count — the engine never enters them;
   nested matches count outer-only, exactly like the real sweep
   rewrites). Detector name `type_sweep`.
+- Joint let-template sweep (WI-5 slice 1, third anti-unification
+  shape): N ≥ 2 `-`/`+` pairs, each a complete single-line
+  typed `let PAT: T = INIT;` → `let PAT: T = INIT′;` — the pattern and
+  ascribed type token-equal per site (a per-site pat/ty delta belongs
+  to another detector, never guessed here) and hetero across sites
+  (bound as inferred `P0`/`T0`, no declarations, SPEC 15.8), while the
+  initializer carries one uniform delta: either a uniform concrete
+  rewrite or one `E0` hole with a uniform structural wrapper on the
+  plus side (method call with varying receiver, e.g.
+  `- let P0: T0 = E0;` / `+ let P0: T0 = E0.wrapping_add(1);`; bare
+  call with one varying argument; binary with one varying side — each
+  with ≥ 1 literal anchor and exactly one `E0` occurrence, ordered
+  value correspondence per SPEC 15.7). Guards: ascriptions on both
+  sides (minus-untyped classes stay with the type-addition sweep;
+  per-site-preserved-init classes stay with the type sweep — disjoint
+  by construction); no attributes, no `let-else`, no unbound/dropped
+  holes (T442 posture); all-identical classes stay for the tighter
+  verbatim sweep (T422 precedent). Pre-image totality is the real-pair
+  engine-count check (`template_pair_holds`): the emitted minus must
+  match exactly N typed lets in the pre-image — an untouched twin
+  vetoes. Detector name `let_template`.
 - Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
   1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
   qself, and generic args decline, same gates as the qualified sweep)
@@ -6873,8 +6894,7 @@ bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 `19`, `21`, `22`); heterogeneous sites no template fires on stay
  ordinary (`12` statement
- sequences — owned by WI-5, `24` divergent `let` shapes — owned by WI-5
- joint-let, `14` divergent single-file renames whose
+ sequences — owned by WI-5c, `14` divergent single-file renames whose
  deltas never share one intent, `30` trait decl/def pairs as WI-7
  grouping territory); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only

@@ -11,7 +11,9 @@
 //! evolving slot is uniform-concrete by construction) and lives here
 //! per the IMPROVE.md WI-4 detector layout.
 
-use super::antiunify::{antiunify_let_type_add, antiunify_types, TypedSite};
+use super::antiunify::{
+    antiunify_let_template, antiunify_let_type_add, antiunify_types, TypedSite,
+};
 use super::unique_rule;
 use quote::ToTokens;
 use syn::spanned::Spanned;
@@ -85,6 +87,39 @@ pub(crate) fn try_type_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, "type_sweep");
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
+/// N-site (N ≥ 2) joint let-template sweep (WI-5 slice 1): typed→typed
+/// `let` pairs with per-site preserved pattern and type plus one
+/// uniform initializer delta (e.g. `let P0: T0 = E0;` →
+/// `let P0: T0 = E0.wrapping_add(1);` with hetero `P0`/`T0`/`E0`
+/// across sites). Strictly generalizes the type-add-only slice (which
+/// owns minus-untyped classes) and the type slice (which owns
+/// per-site-preserved-init classes) — disjoint from both by
+/// construction: this needs ascriptions on both sides plus a per-site
+/// init delta. Totality is the real-pair engine-count check
+/// (`template_pair_holds`): the emitted minus must match exactly N
+/// typed lets in the pre-image — an untouched twin vetoes, exactly
+/// like the real sweep rewrites. Detector name `let_template`.
+pub(crate) fn try_let_template_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    let (minus_tpl, plus_tpl) = antiunify_let_template(minuses, pluses)?;
+    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "let_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
     Some(hunk)
@@ -1073,6 +1108,100 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n-fn alpha(x: i32) -> i32 {\n-fn alpha(y: String) {\n+fn beta(x: i32) {\n+fn beta(y: String) {\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    const PRE_JOINT: &str =
+        "fn f() {\n    let a: i32 = 0;\n    let b: u32 = 1;\n    let c: i64 = 2;\n}\n";
+
+    fn three_joint_body() -> String {
+        "@@ -1,4 +1,4 @@\n fn f() {\n-    let a: i32 = 0;\n-    let b: u32 = 1;\n-    let c: i64 = 2;\n+    let a: i32 = 0.wrapping_add(1);\n+    let b: u32 = 1.wrapping_add(1);\n+    let c: i64 = 2.wrapping_add(1);\n }\n"
+            .to_string()
+    }
+
+    #[test]
+    fn joint_let_wrapping_fires() {
+        // WI-5 slice 1: hetero pat/ty across sites ride P0/T0, the lit
+        // inits ride E0, and the uniform `.wrapping_add(1)` delta is the
+        // anchor. Consumed lines must vanish; diet holes need no
+        // declarations (SPEC 15.8).
+        let raw = section("f.rs", &three_joint_body());
+        let pre = pre_map(&[("f.rs", PRE_JOINT)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(out.contains("- let P0: T0 = E0;\n"), "got: {out}");
+        assert!(
+            out.contains("+ let P0: T0 = E0.wrapping_add(1);\n"),
+            "got: {out}"
+        );
+        assert!(
+            !out.contains("-    let a: i32"),
+            "changed lines must be consumed, got: {out}"
+        );
+        assert!(!out.contains("# pat"), "got: {out}");
+        assert!(!out.contains("# type"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
+    }
+
+    #[test]
+    fn joint_let_extra_twin_vetoes() {
+        // Totality: an untouched fourth typed `let` in the pre-image
+        // would be silently rewritten — the sweep vetoes.
+        let raw = section("f.rs", &three_joint_body());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn f() {\n    let a: i32 = 0;\n    let b: u32 = 1;\n    let c: i64 = 2;\n    let guard: u8 = 9;\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn joint_let_untyped_minus_vetoes() {
+        // Minus-untyped classes belong to the type-add slice (which
+        // runs first and keeps them); a direct call proves this
+        // detector declines them.
+        let minuses = ["let a = f(x);", "let b = f(y);"];
+        let pluses = ["let a: u32 = f(x);", "let b: u32 = f(y);"];
+        assert!(super::try_let_template_sweep(
+            &minuses,
+            &pluses,
+            "f.rs",
+            None,
+            &[1, 2],
+            &mut Vec::new()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn joint_let_per_site_pat_delta_vetoes() {
+        // A per-site pattern rename is not a joint template (rename
+        // detectors own it) — never guessed here.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn f() {\n-    let a: i32 = 0;\n-    let b: u32 = 1;\n+    let ax: i32 = 0.wrapping_add(1);\n+    let b: u32 = 1.wrapping_add(1);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn joint_let_divergent_plus_vetoes() {
+        // Different per-site deltas are not one uniform delta.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn f() {\n-    let a: i32 = 0;\n-    let b: u32 = 1;\n+    let a: i32 = 0.wrapping_add(1);\n+    let b: u32 = 1.wrapping_add(2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn joint_let_single_vetoes() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n fn f() {\n-    let a: i32 = 0;\n+    let a: i32 = 0.wrapping_add(1);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }

@@ -148,6 +148,16 @@ pub(crate) fn run_pair_chain(
     {
         return Some((type_sweep, "type_sweep"));
     }
+    // WI-5 slice 1: joint let template (typed→typed `let` pairs with
+    // per-site preserved pat/ty plus one uniform init delta) — after
+    // the type sweep (that owns per-site-preserved-init classes; this
+    // owns per-site init deltas), before the verbatim stage. Disjoint
+    // from both let slices by construction.
+    if let Some(joint) =
+        super::try_let_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((joint, "let_template"));
+    }
     // WI-1c: nested same-callee full-strip fold (`Box::new(Box::new(x))`
     // → `x`, `# repeat`) — after the type sweep (those own whole-statement
     // templates; this owns call-spine strips), before the verbatim stage

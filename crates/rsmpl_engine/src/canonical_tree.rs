@@ -45,6 +45,10 @@ pub fn canonicalize_with_tree(
     // WI-1b: spell-normalize first so the apply below (hence the site
     // spans) reflects the concrete form both legs share.
     normalize_symbol_spelling(&mut patch);
+    // WI-5 slice 1: diet-rename declared let-metavars (`P`/`T`/`E`) to
+    // the positional diet the inferrer emits (`P0`/`T0`/`E0`), same
+    // posture as the `# expr` rename inside symbol hunks.
+    normalize_let_diet_spelling(&mut patch);
     let mut files: HashMap<String, String> = pre.clone();
     for sec in &patch.files {
         if files.contains_key(&sec.target_path) {
@@ -159,6 +163,156 @@ fn normalize_symbol_spelling(patch: &mut rsmpl_patch::Patch) {
                     return false;
                 }
                 true
+            });
+        }
+    }
+}
+
+/// WI-5 slice 1 diet spelling: a single `-`/`+` `let` pair carrying
+/// declared `# pat`/`# type`/`# expr` metavars is rewritten to the
+/// positional diet the inferrer emits (`P` → `P0`, `T` → `T0`,
+/// `E` → `E0` in first-appearance order per kind), and those
+/// declarations are dropped. Lets the authored long spelling and the
+/// inferred diet share one tree-aware canonical form (the `24-pat-sweep`
+/// leg). All-or-nothing per hunk, mirroring the symbol-hunk posture:
+/// symbol hunks, multi-pair bodies, non-`let` lines, and any token
+/// collision leave the hunk byte-identical so error shapes never
+/// silently heal.
+fn normalize_let_diet_spelling(patch: &mut rsmpl_patch::Patch) {
+    use rsmpl_patch::{Directive, MetavarKind};
+    for sec in &mut patch.files {
+        for hunk in &mut sec.hunks {
+            let rsmpl_patch::Hunk::Rsmpl(r) = hunk else {
+                continue;
+            };
+            if r.directives
+                .iter()
+                .any(|d| matches!(d, Directive::Symbol { .. }))
+            {
+                continue;
+            }
+            let mut minus: Vec<&str> = Vec::new();
+            let mut plus: Vec<&str> = Vec::new();
+            for l in &r.lines {
+                if l.is_removal() {
+                    minus.push(l.text.as_str());
+                } else if l.is_addition() {
+                    plus.push(l.text.as_str());
+                }
+            }
+            if minus.len() != 1 || plus.len() != 1 {
+                continue;
+            }
+            if !minus[0].trim_start().starts_with("let ")
+                || !plus[0].trim_start().starts_with("let ")
+            {
+                continue;
+            }
+            let mut pats: Vec<String> = Vec::new();
+            let mut tys: Vec<String> = Vec::new();
+            let mut exprs: Vec<String> = Vec::new();
+            for d in &r.directives {
+                if let Directive::MetaVar { kind, names } = d {
+                    let bucket = match kind {
+                        MetavarKind::Pat => &mut pats,
+                        MetavarKind::Type => &mut tys,
+                        MetavarKind::Expr => &mut exprs,
+                        _ => continue,
+                    };
+                    for n in names {
+                        if !bucket.contains(n) {
+                            bucket.push(n.clone());
+                        }
+                    }
+                }
+            }
+            if pats.is_empty() && tys.is_empty() && exprs.is_empty() {
+                continue;
+            }
+            // Positional order per kind: first appearance across the
+            // pattern lines (minus, then plus — document order).
+            let order_names = |names: &[String], lines: &[rsmpl_patch::BodyLine]| {
+                let mut positioned: Vec<(usize, usize, String)> = Vec::new();
+                for (order, l) in lines.iter().enumerate() {
+                    if !(l.is_removal() || l.is_addition()) {
+                        continue;
+                    }
+                    for n in names {
+                        if positioned.iter().any(|(_, _, m)| m == n) {
+                            continue;
+                        }
+                        if let Some(pos) = first_token_pos(&l.text, n) {
+                            positioned.push((order, pos, n.clone()));
+                        }
+                    }
+                }
+                positioned.sort();
+                let mut ordered: Vec<String> = positioned.into_iter().map(|(_, _, n)| n).collect();
+                for n in names {
+                    if !ordered.contains(n) {
+                        ordered.push(n.clone());
+                    }
+                }
+                ordered
+            };
+            let mut table: Vec<(String, String)> = Vec::new();
+            for (names, prefix) in [(&pats, "P"), (&tys, "T"), (&exprs, "E")] {
+                for (i, n) in order_names(names, &r.lines).iter().enumerate() {
+                    table.push((n.clone(), format!("{prefix}{i}")));
+                }
+            }
+            // Collision: a target present as a bare token that is not
+            // itself renamed away vetoes the hunk rewrite.
+            let sources: Vec<&str> = table.iter().map(|(s, _)| s.as_str()).collect();
+            let mut collides = false;
+            for l in r.lines.iter() {
+                if !(l.is_removal() || l.is_addition()) {
+                    continue;
+                }
+                for (s, t) in &table {
+                    if s != t && has_bare_token(&l.text, t) && !sources.contains(&t.as_str()) {
+                        collides = true;
+                        break;
+                    }
+                }
+                if collides {
+                    break;
+                }
+            }
+            if collides {
+                continue;
+            }
+            for l in r.lines.iter_mut() {
+                if !(l.is_removal() || l.is_addition()) {
+                    continue;
+                }
+                l.text = replace_token_table(&l.text, &table);
+            }
+            // Every renamed-away name must be gone.
+            let mut leftover = false;
+            for (s, t) in &table {
+                if s != t
+                    && r.lines
+                        .iter()
+                        .any(|l| (l.is_removal() || l.is_addition()) && has_bare_token(&l.text, s))
+                {
+                    leftover = true;
+                    break;
+                }
+            }
+            if leftover {
+                continue;
+            }
+            r.directives.retain(|d| match d {
+                Directive::MetaVar { kind, .. } => !matches!(
+                    kind,
+                    MetavarKind::Pat | MetavarKind::Type | MetavarKind::Expr
+                ),
+                _ => true,
+            });
+            r.raw_directives.retain(|l| {
+                let t = l.trim_start_matches('#').trim_start();
+                !(t.starts_with("pat") || t.starts_with("type") || t.starts_with("expr"))
             });
         }
     }
@@ -681,6 +835,46 @@ mod tests {
             got.contains("- crate::`Old`(E0)\n+ crate::`New`(E0)\n"),
             "got:\n{got}"
         );
+    }
+
+    const LET_PRE: &str = "fn f() {\n    let a: i32 = 0;\n    let b: u32 = 1;\n}\n";
+
+    fn authored_let_patch() -> String {
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep_pats\n# scope=file\n# allow=many\n# pat P\n# type T\n# expr E\n- let P: T = E;\n+ let P: T = E.wrapping_add(1);\n"
+            .to_string()
+    }
+
+    fn inferred_let_patch() -> String {
+        "diff --git src/lib.rs\n@@ -2,2 @@ rule=r1\n# allow=many\n- let P0: T0 = E0;\n+ let P0: T0 = E0.wrapping_add(1);\n"
+            .to_string()
+    }
+
+    #[test]
+    fn let_diet_spelling_unifies() {
+        // WI-5 slice 1: authored long spelling (`P`/`T`/`E` + scope=file
+        // sweep) vs inferred diet (`P0`/`T0`/`E0` + ranged) share one
+        // tree-aware form (the `24-pat-sweep` leg).
+        let p = pre(&[("src/lib.rs", LET_PRE)]);
+        let a = canonicalize_with_tree(&authored_let_patch(), &p).unwrap();
+        let b = canonicalize_with_tree(&inferred_let_patch(), &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- let P0: T0 = E0;\n+ let P0: T0 = E0.wrapping_add(1);\n"),
+            "diet form:\n{a}"
+        );
+        assert!(!a.contains("# pat"), "decl dropped:\n{a}");
+        assert!(!a.contains("# type"), "decl dropped:\n{a}");
+        assert!(!a.contains("# expr"), "decl dropped:\n{a}");
+    }
+
+    #[test]
+    fn let_diet_multi_pair_untouched() {
+        // Two-pair bodies are out of scope for the single-pair diet
+        // gate — the hunk survives byte-identical.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# pat P\n# expr E\n- let P = E;\n- let P = E;\n+ let P = E;\n+ let P = E;\n";
+        let p = pre(&[("src/lib.rs", LET_PRE)]);
+        let got = canonicalize_with_tree(text, &p).unwrap();
+        assert!(got.contains("# pat P"), "multi-pair untouched:\n{got}");
     }
 
     #[test]

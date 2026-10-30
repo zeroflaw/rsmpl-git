@@ -262,6 +262,7 @@ const CYCLE_OK: &[&str] = &[
     "38-method-to-method-sweep",
     "39-move-evolve",
     "27-call-sweep",
+    "24-pat-sweep",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -306,7 +307,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "12-stmt-rewrite",
-        "hetero: type+let+expr shapes stay ordinary (sequence detector is WI-4/9)",
+        "hetero: type+let+expr shapes stay ordinary (sequence detector is WI-5c)",
     ),
     (
         "13-sig-evolution",
@@ -328,10 +329,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "22-attrs-strip",
         "t375: single attributed fn re-infers ordinary",
-    ),
-    (
-        "24-pat-sweep",
-        "hetero: divergent let shapes stay ordinary (anti-unification is WI-4)",
     ),
     (
         "30-trait-sweep",
