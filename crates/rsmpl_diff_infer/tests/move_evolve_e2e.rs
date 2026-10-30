@@ -519,3 +519,94 @@ fn union_field_edited_pair_stays_ordinary() {
         out.rsmpl
     );
 }
+
+/// A long-enough type-alias body to clear the T375 byte-win guard
+/// (doc lines are attrs, so they ride with the alias item).
+fn big_alias(vis: &str, name: &str) -> String {
+    let pre = if vis.is_empty() {
+        String::new()
+    } else {
+        format!("{vis} ")
+    };
+    let mut s = String::new();
+    for i in 0..12 {
+        s.push_str(&format!("/// pad {i} for byte-win padding text\n"));
+    }
+    s.push_str(&format!("{pre}type {name} = u32;\n"));
+    s
+}
+
+#[test]
+fn type_name_change_fires_with_template_paste_and_round_trips() {
+    // WI-8 slice 4: `type Old` → `pub type New` (same aliased type)
+    // moving files compresses to a cut + type-template paste and
+    // round-trips byte-identical.
+    let minus_item = big_alias("", "Old");
+    let plus_item = big_alias("pub", "New");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind="),
+        "evolved type cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub type New = ...;"),
+        "type template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn type_aliased_type_edited_pair_stays_ordinary() {
+    // Same vis/name evolution, but the aliased type changes: two
+    // changes, not one move — stays a full delete+insert.
+    let minus_item = big_alias("", "Old");
+    let plus_item = big_alias("pub", "New").replace("type New = u32;", "type New = i64;");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_item.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        !out.rsmpl.contains("# bind="),
+        "aliased-type edits veto the type move, got:\n{}",
+        out.rsmpl
+    );
+}

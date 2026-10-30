@@ -24,6 +24,7 @@ pub(crate) enum EvolvedKind {
     Struct,
     Enum,
     Union,
+    Type,
 }
 
 #[derive(Clone)]
@@ -40,7 +41,7 @@ pub(crate) struct MovePair {
     pub(crate) item: MoveItem,
     pub(crate) plus_first: usize,
     pub(crate) plus_last: usize,
-    /// WI-8a + WI-8 slices 1-3: plus-side header evolution (kind +
+    /// WI-8a + WI-8 slices 1-4: plus-side header evolution (kind +
     /// prefix + new name); `None` for byte-identical pairs
     /// (bare-`bind` paste).
     pub(crate) evolved: Option<EvolvedPair>,

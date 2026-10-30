@@ -106,9 +106,9 @@ pub(crate) fn try_move_sweep(
                 }
             }
             if hits.is_empty() {
-                // WI-8a + WI-8 slices 1-3: no byte-identical run — try an
+                // WI-8a + WI-8 slices 1-4: no byte-identical run — try an
                 // evolved header (`fn` prefix/vis/quals/name,
-                // `struct`/`enum`/`union` vis/name) over the same body.
+                // `struct`/`enum`/`union`/`type` vis/name) over the same body.
                 for (psi, phi) in &plus_hunks {
                     let pbody = &parsed[*psi].hunks[*phi].body;
                     for (first, last, prefix, name) in
@@ -170,6 +170,22 @@ pub(crate) fn try_move_sweep(
                             plus_last: last,
                             evolved: Some(super::move_parts::EvolvedPair {
                                 kind: super::move_parts::EvolvedKind::Union,
+                                prefix,
+                                name,
+                            }),
+                        });
+                    }
+                    for (first, last, prefix, name) in
+                        super::move_evolve::find_type_evolved_hits(&item.text, pbody)
+                    {
+                        pairs.push(MovePair {
+                            minus_hunk_key: (*msi, *mhi),
+                            plus_hunk_key: (*psi, *phi),
+                            item: item.clone(),
+                            plus_first: first,
+                            plus_last: last,
+                            evolved: Some(super::move_parts::EvolvedPair {
+                                kind: super::move_parts::EvolvedKind::Type,
                                 prefix,
                                 name,
                             }),
@@ -378,7 +394,7 @@ pub(crate) fn try_move_sweep(
         };
         let paste_rule = super::unique_rule(used_rules, &format!("paste_{}", p.item.ident));
         let anchor = parsed[p.plus_hunk_key.0].hunks[p.plus_hunk_key.1].old_start;
-        // WI-8a + WI-8 slices 1-3: evolved pairs paste the plus-side
+        // WI-8a + WI-8 slices 1-4: evolved pairs paste the plus-side
         // header template (the engine splices the captured body under
         // it); identical pairs keep the bare-`bind` verbatim paste.
         let paste = match &p.evolved {
@@ -395,6 +411,9 @@ pub(crate) fn try_move_sweep(
                     }
                     super::move_parts::EvolvedKind::Union => {
                         super::move_evolve::union_evolution_template(&ev.prefix, &ev.name)
+                    }
+                    super::move_parts::EvolvedKind::Type => {
+                        super::move_evolve::type_evolution_template(&ev.prefix, &ev.name)
                     }
                 };
                 format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {tmpl}\n")
