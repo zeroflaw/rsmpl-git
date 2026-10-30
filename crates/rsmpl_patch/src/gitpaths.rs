@@ -36,6 +36,17 @@ pub fn split_git_paths(rest: &str) -> Option<Vec<String>> {
     if parts.len() == 1 {
         return Some(parts);
     }
+    // Identical duplicated bare path (`diff --git A A`, no `a/`/`b/`
+    // uniform) is the single path `A`, not a file literally named
+    // `A A` - quote (`diff --git "A A"`) to name such a file.
+    // `/dev/null` halves never collapse (create/delete keeps halves).
+    if parts.len() >= 2
+        && parts.len() % 2 == 0
+        && !parts.iter().any(|p| is_dev_null(p))
+        && parts[..parts.len() / 2] == parts[parts.len() / 2..]
+    {
+        return Some(vec![parts[..parts.len() / 2].join(" ")]);
+    }
     if parts.len() == 2 {
         // T381: a two-part split is only a two-path header when it wears
         // git's `a/`/`b/` (or `/dev/null`) uniform. Otherwise the whole

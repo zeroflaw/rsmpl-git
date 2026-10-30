@@ -930,6 +930,16 @@ mod tests {
         // Genuinely git-shaped pairs still split in two.
         let (old, new) = parse_diff_git_header("diff --git a/x b/y").unwrap();
         assert_eq!((old.as_str(), new.as_str()), ("a/x", "b/y"));
+        // Identical duplicated bare paths collapse to the single path.
+        let (old, new) = parse_diff_git_header("diff --git src/lib.rs src/lib.rs").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("src/lib.rs", "src/lib.rs"));
+        let (old, new) = parse_diff_git_header("diff --git foo foo").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("foo", "foo"));
+        let (old, new) = parse_diff_git_header("diff --git my file.rs my file.rs").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("my file.rs", "my file.rs"));
+        // Quoted duplication stays literal (escape hatch for `A A` files).
+        let (old, new) = parse_diff_git_header("diff --git \"foo foo\"").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("foo foo", "foo foo"));
     }
 
     #[test]

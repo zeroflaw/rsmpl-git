@@ -379,6 +379,7 @@ so `"caf\303\251.txt"` resolves to `café.txt`, T389).
 A two-part remainder that wears neither git's `a/`/`b/` uniform nor a
 `/dev/null` half is one single path with a space (SPEC 6 single-path form,
 T381) — never a rename of the first word into the second.
+An identical duplicated bare remainder (`diff --git A A`) is the single path `A` — quote (`diff --git "A A"`) to name a file literally containing the duplication.
 Repeated sections for one path are allowed and share original coordinates (Section 10): every `-old,len` cites the pre-patch file, never rebased by earlier sections or hunks.
 Line endings: a trailing `\r` on a hunk body line (` `/`-`/`+`) is file
 content and survives byte-exact (CRLF files round-trip unchanged,
