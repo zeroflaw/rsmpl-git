@@ -82,7 +82,7 @@ fn partial_overlap_spelling_shared_across_matchers() {
     let root = workspace_root();
     for rel in [
         "crates/rsmpl_engine/src/matcher_expr.rs",
-        "crates/rsmpl_engine/src/matcher_general.rs",
+        "crates/rsmpl_engine/src/matcher_general_apply.rs",
         "crates/rsmpl_engine/src/matcher_macro.rs",
     ] {
         let text = std::fs::read_to_string(root.join(rel)).expect("engine source readable");

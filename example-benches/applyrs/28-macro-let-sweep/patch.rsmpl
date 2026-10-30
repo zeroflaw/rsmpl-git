@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=macro_let
+# sweep
+- let v = format!("x{}", 1);
++ let v = format!("y{}", 2);

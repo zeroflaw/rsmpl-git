@@ -4,7 +4,7 @@
 //! `no match found` diagnostics. Diagnostic-only: callers fire these on the
 //! hard zero-match path, so successful and `# optional` hunks pay nothing.
 
-use rsmpl_pattern::PatternKind;
+use rsmpl_pattern::{GeneralShape, PatternKind};
 
 use crate::lines::FileState;
 /// T67 candidate preview: nearest same-kind item header (or nearest
@@ -80,9 +80,111 @@ pub(crate) fn candidate_preview(
             }
         }
     }
+    // WI-2b head-token tier: the dummy `@@ -1,1 @@` range of `# sweep`
+    // hunks makes the plain nearest-line fallback point at line 1; the
+    // pattern’s own head token points at its vocabulary instead.
+    if let Some(head) = head_token(&compiled.kind) {
+        if let Some(preview) = nearest_line_with(state, &head, old_start) {
+            return Some(cap_preview(preview.1));
+        }
+    }
     nearest_source(state, old_start).map(cap_preview)
 }
 
+/// WI-2b head-token tier: the concrete token that names what the pattern is
+/// looking for (`let` for `let` statements, the macro/callee/method name
+/// for expressions and calls). Zero-match previews for `# sweep` hunks cite
+/// a dummy `@@ -1,1 @@` range, so the plain nearest-line fallback points
+/// at line 1; this tier points at the pattern's own vocabulary instead.
+/// `None` when the pattern names nothing concrete (all-hole templates keep
+/// the old fallback).
+fn head_token(kind: &PatternKind) -> Option<String> {
+    match kind {
+        PatternKind::General {
+            shape, minus_sub, ..
+        } => match shape {
+            // The bound name (`b` in `let b = …`) is as generic as `let`; the
+            // longest concrete ident (usually the callee/macro name) locates
+            // the pattern’s line. All-hole templates keep the old fallback.
+            GeneralShape::Stmt => {
+                longest_concrete_ident(minus_sub).or_else(|| Some("let".to_string()))
+            }
+            GeneralShape::Expr | GeneralShape::Sequence | GeneralShape::Type => {
+                longest_concrete_ident(minus_sub)
+            }
+        },
+        PatternKind::Expr { minus, .. } => match minus {
+            rsmpl_pattern::ExprPatternKind::Call { callee, .. } => {
+                Some(callee.rsplit("::").next().unwrap_or(callee).to_string())
+            }
+            rsmpl_pattern::ExprPatternKind::MethodCall { method, .. } => Some(method.clone()),
+            rsmpl_pattern::ExprPatternKind::Macro { name, .. } => Some(name.clone()),
+            rsmpl_pattern::ExprPatternKind::Raw { text } => longest_concrete_ident(text),
+        },
+        PatternKind::Macro { minus_raw, .. } => longest_concrete_ident(minus_raw),
+        _ => None,
+    }
+}
+
+/// Longest ident-like token that is not a substituted placeholder
+/// (`__RSMPL_*` markers name holes, never source text). Length wins over
+/// position: the callee/macro name locates the pattern’s line better than
+/// the bound name or `let`. First wins ties in source order.
+fn longest_concrete_ident(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut best: Option<String> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_ascii_alphabetic() || c == '_' {
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let d = bytes[j] as char;
+                if d.is_ascii_alphanumeric() || d == '_' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            let tok = &text[i..j];
+            if !tok.starts_with("__RSMPL_")
+                && best.as_ref().is_none_or(|b: &String| tok.len() > b.len())
+            {
+                best = Some(tok.to_string());
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
+
+/// Nearest non-empty source line containing `token` (case-sensitive
+/// substring), by distance from `old_start`. `None` when no line names it.
+fn nearest_line_with(state: &FileState, token: &str, old_start: u32) -> Option<(u32, String)> {
+    let n = state.index.line_count() as u32;
+    let mut best: Option<(u32, u32, String)> = None; // (distance, line, excerpt)
+    for line in 1..=n {
+        let start = state.index.line_start(line)?;
+        let end = state
+            .index
+            .line_start(line + 1)
+            .unwrap_or_else(|| state.index.eof());
+        let raw = state.original.get(start..end.min(state.original.len()))?;
+        if !raw.contains(token) {
+            continue;
+        }
+        let Some(excerpt) = source_line(state, line) else {
+            continue;
+        };
+        let d = line.abs_diff(old_start);
+        if best.as_ref().is_none_or(|(bd, _, _)| d < *bd) {
+            best = Some((d, line, excerpt));
+        }
+    }
+    best.map(|(_, line, excerpt)| (line, format!("source at line {line}: '{excerpt}'")))
+}
 /// `(line, label)` item headers for the T67 kind-aware tier.
 /// T141: walks the full `Visit` tree so block-level items (fn bodies,
 /// closures, method bodies — the same scope the T23 matcher reaches) are

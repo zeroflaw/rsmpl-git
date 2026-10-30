@@ -4,6 +4,7 @@
 //! the actual target matching.
 
 use rsmpl_patch::{ErrorCode, MetavarKind, StructuredError};
+use syn::visit::{self, Visit};
 
 use crate::expr_pattern::{ExprPattern, PlaceholderMaps};
 use crate::metavar::MetavarTable;
@@ -153,6 +154,9 @@ pub(crate) fn try_general(
     let (masked, sentinels) = mask_literal_spans(&minus_rest)?;
     let (mut sub, maps) = ExprPattern::placeholder_expr(&masked, table);
     sub = unmask_literal_spans(&sub, &sentinels);
+    // WI-2b C19: macro bodies and `Verbatim` nodes never match (verbatim-only
+    // engine); fail at compile time with the exact node kind.
+    check_c19(&sub)?;
 
     let want = |s: GeneralShape| forced.is_none_or(|f| f == s);
     let has_type_decl = table.declared.iter().any(|(k, _)| {
@@ -356,6 +360,153 @@ pub(crate) fn try_general(
     Ok(None)
 }
 
+/// C19 (WI-2b): reject pattern positions the general matcher cannot bind.
+///
+/// Macro invocations match verbatim (`render_eq`, never holed), and
+/// `Verbatim` nodes have no matcher arm at all — so a declared hole inside
+/// a macro body can never bind and a `Verbatim` node can never match. Both
+/// fail here at compile time with the exact node kind instead of a
+/// match-time `no match found` that points at the file. Plus sides are not
+/// checked: writing a bound hole into a macro body is textual substitution
+/// and applies today.
+fn check_c19(minus_sub: &str) -> Result<(), StructuredError> {
+    // Shape is unset this early, so walk every root that parses (`E + 1`
+    // parses as both `Stmt` and `Expr`; the walk is idempotent). Sequence
+    // members ride the `Block` root.
+    if let Ok(stmt) = syn::parse_str::<syn::Stmt>(minus_sub) {
+        let mut walk = C19Walk::default();
+        walk.visit_stmt(&stmt);
+        if let Some(err) = walk.into_err() {
+            return Err(err);
+        }
+    }
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(minus_sub) {
+        let mut walk = C19Walk::default();
+        walk.visit_expr(&expr);
+        if let Some(err) = walk.into_err() {
+            return Err(err);
+        }
+    }
+    if let Ok(ty) = syn::parse_str::<syn::Type>(minus_sub) {
+        let mut walk = C19Walk::default();
+        walk.visit_type(&ty);
+        if let Some(err) = walk.into_err() {
+            return Err(err);
+        }
+    }
+    if let Ok(block) = syn::parse_str::<syn::Block>(&format!("{{ {minus_sub} }}")) {
+        let mut walk = C19Walk::default();
+        walk.visit_block(&block);
+        if let Some(err) = walk.into_err() {
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+/// C19 walker: records the first unbindable position (macro hole wins over
+/// `Verbatim`; either fails the compile).
+#[derive(Default)]
+struct C19Walk {
+    hole_macro: Option<String>,
+    verbatim: Option<String>,
+}
+
+impl C19Walk {
+    fn into_err(self) -> Option<StructuredError> {
+        if let Some(name) = self.hole_macro {
+            return Some(
+                StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "v1 general patterns match macro invocations verbatim (a hole inside `{name}` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites, or use an ordinary hunk"
+                    ),
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C19",
+                    "write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites, or use an ordinary hunk",
+                )),
+            );
+        }
+        if let Some(node) = self.verbatim {
+            return Some(
+                StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "v1 general patterns do not match `{node}` nodes (engine-opaque); write a concrete shape or use an ordinary hunk"
+                    ),
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C19",
+                    "write a concrete shape or use an ordinary hunk",
+                )),
+            );
+        }
+        None
+    }
+
+    /// A macro invocation carrying a declared hole (placeholder or `...`
+    /// sentinel) in its path or body can never bind; records `NAME!`.
+    fn check_macro(&mut self, path: &syn::Path, tokens: &proc_macro2::TokenStream) {
+        if self.hole_macro.is_some() {
+            return;
+        }
+        if !tokens.to_string().contains("__RSMPL_") {
+            return;
+        }
+        let name = path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_else(|| "macro".to_string());
+        self.hole_macro = Some(format!("{name}!"));
+    }
+}
+
+impl<'ast> Visit<'ast> for C19Walk {
+    fn visit_expr(&mut self, e: &'ast syn::Expr) {
+        match e {
+            syn::Expr::Verbatim(_) => {
+                if self.verbatim.is_none() {
+                    self.verbatim = Some("Verbatim expression".to_string());
+                }
+            }
+            syn::Expr::Macro(m) => self.check_macro(&m.mac.path, &m.mac.tokens),
+            _ => {}
+        }
+        // Macro token streams are opaque: never recurse into them.
+        if !matches!(e, syn::Expr::Macro(_)) {
+            visit::visit_expr(self, e);
+        }
+    }
+
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        // `Stmt::Macro` members inside block patterns (same opacity).
+        self.check_macro(&m.path, &m.tokens);
+    }
+
+    fn visit_type(&mut self, t: &'ast syn::Type) {
+        match t {
+            syn::Type::Verbatim(_) => {
+                if self.verbatim.is_none() {
+                    self.verbatim = Some("Verbatim type".to_string());
+                }
+            }
+            syn::Type::Macro(m) => self.check_macro(&m.mac.path, &m.mac.tokens),
+            _ => {}
+        }
+        if !matches!(t, syn::Type::Macro(_)) {
+            visit::visit_type(self, t);
+        }
+    }
+
+    fn visit_pat(&mut self, p: &'ast syn::Pat) {
+        if matches!(p, syn::Pat::Verbatim(_)) && self.verbatim.is_none() {
+            self.verbatim = Some("Verbatim pattern".to_string());
+        }
+        visit::visit_pat(self, p);
+    }
+}
 fn check_type_deletion(
     plus_trimmed: &str,
     build: impl FnOnce() -> PatternKind,

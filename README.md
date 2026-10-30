@@ -158,6 +158,7 @@ context would be larger, so these are lower bounds.)
 | 25-async-block-rewrite (1 hunk rewrites `E + 1`→`E + 2` inside `async` blocks over 4 sites) | 93 B / 5 ln | 363 B / 15 ln | 74% |
 | 26-stmt-interior-rewrite (1 hunk rewrites `F`→`F + 1` inside `if` bodies with an opaque `log!("hit");` over 4 sites) | 138 B / 5 ln | 616 B / 35 ln | 78% |
 | 27-fn-bound-rewrite (1 hunk rewrites `Box<dyn Fn(T) -> u8>`→`Box<dyn Fn(T) -> String>` over 4 hetero-input sites) | 105 B / 5 ln | 507 B / 15 ln | 79% |
+| 28-macro-let-sweep (1 hunk rewrites a verbatim-macro `let` over 4 sites) | 114 B / 5 ln | 379 B / 15 ln | 70% |
 
 `example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):

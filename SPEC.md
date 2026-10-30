@@ -3548,6 +3548,7 @@ case where an ordinary hunk cannot express the edit.
 | C17 | `# follow=uses` on any shape other than a fn or item rename hunk (WI-6a) | `` `# follow=uses` is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
+| C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites, or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -3575,12 +3576,12 @@ and `E.foo() + 1` route to the general matcher rather than a `foo(E)` /
 The receiver/method dot split skips `"..."` string literals (T419): a dot
 inside a string arg (`R.contains("a.b")`) never splits receiver from method.
 
-Envelope: all eleven live C1-C12 rejections above fail with
+Envelope: all twelve live C-table rejections above fail with
 `RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the
 null `range:`/`suggestion:` lines, JSON carries explicit `range: null` /
 `suggestion: null`) -- except C11/C12, which carry the set suggestion
 (like the Section 14.6 pair they share strings with). C2 is closed by
-WI-5a (now a firing shape, pinned end to end) and no longer fails.
+WI-5a (now a firing shape, pinned end to end) and no longer fails; C19 is the WI-2b macro-hole/`Verbatim` gate.
 
 #### Match-time silent rejections (surface as `no match found`)
 
@@ -6119,8 +6120,9 @@ prints one JSON object to stdout:
 - `format`, `bind`/`use` shape errors) use the same shape with a gate-name
 - `code` (`"root"`, `"kind"`, `"attributes"`, `"repeat"`, `"unbound"`,
 - `"ellipsis"`, `"tokens"`, `"format"`, `"bind"`, `"use"`, `"pattern"` for
-- the long tail); the engine boundary fills any `PatternConflict` that
-- reaches it without a specific code as `"pattern"` with the reason echoed.
+- the long tail); the engine boundary fills any `PatternConflict` without a
+- specific code as `"pattern"` with a keyed concrete template (WI-2b hygiene:
+- never the echoed reason), and any `CaptureConflict` as `"capture"` likewise.
 - Symbol/capture: symbol gates (C13, follow veto, unparseable tripwire)
 - carry `{"action":"add_directive","directive":"# fallback=syntax"}` (apply
 - verbatim, retry); unbound/duplicate captures carry

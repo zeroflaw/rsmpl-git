@@ -28,7 +28,7 @@ use crate::use_graph::follow_uses_workspace;
 use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{
-    matcher_expr, matcher_fn, matcher_general, matcher_impl, matcher_item, matcher_macro,
+    matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item, matcher_macro,
     matcher_use,
 };
 use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
@@ -767,7 +767,7 @@ fn apply_rsmpl_hunk(
             edits,
         )
         .map(|n| (n, vec![empty(); n])),
-        PatternKind::General { .. } => matcher_general::apply_general_hunk(
+        PatternKind::General { .. } => matcher_general_apply::apply_general_hunk(
             parsed,
             &state.original,
             &state.index,

@@ -101,7 +101,7 @@ fn exactly_one_elsewhere_appends_to_suggestion() {
     let content = "fn m() {\n    let x = 1;\n    foo(1);\n}\n";
     let patch =
         "diff --git src/lib.rs\n@@ -2,1 @@ rule=rename_calls\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let reason = "no match found — nearest source at line 2: 'let x = 1;'";
+    let reason = "no match found — nearest source at line 3: 'foo(1);'";
     let suggestion = "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional` — exactly one match exists elsewhere in the file; retry with `# scope=file` + `@@ -1,1 @@`";
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", content);
@@ -134,7 +134,7 @@ fn multiple_elsewhere_appends_to_suggestion() {
     let content = "fn m() {\n    let x = 1;\n    foo(1);\n    foo(2);\n}\n";
     let patch =
         "diff --git src/lib.rs\n@@ -2,1 @@ rule=rename_calls\n# expr E\n- foo(E)\n+ bar(E)\n";
-    let reason = "no match found — nearest source at line 2: 'let x = 1;'";
+    let reason = "no match found — nearest source at line 3: 'foo(1);'";
     let suggestion = "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional` — multiple matches exist outside this range; widen the range (or add `# scope=file`) and add `# allow=many` if intended";
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", content);

@@ -281,7 +281,7 @@ fn shared_spellings_rot_gate() {
     let attached_sites = [
         "crates/rsmpl_engine/src/matcher_fn.rs",
         "crates/rsmpl_engine/src/matcher_item.rs",
-        "crates/rsmpl_engine/src/matcher_general.rs",
+        "crates/rsmpl_engine/src/matcher_general_apply.rs",
     ];
     for rel in attached_sites {
         let text = std::fs::read_to_string(root.join(rel)).expect("engine source readable");

@@ -18,36 +18,30 @@ pub struct ZeroMatchHint {
     pub preview: Option<String>,
 }
 
-/// WI-3b: fill a missing machine `repair` for engine-boundary errors.
+/// WI-3b/2b: fill a missing machine `repair` for engine-boundary errors.
 ///
 /// Specific gates pin exact payloads; this covers the long tail so no
-/// `PatternConflict`/`SymbolConflict`/`CaptureConflict` is prose-only:
-/// pattern/capture conflicts gain `fix_pattern` with the reason echoed
-/// as `write_instead` (reasons already say what to write instead);
-/// symbol conflicts gain `add_directive # fallback=syntax` (every v0.1
-/// symbol gate's documented fix).
+/// `PatternConflict`/`SymbolConflict`/`CaptureConflict` is prose-only.
+/// WI-2b hygiene: the filler keys one concrete template per error class
+/// and never echoes the English reason into `write_instead` (a template
+/// the agent cannot apply is not a repair). Symbol conflicts keep the
+/// `# fallback=syntax` directive (every v0.1 symbol gate’s documented fix).
 pub fn fill_generic_repair(err: StructuredError) -> StructuredError {
     if err.repair.is_some() {
         return err;
     }
     match err.code {
-        ErrorCode::PatternConflict => {
-            let write_instead = err.message.clone();
-            err.with_repair(StructuredError::fix_pattern_repair(
-                "pattern",
-                &write_instead,
-            ))
-        }
+        ErrorCode::PatternConflict => err.with_repair(StructuredError::fix_pattern_repair(
+            "pattern",
+            "rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk",
+        )),
         ErrorCode::SymbolConflict => {
             err.with_repair(StructuredError::add_directive_repair("# fallback=syntax"))
         }
-        ErrorCode::CaptureConflict => {
-            let write_instead = err.message.clone();
-            err.with_repair(StructuredError::fix_pattern_repair(
-                "capture",
-                &write_instead,
-            ))
-        }
+        ErrorCode::CaptureConflict => err.with_repair(StructuredError::fix_pattern_repair(
+            "capture",
+            "name the capture with `# bind=Name` on the cut hunk and paste with `+ Name` plus `# use=Name`",
+        )),
         _ => err,
     }
 }
@@ -530,6 +524,20 @@ mod tests {
         assert!(fill_generic_repair(io).repair.is_none());
     }
 
+    #[test]
+    fn generic_repair_never_echoes_reason_as_template() {
+        // WI-2b hygiene: the generic filler keys a concrete template per
+        // class. A `write_instead` equal to its own reason is prose, not
+        // a repair an agent can apply.
+        for code in [ErrorCode::PatternConflict, ErrorCode::CaptureConflict] {
+            let reason = format!("some {code:?} shape rejected");
+            let filled = fill_generic_repair(StructuredError::new(code, reason.clone()));
+            let repair = filled.repair.expect("must carry repair");
+            let write_instead = repair["write_instead"].as_str().expect("template");
+            assert_ne!(write_instead, reason, "code {code:?} echoes prose");
+            assert!(!write_instead.is_empty(), "code {code:?} needs a template");
+        }
+    }
     #[test]
     fn too_many_carries_add_directive_repair() {
         let err = ensure_match_count(

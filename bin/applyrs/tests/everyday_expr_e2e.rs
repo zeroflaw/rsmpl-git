@@ -2,8 +2,8 @@
 //!
 //! Each arm is structural, never guessing: macro is token-equal like
 //! `Type::Macro`/`Stmt::Macro`; repeat/raw-addr/const recurse; `_`
-//! matches anything and binds nothing. Holes inside macros reject at
-//! match time in this slice (C19 compile lint is WI-2b).
+//! matches anything and binds nothing. Holes inside macros fail at
+//! compile time (C19); sweep misses preview the head-token line (WI-2b).
 
 mod common;
 use common::*;
@@ -184,5 +184,57 @@ fn infer_pattern_matches_any_expr_and_writes_literal() {
     assert_eq!(
         read(dir.path(), "src/lib.rs"),
         "fn f() {\n    let v = 0;\n}\n"
+    );
+}
+
+// --- C19: holes inside macros fail at compile time ---
+
+const HOLE_PATCH: &str = "diff --git src/lib.rs\n@@ -1,1 @@ rule=macro_hole\n# scope=file\n# expr E\n- let b = format!(E);\n+ let b = format!(\"y\");\n";
+
+#[test]
+fn macro_hole_fails_c19_at_compile_time() {
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", MACRO_BEFORE);
+    let out = run_stdin(dir.path(), HOLE_PATCH, &["--check"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("never binds"), "got: {stderr}");
+    assert_eq!(read(dir.path(), "src/lib.rs"), MACRO_BEFORE);
+    // JSON envelope: exact code + concrete repair template.
+    let out = run_stdin(
+        dir.path(),
+        HOLE_PATCH,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(!out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PATTERN_CONFLICT")
+    );
+    assert_eq!(v["error"]["repair"]["code"], serde_json::json!("C19"));
+    let w = v["error"]["repair"]["write_instead"].as_str().unwrap();
+    assert!(w.contains("macro body concretely"), "got: {w}");
+}
+
+// --- head-token preview: a sweep miss names the pattern's line, not line 1 ---
+
+#[test]
+fn sweep_miss_previews_head_token_line() {
+    let dir = init_repo();
+    let mut src = String::new();
+    for i in 1..=20 {
+        src.push_str(&format!("fn filler{i}() {{ let q{i} = {i}; }}\n"));
+    }
+    src.push_str("fn target() { let b = format!(\"x{}\", 1); }\n");
+    write(dir.path(), "src/lib.rs", &src);
+    const MISS: &str = "diff --git src/lib.rs\n@@ -1,1 @@ rule=miss\n# scope=file\n# allow=many\n- let b = format!(\"zzz{}\", 9);\n+ let b = format!(\"y{}\", 9);\n";
+    let out = run_stdin(dir.path(), MISS, &["--check"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("line 21"),
+        "head-token preview must name the format! line, got: {stderr}"
     );
 }

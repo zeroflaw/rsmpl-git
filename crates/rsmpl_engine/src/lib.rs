@@ -15,6 +15,7 @@ mod lines;
 mod matcher_expr;
 mod matcher_fn;
 mod matcher_general;
+mod matcher_general_apply;
 mod matcher_general_async;
 mod matcher_general_ctrl;
 mod matcher_general_tails;
