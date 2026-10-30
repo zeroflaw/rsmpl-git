@@ -1216,6 +1216,7 @@ index 1111111..2222222 100644
 An RSmPL-Git engine applies ordinary hunks using standard unified-diff semantics or delegates them to a Git-compatible patch applier. Header counts must agree with the body (validated at parse, below): old-side lines (` ` + `-`) equal `-old,len` and new-side lines (` ` + `+`) equal `+new,len`; `\ No newline` markers are neither side. The engine positions by `old_start` and verifies every context (` `) and removal (`-`) line byte-for-byte against the original file. `old_len` still bounds the file (`old_start-1+old_len` must fit, else `RSMPL_RANGE_CONFLICT`); a content mismatch (wrong `old_start` or wrong line text) fails with `GIT_HUNK_CONFLICT`. RSmPL hunks are exempt from count validation: counts are search ranges there and bodies are patterns (Section 10.4).
 
 Ordinary hunks may appear before, between, or after RSmPL hunks.
+Patch prose between hunks or sections (bare lines carrying no ` /+/-/\\` prefix) is skipped and never affects the lowering; a line starting with `@@` is always a hunk-header attempt and fails loud when malformed, while ` /+/-/\\`-leading lines are hunk body lines under standard unified-diff semantics, never prose.
 
 A file section touched only by ordinary hunks is language-agnostic
 (T137): the engine performs no Rust parse of the original file and no

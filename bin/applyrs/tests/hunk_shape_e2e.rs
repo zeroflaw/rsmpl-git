@@ -1,4 +1,5 @@
 //! T365 + T367: hunk-header shape fail-fast pins (SPEC 25.2).
+//! WI-9d-ordinary-at: inter-hunk patch-prose pins (SPEC 11).
 //!
 //! A hunk header with leading whitespace is rejected (T365: without the
 //! gate it lands in metadata and lowers to an empty no-op with exit 0),
@@ -114,4 +115,75 @@ fn well_formed_ordinary_hunk_applies() {
         read(dir.path(), "src/lib.rs"),
         "mod old;\nmod new;\n\nfn main() {}\n"
     );
+}
+
+#[test]
+fn at_prose_between_hunks_rejected() {
+    // WI-9d-ordinary-at probe A: a line starting with `@@` between hunks
+    // is a hunk-header attempt, never prose — loud, fail-safe.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,2 @@\n fn a() {}\n+fn c() {}\n@@ this is prose, not a header\n@@ -2,1 +2,2 @@\n fn b() {}\n+fn d() {}\n";
+    let (stderr, v) = check_rejected(patch, "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("invalid hunk header"), "got: {stderr}");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PARSE_CONFLICT")
+    );
+}
+
+#[test]
+fn bare_prose_between_hunks_skipped() {
+    // WI-9d-ordinary-at probes B2/F: bare prose (no ` /+/-/\\` prefix, no
+    // leading `@@`) between hunks, between sections, or trailing at EOF
+    // is skipped — the lowering is byte-identical to the prose-free
+    // patch, so prose carries no patch semantics and can never corrupt.
+    let control = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,2 @@\n fn a() {}\n+fn c() {}\n@@ -2,1 +2,2 @@\n fn b() {}\n+fn d() {}\n";
+    let with_prose = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,2 @@\n fn a() {}\n+fn c() {}\nSome prose explanation here.\n@@ -2,1 +2,2 @@\n fn b() {}\n+fn d() {}\nTrailing note at EOF.\n";
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    let checked = run_stdin(dir.path(), control, &["--check"]);
+    let prosed = run_stdin(dir.path(), with_prose, &["--check"]);
+    assert!(
+        checked.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(
+        prosed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&prosed.stderr)
+    );
+    assert_eq!(
+        checked.stdout, prosed.stdout,
+        "lowering must be prose-invariant"
+    );
+    let d1 = init_repo();
+    write(d1.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    let d2 = init_repo();
+    write(d2.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    assert!(run_stdin(d1.path(), control, &[]).status.success());
+    assert!(run_stdin(d2.path(), with_prose, &[]).status.success());
+    assert_eq!(read(d1.path(), "src/lib.rs"), read(d2.path(), "src/lib.rs"));
+    assert_eq!(
+        read(d1.path(), "src/lib.rs"),
+        "fn a() {}\nfn c() {}\nfn b() {}\nfn d() {}\n"
+    );
+}
+
+#[test]
+fn plus_prefixed_prose_is_body_line() {
+    // WI-9d-ordinary-at probe D: a `+`-leading line is an addition under
+    // Git semantics, never skippable prose — the count gate fires loud
+    // with a machine repair. Guards a future prose-skip change against
+    // silently eating `+` lines.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,2 @@\n fn a() {}\n+fn c() {}\n+NOTE: this line carries a plus prefix\n@@ -2,1 +2,1 @@\n fn b() {}\n";
+    let (stderr, v) = check_rejected(patch, "src/lib.rs", "fn a() {}\nfn b() {}\n");
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("fix_header"), "got: {stderr}");
+    assert_eq!(
+        v["error"]["repair"]["action"],
+        serde_json::json!("fix_header")
+    );
+    assert_eq!(v["error"]["repair"]["expected_old"], serde_json::json!(1));
+    assert_eq!(v["error"]["repair"]["expected_new"], serde_json::json!(3));
 }
