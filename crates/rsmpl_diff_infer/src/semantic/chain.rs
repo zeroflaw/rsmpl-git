@@ -235,7 +235,7 @@ pub(crate) fn compress_section(
             push_section_prov(
                 prov,
                 &deleted,
-                section.len(),
+                section,
                 path,
                 "delete",
                 &crate::totality::changed_old_lines(section),
@@ -313,7 +313,7 @@ pub(crate) fn compress_section(
                         push_section_prov(
                             prov,
                             &final_text,
-                            section.len(),
+                            section,
                             path,
                             "item_rename",
                             &changed,
@@ -331,7 +331,7 @@ pub(crate) fn compress_section(
                 push_section_prov(
                     prov,
                     &rename,
-                    section.len(),
+                    section,
                     path,
                     "item_rename",
                     &changed,
@@ -389,19 +389,11 @@ pub(crate) fn compress_section(
         if let Some(verbatim) =
             super::verbatim::try_verbatim_sweep(after_mac, path, used_rules, file_old, &mut fired)
         {
-            commit_prov(
-                prov,
-                &verbatim,
-                section.len(),
-                path,
-                &fired,
-                &changed,
-                file_old,
-            );
+            commit_prov(prov, &verbatim, section, path, &fired, &changed, file_old);
             return Some(verbatim);
         }
         if let Some(r) = rewritten {
-            commit_prov(prov, &r, section.len(), path, &fired, &changed, file_old);
+            commit_prov(prov, &r, section, path, &fired, &changed, file_old);
             return Some(r);
         }
         // T403: non-whole sections try the cross-hunk verbatim sweep
@@ -423,7 +415,7 @@ pub(crate) fn compress_section(
                     push_section_prov(
                         prov,
                         &final_text,
-                        section.len(),
+                        section,
                         path,
                         detector,
                         &changed,
@@ -437,15 +429,7 @@ pub(crate) fn compress_section(
             used_rules.truncate(checkpoint);
         } else if sweep.len() < section.len() {
             push_section_prov(
-                prov,
-                &sweep,
-                section.len(),
-                path,
-                detector,
-                &changed,
-                file_old,
-                checkpoint,
-                used_rules,
+                prov, &sweep, section, path, detector, &changed, file_old, checkpoint, used_rules,
             );
             return Some(sweep);
         } else {
@@ -461,7 +445,7 @@ pub(crate) fn compress_section(
         commit_prov(
             prov,
             &interior,
-            section.len(),
+            section,
             path,
             &verb_fired,
             &changed,
@@ -475,7 +459,7 @@ pub(crate) fn compress_section(
         commit_prov(
             prov,
             &verbatim,
-            section.len(),
+            section,
             path,
             &verb_fired,
             &changed,
@@ -547,7 +531,7 @@ fn compress_section_per_hunk(
             push_section_prov(
                 prov,
                 &d,
-                hunk.len(),
+                hunk,
                 path,
                 "delete",
                 &crate::totality::changed_old_lines(hunk),
@@ -577,7 +561,7 @@ fn compress_section_per_hunk(
                 push_section_prov(
                     prov,
                     &body,
-                    hunk.len(),
+                    hunk,
                     path,
                     detector,
                     &changed,

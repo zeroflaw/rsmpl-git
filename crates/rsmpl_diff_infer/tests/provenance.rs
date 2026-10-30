@@ -299,6 +299,15 @@ fn provenance_pins_per_detector_family() {
                 "case {i}: {h:?}"
             );
             assert!(h.saved_bytes > 0, "case {i}: {h:?}");
+            // WI-2d: `proven` tracks pre-image evidence exactly, and
+            // `sites_exact` tracks it except for anchor-only pastes
+            // (empty sites are exactly empty).
+            assert_eq!(h.proven, c.pre_image, "case {i}: {h:?}");
+            if h.sites.is_empty() {
+                assert!(h.sites_exact, "case {i}: {h:?}");
+            } else {
+                assert_eq!(h.sites_exact, c.pre_image, "case {i}: {h:?}");
+            }
             // Anchor-only move pastes report no sites; every other
             // hunk covers at least one changed line.
             if h.detector != "move" {

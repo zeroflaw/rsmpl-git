@@ -6128,7 +6128,8 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
 [{path}], "patch": "<RSmPL-Git patch>", "hunks": [...]}` to stdout
 (text mode prints only the patch). Each `hunks` entry carries per-hunk
 provenance for one emitted semantic hunk (empty when fully ordinary):
-`{rule, file, detector, sites, totality, saved_bytes, group}`. `detector` is
+`{rule, file, detector, sites, sites_exact, totality, proven,
+saved_bytes, group}`. `detector` is
 the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_to_fn`, `method_to_method`, `method_same_literal`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
@@ -6136,11 +6137,21 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `call_literal`, `call_peel`, `call_peel_section`,
 `call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
-range (anchor-only move pastes report `[]`). `totality` is
-`"pre-image"` when the section had pre-image text to count against,
-else `"section-visible"`. `saved_bytes` is the hunk's byte win vs the
-ordinary text it replaced (multi-hunk section rewrites split the
-section total equally so entries sum to the section delta). `group` is
+range (anchor-only move pastes report `[]`, exactly — there is
+nothing to cover, so their `sites_exact` is true). `sites_exact` is
+true when the list is proven exact (the emitted range parsed and
+either pre-image totality backs the coverage or the list is empty)
+and false when it is a covering superset (section-visible evidence or
+a missing header). `totality` is `"pre-image"` when the section had
+pre-image text to count against, else `"section-visible"`; `proven`
+is true exactly for `"pre-image"` (a `"section-visible"` entry is a
+covering guess, never proof). `saved_bytes` is the hunk's byte win:
+single-hunk firings report the exact section saving (the one hunk is
+the whole win); multi-hunk section rewrites measure each hunk — the
+ordinary native hunk bytes its old-range covers minus its own emitted
+block bytes (saturating; `0` for anchor-only pastes) — never a split
+of a section total, so those entries need not sum to the section
+delta. `group` is
 the WI-7 cross-file intent label: `""` when ungrouped, else
 `rename_Old_to_New` shared with every hunk of the same single-delta
 intent across files (rename-like detectors only — same-callee,
@@ -6155,9 +6166,9 @@ name must cost strictly less than the group's `saved_bytes` sum, else
 that group falls back to positional `rN` names while keeping the
 `group` label. `version`
 stays `1` (additive, per D.2 rules). Budget (bytes beyond `patch`):
-≈100 B fixed + ≈130 B per `hunks[]` entry + ≈5 B per covered site
+≈100 B fixed + ≈165 B per `hunks[]` entry + ≈5 B per covered site
 (`sites` arrays grow with matches — evidence, not overhead).
-Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
+Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
 `T` = total sites). No relative % bound, same rationale as D.2.
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,

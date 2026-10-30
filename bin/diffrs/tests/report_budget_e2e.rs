@@ -1,6 +1,6 @@
-//! WI-2 follow-up: absolute `diffrs --format json` hunks-budget pin.
+//! WI-2d: absolute `diffrs --format json` hunks-budget pin.
 //!
-//! SPEC D.4 budget: bytes beyond `patch` ≤ `150 + 150·H + 10·T`
+//! SPEC D.4 budget: bytes beyond `patch` ≤ `150 + 190·H + 10·T`
 //! (`H` = hunks, `T` = total sites). Multi-file fixture so the pin
 //! applies on a realistic report, not a toy single hunk.
 
@@ -104,7 +104,7 @@ fn json_hunks_within_absolute_budget() {
         .map(|e| e["sites"].as_array().map(|a| a.len()).unwrap_or(0))
         .sum();
     let overhead = stdout.len() - patch.len();
-    let budget = 150 + 150 * h + 10 * t;
+    let budget = 150 + 190 * h + 10 * t;
     assert!(
         overhead <= budget,
         "overhead {overhead} B exceeds budget {budget} B (H={h} T={t}): {v}"
@@ -114,6 +114,8 @@ fn json_hunks_within_absolute_budget() {
         assert!(e.get("file").is_some(), "got: {v}");
         assert!(e.get("detector").is_some(), "got: {v}");
         assert!(e.get("totality").is_some(), "got: {v}");
+        assert!(e.get("proven").is_some(), "got: {v}");
+        assert!(e.get("sites_exact").is_some(), "got: {v}");
         assert!(e.get("saved_bytes").is_some(), "got: {v}");
     }
 }
