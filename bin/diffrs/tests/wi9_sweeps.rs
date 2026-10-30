@@ -1,10 +1,11 @@
-//! WI-9a/WI-9b1/WI-9b2b shape pins for
-//! `test-fixtures/diffrs/{27,82,83,84,85,86,87,88}-*`: same-name
+//! WI-9a/WI-9b1/WI-9b2b/WI-9b2 shape pins for
+//! `test-fixtures/diffrs/{27,82,83,84,85,86,87,88,89}-*`: same-name
 //! macro-interior sweep (27 fires hetero, 82 bracket fires
 //! delimiter-exact, 83 hetero fire with a stable long arg, 84
 //! single-site stays ordinary, 85 concrete twin recovery, 86 nested
 //! `env!` extraction, 87 brace fires delimiter-exact, 88 nested
-//! multi-token raw-span fire). Split out of
+//! multi-token raw-span fire, 89 cross-site hetero grouping with a
+//! varying stable arg). Split out of
 //! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
 //! (helpers duplicated, not shared — T246 precedent). The generic
 //! native → semantic → native round-trip for these fixtures already
@@ -228,7 +229,44 @@ fn wi9_macro_interior_fires() {
     );
     assert!(
         semantic.len() < native_input.len(),
-        "interior sweep must beat native bytes ({} vs {})",
+        "nested sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi9_macro_hetero_xsite_fires() {
+    // Fixture 89 (WI-9b2 cross-site hetero): two singleton-class pairs
+    // sharing path/arity/delta but varying in the stable arg
+    // (`alpha_context` vs `beta_context`) group cross-site to one
+    // hetero `# allow=many` hunk — the identical-pair classes veto
+    // these as N=1 each, so without the secondary pass the section
+    // stays ordinary.
+    let (native_input, semantic) = convert_fixture("89-macro-hetero-xsite-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "cross-site hetero must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# macro"),
+        "plain `!` routing, no directive, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- check!(E0, FIRST_MODE)\n"),
+        "xsite hetero minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ check!(E0, SECOND_MODE)\n"),
+        "xsite hetero plus missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    check!(alpha_context"),
+        "xsite minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "xsite sweep must beat native bytes ({} vs {})",
         semantic.len(),
         native_input.len()
     );

@@ -13,7 +13,7 @@ use super::{ident_len, unique_rule};
 /// the whole line as `Expr::Macro`, else unwrap a `let`-init macro
 /// (T449 precedent — `let x = old!(a);` matches `- old!(...)`,
 /// probed). `let-else` never qualifies.
-fn parse_macro_expr(line: &str) -> Option<syn::ExprMacro> {
+pub(crate) fn parse_macro_expr(line: &str) -> Option<syn::ExprMacro> {
     let mut text = line.trim();
     if text.is_empty() {
         return None;
@@ -130,7 +130,7 @@ fn parse_macro_pair(old_line: &str, new_line: &str) -> Option<(String, String)> 
 /// `None` for leading `::` (no engine spelling, probed — declined like
 /// qualified calls), segment-count mismatch is checked by the caller via
 /// exact rendered-path equality, and generic args.
-fn macro_path(mac: &syn::ExprMacro) -> Option<String> {
+pub(crate) fn macro_path(mac: &syn::ExprMacro) -> Option<String> {
     if mac.mac.path.leading_colon.is_some() {
         return None;
     }
@@ -155,7 +155,7 @@ fn macro_path(mac: &syn::ExprMacro) -> Option<String> {
 }
 
 /// Open delimiter character of a macro invocation (`(` / `[` / `{`).
-fn macro_delim_open(mac: &syn::ExprMacro) -> Option<char> {
+pub(crate) fn macro_delim_open(mac: &syn::ExprMacro) -> Option<char> {
     match mac.mac.delimiter {
         syn::MacroDelimiter::Paren(_) => Some('('),
         syn::MacroDelimiter::Bracket(_) => Some('['),
@@ -417,25 +417,91 @@ pub(crate) fn try_macro_interior_section(
             sites: member_sites(members, &pair_old),
         });
     }
+    // WI-9b2 cross-site hetero groups: leftover balanced pairs (not
+    // claimed by any passing identical/nested group) keyed by
+    // (path, delimiter, arity); the template holes stable positions
+    // that vary across sites while the literal delta stays shared.
+    // No stranded claims (nested precedent); per-group byte sanity
+    // keeps a losing candidate from flipping the section-global T375
+    // into a whole-sweep veto.
+    {
+        let claimed: std::collections::HashSet<usize> = passing
+            .iter()
+            .flat_map(|g| g.members.iter().copied())
+            .collect();
+        let mut xclasses: Vec<((String, char, usize), Vec<usize>)> = Vec::new();
+        for (idx, (.., m, p)) in pairs.iter().enumerate() {
+            if claimed.contains(&idx) {
+                continue;
+            }
+            let Some(key) = super::macro_hetero::hetero_group_key(m, p) else {
+                continue;
+            };
+            match xclasses.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, members)) => members.push(idx),
+                None => xclasses.push((key, vec![idx])),
+            }
+        }
+        for (_, members) in &xclasses {
+            if members.len() < 2 {
+                continue;
+            }
+            let lines: Vec<(&str, &str)> = members
+                .iter()
+                .map(|&i| (pairs[i].1.as_str(), pairs[i].2.as_str()))
+                .collect();
+            let Some((hm, hp)) = super::macro_hetero::hetero_group_template(&lines) else {
+                continue;
+            };
+            let raw_len: usize = members
+                .iter()
+                .map(|&i| pairs[i].1.len() + pairs[i].2.len())
+                .sum();
+            if hm.len() + hp.len() + 40 >= raw_len {
+                continue;
+            }
+            if !crate::totality::template_pair_holds(path, file_old, &hm, &hp, members.len()) {
+                continue;
+            }
+            // The template always carries ≥1 fresh hole (the builder
+            // vetoes hole-free groups), so this key — unlike the
+            // concrete identical/nested keys above — can never collide
+            // with a stranded `joined` claim: victim-release below
+            // only ever clears concrete claims.
+            passing.push(InteriorGroup {
+                key: (hm.clone(), hp.clone()),
+                minus: hm,
+                plus: hp,
+                members: members.clone(),
+                sites: member_sites(members, &pair_old),
+            });
+        }
+    }
     // Hunk-atomicity fixed point (aa23c77 soundness): a group fires only
     // if every balanced hunk holding a member pair is fully covered by
     // passing groups — otherwise the group hunk and the leftover
     // ordinary hunk would rewrite the same line (GIT_HUNK_CONFLICT
     // "overlapping edits cannot be merged"). Drop violators (releasing
-    // claims) to a fixed point. Coverage is whole-line OR nested keys
-    // (WI-9b2b: the two key domains are disjoint — nested requires the
-    // whole-line parse to fail — so one shared key list is exact).
+    // claims) to a fixed point. Coverage is by member index (whole-line
+    // identical, nested, and cross-site hetero groups share one
+    // member set — cross-site members share no single render key, so
+    // key re-derivation cannot see them; index sets are equivalent
+    // for the keyed groups because classes collect every pair with
+    // their key).
     loop {
-        let keys: Vec<(String, String)> = passing.iter().map(|g| g.key.clone()).collect();
+        let covered: std::collections::HashSet<usize> = passing
+            .iter()
+            .flat_map(|g| g.members.iter().copied())
+            .collect();
         let mut victim: Option<usize> = None;
         'scan: for (gi, g) in passing.iter().enumerate() {
             for &idx in &g.members {
                 let hj = pairs[idx].0;
-                for (jj, m2, p2) in pairs.iter() {
-                    if *jj != hj {
+                for (jj, (hj2, _, _)) in pairs.iter().enumerate() {
+                    if *hj2 != hj {
                         continue;
                     }
-                    if !pair_key_matches(m2, p2, &keys) {
+                    if !covered.contains(&jj) {
                         victim = Some(gi);
                         break 'scan;
                     }
@@ -486,16 +552,20 @@ pub(crate) fn try_macro_interior_section(
         split_leftovers[j] = Some((gm.clone(), gp.clone(), leftover));
     }
     // A hunk is covered iff balanced and every pair sits in a group
-    // (whole-line or nested — WI-9b2b unified domain).
-    let group_keys: Vec<(String, String)> = passing.iter().map(|(g, _)| g.key.clone()).collect();
+    // (identical, nested, or cross-site — one member-index domain).
+    let covered: std::collections::HashSet<usize> = passing
+        .iter()
+        .flat_map(|(g, _)| g.members.iter().copied())
+        .collect();
     let covered_hunk: Vec<bool> = hunk_balanced
         .iter()
         .enumerate()
         .map(|(i, b)| {
             *b && pairs
                 .iter()
-                .filter(|(j, _, _)| *j == i)
-                .all(|(_, m, p)| pair_key_matches(m, p, &group_keys))
+                .enumerate()
+                .filter(|(_, (j, _, _))| *j == i)
+                .all(|(jj, _)| covered.contains(&jj))
         })
         .collect();
     // WI-1b ranged bodies per group when spans are disjoint and ≤64;
@@ -577,7 +647,8 @@ pub(crate) fn try_macro_interior_section(
         let holds_pair = |(g, _): &(InteriorGroup, String)| {
             pairs
                 .iter()
-                .any(|(j, m, p)| *j == i && pair_key_matches(m, p, std::slice::from_ref(&g.key)))
+                .enumerate()
+                .any(|(jj, (j, _, _))| *j == i && g.members.contains(&jj))
                 || split_leftovers[i]
                     .as_ref()
                     .is_some_and(|(gm, gp, _)| *gm == g.key.0 && *gp == g.key.1)
@@ -611,13 +682,6 @@ fn member_sites(members: &[usize], pair_old: &[usize]) -> Vec<usize> {
         }
     }
     sites
-}
-
-/// A line pair is covered iff its whole-line OR nested interior key is
-/// among the passing groups (WI-9b2b unified hunk-atomicity domain).
-fn pair_key_matches(old_line: &str, new_line: &str, keys: &[(String, String)]) -> bool {
-    parse_macro_interior_pair(old_line, new_line).is_some_and(|k| keys.contains(&k))
-        || parse_nested_macro_pair(old_line, new_line).is_some_and(|k| keys.contains(&k))
 }
 
 /// Parse a `-`/`+` line pair as a same-name concrete macro interior:
@@ -783,7 +847,7 @@ fn parse_nested_macro_pair(old_line: &str, new_line: &str) -> Option<(String, St
 /// `"..."` split nothing). Returns `None` on unbalanced delimiters
 /// (e.g. a `'('` char literal — the engine deliberately skips `'` for
 /// lifetime ambiguity, T419); hetero then bails to concrete.
-fn split_top_spans(body: &str) -> Option<Vec<(usize, usize)>> {
+pub(crate) fn split_top_spans(body: &str) -> Option<Vec<(usize, usize)>> {
     let mut out = Vec::new();
     let mut depth = 0i32;
     let mut start = 0usize;
@@ -830,7 +894,7 @@ fn split_top_spans(body: &str) -> Option<Vec<(usize, usize)>> {
 }
 
 /// Trimmed byte range of a group span (leading/trailing whitespace excluded).
-fn trim_range(s: &str, ms: usize, me: usize) -> (usize, usize) {
+pub(crate) fn trim_range(s: &str, ms: usize, me: usize) -> (usize, usize) {
     let bytes = s.as_bytes();
     let mut ts = ms;
     while ts < me && bytes[ts].is_ascii_whitespace() {
@@ -847,7 +911,7 @@ fn trim_range(s: &str, ms: usize, me: usize) -> (usize, usize) {
 /// strings are opaque positions (WI-9 string-literal-only rule) and never
 /// hole, even when stable. Char literals and lifetimes hole like any other
 /// non-string arg under totality.
-fn is_string_arg(arg: &str) -> bool {
+pub(crate) fn is_string_arg(arg: &str) -> bool {
     let t = arg.trim();
     let u = t
         .strip_prefix("br\"")
@@ -859,7 +923,7 @@ fn is_string_arg(arg: &str) -> bool {
 }
 
 /// Scan ident-like tokens (mirrors the inference candidate scan).
-fn scan_arg_idents(text: &str) -> Vec<String> {
+pub(crate) fn scan_arg_idents(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -1039,7 +1103,7 @@ fn emit_pair(
 /// complete invocation — nothing trails the close delimiter but
 /// `;`/whitespace — so interior closers inside strings cannot mislead
 /// the `strip_suffix`.
-fn macro_raw_args(line: &str) -> Option<String> {
+pub(crate) fn macro_raw_args(line: &str) -> Option<String> {
     let bang = line.find('!')?;
     let after = line[bang + 1..].trim_start();
     let (open, close) = match after.chars().next()? {

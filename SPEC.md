@@ -6366,11 +6366,12 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   pure-insertion leftover), so sections with a pure addition still
   compress their runs. Totality is the generic engine-count probe on
   the emitted minus (the engine's own match domain). `![...]`/`!{}`
-  Mixed-delimiter pairs stay ordinary (no cross-delimiter class);
-  renames (name delta), hetero pairs (per-site differing bodies),
-  and macro-body-descent
-  edits (changed lines nested inside a macro body the pattern never
-  enters) stay ordinary for WI-9b2. WI-9b1 hetero emission: when every
+    Mixed-delimiter pairs stay ordinary (no cross-delimiter class);
+   renames (name delta) and macro-body-descent
+   edits (changed lines nested inside a macro body the pattern never
+   enters) stay ordinary; varying-across-sites hetero body rewrites
+   group cross-site (WI-9b2 below), while pairs whose delta itself
+   varies across sites stay ordinary. WI-9b1 hetero emission: when every
   stable (minus==plus) non-string arg longer than its hole name can hole
   to a shared diet `E{i}` hole (`E0` first, bumped past idents in the
   surviving literals/path so SPEC 15.7 equality never fuses hole to
@@ -6406,8 +6407,19 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    (WI-9b2 nested-raw) instead of the TokenStream grouping key
    (`1, 2` → `1 , 2`, which never occurs byte-exact in the line), so
    there is always a byte-exact substring to anchor on; slicing
-   failures fall back to the normalized rendering (single-token bodies
-   render identically either way).
+   failures fall back to the normalized rendering     (single-token bodies
+   render identically either way). WI-9b2 cross-site hetero grouping:
+   leftover balanced pairs (singletons the identical classes veto)
+   sharing path, delimiter, and arity group when every top-level arg
+   position is stable in ALL pairs (token-equal everywhere → literal;
+   varying → one shared diet `E{i}` hole, strings veto) or a delta in
+   ALL pairs with the same trimmed `(minus, plus)` everywhere
+   (→ literal delta); mixed stable/delta positions, varying deltas,
+   and arity mismatch stay ordinary. Same engine token-wise matching
+   (first-site raw separators), same real-pair totality
+   (`template_pair_holds`, N = members), same index-based hunk
+   atomicity, plus a per-group byte sanity so a losing candidate can
+   never flip the section T375 into a whole-sweep veto.
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

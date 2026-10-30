@@ -21,6 +21,7 @@ mod deletes;
 mod generalized;
 pub(crate) mod group;
 mod literal;
+mod macro_hetero;
 mod macros;
 mod methods;
 mod move_evolve;
