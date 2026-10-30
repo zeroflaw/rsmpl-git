@@ -756,6 +756,15 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     }
     let mut items = Vec::new();
     for it in &file.items {
+        // WI-mod-content-cut: the scalar `- I` cut cannot isolate an item
+        // with nested items (it would match them too — `expected one match,
+        // found N`). Content-bearing inline `mod` (≥1 nested item) and
+        // method-bearing `trait` (any trait item) stay ordinary; empty
+        // `mod {}` / `mod;` / empty trait still move. Mirrors the
+        // empty-only evolved `mod`/`trait` narrowing (WI-8 slices 7-8).
+        if !move_cut_eligible(it) {
+            continue;
+        }
         let Some(ident) = item_ident(it) else {
             continue;
         };
@@ -771,6 +780,25 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
         });
     }
     Some(items)
+}
+
+/// WI-mod-content-cut: scalar-cut eligibility for byte-identical moves.
+///
+/// The engine's `- I` cut matches nested items too (`collect_fns` recurses
+/// into inline `mod` content; `collect_impl_method_spans` collects trait
+/// methods), so cutting a content-bearing `mod` or a method-bearing
+/// `trait` always fails with `expected one match, found N`. Such items
+/// stay ordinary. Empty inline `mod {}` (`Some` empty), outline
+/// `mod;` (`None`), and empty traits stay eligible.
+fn move_cut_eligible(it: &syn::Item) -> bool {
+    match it {
+        syn::Item::Mod(m) => match &m.content {
+            None => true,
+            Some((_, inner)) => inner.is_empty(),
+        },
+        syn::Item::Trait(t) => t.items.is_empty(),
+        _ => true,
+    }
 }
 
 /// Single plain ident for named items; `None` for ident-less items
@@ -1843,5 +1871,107 @@ mod tests {
             "plus lines must be consumed, got:\n{text}"
         );
         validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_content_bearing_mod_stays_ordinary() {
+        // WI-mod-content-cut: the scalar `- I` cut cannot isolate a mod
+        // with nested items (it would match them too — `expected one match,
+        // found N`). Byte-identical content-bearing mods stay ordinary.
+        let mut inner = String::from("    fn inner() {\n");
+        for i in 0..40 {
+            inner.push_str(&format!("        let v{i} = {i};\n"));
+        }
+        inner.push_str("    }\n");
+        let modu = format!("mod bigmod {{\n{inner}}}\n");
+        let a_minus: String = modu.lines().map(|l| format!("-{l}\n")).collect();
+        let n = modu.lines().count();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = modu.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{n} @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{modu}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(
+            try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "content-bearing mod must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn move_method_bearing_trait_stays_ordinary() {
+        // WI-mod-content-cut: same shape for traits — a trait with methods
+        // matches 1 trait + N methods under `- I`, so it stays ordinary.
+        // (Evolved-trait pairing already vetoes this; WI-8 slice 8.)
+        let mut methods = String::new();
+        for m in 0..2 {
+            methods.push_str(&format!("    fn m{m}(&self) {{\n"));
+            for i in 0..20 {
+                methods.push_str(&format!("        let v{i} = {i};\n"));
+            }
+            methods.push_str("    }\n");
+        }
+        let tra = format!("trait Big {{\n{methods}}}\n");
+        let a_minus: String = tra.lines().map(|l| format!("-{l}\n")).collect();
+        let n = tra.lines().count();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = tra.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{n} @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{tra}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(
+            try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "method-bearing trait must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn move_empty_mod_still_fires() {
+        // WI-mod-content-cut: empty inline `mod {}` stays eligible. Doc
+        // padding clears the T375 byte-win guard (docs ride with the item).
+        let mut docs = String::new();
+        for i in 0..40 {
+            docs.push_str(&format!("/// doc line {i}\n"));
+        }
+        let modu = format!("{docs}mod emptymod {{}}\n");
+        let a_minus: String = modu.lines().map(|l| format!("-{l}\n")).collect();
+        let n = modu.lines().count();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = modu.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{n} @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{modu}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("empty mod must fire");
+        validated_live(&out.join(""), &pre);
+    }
+
+    #[test]
+    fn move_empty_trait_still_fires() {
+        // WI-mod-content-cut: empty trait stays eligible (same doc padding).
+        let mut docs = String::new();
+        for i in 0..40 {
+            docs.push_str(&format!("/// doc line {i}\n"));
+        }
+        let tra = format!("{docs}trait Empty {{}}\n");
+        let a_minus: String = tra.lines().map(|l| format!("-{l}\n")).collect();
+        let n = tra.lines().count();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = tra.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{n} @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{tra}")),
+            ("b.rs", "use x;\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("empty trait must fire");
+        validated_live(&out.join(""), &pre);
     }
 }

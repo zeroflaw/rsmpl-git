@@ -6874,9 +6874,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   struct, enum, trait, type, mod, union, const, static) deleted in
   one file and added in another (or the same file, or a new file) compresses
   to `# item I` + `# bind` cut hunks spliced at the consumed pure-minus hunk
-  plus `# use` paste hunks spliced after the rewritten pure-plus hunk (1b8993a:
-  four fns move files, 873 ordinary lines -> 117). v1 gates: named items only
-  (ident-less impl/use/macro stay ordinary),
+   plus `# use` paste hunks spliced after the rewritten pure-plus hunk (1b8993a:
+   four fns move files, 873 ordinary lines -> 117). v1 gates: named items only
+   (ident-less impl/use/macro stay ordinary; content-bearing inline `mod`
+   (≥1 nested item) and method-bearing `trait` (any trait item) stay
+   ordinary — the scalar `- I` cut would match the nested items too;
+   empty `mod {}` / `mod;` / empty trait still move),
   global N-minus + M-plus pairing (one cut per surviving minus item sharing
   its bind across its pastes; duplicate plus-run claims dedup to the first
   pair in document order, the rest stay ordinary), cut-file pre-image flat-ws uniqueness (twin
