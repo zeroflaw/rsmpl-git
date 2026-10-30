@@ -940,8 +940,11 @@ pub(crate) fn qualified_call_holds(
         fn visit_expr(&mut self, node: &'ast syn::Expr) {
             if let syn::Expr::Call(call) = node {
                 if let syn::Expr::Path(p) = call.func.as_ref() {
-                    if p.qself.is_none()
-                        && p.path.segments.len() >= 2
+                    // WI-7d: the full render (qself + leading + segs)
+                    // decides — a bare twin, an opposite-leading twin,
+                    // or a differing-qself twin never equals the
+                    // emitted path and never counts (probed parity).
+                    if p.path.segments.len() >= 2
                         && p.path
                             .segments
                             .iter()
@@ -968,18 +971,27 @@ pub(crate) fn qualified_call_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
-/// Canonical full-path render for totality counting: leading `::` plus
-/// bare ident joins — the same spelling the qualified/turbofish
-/// detectors emit, so detector and counter agree by construction.
+/// Canonical full-path render for totality counting: optional `qself`
+/// qualifier plus the post-qualifier segments (`<T as Tr>::a::b` — the
+/// trait path lives inside the qualifier, never doubled), with leading
+/// `::` when qualifier-free — the same spelling the
+/// qualified/turbofish detectors emit, so detector and counter agree
+/// by construction (WI-7d).
 fn render_full_path(p: &syn::ExprPath) -> String {
     let mut out = String::new();
-    if p.path.leading_colon.is_some() {
+    let mut skip = 0usize;
+    if let (Some(q), pos) = super::semantic::qualifier_of(p) {
+        out.push_str(&q);
+        out.push_str("::");
+        skip = pos;
+    } else if p.path.leading_colon.is_some() {
         out.push_str("::");
     }
     let segs: Vec<String> = p
         .path
         .segments
         .iter()
+        .skip(skip)
         .map(|s| s.ident.to_string())
         .collect();
     out.push_str(&segs.join("::"));

@@ -3585,7 +3585,7 @@ WI-5a (now a firing shape, pinned end to end) and no longer fails.
 
 | # | Trigger | Mechanism | Write instead |
 |---|---|---|---|
-| R1 | (closed by WI-5a/WI-5b/WI-6 slice 1) macro types as the general expression | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break`/`continue` (labels strict), `if` (condition, then-block as a concrete prefix plus optional trailing `...` tail, else branch — `else if` chains recurse), blocks (concrete prefix matched pairwise plus an optional trailing `...` tail absorbing the rest, Section 16.4.1; macro-statement members match only whole-shape token-equal with no holes, `fn`-item members match with a strict header plus a structural body, and any other item member must be token-equal — WI-6b), `match` (scrutinee plus equal-count arms in order; arm pattern via `# pat P` or strict, guard/body structural), `loop`/`while`/`for` (labels strict; `for` bound pattern via `# pat P`), closures (qualifiers strict; params like `P: T`; body structural), `async`/`try`/`unsafe` blocks (qualifiers strict; bodies structural — trailing `...` rides along), `yield` (optional value structural), `let` expressions (pattern plus scrutinee); anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
+| R1 | (closed by WI-5a/WI-5b/WI-6 slice 1) macro types as the general expression | bounded variant set: paths (leading `::` compares with parity and `qself` qualifiers compare token-equal — WI-7d, placeholders never bind inside `qself`), literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break`/`continue` (labels strict), `if` (condition, then-block as a concrete prefix plus optional trailing `...` tail, else branch — `else if` chains recurse), blocks (concrete prefix matched pairwise plus an optional trailing `...` tail absorbing the rest, Section 16.4.1; macro-statement members match only whole-shape token-equal with no holes, `fn`-item members match with a strict header plus a structural body, and any other item member must be token-equal — WI-6b), `match` (scrutinee plus equal-count arms in order; arm pattern via `# pat P` or strict, guard/body structural), `loop`/`while`/`for` (labels strict; `for` bound pattern via `# pat P`), closures (qualifiers strict; params like `P: T`; body structural), `async`/`try`/`unsafe` blocks (qualifiers strict; bodies structural — trailing `...` rides along), `yield` (optional value structural), `let` expressions (pattern plus scrutinee); anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
 | R2 | mixed `let-else` (only one side carries the diverge block) | agreed `let-else` matches structurally (WI-5a: both diverge blocks present, compared as `Block`s); mixed presence rejects the candidate | an ordinary Git hunk |
 | R3 | (closed by T144/T145; extended by WI-6c) placeholder path segments with generic arguments match structurally (`P<u8>`, `P::<T>` bind the segment ident and compare args via `match_generic_arg`); method-call turbofish compares structurally too (lifetimes wildcard, `_` matches any type; T176: call-shape `R.collect::<T>()` binds through the call router, not only via the general matcher; placeholder `R.M::<T>()` binds the method ident like callee `P::<T>`, and bare `R.M()` never matches a turbofish site (T177 parity, T178)). T177: a bare call/method pattern without `::<...>` never matches a turbofish site (None-vs-Some fails on both arms, general-matcher parity) — spell `::<T>` explicitly. Function-call turbofish compares structurally as well (`id::<T>` binds `T` to the target source text; concrete args compare token-normalized; the pattern must use the `::<>` form — a bare `id<T>` pattern never matches a real call). WI-6c: parenthesized `Fn(A) -> B` arguments match structurally (inputs pairwise via `match_type` so `# type T` holes bind, output via `match_return_type`; arity and output-shape mismatches reject) | cross-kind pairs (`P(T)` vs angle-bracketed `Vec<u8>`, any None/Angle/Parenthesized mix) still reject via rendered-text comparison | — |
 | R4 | `P @ sub` with a concrete head, or a composite-placeholder subpattern | WI-5a: a placeholder head `P` binds the whole target pattern text and `sub` matches recursively (a target `@` unwraps to its subpattern, otherwise the whole target pattern; single-placeholder subs bind, concrete subs compare strictly token-equal); WI-5b: the same rule applies in match-arm, `for`-loop, closure-param, and `let`-expression pattern positions; write plus sides with `P` alone (repeating the `P @ sub` spelling re-splices the whole target text and duplicates the subpattern); non-placeholder heads and composite subs fail at C8 | a whole-pattern `# pat P` placeholder or a concrete pattern |
@@ -6392,7 +6392,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    idents stay plain (the `::<` suffix defeats hole inference, so the
    pattern is already literal), as do macro names (never inferred) and
    `use` paths (backticks rejected there — the concrete path is
-   already literal).
+   already literal). A bare pattern never matches a leading-`::` site
+   (parity, probed); a bare single-segment `::foo` rename stays
+   ordinary (no prefix to anchor the win).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
@@ -6561,8 +6563,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `single_block`.
 - Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
   1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
-  qself, and generic args decline, same gates as the qualified sweep)
-  applied one or more times around a plus side that is exactly the
+  qself, and generic args decline here; narrower than the qualified
+  sweep, whose engine spelling now covers both) applied one or more times around a plus side that is exactly the
   full-strip fixpoint (peeling that callee repeatedly from the minus
   reaches the plus; partial strips are the `partial_strip` detector
   below — a `# repeat` emission would over-strip the untouched layers). Call sites inside
@@ -6585,8 +6587,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   the same 1-arg callee applied exactly one layer deeper than the plus
   (`C(C(x))` → `C(x)`; uniform depth both sides — mixed `2→1` + `3→2`
   classes stay ordinary, one template cannot spell both depths without
-  overlap ambiguity), same callee/gate discipline as the fold
-  (leading `::`, qself, generics, `&`-led sides decline;
+  overlap ambiguity), same callee discipline as the fold
+  (leading `::`, qself, generics, `&`-led sides decline — narrower than
+  the qualified sweep's engine spelling;
   all-byte-identical classes stay for verbatim, T422). `let`-init sites
   unwrap the same way. One plain `# allow=many` hunk with no `# repeat`
   (`- C(C(E0))` / `+ C(E0)` generalized to depth d, inferred hole;
@@ -6638,19 +6641,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    an uppercase method rides backticks — `&Receiver.`Old`(argv)`).
    Trailing `;`/`,` tolerated.
 - Qualified-call sweep: N ≥ 2 `-`/`+` pairs, each a multi-segment
-  (`syn`-parsed, generic-free, qself-free) `P::Old(args)` →
-  `P::New(args)` call with a shared prefix (leading `::` has no engine
-  spelling and declines), one shared last-segment delta, uniform arity,
-  and per-site token-equal args → one `# allow=many` hunk with the
-   concrete path form (`- crate::old_api(E0…)` /
-   `+ crate::new_api(E0…)`; SPEC 19.3 prefers concrete paths, no `# symbol`
-   tax). An uppercase last segment rides backticks on that segment only
-   (`` crate::`Old`(E0) `` — bare `crate::Old(E0)` leaves plus-side
-   `New` unbound; only the last segment can infer, so prefixes stay
-   verbatim). Leading-`::` and qself sites stay ordinary. Call sites inside
+  (`syn`-parsed, generic-free) `P::Old(args)` →
+  `P::New(args)` call with a shared prefix (leading `::` shared
+  verbatim — `::p::Old` renames compress; a bare pattern never
+  matches a `::` site and vice versa, probed parity), an optional
+  shared `qself` qualifier (`<T as Tr>` token-equal, never resolved —
+  divergent qualifiers never fuse), one shared last-segment delta,
+  uniform arity, and per-site token-equal args → one `# allow=many`
+  hunk with the concrete path form (`- crate::old_api(E0…)` /
+  `+ crate::new_api(E0…)`; SPEC 19.3 prefers concrete paths, no `# symbol`
+  tax). An uppercase last segment rides backticks on that segment only
+  (`` crate::`Old`(E0) `` — bare `crate::Old(E0)` leaves plus-side
+  `New` unbound; only the last segment can infer, so prefixes stay
+  verbatim). Bare single-segment `::foo` renames stay ordinary (no
+  prefix to anchor the win). Call sites inside
   `let` inits unwrap to their init call (T449 precedent). Pre-image
-  totality keys on the exact rendered path + arity (bare twins never
-  match a qualified pattern and vice versa — probed parity).
+  totality keys on the exact rendered path (qualifier + leading +
+  segments) + arity (bare twins never match a qualified pattern and
+  vice versa — probed parity).
 - Turbofish sweep: N ≥ 2 `-`/`+` pairs, one uniform variant per hunk —
   bare calls (`foo::<u8>(x)` → `bar::<u8>(x)`), qualified calls
   (`crate::old::<u8>(x)` → `crate::new::<u8>(x)`, same prefix rule as
@@ -6667,11 +6675,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `New` unbound); turbofish-suffixed method idents stay plain (the
    `::<` suffix defeats hole inference — probed literal, no backticks).
    A bare-without-turbofish
-  pattern never matches a turbofish site (R3 parity, probed), and
+   pattern never matches a turbofish site (R3 parity, probed), and
   turbo-arity is match-exact, so totality keys on callee + value arity
   + turbo arity + concrete non-hole turbo texts (`&`-receivers counted
-  conservatively). Two varying positions, per-site turbofish deltas,
-  non-type holes, and qself stay ordinary.
+  conservatively). Leading `::` compares with parity on the bare and
+  qualified variants (shared verbatim). Two varying positions,
+  per-site turbofish deltas, non-type holes, and qself-turbofish stay
+  ordinary (a `qself` qualifier with `::<…>` has no template spelling).
 - Macro-rename sweep: N ≥ 2 `-`/`+` pairs, each a bare
   (`old!(body)` → `new!(body)`) or qualified
   (`prefix::old!(body)` → `prefix::new!(body)`, one uniform class per
@@ -6908,9 +6918,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks (whole-item moves pair pure-minus/pure-plus
   twins instead — see above; verbatim stranded-join pairs excepted),
-  leading-`::`/qself call sites, non-strip
+  bare single-segment `::foo` renames and `qself`-turbofish call sites,
+  non-strip
    `&`-receiver sites, single-segment use prefixes, macro
-   interiors (same-name body rewrites), headers-only rename sections
+  interiors (same-name body rewrites), headers-only rename sections
    and renames with no compressible content (WI-7a: rename sections
    whose content hunks compress under any existing detector emit the
    semantic hunks against the new path inside the preserved rename

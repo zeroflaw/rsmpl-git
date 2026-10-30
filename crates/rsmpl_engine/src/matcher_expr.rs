@@ -19,23 +19,32 @@ use crate::lines::LineIndex;
 
 /// A call-like candidate with original byte range.
 #[derive(Debug)]
-struct Candidate<'a> {
+pub(crate) struct Candidate<'a> {
     /// Whole-expression byte range in original text.
-    start: usize,
-    end: usize,
-    start_line: u32,
-    end_line: u32,
-    callee_segments: Vec<String>,
-    arg_texts: Vec<String>,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) start_line: u32,
+    pub(crate) end_line: u32,
+    pub(crate) callee_segments: Vec<String>,
+    /// Leading `::` on the callee path (`::a::b` vs `a::b` parity).
+    pub(crate) leading: bool,
+    /// Written `qself` qualifier (`<T as Tr>` as written, without the
+    /// trailing `::`); `None` for plain paths. Compared token-equal
+    /// with position (WI-7d); placeholders never bind inside it.
+    pub(crate) qself: Option<String>,
+    /// `QSelf::position` (how many leading path segments belong to the
+    /// qualifier trait); 0 when `qself` is `None`.
+    pub(crate) qself_pos: usize,
+    pub(crate) arg_texts: Vec<String>,
     /// Source-sliced generic args per callee segment (T145 structural
     /// path); empty vec for segments without turbofish.
-    callee_arg_texts: Vec<Vec<String>>,
+    pub(crate) callee_arg_texts: Vec<Vec<String>>,
     /// Source-sliced generic args of the method turbofish (T176 structural
     /// path); `None` when the call site carries no turbofish.
-    method_turbofish: Option<Vec<String>>,
-    receiver_text: Option<String>,
-    method_text: Option<String>,
-    is_method: bool,
+    pub(crate) method_turbofish: Option<Vec<String>>,
+    pub(crate) receiver_text: Option<String>,
+    pub(crate) method_text: Option<String>,
+    pub(crate) is_method: bool,
     _expr: &'a syn::Expr,
 }
 
@@ -108,6 +117,28 @@ fn expr_path_segments(func: &syn::Expr) -> Option<Vec<String>> {
     }
 }
 
+/// Rendered `qself` qualifier of a call func (`<T as Tr>` as written,
+/// without the trailing `::`) plus `QSelf::position`. Rendered by the
+/// `matcher_spelling` sibling (WI-7d).
+fn expr_qself(func: &syn::Expr) -> Option<(String, usize)> {
+    if let syn::Expr::Path(p) = func {
+        let q = p.qself.as_ref()?;
+        return Some((
+            crate::matcher_spelling::qualifier_render(q, &p.path),
+            q.position,
+        ));
+    }
+    None
+}
+
+/// Leading `::` on a call func path.
+fn expr_leading(func: &syn::Expr) -> bool {
+    if let syn::Expr::Path(p) = func {
+        return p.path.leading_colon.is_some();
+    }
+    false
+}
+
 impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
     fn visit_expr(&mut self, node: &'ast syn::Expr) {
         match node {
@@ -116,12 +147,16 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                     if let Some((start, end)) = self.span_range(node.span()) {
                         let args: Vec<String> =
                             call.args.iter().map(|a| self.slice_opt(a.span())).collect();
+                        let (qself, qself_pos) = expr_qself(&call.func).unzip();
                         self.out.push(Candidate {
                             start,
                             end,
                             start_line: node.span().start().line as u32,
                             end_line: node.span().end().line as u32,
                             callee_segments: segs,
+                            leading: expr_leading(&call.func),
+                            qself,
+                            qself_pos: qself_pos.unwrap_or(0),
                             arg_texts: args,
                             callee_arg_texts: callee_generic_args(self, &call.func),
                             method_turbofish: None,
@@ -145,6 +180,9 @@ impl<'ast, 'b> Visit<'ast> for Collector<'ast, 'b> {
                         start_line: node.span().start().line as u32,
                         end_line: node.span().end().line as u32,
                         callee_segments: vec![m.method.to_string()],
+                        leading: false,
+                        qself: None,
+                        qself_pos: 0,
                         arg_texts: args,
                         callee_arg_texts: Vec::new(),
                         method_turbofish: method_generic_args(self, m),
@@ -1008,12 +1046,14 @@ fn match_callee(
     bindings: &mut HashMap<String, String>,
 ) -> bool {
     let reverse_map = build_reverse_map(compiled);
-    // T145: a pattern callee carrying `<...>` takes the structural path
-    // (the ident-only text comparison below could never match it — the
-    // target segments drop generic args, so `id::<T>` always failed).
-    // Callees without `<` keep the exact historical behavior.
-    if callee.contains('<') {
-        return match_callee_turbofish(
+    // T145: a pattern callee carrying a real turbofish (`::<…>` on a
+    // segment) takes the structural path (the ident-only text comparison
+    // below could never match it — the target segments drop generic
+    // args, so `id::<T>` always failed). A `qself` qualifier (`<T as
+    // Tr>::old`, no turbofish) stays on the plain path — the `<` it
+    // carries is qualification, not generic application.
+    if crate::matcher_spelling::callee_has_turbo(callee) {
+        return crate::matcher_spelling::match_callee_turbofish(
             callee,
             cand,
             &reverse_map,
@@ -1037,8 +1077,18 @@ fn match_callee(
             if got_last != want_last {
                 return false;
             }
+            // WI-7d: seeds are plain-path spellings — a seeded site must
+            // share the seed's leading spelling and carry no `qself`.
+            let seed_leading = sym_path.starts_with("::");
+            if seed_leading != cand.leading || cand.qself.is_some() {
+                return false;
+            }
             // Bind the full path text; repeated occurrences must agree.
-            let text = target_segments.join("::");
+            let text = crate::matcher_spelling::cand_full_path(
+                cand.leading,
+                &cand.qself,
+                &cand.callee_segments,
+            );
             if let Some(prev) = bindings.get(orig) {
                 return prev == &text;
             }
@@ -1046,167 +1096,46 @@ fn match_callee(
             return true;
         }
         // Plain metavariable as whole callee: binds any path.
-        let text = target_segments.join("::");
+        let text = crate::matcher_spelling::cand_full_path(
+            cand.leading,
+            &cand.qself,
+            &cand.callee_segments,
+        );
         if let Some(prev) = bindings.get(orig) {
             return prev == &text;
         }
         bindings.insert(orig.clone(), text);
         return true;
     }
-    // Concrete (possibly with `...` wildcards).
-    let pat_segments: Vec<String> = callee.split("::").map(|s| s.to_string()).collect();
+    // Concrete (possibly with `...` wildcards). Parsed forms compare
+    // leading-`::` and `qself` with parity first (WI-7d, helpers in
+    // `matcher_spelling`); the `...` path-ellipsis spelling does not
+    // parse, so it keeps the legacy split path with the same parity
+    // gates.
+    if let Some(parts) = crate::matcher_spelling::parse_callee_parts(callee) {
+        if parts.leading != cand.leading
+            || !crate::matcher_spelling::qself_key_eq(
+                (&parts.qself, parts.qself_pos),
+                (&cand.qself, cand.qself_pos),
+            )
+        {
+            return false;
+        }
+        return match_path_segments(&parts.segs, target_segments);
+    }
+    let (leading, rest) = match callee.strip_prefix("::") {
+        Some(r) => (true, r),
+        None => (false, callee),
+    };
+    if leading != cand.leading || cand.qself.is_some() {
+        return false;
+    }
+    let pat_segments: Vec<String> = rest.split("::").map(|s| s.to_string()).collect();
     match_path_segments(&pat_segments, target_segments)
 }
 
-/// T145: structural function-call turbofish comparison (mirror of T144's
-/// `MethodCall` arm). The pattern callee parses as a `syn::Path`
-/// (placeholders are ordinary idents post-substitution); target segments
-/// pair with their source-sliced generic args from collection.
-fn match_callee_turbofish(
-    pat_callee: &str,
-    cand: &Candidate<'_>,
-    reverse_map: &HashMap<String, String>,
-    symbols: &HashMap<String, String>,
-    bindings: &mut HashMap<String, String>,
-) -> bool {
-    let pat_path: syn::Path = match syn::parse_str(pat_callee) {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    if pat_path.leading_colon.is_some() {
-        return false;
-    }
-    let mut segs: Vec<syn::PathSegment> = pat_path.segments.into_iter().collect();
-    // T199: a sole symbol ident with turbofish (`Old::<u8>` with
-    // `# symbol Old=crate::old_api`) expands to its seeded path
-    // segments; seeded idents compare by full-path equality (SPEC 19.3,
-    // same rule as the bare-symbol arm) while the turbofish args compare
-    // structurally below. Symbols are pre-bound, so no binding is added.
-    // A placeholder-mapped ident keeps placeholder behavior (the bare
-    // arm checks the reverse map first, too).
-    if segs.len() == 1 {
-        let ident = segs[0].ident.to_string();
-        // A symbol name is also placeholder-substituted, so resolve
-        // through the reverse map first (mirrors the bare-symbol arm).
-        // A plain placeholder has no symbols entry and keeps its
-        // behavior.
-        if let Some(orig) = reverse_map.get(&ident) {
-            if let Some(seed) = symbols.get(orig) {
-                let seed_path: syn::Path = match syn::parse_str(seed) {
-                    Ok(p) => p,
-                    Err(_) => return false,
-                };
-                if seed_path.leading_colon.is_some() {
-                    return false;
-                }
-                let mut seed_segs: Vec<_> = seed_path.segments.into_iter().collect();
-                if let Some(last) = seed_segs.last_mut() {
-                    last.arguments = segs[0].arguments.clone();
-                }
-                segs = seed_segs;
-            }
-        }
-    }
-    if segs.len() != cand.callee_segments.len() {
-        return false;
-    }
-    for ((pat_seg, tgt_ident), tgt_args) in segs
-        .iter()
-        .zip(cand.callee_segments.iter())
-        .zip(cand.callee_arg_texts.iter())
-    {
-        if pat_seg.ident == "..." {
-            return false;
-        }
-        if let Some(orig) = reverse_map.get(&pat_seg.ident.to_string()) {
-            let prev_ok = match bindings.get(orig) {
-                Some(prev) => prev == tgt_ident,
-                None => {
-                    bindings.insert(orig.clone(), tgt_ident.clone());
-                    true
-                }
-            };
-            if !prev_ok {
-                return false;
-            }
-            // T144 bare-placeholder parity: no-arg pattern skips the
-            // args check; `P::<T>` compares structurally.
-            if matches!(pat_seg.arguments, syn::PathArguments::None) {
-                continue;
-            }
-        } else {
-            if pat_seg.ident != *tgt_ident {
-                return false;
-            }
-            if matches!(pat_seg.arguments, syn::PathArguments::None) && tgt_args.is_empty() {
-                continue;
-            }
-        }
-        let syn::PathArguments::AngleBracketed(pat_bracketed) = &pat_seg.arguments else {
-            return false;
-        };
-        // A bare `id<T>` pattern never matches a real `id::<u8>` call
-        // (it never did — a non-turbofish call site cannot exist).
-        if pat_bracketed.colon2_token.is_none() {
-            return false;
-        }
-        if pat_bracketed.args.len() != tgt_args.len() {
-            return false;
-        }
-        for (pat_arg, tgt_text) in pat_bracketed.args.iter().zip(tgt_args.iter()) {
-            if !match_callee_generic_arg(pat_arg, tgt_text, reverse_map, bindings) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// One generic argument of a pattern turbofish against target source
-/// text: single-placeholder types bind; lifetimes wildcard; everything
-/// else (concrete types, consts) compares token-normalized.
-fn match_callee_generic_arg(
-    pat_arg: &syn::GenericArgument,
-    tgt_text: &str,
-    reverse_map: &HashMap<String, String>,
-    bindings: &mut HashMap<String, String>,
-) -> bool {
-    if let Some(orig) = single_placeholder_arg_type(pat_arg, reverse_map) {
-        return match bindings.get(&orig) {
-            Some(prev) => fragments_equal(prev, tgt_text),
-            None => {
-                bindings.insert(orig, tgt_text.to_string());
-                true
-            }
-        };
-    }
-    if let syn::GenericArgument::Lifetime(_) = pat_arg {
-        if syn::parse_str::<syn::Lifetime>(tgt_text).is_ok() {
-            return true;
-        }
-    }
-    fragments_equal(&quote::quote!(#pat_arg).to_string(), tgt_text)
-}
-
-/// Declared name if `arg` is a single-placeholder type (`T` for `# type T`).
-fn single_placeholder_arg_type(
-    arg: &syn::GenericArgument,
-    reverse_map: &HashMap<String, String>,
-) -> Option<String> {
-    let syn::GenericArgument::Type(syn::Type::Path(tp)) = arg else {
-        return None;
-    };
-    if tp.qself.is_some()
-        || tp.path.segments.len() != 1
-        || !matches!(tp.path.segments[0].arguments, syn::PathArguments::None)
-    {
-        return None;
-    }
-    reverse_map
-        .get(&tp.path.segments[0].ident.to_string())
-        .cloned()
-}
-
+/// T145 turbofish matching plus the `qself`/turbofish spelling helpers
+/// live in the `matcher_spelling` sibling (WI-7d, D5 size gate).
 fn match_receiver_or_method(
     receiver_pat: &str,
     method_pat: &str,
@@ -1319,7 +1248,12 @@ fn match_method_turbofish(
         return false;
     }
     for (pat_arg, tgt_text) in pat_bracketed.args.iter().zip(tgt_args.iter()) {
-        if !match_callee_generic_arg(pat_arg, tgt_text, reverse_map, bindings) {
+        if !crate::matcher_spelling::match_callee_generic_arg(
+            pat_arg,
+            tgt_text,
+            reverse_map,
+            bindings,
+        ) {
             return false;
         }
     }

@@ -42,6 +42,7 @@ pub(crate) struct MethodFnSite {
 /// One extracted qualified-call site.
 pub(crate) struct QualSite {
     pub(crate) prefix: (bool, Vec<String>),
+    pub(crate) qself: (Option<String>, usize),
     pub(crate) old_cal: String,
     pub(crate) new_cal: String,
     pub(crate) arity: usize,
@@ -136,19 +137,28 @@ fn method_calls(expr: &syn::Expr) -> Vec<(String, String, Vec<syn::Expr>, String
     m.0
 }
 
-/// A collected qualified call: shared-prefix key, last segment, value
-/// args, and the rendered subterm text for the frame check.
-type QualCall = ((bool, Vec<String>), String, Vec<syn::Expr>, String);
+/// A collected qualified call: shared-prefix key, `qself` qualifier
+/// key, last segment, value args, and the rendered subterm text for
+/// the frame check.
+type QualCall = (
+    (bool, Vec<String>),
+    (Option<String>, usize),
+    String,
+    Vec<syn::Expr>,
+    String,
+);
 
-/// Collect multi-segment generic-free calls in source order.
+/// Collect multi-segment generic-free calls in source order (WI-7d:
+/// leading `::` and `qself` are recorded as match keys, never vetoed).
 fn qualified_calls(expr: &syn::Expr) -> Vec<QualCall> {
     struct Q(Vec<QualCall>);
     impl<'ast> Visit<'ast> for Q {
         fn visit_expr(&mut self, node: &'ast syn::Expr) {
             if let syn::Expr::Call(call) = node {
                 if let syn::Expr::Path(p) = call.func.as_ref() {
-                    if p.qself.is_none() && p.path.segments.len() >= 2 {
+                    if p.path.segments.len() >= 2 {
                         let leading = p.path.leading_colon.is_some();
+                        let (qself, qself_pos) = super::qualifier_of(p);
                         let mut generic_free = true;
                         let mut segs = Vec::new();
                         for s in p.path.segments.iter() {
@@ -158,12 +168,17 @@ fn qualified_calls(expr: &syn::Expr) -> Vec<QualCall> {
                             }
                             segs.push(s.ident.to_string());
                         }
-                        if generic_free && !leading {
+                        if generic_free {
                             let last = segs.last().cloned().unwrap_or_default();
-                            let pre = segs[..segs.len() - 1].to_vec();
+                            // Post-qualifier prefix only (the qualifier
+                            // carries the trait path — never doubled);
+                            // the qualifier itself rides the `qself` key.
+                            let skip = qself_pos.min(segs.len().saturating_sub(1));
+                            let pre = segs[skip..segs.len() - 1].to_vec();
                             if super::ident_len(&last).is_some_and(|l| l == last.len()) {
                                 self.0.push((
                                     (leading, pre),
+                                    (qself, qself_pos),
                                     last,
                                     call.args.iter().cloned().collect(),
                                     node.to_token_stream().to_string(),
@@ -378,10 +393,10 @@ pub(crate) fn extract_qual_sites(minus: &str, plus: &str) -> Option<Vec<QualSite
     }
     let mut sites = Vec::new();
     let mut pairs = Vec::new();
-    for ((o_pre, o_last, o_args, o_raw), (n_pre, n_last, n_args, n_raw)) in
+    for ((o_pre, o_q, o_last, o_args, o_raw), (n_pre, n_q, n_last, n_args, n_raw)) in
         m_calls.iter().zip(p_calls.iter())
     {
-        if o_pre != n_pre || o_args.len() != n_args.len() {
+        if o_pre != n_pre || o_q != n_q || o_args.len() != n_args.len() {
             return None;
         }
         for (a, b) in o_args.iter().zip(n_args.iter()) {
@@ -394,22 +409,23 @@ pub(crate) fn extract_qual_sites(minus: &str, plus: &str) -> Option<Vec<QualSite
         }
         sites.push(QualSite {
             prefix: o_pre.clone(),
+            qself: o_q.clone(),
             old_cal: o_last.clone(),
             new_cal: n_last.clone(),
             arity: o_args.len(),
         });
         pairs.push((o_raw.clone(), n_raw.clone()));
     }
-    let (p0, o0, n0, a0) = (
+    let (p0, q0, o0, n0, a0) = (
         sites[0].prefix.clone(),
+        sites[0].qself.clone(),
         sites[0].old_cal.clone(),
         sites[0].new_cal.clone(),
         sites[0].arity,
     );
-    if sites
-        .iter()
-        .any(|s| s.prefix != p0 || s.old_cal != o0 || s.new_cal != n0 || s.arity != a0)
-    {
+    if sites.iter().any(|s| {
+        s.prefix != p0 || s.qself != q0 || s.old_cal != o0 || s.new_cal != n0 || s.arity != a0
+    }) {
         return None;
     }
     if !frame_holds(minus, plus, &pairs) {

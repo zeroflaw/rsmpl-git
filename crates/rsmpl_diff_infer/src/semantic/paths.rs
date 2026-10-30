@@ -23,28 +23,51 @@ pub(crate) fn render_qualified(leading: bool, segs: &[String]) -> String {
     out
 }
 
-/// A parsed qualified-call delta: ((leading `::`, prefix segments),
-/// old last-segment, new last-segment, value arity).
-type QualifiedDelta = ((bool, Vec<String>), String, String, usize);
+/// A parsed qualified-call delta: shared prefix (leading `::`,
+/// `qself` qualifier, pre segments), old/new last-segment, value arity.
+struct QualDelta {
+    prefix: QualPrefix,
+    old: String,
+    new: String,
+    arity: usize,
+}
 
-/// A qualified callee: leading `::` flag, all segments, value args.
+/// Shared qualified prefix: leading `::` spelling, `qself` qualifier
+/// text + position, and pre-last-segment idents (WI-7d: leading and
+/// `qself` are shared-verbatim keys, never wildcards).
+#[derive(Clone, PartialEq, Eq)]
+struct QualPrefix {
+    leading: bool,
+    qself: Option<String>,
+    qself_pos: usize,
+    segs: Vec<String>,
+}
+
+/// A qualified callee: leading `::` flag, `qself` qualifier, all
+/// segments, value args.
 struct Qualified {
     leading: bool,
+    qself: Option<String>,
+    qself_pos: usize,
     segs: Vec<syn::PathSegment>,
     args: Vec<syn::Expr>,
 }
 
 /// Split an `Expr::Call` func path into its qualified parts; `None` for
-/// method calls, qself (WI-6 resolver territory), bare single-segment
-/// callees (the bare sweep owns those), and segment counts below 2.
+/// method calls, bare single-segment callees (the bare sweep owns
+/// those), and segment counts below 2. `qself` (`<T as Tr>`) is
+/// recorded, never resolved (SPEC 19.3 stands).
 fn qualified_parts(expr: &syn::Expr) -> Option<Qualified> {
     if let syn::Expr::Call(call) = expr {
         if let syn::Expr::Path(p) = call.func.as_ref() {
-            if p.qself.is_some() || p.path.segments.len() < 2 {
+            if p.path.segments.len() < 2 {
                 return None;
             }
+            let (qself, qself_pos) = super::qualifier_of(p);
             return Some(Qualified {
                 leading: p.path.leading_colon.is_some(),
+                qself,
+                qself_pos,
                 segs: p.path.segments.iter().cloned().collect(),
                 args: call.args.iter().cloned().collect(),
             });
@@ -71,44 +94,44 @@ pub(crate) fn try_qualified_call_sweep(
     if minuses.len() < 2 {
         return None;
     }
-    let mut prefix: Option<(bool, Vec<String>)> = None;
+    let mut prefix: Option<QualPrefix> = None;
     let mut old_cal: Option<String> = None;
     let mut new_cal: Option<String> = None;
     let mut arity: Option<usize> = None;
     let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let Some((pre, o, n, a)) = parse_qualified_pair(m, p) else {
+        let Some(delta) = parse_qualified_pair(m, p) else {
             whole_ok = false;
             break;
         };
-        if prefix.as_ref().is_some_and(|x| *x != pre) {
+        if prefix.as_ref().is_some_and(|x| *x != delta.prefix) {
             return None;
         }
-        if old_cal.as_ref().is_some_and(|c| *c != o) {
+        if old_cal.as_ref().is_some_and(|c| *c != delta.old) {
             return None;
         }
-        if new_cal.as_ref().is_some_and(|c| *c != n) {
+        if new_cal.as_ref().is_some_and(|c| *c != delta.new) {
             return None;
         }
-        if arity.is_some_and(|x| x != a) {
+        if arity.is_some_and(|x| x != delta.arity) {
             return None;
         }
-        prefix = Some(pre);
-        old_cal = Some(o);
-        new_cal = Some(n);
-        arity = Some(a);
+        prefix = Some(delta.prefix);
+        old_cal = Some(delta.old);
+        new_cal = Some(delta.new);
+        arity = Some(delta.arity);
     }
     if whole_ok {
-        let ((leading, pre_segs), old_cal, new_cal, arity) = (prefix?, old_cal?, new_cal?, arity?);
+        let (prefix, old_cal, new_cal, arity) = (prefix?, old_cal?, new_cal?, arity?);
         if old_cal == new_cal {
             return None;
         }
-        let old_path = format!("{}{old_cal}", render_prefix(leading, &pre_segs));
+        let old_path = qual_full(&prefix, &old_cal);
         if !crate::totality::qualified_call_holds(file_old, &old_path, arity, minuses, changed) {
             return None;
         }
         return Some(emit_qualified_sweep(
-            path, used_rules, leading, &pre_segs, &old_cal, &new_cal, arity, changed,
+            path, used_rules, &prefix, &old_cal, &new_cal, arity, changed,
         ));
     }
     // WI-4 sub-line fallback (mixed whole/sub lines veto;
@@ -116,7 +139,7 @@ pub(crate) fn try_qualified_call_sweep(
     if super::subline::all_identical_pairs(minuses, pluses) {
         return None;
     }
-    let mut sub_pre: Option<(bool, Vec<String>)> = None;
+    let mut sub_pre: Option<QualPrefix> = None;
     let mut sub_old: Option<String> = None;
     let mut sub_new: Option<String> = None;
     let mut sub_arity: Option<usize> = None;
@@ -124,7 +147,13 @@ pub(crate) fn try_qualified_call_sweep(
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         let sites = super::subline::extract_qual_sites(m, p)?;
         for s in &sites {
-            if sub_pre.as_ref().is_some_and(|x| *x != s.prefix) {
+            let site_prefix = QualPrefix {
+                leading: s.prefix.0,
+                qself: s.qself.0.clone(),
+                qself_pos: s.qself.1,
+                segs: s.prefix.1.clone(),
+            };
+            if sub_pre.as_ref().is_some_and(|x| *x != site_prefix) {
                 return None;
             }
             if sub_old.as_ref().is_some_and(|c| *c != s.old_cal) {
@@ -136,18 +165,18 @@ pub(crate) fn try_qualified_call_sweep(
             if sub_arity.is_some_and(|x| x != s.arity) {
                 return None;
             }
-            sub_pre = Some(s.prefix.clone());
+            sub_pre = Some(site_prefix);
             sub_old = Some(s.old_cal.clone());
             sub_new = Some(s.new_cal.clone());
             sub_arity = Some(s.arity);
             total += 1;
         }
     }
-    let ((leading, pre_segs), old_cal, new_cal, arity) = (sub_pre?, sub_old?, sub_new?, sub_arity?);
+    let (prefix, old_cal, new_cal, arity) = (sub_pre?, sub_old?, sub_new?, sub_arity?);
     if old_cal == new_cal || total < 2 {
         return None;
     }
-    let old_path = format!("{}{old_cal}", render_prefix(leading, &pre_segs));
+    let old_path = qual_full(&prefix, &old_cal);
     if !crate::totality::template_expr_holds(
         path,
         file_old,
@@ -157,18 +186,16 @@ pub(crate) fn try_qualified_call_sweep(
         return None;
     }
     Some(emit_qualified_sweep(
-        path, used_rules, leading, &pre_segs, &old_cal, &new_cal, arity, changed,
+        path, used_rules, &prefix, &old_cal, &new_cal, arity, changed,
     ))
 }
 
 /// Shared emission for the whole-line and sub-line qualified paths
 /// (identical hunks).
-#[allow(clippy::too_many_arguments)]
 fn emit_qualified_sweep(
     path: &str,
     used_rules: &mut Vec<String>,
-    leading: bool,
-    pre_segs: &[String],
+    prefix: &QualPrefix,
     old_cal: &str,
     new_cal: &str,
     arity: usize,
@@ -181,12 +208,12 @@ fn emit_qualified_sweep(
         vars.push(format!("E{i}"));
     }
     let args = vars.join(", ");
-    let new_path = format!("{}{new_cal}", render_prefix(leading, pre_segs));
+    let new_path = qual_full(prefix, new_cal);
     // WI-7-upper: an uppercase last segment infers as an `expr` hole
     // (bare `crate::Old(E0)` leaves plus-side `New` unbound) — backtick
     // the last segment only (full-path quotes are engine-rejected).
     // Lowercase paths pass through untouched (zero churn).
-    let old_path = format!("{}{old_cal}", render_prefix(leading, pre_segs));
+    let old_path = qual_full(prefix, old_cal);
     let old_path = super::shape::literal_path_last(&old_path);
     let new_path = super::shape::literal_path_last(&new_path);
     hunk.push_str(&format!("- {old_path}({args})\n+ {new_path}({args})\n"));
@@ -206,21 +233,51 @@ fn render_prefix(leading: bool, segs: &[String]) -> String {
     format!("{}::", render_qualified(leading, segs))
 }
 
-/// Parse a `-`/`+` line pair as a qualified-call rename; return
-/// ((leading, prefix segments), old last-segment, new last-segment,
-/// arity) when the delta is last-segment-only.
-fn parse_qualified_pair(old_line: &str, new_line: &str) -> Option<QualifiedDelta> {
+/// Render a full qualified path (`[<qself>::][::]<prefix>::<last>`).
+/// `qself` and leading `::` never co-occur (`syn` forbids it). The
+/// prefix holds only post-qualifier segments — the qualifier already
+/// carries the trait path, so it is never doubled.
+fn qual_full(prefix: &QualPrefix, last: &str) -> String {
+    let mut out = String::new();
+    if let Some(q) = &prefix.qself {
+        out.push_str(q);
+        out.push_str("::");
+    } else if prefix.leading {
+        out.push_str("::");
+    }
+    if !prefix.segs.is_empty() {
+        out.push_str(&prefix.segs.join("::"));
+        out.push_str("::");
+    }
+    out.push_str(last);
+    out
+}
+
+/// Parse a `-`/`+` line pair as a qualified-call rename; return the
+/// shared prefix plus old/new last-segment and arity when the delta is
+/// last-segment-only. Leading `::` must agree (shared verbatim, WI-7d)
+/// and `qself` qualifiers must be token-equal (shared, never resolved).
+fn parse_qualified_pair(old_line: &str, new_line: &str) -> Option<QualDelta> {
     let o = qualified_parts(&parse_call_expr(old_line)?)?;
     let n = qualified_parts(&parse_call_expr(new_line)?)?;
-    // Leading `::` has no engine spelling (a `::p::Old(E0)` pattern
-    // matches nothing — probed): decline, never emit.
-    if o.leading || n.leading || o.leading != n.leading || o.segs.len() != n.segs.len() {
+    if o.leading != n.leading || o.segs.len() != n.segs.len() {
         return None;
     }
-    // Shared prefix (all but last), token-equal and generic-free; the
-    // last segment carries the delta, also generic-free.
+    if o.qself != n.qself || o.qself_pos != n.qself_pos {
+        return None;
+    }
+    // Shared prefix (post-qualifier segments, all but last),
+    // token-equal and generic-free; the last segment carries the delta,
+    // also generic-free. The qualifier already pins the trait path, so
+    // qualified segments are skipped here (never doubled in emission).
     let mut pre = Vec::new();
-    for (os, ns) in o.segs.iter().zip(n.segs.iter()).take(o.segs.len() - 1) {
+    for (os, ns) in o
+        .segs
+        .iter()
+        .zip(n.segs.iter())
+        .skip(o.qself_pos)
+        .take(o.segs.len().saturating_sub(o.qself_pos + 1))
+    {
         if os.to_token_stream().to_string() != ns.to_token_stream().to_string() {
             return None;
         }
@@ -249,7 +306,17 @@ fn parse_qualified_pair(old_line: &str, new_line: &str) -> Option<QualifiedDelta
             return None;
         }
     }
-    Some(((o.leading, pre), old, new, o.args.len()))
+    Some(QualDelta {
+        prefix: QualPrefix {
+            leading: o.leading,
+            qself: o.qself,
+            qself_pos: o.qself_pos,
+            segs: pre,
+        },
+        old,
+        new,
+        arity: o.args.len(),
+    })
 }
 
 /// One turbofish argument: token text plus whether it is a plain type
@@ -289,6 +356,7 @@ fn last_turbo(seg: &syn::PathSegment) -> Option<&syn::AngleBracketedGenericArgum
 #[derive(Clone, PartialEq, Eq)]
 enum TurboShape {
     BareCall {
+        leading: bool,
         old: String,
         new: String,
     },
@@ -320,17 +388,20 @@ impl TurboShape {
         }
         let args = vars.join(", ");
         match self {
-            TurboShape::BareCall { old, new } => (
-                format!(
-                    "{old}::<{turbo}>({args})",
-                    old = super::shape::literal_callee(old)
-                ),
-                format!(
-                    "{new}::<{turbo}>({args})",
-                    new = super::shape::literal_callee(new)
-                ),
-                format!("{old}_to_{new}_turbo"),
-            ),
+            TurboShape::BareCall { leading, old, new } => {
+                let lead = if *leading { "::" } else { "" };
+                (
+                    format!(
+                        "{lead}{old}::<{turbo}>({args})",
+                        old = super::shape::literal_callee(old)
+                    ),
+                    format!(
+                        "{lead}{new}::<{turbo}>({args})",
+                        new = super::shape::literal_callee(new)
+                    ),
+                    format!("{old}_to_{new}_turbo"),
+                )
+            }
             TurboShape::QualCall {
                 leading,
                 prefix,
@@ -373,9 +444,9 @@ impl TurboShape {
         changed: &[usize],
     ) -> bool {
         match self {
-            TurboShape::BareCall { old, .. } => crate::totality::turbofish_call_holds(
+            TurboShape::BareCall { leading, old, .. } => crate::totality::turbofish_call_holds(
                 file_old,
-                old,
+                &render_qualified(*leading, std::slice::from_ref(old)),
                 val_arity,
                 turbo_arity,
                 concrete,
@@ -561,11 +632,9 @@ fn parse_turbofish_call_pair(
     if o_segs.len() != n_segs.len() || o_segs.is_empty() {
         return None;
     }
+    // WI-7d: leading `::` must agree (shared verbatim — the engine
+    // compares it with parity, so a `::`-spelled emission matches).
     if o_p.path.leading_colon != n_p.path.leading_colon {
-        return None;
-    }
-    // Leading `::` has no engine spelling (probed) — decline here too.
-    if o_p.path.leading_colon.is_some() {
         return None;
     }
     let o_last = o_segs.last()?;
@@ -579,7 +648,11 @@ fn parse_turbofish_call_pair(
             return None;
         }
         return Some((
-            TurboShape::BareCall { old, new },
+            TurboShape::BareCall {
+                leading: o_p.path.leading_colon.is_some(),
+                old,
+                new,
+            },
             o_t,
             n_t,
             o_call.args.len(),
@@ -696,15 +769,47 @@ mod tests {
     }
 
     #[test]
-    fn qualified_leading_colon_stays_passthrough() {
-        // No engine spelling: a `::p::Old(E0)` pattern matches nothing
-        // (probed `MATCH_CONFLICT`), so leading-`::` renames stay
-        // ordinary rather than emitting an unmatchable hunk.
+    fn qualified_leading_colon_fires() {
+        // WI-7d: leading `::` is a compared spelling (parity, never
+        // wildcard) — a shared-`::` rename compresses with the `::`
+        // spelled verbatim in the pattern.
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    ::framework::old_handler_name(first_argument);\n-    ::framework::old_handler_name(second_argument);\n+    ::framework::new_handler_name(first_argument);\n+    ::framework::new_handler_name(second_argument);\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    ::framework::old_handler_name(first_argument);\n    ::framework::old_handler_name(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- ::framework::old_handler_name(E0)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ ::framework::new_handler_name(E0)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn qualified_leading_colon_distractor_vetoes() {
+        // Parity both directions: a bare twin never matches a `::`
+        // pattern, but an extra `::` same-callee site is a real extra
+        // match — totality vetoes.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    ::framework::old_handler_name(first_argument);\n-    ::framework::old_handler_name(second_argument);\n+    ::framework::new_handler_name(first_argument);\n+    ::framework::new_handler_name(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    ::framework::old_handler_name(first_argument);\n    ::framework::old_handler_name(second_argument);\n    ::framework::old_handler_name(third_argument);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
     }
 
     #[test]
@@ -800,14 +905,55 @@ mod tests {
     }
 
     #[test]
-    fn qualified_qself_stays_passthrough() {
-        // The engine leniently matches qself sites against concrete
-        // patterns (probed) — the detector must not depend on that.
+    fn qualified_qself_fires() {
+        // WI-7d: `qself` qualifiers compare token-equal (never resolved)
+        // — a shared-qualifier rename compresses with the qualifier
+        // spelled verbatim in the pattern.
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    <TargetType as ConversionTrait>::old_handler_name(first_argument);\n-    <TargetType as ConversionTrait>::old_handler_name(second_argument);\n+    <TargetType as ConversionTrait>::new_handler_name(first_argument);\n+    <TargetType as ConversionTrait>::new_handler_name(second_argument);\n }\n",
         );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    <TargetType as ConversionTrait>::old_handler_name(first_argument);\n    <TargetType as ConversionTrait>::old_handler_name(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- <TargetType as ConversionTrait>::old_handler_name(E0)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ <TargetType as ConversionTrait>::new_handler_name(E0)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn qualified_qself_mismatch_stays_passthrough() {
+        // Divergent qualifiers are different prefixes — never fused.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    <TargetType as ConversionTrait>::old_handler_name(first_argument);\n-    <OtherType as ConversionTrait>::old_handler_name(second_argument);\n+    <TargetType as ConversionTrait>::new_handler_name(first_argument);\n+    <OtherType as ConversionTrait>::new_handler_name(second_argument);\n }\n",
+        );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn qualified_qself_extra_site_vetoes() {
+        // A third same-qualifier same-callee site is a real extra match.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    <TargetType as ConversionTrait>::old_handler_name(first_argument);\n-    <TargetType as ConversionTrait>::old_handler_name(second_argument);\n+    <TargetType as ConversionTrait>::new_handler_name(first_argument);\n+    <TargetType as ConversionTrait>::new_handler_name(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    <TargetType as ConversionTrait>::old_handler_name(first_argument);\n    <TargetType as ConversionTrait>::old_handler_name(second_argument);\n    <TargetType as ConversionTrait>::old_handler_name(third_argument);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
     }
 
     #[test]
@@ -908,6 +1054,30 @@ mod tests {
         validated_live(&out, &pre);
         assert!(
             out.contains("- crate::old_deserializer_name::<u8>(E0)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn turbofish_leading_colon_fires() {
+        // WI-7d: leading `::` compares with parity on the turbofish
+        // shapes too — a shared-`::` rename compresses verbatim.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    ::crate::old_deserializer_name::<u8>(first_argument);\n-    ::crate::old_deserializer_name::<u8>(second_argument);\n+    ::crate::new_deserializer_name::<u8>(first_argument);\n+    ::crate::new_deserializer_name::<u8>(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    ::crate::old_deserializer_name::<u8>(first_argument);\n    ::crate::old_deserializer_name::<u8>(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- ::crate::old_deserializer_name::<u8>(E0)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ ::crate::new_deserializer_name::<u8>(E0)\n"),
             "got: {out}"
         );
     }

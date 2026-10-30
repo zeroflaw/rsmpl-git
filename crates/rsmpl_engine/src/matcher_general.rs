@@ -242,6 +242,7 @@ pub(crate) fn render_eq<T: quote::ToTokens, U: quote::ToTokens>(a: &T, b: &U) ->
 
 /// Match pattern path segments against target segments. A whole-segment
 /// placeholder binds the target segment text; concrete segments must equal.
+/// (`qself` equality lives in the `matcher_spelling` sibling, WI-7d.)
 fn match_path(pat: &syn::Path, tgt: &syn::Path, cx: &mut MatchCx) -> bool {
     if pat.leading_colon.is_some() != tgt.leading_colon.is_some() {
         return false;
@@ -386,7 +387,13 @@ pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> 
         }
     }
     match (pat, tgt) {
-        (syn::Expr::Path(a), syn::Expr::Path(b)) => match_path(&a.path, &b.path, cx),
+        // WI-7d: `qself` qualifiers compare token-equal (a `<T as Tr>`
+        // site never matches a bare pattern and vice versa); the path
+        // itself keeps leading-`::` parity via `match_path`.
+        (syn::Expr::Path(a), syn::Expr::Path(b)) => {
+            crate::matcher_spelling::qself_syn_eq(&a.qself, &b.qself)
+                && match_path(&a.path, &b.path, cx)
+        }
         (syn::Expr::Lit(a), syn::Expr::Lit(b)) => render_eq(a, b),
         (syn::Expr::Binary(a), syn::Expr::Binary(b)) => {
             render(&a.op) == render(&b.op)

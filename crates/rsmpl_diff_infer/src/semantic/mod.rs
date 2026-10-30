@@ -309,6 +309,33 @@ pub(crate) fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
 }
 
+/// Rendered `qself` qualifier of a call func path (`<T as Tr>` as
+/// written, without the trailing `::`) plus `QSelf::position` (WI-7d).
+/// `syn::QSelf` carries only the `<T as …>` half — the trait path is
+/// the first `position` segments of the sibling `Path` — so both
+/// render here. `None`/`0` for plain paths.
+pub(crate) fn qualifier_of(p: &syn::ExprPath) -> (Option<String>, usize) {
+    let Some(q) = p.qself.as_ref() else {
+        return (None, 0);
+    };
+    let mut out = String::from("<");
+    let ty: &syn::Type = &q.ty;
+    out.push_str(&quote::ToTokens::to_token_stream(ty).to_string());
+    if q.as_token.is_some() {
+        out.push_str(" as ");
+        let trait_part: Vec<String> = p
+            .path
+            .segments
+            .iter()
+            .take(q.position)
+            .map(|s| quote::ToTokens::to_token_stream(s).to_string())
+            .collect();
+        out.push_str(&trait_part.join("::"));
+    }
+    out.push('>');
+    (Some(out), q.position)
+}
+
 fn parse_call_expr(line: &str) -> Option<syn::Expr> {
     let mut text = line.trim();
     if text.is_empty() {

@@ -409,3 +409,72 @@ fn wi3_macro_interior_stays_ordinary() {
         "ordinary passthrough must equal normalized native, got: {semantic}"
     );
 }
+
+#[test]
+fn wi7d_leading_colon_call_fires() {
+    // Fixture 93 (WI-7d): three shared-`::`
+    // `::framework::old_handler_name(..)` sites rewrite in one
+    // `# allow=many` hunk with the leading `::` spelled verbatim.
+    let (native_input, semantic) = convert_fixture("93-leading-colon-call-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "leading-`::` rename must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# scope=file"),
+        "ranged hunk, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- ::framework::old_handler_name(E0)\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ ::framework::new_handler_name(E0)\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    ::framework::old_handler_name("),
+        "renamed minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "leading-`::` sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi7d_qself_call_fires() {
+    // Fixture 94 (WI-7d): three shared-qualifier
+    // `<TargetType as ConversionTrait>::old_handler_name(..)` sites
+    // rewrite in one `# allow=many` hunk with the qualifier spelled
+    // verbatim (token-equal, never resolved).
+    let (native_input, semantic) = convert_fixture("94-qself-call-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "qself rename must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# scope=file"),
+        "ranged hunk, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- <TargetType as ConversionTrait>::old_handler_name(E0)\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ <TargetType as ConversionTrait>::new_handler_name(E0)\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    <TargetType as ConversionTrait>::old_handler_name("),
+        "renamed minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "qself sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
