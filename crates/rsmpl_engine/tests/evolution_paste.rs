@@ -90,6 +90,29 @@ fn attrs_and_doc_lines_ride_verbatim() {
 }
 
 #[test]
+fn restricted_visibility_template_applies() {
+    // WI-history-70d72c0: a vis-only `fn` → `pub(crate) fn` move raises
+    // `+ pub(crate) fn ...( ... ) { ... }`; the template gate must
+    // accept restricted visibilities (parens are part of `pub(...)`).
+    let files = apply_multi(
+        &cut_and_paste("pub(crate) fn new_name(...) { ... }"),
+        vec![("a.rs", SRC), ("b.rs", B_SRC)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "fn keep() {}\n", "got: {:?}", files["a.rs"]);
+    assert!(
+        files["b.rs"].contains("pub(crate) fn new_name(x: i32) -> i32 {"),
+        "got: {:?}",
+        files["b.rs"]
+    );
+    assert!(
+        files["b.rs"].contains("    let y = x + 1;\n    y * 2\n"),
+        "body must ride byte-verbatim, got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
 fn verbatim_paste_still_works() {
     // The bare-name shape is untouched by the evolution branch.
     let files = apply_multi(&cut_and_paste("M1"), vec![("a.rs", SRC), ("b.rs", B_SRC)]).unwrap();

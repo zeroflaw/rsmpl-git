@@ -292,10 +292,21 @@ pub(crate) fn try_partial_delete_hunk(
         }
     }
     // The last delete absorbs the following blank when one exists; the
-    // insertion leftover restores it so the tree stays byte-exact.
-    let compensate = old_lines
+    // insertion leftover restores it so the tree stays byte-exact —
+    // unless a kept preceding blank already separates. A pure deletion
+    // restores adjacent to the anchor, which would double that kept
+    // separator (WI-history-70d72c0: the `mod.rs` cut left two blanks
+    // where the native change leaves one); plus-carrying leftovers
+    // interpose code between anchor and restored blank, so they always
+    // restore.
+    let following_blank = old_lines
         .get(last as usize)
         .is_some_and(|l| l.trim().is_empty());
+    let preceding_blank = old_start > 1
+        && old_lines
+            .get(old_start as usize - 2)
+            .is_some_and(|l| l.trim().is_empty());
+    let compensate = following_blank && (!preceding_blank || !plus.is_empty());
     let rule = unique_rule(used_rules, "delete_items");
     let mut out = String::new();
     // Leading in-range blanks survive the engine delete (it absorbs a
@@ -662,6 +673,44 @@ mod tests {
         let out = try_partial_delete_hunk(&hunk, Some(old.as_ref()), &mut used).expect("must fire");
         assert!(out.contains("@@ -0,0 +1,1 @@\n+\n"), "got:\n{out}");
         assert_eq!(partial_live(&out, &old), "\nfn kept() {}\n");
+    }
+
+    #[test]
+    fn partial_delete_pure_deletion_kept_preceding_blank_skips_compensation() {
+        // WI-history-70d72c0 (`mod.rs` in that commit): a pure deletion
+        // between two kept blanks must not restore the absorbed
+        // following blank — the kept preceding blank already separates,
+        // and restoring would double it (native leaves one blank).
+        let old = "use p;\n\n/// D.\nfn gone() {\n    1\n}\n\nfn kept() {}\n";
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[2..6].to_vec();
+        let hunk = partial_native(3, &minus, &[], 3);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old), &mut used).expect("must fire");
+        assert!(
+            !out.contains("+\n"),
+            "no insertion leftover owed, got:\n{out}"
+        );
+        assert_eq!(partial_live(&out, old), "use p;\n\nfn kept() {}\n");
+    }
+
+    #[test]
+    fn partial_delete_plus_leftover_restores_despite_preceding_blank() {
+        // Plus-carrying leftovers interpose code between anchor and
+        // restored blank, so no doubling with a kept preceding blank is
+        // possible — restoration still fires.
+        let old = format!("use p;\n\n{}\nfn kept() {{}}\n", big_fn("gone"));
+        let gone_len = big_fn("gone").lines().count();
+        let old_lines: Vec<&str> = old.lines().collect();
+        let minus: Vec<&str> = old_lines[2..(2 + gone_len)].to_vec();
+        let hunk = partial_native(3, &minus, &["use q;"], 3);
+        let mut used = Vec::new();
+        let out = try_partial_delete_hunk(&hunk, Some(old.as_str()), &mut used).expect("must fire");
+        assert!(out.contains("@@ -2,0 +3,2 @@\n+use q;\n+\n"), "got:\n{out}");
+        assert_eq!(
+            partial_live(&out, &old),
+            "use p;\n\nuse q;\n\nfn kept() {}\n"
+        );
     }
 
     #[test]

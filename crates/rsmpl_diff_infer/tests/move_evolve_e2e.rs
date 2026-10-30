@@ -205,6 +205,48 @@ fn param_edited_pair_stays_ordinary() {
 }
 
 #[test]
+fn restricted_vis_only_move_raises_template_and_round_trips() {
+    // WI-history-70d72c0: vis-only `fn big` → `pub(crate) fn big` (the
+    // 70d72c0 `parse_diff_git_header` shape) must raise to cut +
+    // header-template paste and apply byte-identical — the emitted
+    // template must be accepted by the engine's own template gate.
+    let big = big_fn("", "big");
+    let big_pub = big_fn("pub(crate)", "big");
+    let a_old = format!("fn keep() {{}}\n{big}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{big_pub}");
+    let minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = big_pub.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", big.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", big_pub.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind="),
+        "evolved cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub(crate) fn big(...) { ... }"),
+        "restricted-vis template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
 fn struct_name_change_stays_ordinary_wi_8b() {
     // Non-`fn` evolution is WI-8b territory: stays ordinary.
     let minus_item = "struct Old {\n    x: i32,\n}\n";

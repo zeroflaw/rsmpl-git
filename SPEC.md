@@ -3607,7 +3607,9 @@ diff --git src/new.rs
 The engine parses the captured item (which must be an `fn`), replaces
 exactly the header line's vis + `fn <Old>` prefix with the template's
 verbatim prefix and new name, and keeps every other line byte-verbatim
-(multi-line params, attrs, docs, body). A single-line plus that looks
+(multi-line params, attrs, docs, body). The prefix is any valid Rust
+visibility + qualifier combination, including restricted visibilities
+such as `pub(crate)` / `pub(in path)`. A single-line plus that looks
 like an `fn` header but is not a valid template (no `(...)` or no
 `...`) fails loud with `RSMPL_PATTERN_CONFLICT`; a multi-line plus
 with `# use=` fails loud with `RSMPL_CAPTURE_CONFLICT` — captures are

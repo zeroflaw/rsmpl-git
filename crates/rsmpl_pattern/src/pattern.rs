@@ -583,7 +583,7 @@ pub fn parse_evolution_template(text: &str) -> Option<(String, String)> {
     }
     let fn_pos = fn_pos?;
     let prefix = &line[..fn_pos];
-    if prefix.contains(['(', '{', ';', '"']) {
+    if !valid_evolution_prefix(prefix) {
         return None;
     }
     let rest = line[fn_pos + 2..].trim_start();
@@ -603,6 +603,24 @@ pub fn parse_evolution_template(text: &str) -> Option<(String, String)> {
         return None;
     }
     Some((prefix.to_string(), rest[..ident_len].to_string()))
+}
+
+/// The verbatim text before `fn` in an evolution-paste template: a Rust
+/// visibility + qualifier prefix (`pub`, `pub(crate)`, `pub(in path)`,
+/// `const`/`async`/`unsafe`/`extern "C"` combos, or empty for a bare
+/// `fn`). Validated by parsing, not by character vetoes, so restricted
+/// visibilities (which contain parens) are accepted while garbage
+/// (`foo(`, `a;b`, `"x"`) still fails to parse as a header prefix.
+fn valid_evolution_prefix(prefix: &str) -> bool {
+    let pre = prefix.trim();
+    if pre.is_empty() {
+        return true;
+    }
+    // Fast veto: these bytes never appear in a vis/qualifier prefix.
+    if pre.contains(['{', ';']) {
+        return false;
+    }
+    syn::parse_str::<syn::ItemFn>(&format!("{pre} fn __rsmpl_dummy__() {{}}")).is_ok()
 }
 
 /// Word-bounded `fn` keyword followed by whitespace (a line that looks

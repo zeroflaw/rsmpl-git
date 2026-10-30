@@ -937,3 +937,38 @@ fn trait_header_ident_cases() {
     assert!(!is_trait_header("  // trait T {"));
     assert!(!is_trait_header("  impl S {"));
 }
+
+#[test]
+fn evolution_template_accepts_restricted_visibility() {
+    // WI-history-70d72c0: `diffrs` emits `pub(crate)`-prefixed evolution
+    // pastes for vis-only fn moves; the template gate must accept every
+    // valid Rust vis/qualifier prefix, not just bare `pub`.
+    use rsmpl_pattern::parse_evolution_template;
+    for prefix in [
+        "",
+        "pub",
+        "pub(crate)",
+        "pub(super)",
+        "pub(self)",
+        "pub(in crate::x)",
+        "pub(crate) async",
+        "pub unsafe",
+    ] {
+        let tmpl = if prefix.is_empty() {
+            "fn new(...) { ... }".to_string()
+        } else {
+            format!("{prefix} fn new(...) {{ ... }}")
+        };
+        let (pre, name) =
+            parse_evolution_template(&tmpl).unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+        assert_eq!(name, "new", "got: {tmpl:?}");
+        assert_eq!(pre.trim(), prefix, "got: {tmpl:?}");
+    }
+    // Garbage prefixes still rejected; missing holes still rejected
+    // (`(...)` carries the `...` substring, so the params hole is the
+    // effective body gate — pre-existing behavior, unchanged here).
+    assert!(parse_evolution_template("foo( fn new(...) { ... }").is_none());
+    assert!(parse_evolution_template("a;b fn new(...) { ... }").is_none());
+    assert!(parse_evolution_template("pub fn new(x: i32)").is_none());
+    assert!(parse_evolution_template("pub(crate) fn new(x: i32)").is_none());
+}
