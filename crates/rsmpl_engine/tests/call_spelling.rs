@@ -94,3 +94,52 @@ fn general_shape_qself_parity() {
         "qself site must survive: {out}"
     );
 }
+
+#[test]
+fn type_qself_parity() {
+    // WI-7d-follow: type-position `qself` mirrors the expression rule —
+    // a concrete `<Target as Trait>::Assoc` pattern matches only
+    // identical-qualifier sites; qualifier-free (`Trait::assoc`, same
+    // segments, no `qself`) and divergent-qualifier twins survive.
+    // (Assoc names are lowercase so the classifier keeps them
+    // concrete — an uppercase tail would infer as a hole.)
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# allow=many\n# root=type\n- <Target as Trait>::assoc\n+ <Target as Trait>::newassoc\n";
+    let src = "fn m(x: <Target as Trait>::assoc, y: <Other as Trait>::assoc, z: Trait::assoc) {}\n";
+    let out = apply(patch, src).unwrap();
+    assert!(out.contains("<Target as Trait>::newassoc"), "got: {out}");
+    assert!(
+        out.contains("<Other as Trait>::assoc"),
+        "divergent qualifier must survive: {out}"
+    );
+    assert!(
+        out.contains("z: Trait::assoc"),
+        "bare twin must survive: {out}"
+    );
+    // Converse: a qualifier-free `Trait::assoc` pattern never matches a
+    // qualified site (previously lenient — matched by ignoring `qself`;
+    // same segment count, so only the `qself` gate vetoes).
+    let bare = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# allow=many\n# root=type\n- Trait::assoc\n+ Trait::newassoc\n";
+    let out = apply(bare, src).unwrap();
+    assert!(out.contains("z: Trait::newassoc"), "got: {out}");
+    assert!(
+        out.contains("<Target as Trait>::assoc"),
+        "qself site must survive: {out}"
+    );
+    assert!(
+        out.contains("<Other as Trait>::assoc"),
+        "divergent qself site must survive: {out}"
+    );
+}
+
+#[test]
+fn type_qself_hole_still_binds() {
+    // WI-7d-follow guard: a whole-type `# type T` hole still binds any
+    // target, including a qualified one (mirrors whole-expr `E`).
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n# allow=many\n# type T\n- Vec<T>\n+ Box<T>\n";
+    let src = "fn m(x: Vec<<Target as Trait>::assoc>) {}\n";
+    let out = apply(patch, src).unwrap();
+    assert!(
+        out.contains("Box<<Target as Trait>::assoc>"),
+        "hole must bind qualified inner: {out}"
+    );
+}

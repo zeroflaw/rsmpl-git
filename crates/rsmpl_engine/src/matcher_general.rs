@@ -563,7 +563,14 @@ pub(crate) fn match_type(pat: &syn::Type, tgt: &syn::Type, cx: &mut MatchCx) -> 
         return cx.bind_span(&name, tgt.span());
     }
     match (pat, tgt) {
-        (syn::Type::Path(a), syn::Type::Path(b)) => match_path(&a.path, &b.path, cx),
+        (syn::Type::Path(a), syn::Type::Path(b)) => {
+            // WI-7d-follow: type-position `qself` parity mirrors the
+            // `Expr::Path` arm — `<T as Tr>::Assoc` never matches bare
+            // `Assoc` and vice versa; trait prefix compares via
+            // `match_path`, `ty` half fails closed on placeholders.
+            crate::matcher_spelling::qself_syn_eq(&a.qself, &b.qself)
+                && match_path(&a.path, &b.path, cx)
+        }
         (syn::Type::Reference(a), syn::Type::Reference(b)) => {
             // Lifetimes are wildcards in v1 (documented).
             render(&a.mutability) == render(&b.mutability) && match_type(&a.elem, &b.elem, cx)
