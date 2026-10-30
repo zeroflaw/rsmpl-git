@@ -231,11 +231,21 @@ pub(crate) fn assign_type_ast(ty: &syn::Type, kinds: &mut HashMap<String, HashSe
             if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
                 assign_angle_args(ab, kinds);
             }
+            // WI-6c-diet: parenthesized `Fn(T) -> U` inputs/output infer
+            // `type` too (the engine binds them structurally); without
+            // this the call pass claims `T` as `expr` and diet fails
+            // with an incompatible-positions conflict.
+            if let syn::PathArguments::Parenthesized(p) = &seg.arguments {
+                assign_paren_args(p, kinds);
+            }
         }
         syn::Type::Path(tp) => {
             for seg in &tp.path.segments {
                 if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
                     assign_angle_args(ab, kinds);
+                }
+                if let syn::PathArguments::Parenthesized(p) = &seg.arguments {
+                    assign_paren_args(p, kinds);
                 }
             }
         }
@@ -287,8 +297,25 @@ fn assign_type_param_bound(
                 if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
                     assign_angle_args(ab, kinds);
                 }
+                if let syn::PathArguments::Parenthesized(p) = &seg.arguments {
+                    assign_paren_args(p, kinds);
+                }
             }
         }
+    }
+}
+
+/// Parenthesized `Fn(T) -> U` arguments: inputs and output infer `type`
+/// (WI-6c-diet). Mirrors the engine's `match_path_args` structural arm.
+fn assign_paren_args(
+    p: &syn::ParenthesizedGenericArguments,
+    kinds: &mut HashMap<String, HashSet<MetavarKind>>,
+) {
+    for t in &p.inputs {
+        assign_type_ast(t, kinds);
+    }
+    if let syn::ReturnType::Type(_, t) = &p.output {
+        assign_type_ast(t, kinds);
     }
 }
 

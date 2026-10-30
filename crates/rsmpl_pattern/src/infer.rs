@@ -947,9 +947,17 @@ fn assign_call_slots(
                     }
                     continue;
                 }
-                if let Some(args) = balanced_args(&t[paren..]) {
-                    for n in names_in(&args, kinds) {
-                        add_kind(kinds, &n, MetavarKind::Expr);
+                // Type-parseable lines (`Box<dyn Fn(T) -> T>`, `fn(T) -> T`)
+                // are type-owned: the type fallback assigns `type` to
+                // preserved names, so the call pass must not claim the
+                // paren-group names as `expr` (WI-6c-diet). The callee
+                // guard above already skips the callee; this skips the
+                // args. Non-type lines still infer `expr` holes.
+                if syn::parse_str::<syn::Type>(t).is_err() {
+                    if let Some(args) = balanced_args(&t[paren..]) {
+                        for n in names_in(&args, kinds) {
+                            add_kind(kinds, &n, MetavarKind::Expr);
+                        }
                     }
                 }
             }
@@ -1398,6 +1406,17 @@ mod tests {
     #[test]
     fn type_position_infers_type() {
         let t = infer("Vec<T>", "Box<[T]>");
+        assert_eq!(t.kind_of("T"), Some(MetavarKind::Type));
+    }
+
+    #[test]
+    fn parenthesized_fn_args_infer_type() {
+        // WI-6c-diet: `T` inside `Fn(T) -> T` infers `type` (input and
+        // output), so the diet spelling needs no `# type T`. The call
+        // pass must not claim the paren-group names as `expr` on
+        // type-parseable lines (that plus the type fallback's `type`
+        // was an incompatible-positions conflict).
+        let t = infer("Box<dyn Fn(T) -> T>", "Box<dyn Fn(T) -> Box<T>>");
         assert_eq!(t.kind_of("T"), Some(MetavarKind::Type));
     }
 

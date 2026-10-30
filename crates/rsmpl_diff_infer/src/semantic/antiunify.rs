@@ -1117,9 +1117,16 @@ fn gen_path_args(
             return None;
         }
         let mut out = pars[0].clone();
+        // WI-6d: the `dyn`/`impl` wrapper plus bound plus path
+        // triple-count a single bound position against the depth ≤ 2
+        // doctrine, so `Box<dyn Fn(..)>` holes land at depth 3 and veto.
+        // Fn inputs/outputs are granted one extra level
+        // (`saturating_sub(1)`): the shapes stay totality-gated and the
+        // allowance applies only inside parenthesized positions, never
+        // to the general core.
         for (i, input) in out.inputs.iter_mut().enumerate() {
             let nth: Vec<syn::Type> = pars.iter().map(|p| p.inputs[i].clone()).collect();
-            *input = hole_or_gen(&nth, depth, holes)?;
+            *input = hole_or_gen(&nth, depth.saturating_sub(1), holes)?;
         }
         match (&pars[0].output, &mut out.output) {
             (syn::ReturnType::Default, syn::ReturnType::Default) => {}
@@ -1131,7 +1138,7 @@ fn gen_path_args(
                         _ => None,
                     })
                     .collect::<Option<_>>()?;
-                **out_ty = hole_or_gen(&nth, depth, holes)?;
+                **out_ty = hole_or_gen(&nth, depth.saturating_sub(1), holes)?;
             }
             _ => return None,
         }
@@ -1348,6 +1355,36 @@ mod tests {
         antiunify_types(&m, &p)
     }
 
+    #[test]
+    fn parenthesized_fn_boxed_output_delta_generalizes() {
+        // WI-6d: `Box<dyn Fn(..)>` nests Fn inputs at depth 3 (Box angle
+        // → trait bound → path args); the parenthesized arm grants one
+        // extra level so the hetero inputs hole instead of vetoing.
+        // The delta is concrete (uniform `u8` → `String` output) with
+        // the hole preserved across sides, per the correspondence law.
+        let out = antiunify_strs(
+            &[
+                "Box<dyn Fn(u8) -> u8>",
+                "Box<dyn Fn(u16) -> u8>",
+                "Box<dyn Fn(u32) -> u8>",
+                "Box<dyn Fn(bool) -> u8>",
+            ],
+            &[
+                "Box<dyn Fn(u8) -> String>",
+                "Box<dyn Fn(u16) -> String>",
+                "Box<dyn Fn(u32) -> String>",
+                "Box<dyn Fn(bool) -> String>",
+            ],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "Box<dyn Fn(T0) -> u8>".to_string(),
+                "Box<dyn Fn(T0) -> String>".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
     #[test]
     fn types_hetero_hole_generalizes() {
         // The canonical WI-4b shape: varying `T` holes one level deep.

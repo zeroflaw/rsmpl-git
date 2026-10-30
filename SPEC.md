@@ -2811,7 +2811,7 @@ Kind by position:
 | one pre-`fn` token (`V fn`) | ambiguous (`visibility` vs `qualifier_list`) — declare explicitly |
 | `let P: T = E;` | pattern `pat`, `: T` region `type`, `= E` region `expr` |
 | call/method callee, receiver, method, bare args | `expr` (macro `!` arg names infer only when occurring on both sides — single-side uppercase idents stay literal deltas; macro names never infer; `use`-paths and item-rename names never infer) |
-| type argument interiors (`Vec<T>`, `Box<[T]>`) | `type` for the inner names only; the leading constructor (`Vec`, `Box`) stays literal, as do one-sided concrete additions (`+ Send`) |
+| type argument interiors (`Vec<T>`, `Box<[T]>`, `Fn(T)` inputs and `-> T` outputs) | `type` for the inner names only; the leading constructor (`Vec`, `Box`, `Fn`) stays literal, as do one-sided concrete additions (`+ Send`) |
 | otherwise (`# root=type/expr`) | the forced kind; unforced general text follows `try_general` routing (type-parseable → `type`, else `expr`) |
 
 Rules:
@@ -6413,10 +6413,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   to one template pair with shared inferred `T0…` holes (e.g.
   `- Vec < T0 >` / `+ Box < [T0] >`, no declarations, SPEC 15.8;
   all-identical classes stay for the tighter verbatim sweep, T422
-  precedent). Guards: same `syn::Type` variant at every generalized
+  precedent).   Guards: same `syn::Type` variant at every generalized
   node (the root constructor is the literal anchor); holes only in
   `Type` positions at depth ≤ 2 (deeper variation coarsens to the
-  shallowest varying level); lifetimes, const-generic args,
+  shallowest varying level) — except parenthesized `Fn` inputs/outputs,
+  which are granted one extra level (WI-6d: the `dyn`/`impl` wrapper
+  plus bound plus path triple-count a single bound position, so
+  `Box<dyn Fn(..)>` holes land at depth 3); lifetimes, const-generic args,
   mutability and all other non-`Type` slots must agree across sites (a
   varying lifetime would mis-rewrite — the engine wildcards pattern
   lifetimes while the plus side would emit the first site's spelling);

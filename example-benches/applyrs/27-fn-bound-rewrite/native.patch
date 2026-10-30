@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2 +2 @@
+-    let f: Box<dyn Fn(u8) -> u8> = build();
++    let f: Box<dyn Fn(u8) -> String> = build();
+@@ -6 +6 @@
+-    let f: Box<dyn Fn(u16) -> u8> = build();
++    let f: Box<dyn Fn(u16) -> String> = build();
+@@ -10 +10 @@
+-    let f: Box<dyn Fn(u32) -> u8> = build();
++    let f: Box<dyn Fn(u32) -> String> = build();
+@@ -14 +14 @@
+-    let f: Box<dyn Fn(bool) -> u8> = build();
++    let f: Box<dyn Fn(bool) -> String> = build();

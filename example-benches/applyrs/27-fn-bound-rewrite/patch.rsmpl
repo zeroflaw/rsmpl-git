@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=fn_bound
+# sweep
+- Box<dyn Fn(T) -> u8>
++ Box<dyn Fn(T) -> String>

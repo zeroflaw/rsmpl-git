@@ -123,7 +123,7 @@ SPEC D.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 
-`example-benches/applyrs/` (24 benches) compares the agent-authored `patch.rsmpl`
+`example-benches/applyrs/` (25 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
 same result, RSmPL input vs full Git spelling. Re-measure any time with
 `./example-benches/run.sh`. (A hand-written native patch with conventional
@@ -157,6 +157,7 @@ context would be larger, so these are lower bounds.)
 | 24-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 155 B / 7 ln | 630 B / 18 ln | 75% |
 | 25-async-block-rewrite (1 hunk rewrites `E + 1`→`E + 2` inside `async` blocks over 4 sites) | 93 B / 5 ln | 363 B / 15 ln | 74% |
 | 26-stmt-interior-rewrite (1 hunk rewrites `F`→`F + 1` inside `if` bodies with an opaque `log!("hit");` over 4 sites) | 138 B / 5 ln | 616 B / 35 ln | 78% |
+| 27-fn-bound-rewrite (1 hunk rewrites `Box<dyn Fn(T) -> u8>`→`Box<dyn Fn(T) -> String>` over 4 hetero-input sites) | 105 B / 5 ln | 507 B / 15 ln | 79% |
 
 `example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):

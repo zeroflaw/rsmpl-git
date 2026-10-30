@@ -45,6 +45,7 @@ below).
 | 24-sequence-sweep | 1 hunk rewrites 3 blocks × 2 hetero lets (WI-5c: type-add + joint positions, per-position `P{j}`/`E{j}` holes) | 155 B / 7 ln | 630 B / 18 ln | 75% |
 | 25-async-block-rewrite | 1 hunk rewrites `E + 1`→`E + 2` inside `async` block bodies over 4 sites (WI-6 slice 1: diet `E` infers, qualifier-strict) | 93 B / 5 ln | 363 B / 15 ln | 74% |
 | 26-stmt-interior-rewrite | 1 hunk rewrites `F`→`F + 1` inside `if` bodies that also carry an opaque `log!("hit");` statement over 4 sites (WI-6b: diet `E`/`F` infer, macro stays literal) | 138 B / 5 ln | 616 B / 35 ln | 78% |
+| 27-fn-bound-rewrite | 1 hunk rewrites `Box<dyn Fn(T) -> u8>`→`Box<dyn Fn(T) -> String>` over 4 hetero-input sites (WI-6d: diet `T` infers, uniform output delta, raising via `type_sweep`) | 105 B / 5 ln | 507 B / 15 ln | 79% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even

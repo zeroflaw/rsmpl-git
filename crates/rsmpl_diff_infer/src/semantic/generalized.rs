@@ -884,6 +884,31 @@ mod tests {
     }
 
     #[test]
+    fn type_sweep_fn_bound_fires() {
+        // WI-6d: parenthesized `Fn` bound delta at depth 3 (Box angle →
+        // trait bound → path args) raises through the full pipeline:
+        // hetero inputs hole as `T0`, the uniform `u8` → `String`
+        // output delta stays concrete, pre-image engine-count
+        // totality holds (exactly 4 subterms). Same shape as
+        // applyrs bench 27, which proves the authored direction.
+        let pre = "fn a() {\n    let f: Box<dyn Fn(u8) -> u8> = build();\n    f\n}\nfn b() {\n    let f: Box<dyn Fn(u16) -> u8> = build();\n    f\n}\nfn c() {\n    let f: Box<dyn Fn(u32) -> u8> = build();\n    f\n}\nfn d() {\n    let f: Box<dyn Fn(bool) -> u8> = build();\n    f\n}\n";
+        let body = "@@ -2 +2 @@\n-    let f: Box<dyn Fn(u8) -> u8> = build();\n+    let f: Box<dyn Fn(u8) -> String> = build();\n@@ -6 +6 @@\n-    let f: Box<dyn Fn(u16) -> u8> = build();\n+    let f: Box<dyn Fn(u16) -> String> = build();\n@@ -10 +10 @@\n-    let f: Box<dyn Fn(u32) -> u8> = build();\n+    let f: Box<dyn Fn(u32) -> String> = build();\n@@ -14 +14 @@\n-    let f: Box<dyn Fn(bool) -> u8> = build();\n+    let f: Box<dyn Fn(bool) -> String> = build();\n".to_string();
+        let raw = section("f.rs", &body);
+        let pres = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pres).unwrap();
+        validated_live(&out, &pres);
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(out.contains("- Box<dyn Fn(T0) -> u8>\n"), "got: {out}");
+        assert!(out.contains("+ Box<dyn Fn(T0) -> String>\n"), "got: {out}");
+        // Inferred holes need no declarations (SPEC 15.8).
+        assert!(!out.contains("# type"), "got: {out}");
+        // Consumed: no native type lines survive.
+        assert!(!out.contains("Box<dyn Fn(u8) -> u8>"), "got: {out}");
+        assert!(out.len() < body.len(), "type sweep must beat native bytes");
+    }
+
+    #[test]
     fn type_sweep_extra_type_site_vetoes() {
         // Totality: a third `Vec<..>` ascription in the pre-image would
         // be silently rewritten — the sweep vetoes.
