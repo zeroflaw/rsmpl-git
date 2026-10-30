@@ -298,6 +298,9 @@ pub(crate) fn try_macro_interior_section(
         // would infer literal uppercase deltas as holes and count a more
         // general domain — `template_pair_holds` runs the emitted hunk's
         // own diet inference instead); else the concrete probe decides.
+        // WI-9b2a: concrete probes the real pair too (same soundness —
+        // the self probe holed shared uppercase deltas and vetoed on
+        // second-arg twins a sound concrete group must ignore).
         let (m0, p0) = (&pairs[members[0]].1, &pairs[members[0]].2);
         let (concrete_minus, concrete_plus) = emit_pair(m0, p0, minus, plus);
         let hetero = hetero_pair(m0, p0).filter(|(hm, hp)| {
@@ -307,7 +310,13 @@ pub(crate) fn try_macro_interior_section(
         let (emit_minus, emit_plus) = match hetero {
             Some(pair) => pair,
             None => {
-                if !crate::totality::template_expr_holds(path, file_old, &concrete_minus, n_eff) {
+                if !crate::totality::template_pair_holds(
+                    path,
+                    file_old,
+                    &concrete_minus,
+                    &concrete_plus,
+                    n_eff,
+                ) {
                     // Release this group's claims: the hunks stay ordinary.
                     for claim in joined.iter_mut() {
                         if claim
@@ -1366,6 +1375,36 @@ mod tests {
             out.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)\n"),
             "concrete fallback, got: {out}"
         );
+        assert!(!out.contains("E0"), "hetero vetoed, got: {out}");
+    }
+
+    #[test]
+    fn macro_concrete_second_arg_twin_fires() {
+        // WI-9b2a: a twin with its own delta no longer vetoes the concrete
+        // group when hetero is absent (the only stable arg `x` is shorter
+        // than any hole name, so `hetero_pair` is `None` and the concrete
+        // fallback decides alone). The old self-rewrite probe (`- M / + M`)
+        // saw `FIRST_DELTA` on both sides, holed it, and counted
+        // `check!(x-lit, <any>)` (3 ≠ 2 → ordinary); the real-pair probe
+        // keeps the single-side delta literal, so the twin's `THIRD_DELTA`
+        // never matches (2 == 2 → fires concrete). A/B-pinned: fails on
+        // the old probe, passes on the new.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    check!(x, FIRST_DELTA);\n-    check!(x, FIRST_DELTA);\n+    check!(x, SECOND_DELTA);\n+    check!(x, SECOND_DELTA);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    check!(x, FIRST_DELTA);\n    check!(x, FIRST_DELTA);\n    check!(x, THIRD_DELTA);\n}\n",
+        )]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- check!(x, FIRST_DELTA)\n"),
+            "concrete recovery, got: {out}"
+        );
+        assert!(out.contains("+ check!(x, SECOND_DELTA)\n"), "got: {out}");
         assert!(!out.contains("E0"), "hetero vetoed, got: {out}");
     }
 

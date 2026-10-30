@@ -6375,6 +6375,9 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   minus/plus diet pair applied to a scratch pre-image must match exactly
   N — a self-rewrite probe would infer literal uppercase deltas as holes
   and count a more general domain than the hunk matches).
+  WI-9b2a: the concrete fallback probes the real pair too (same
+  soundness — the self probe holed shared uppercase deltas and vetoed on
+  second-arg twins a sound concrete group must ignore).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

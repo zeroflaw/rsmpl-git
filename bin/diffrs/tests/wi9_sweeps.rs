@@ -316,3 +316,35 @@ fn wi9_macro_interior_bracket_stays_ordinary() {
         "ordinary passthrough must equal normalized native, got: {semantic}"
     );
 }
+
+#[test]
+fn wi9_macro_concrete_twin_fires() {
+    // Fixture 85 (WI-9b2a): two `check!(x, FIRST_DELTA)` sites plus an
+    // untouched `check!(x, THIRD_DELTA)` twin. Hetero is absent (the only
+    // stable arg `x` is shorter than any hole name); the real-pair
+    // concrete probe keeps the delta literal so the twin never matches
+    // and the sweep fires concrete (the old self probe vetoed → ordinary).
+    let (native_input, semantic) = convert_fixture("85-macro-concrete-twin-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "concrete interior must fire, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- check!(x, FIRST_DELTA)\n"),
+        "concrete minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ check!(x, SECOND_DELTA)\n"),
+        "concrete plus missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("E0"),
+        "no holes expected, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "concrete sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
