@@ -102,24 +102,28 @@ pub(crate) fn paste_capture(
     Ok(())
 }
 
-/// WI-8a + WI-8 slice 1: splice a captured item under an
-/// evolution-template header (`pub fn New(...) { ... }` or
-/// `pub struct New { ... }`). The template's prefix and new ident
-/// replace the capture's header line; every other line stays
-/// byte-verbatim. Returns the spliced item text.
+/// WI-8a + WI-8 slices 1-2: splice a captured item under an
+/// evolution-template header (`pub fn New(...) { ... }`,
+/// `pub struct New { ... }`, or `pub enum New { ... }`). The
+/// template's prefix and new ident replace the capture's header
+/// line; every other line stays byte-verbatim. Returns the spliced
+/// item text.
 fn splice_evolved_header(
     captured: &str,
     template: &str,
     rule: &str,
 ) -> Result<String, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    if rsmpl_pattern::parse_enum_evolution_template(template.trim()).is_some() {
+        return splice_enum_header(captured, template, rule);
+    }
     if rsmpl_pattern::parse_struct_evolution_template(template.trim()).is_some() {
         return splice_struct_header(captured, template, rule);
     }
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...` or a single-line `struct` header with `...` (got `{}`)",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, a single-line `struct` header with `...`, or a single-line `enum` header with `...` (got `{}`)",
                 template.trim()
             ))
         })?;
@@ -132,7 +136,7 @@ fn splice_evolved_header(
         [syn::Item::Fn(f)] => f.sig.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `fn` item in v0.1 (only fn headers evolve)"
+                "evolution paste needs a captured `fn` item for a `fn` template (only fn/struct/enum headers evolve)"
                     .to_string(),
             ));
         }
@@ -220,7 +224,7 @@ fn splice_struct_header(
         [syn::Item::Struct(s)] => s.ident.to_string(),
         _ => {
             return Err(fail(
-                "evolution paste needs a captured `struct` item for a `struct` template (only fn/struct headers evolve)"
+                "evolution paste needs a captured `struct` item for a `struct` template (only fn/struct/enum headers evolve)"
                     .to_string(),
             ));
         }
@@ -284,6 +288,128 @@ fn splice_struct_header(
     };
     lines[idx] = format!("{ws}{head}{suffix}");
     Ok(lines.join("\n"))
+}
+
+/// WI-8 slice 2: splice a captured `enum` item under an
+/// evolution-template header (`pub enum New { ... }`). The
+/// template's visibility prefix and new ident replace the capture's
+/// `enum <Old>` header span; generics, where-clauses, and variants
+/// ride byte-verbatim as the suffix after the old ident.
+fn splice_enum_header(
+    captured: &str,
+    template: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let (new_prefix, new_name) =
+        rsmpl_pattern::parse_enum_evolution_template(template.trim()).ok_or_else(|| {
+            fail(format!(
+                "evolution paste template must be a single-line `enum` header with `...` (got `{}`)",
+                template.trim()
+            ))
+        })?;
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name = match file.items.as_slice() {
+        [syn::Item::Enum(e)] => e.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `enum` item for an `enum` template (only fn/struct/enum headers evolve)"
+                    .to_string(),
+            ));
+        }
+    };
+    // First `enum <Old>` header line: word-bounded match so a body
+    // occurrence (e.g. a doc comment) never wins over the header.
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if enum_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx = target.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `enum {old_name}` header line"
+        ))
+    })?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, rest) = line.split_at(ws_len);
+    let mut enum_at = None;
+    let mut search = rest;
+    let mut base = 0;
+    while let Some(pos) = search.find("enum") {
+        let before_ok = pos == 0
+            || !search.as_bytes()[pos - 1].is_ascii_alphanumeric()
+                && search.as_bytes()[pos - 1] != b'_';
+        let after = &search[pos + 4..];
+        let after_ok = after.starts_with(char::is_whitespace);
+        let boundary = after.trim_start()[old_name.len()..]
+            .chars()
+            .next()
+            .map(|c| c != '_' && !c.is_ascii_alphanumeric())
+            .unwrap_or(true);
+        if before_ok && after_ok && after.trim_start().starts_with(old_name.as_str()) && boundary {
+            enum_at = Some(base + pos);
+            break;
+        }
+        search = &search[pos + 4..];
+        base += pos + 4;
+    }
+    let enum_at = enum_at.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `enum {old_name}` header line"
+        ))
+    })?;
+    let after_enum = &rest[enum_at + 4..];
+    let trimmed = after_enum.trim_start();
+    let suffix = trimmed[old_name.len()..].to_string();
+    let pre = new_prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("enum {new_name}")
+    } else {
+        format!("{pre} enum {new_name}")
+    };
+    lines[idx] = format!("{ws}{head}{suffix}");
+    Ok(lines.join("\n"))
+}
+
+/// The ident of an `enum <Ident>` header line (`None` when the line
+/// holds no word-bounded `enum` + ident pair).
+fn enum_line_ident(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i..].starts_with(b"enum")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 4).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 4;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if start != j {
+                return Some(line[start..j].to_string());
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
 }
 
 /// The ident of a `struct <Ident>` header line (`None` when the line

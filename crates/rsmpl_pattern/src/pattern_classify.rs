@@ -9,7 +9,9 @@ use crate::expr_pattern::{classify_call_pattern, find_macro_bang, ExprPatternKin
 use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
 use crate::pattern::{GeneralShape, PatternKind};
-use crate::pattern_evolution::{parse_evolution_template, parse_struct_evolution_template};
+use crate::pattern_evolution::{
+    parse_enum_evolution_template, parse_evolution_template, parse_struct_evolution_template,
+};
 use crate::pattern_general::try_general;
 use crate::quote_utils::qualifier_leads_to_fn;
 
@@ -41,6 +43,24 @@ fn has_struct_keyword(text: &str) -> bool {
         if bytes[i..].starts_with(b"struct")
             && (i == 0 || !is_ident(bytes[i - 1]))
             && bytes.get(i + 6).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Word-bounded `enum` keyword followed by whitespace (a line that
+/// looks like an `enum` header, valid template or not).
+fn has_enum_keyword(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i..].starts_with(b"enum")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 4).is_some_and(|c| c.is_ascii_whitespace())
         {
             return true;
         }
@@ -138,9 +158,10 @@ pub(crate) fn classify(
     // Insertion: no minus, plus present.
     if m.is_empty() && !p.is_empty() {
         let uses = hunk.uses();
-        // WI-8a + WI-8 slice 1: `# use=N` with a single-line `fn`
-        // header template (`+ pub fn New(...) { ... }`) or `struct`
-        // header template (`+ pub struct New { ... }`) is an evolution
+        // WI-8a + WI-8 slices 1-2: `# use=N` with a single-line `fn`
+        // header template (`+ pub fn New(...) { ... }`), `struct`
+        // header template (`+ pub struct New { ... }`), or `enum`
+        // header template (`+ pub enum New { ... }`) is an evolution
         // paste — the engine splices the captured body under the
         // template header. Anything else with `# use=` stays a literal
         // insertion.
@@ -148,7 +169,8 @@ pub(crate) fn classify(
             && p.lines().count() == 1
             && (p.trim() == uses[0]
                 || parse_evolution_template(p.trim()).is_some()
-                || parse_struct_evolution_template(p.trim()).is_some())
+                || parse_struct_evolution_template(p.trim()).is_some()
+                || parse_enum_evolution_template(p.trim()).is_some())
         {
             Some(uses[0].to_string())
         } else if uses.len() == 1 && p.lines().count() == 1 && has_fn_keyword(p.trim()) {
@@ -164,6 +186,14 @@ pub(crate) fn classify(
                 ErrorCode::PatternConflict,
                 format!(
                     "evolution paste template must be a single-line `struct` header with `...` (got `{}`); write `+ <vis>struct <New> {{ ... }}` or paste the bare capture name for a verbatim move",
+                    p.trim()
+                ),
+            ));
+        } else if uses.len() == 1 && p.lines().count() == 1 && has_enum_keyword(p.trim()) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "evolution paste template must be a single-line `enum` header with `...` (got `{}`); write `+ <vis>enum <New> {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));

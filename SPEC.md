@@ -3707,7 +3707,8 @@ at the same anchor keep document order too but are never blank-joined —
 the author controls their blanks explicitly.
 
 An evolution paste carries a single-line header template instead
-of the bare name (WI-8a `fn` items, WI-8 slice 1 `struct` items):
+of the bare name (WI-8a `fn` items, WI-8 slice 1 `struct` items,
+WI-8 slice 2 `enum` items):
 
 ```diff
 diff --git src/new.rs
@@ -3723,24 +3724,34 @@ diff --git src/new.rs
 + pub struct Renamed { ... }
 ```
 
+```diff
+diff --git src/new.rs
+@@ -5,0 @@ rule=paste_kind
+# use=Kind
++ pub enum Renamed { ... }
+```
+
 The engine parses the captured item (which must match the template
 kind: `fn` template needs a captured `fn`, `struct` template a
-captured `struct`), replaces exactly the header line's vis +
-`fn <Old>` / `struct <Old>` prefix with the template's verbatim
-prefix and new name, and keeps every other line byte-verbatim
-(multi-line params, attrs, docs, body for `fn`; generics,
-where-clauses, and fields for `struct`). The `fn` prefix is any valid
-Rust visibility + qualifier combination, including restricted
-visibilities such as `pub(crate)` / `pub(in path)`; the `struct`
-prefix is any valid Rust visibility. The `struct` template's
-`{ ... }` tail is a shape marker only (like the `fn` template's
-`(...)`): the splice keeps the captured suffix (generics, fields,
-`;` for tuple/unit structs) verbatim, so all struct shapes
-round-trip. A single-line plus that looks like an `fn`/`struct`
-header but is not a valid template (no `(...)` or no `...` for `fn`;
-no `...` for `struct`) fails loud with `RSMPL_PATTERN_CONFLICT`; a
-multi-line plus with `# use=` fails loud with
-`RSMPL_CAPTURE_CONFLICT` — captures are never silently ignored.
+captured `struct`, `enum` template a captured `enum`), replaces
+exactly the header line's vis + `fn <Old>` / `struct <Old>` /
+`enum <Old>` prefix with the template's verbatim prefix and new
+name, and keeps every other line byte-verbatim (multi-line params,
+attrs, docs, body for `fn`; generics, where-clauses, and fields
+for `struct`; generics, where-clauses, and variants for `enum`).
+The `fn` prefix is any valid Rust visibility + qualifier
+combination, including restricted visibilities such as
+`pub(crate)` / `pub(in path)`; the `struct`/`enum` prefix is any
+valid Rust visibility. The `struct`/`enum` template's `{ ... }`
+tail is a shape marker only (like the `fn` template's `(...)`):
+the splice keeps the captured suffix (generics, fields, `;` for
+tuple/unit structs; generics, variants for enums) verbatim, so all
+struct shapes and all enum shapes round-trip. A single-line plus
+that looks like an `fn`/`struct`/`enum` header but is not a valid
+template (no `(...)` or no `...` for `fn`; no `...` for `struct` /
+`enum`) fails loud with `RSMPL_PATTERN_CONFLICT`; a multi-line
+plus with `# use=` fails loud with `RSMPL_CAPTURE_CONFLICT` —
+captures are never silently ignored.
 
 ### 20.3 Capture naming and forward references
 
@@ -3752,7 +3763,7 @@ Names are patch-local.
 
 In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST object. Collection-valued captures are not part of v0.1 and there is no syntax such as `# bind_list=Name`, `# bind_many=Name`, or `# use_list=Name`.
 
-> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, or the single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>struct <New> { ... }` evolution paste). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file.
+> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, or the single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` evolution paste). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file.
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
 
@@ -6836,8 +6847,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   engine splices the captured body under it (identical pairs keep the
   bare-`bind` paste); WI-8 slice 1 pairs `struct` moves whose visibility
   and/or name evolve while attrs, generics, and fields stay token-equal
-  (paste `+ <vis>struct <New> { ... }`). Everything else (other item
-  kinds, attr/signature/body deltas) stays ordinary.
+  (paste `+ <vis>struct <New> { ... }`); WI-8 slice 2 pairs `enum`
+  moves whose visibility and/or name evolve while attrs, generics, and
+  variants stay token-equal (paste `+ <vis>enum <New> { ... }`).
+  Everything else (other item kinds, attr/signature/body deltas) stays
+  ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,

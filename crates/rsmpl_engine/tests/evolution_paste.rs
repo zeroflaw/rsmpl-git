@@ -227,3 +227,62 @@ fn struct_template_on_fn_capture_is_loud() {
     .expect_err("kind mismatch must fail loud");
     assert!(err.contains("captured `struct`"), "got: {err}");
 }
+
+// WI-8 slice 2: enum evolution pastes.
+
+const ENUM_SRC: &str = "enum Old {\n    A,\n    B(i32),\n}\n";
+const B_ENUM: &str = "fn other() {}\n";
+
+fn cut_and_paste_enum(template: &str) -> String {
+    format!(
+        "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,4 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ {template}\n"
+    )
+}
+
+#[test]
+fn enum_name_and_vis_evolve_cross_file() {
+    let files = apply_multi(
+        &cut_and_paste_enum("pub enum New { ... }"),
+        vec![("a.rs", ENUM_SRC), ("b.rs", B_ENUM)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub enum New {\n    A,\n    B(i32),\n}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn enum_malformed_template_is_loud() {
+    let err = apply_multi(
+        &cut_and_paste_enum("pub enum New"),
+        vec![("a.rs", ENUM_SRC), ("b.rs", B_ENUM)],
+    )
+    .expect_err("malformed enum template must fail loud");
+    assert!(err.contains("evolution paste template"), "got: {err}");
+}
+
+#[test]
+fn enum_template_on_struct_capture_is_loud() {
+    // Kind mismatch: an `enum` template cannot splice a `struct` capture.
+    let err = apply_multi(
+        &cut_and_paste_struct("pub enum New { ... }"),
+        vec![("a.rs", STRUCT_SRC), ("b.rs", B_STRUCT)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `enum`"), "got: {err}");
+}
+
+#[test]
+fn struct_template_on_enum_capture_is_loud() {
+    // Converse kind mismatch: a `struct` template cannot splice an
+    // `enum` capture.
+    let err = apply_multi(
+        &cut_and_paste_enum("pub struct New { ... }"),
+        vec![("a.rs", ENUM_SRC), ("b.rs", B_ENUM)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `struct`"), "got: {err}");
+}

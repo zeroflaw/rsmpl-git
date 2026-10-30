@@ -339,3 +339,93 @@ fn struct_field_edited_pair_stays_ordinary() {
         out.rsmpl
     );
 }
+
+/// A long-enough enum body to clear the T375 byte-win guard.
+fn big_enum(vis: &str, name: &str) -> String {
+    let pre = if vis.is_empty() {
+        String::new()
+    } else {
+        format!("{vis} ")
+    };
+    let mut s = format!("{pre}enum {name} {{\n");
+    for i in 0..30 {
+        s.push_str(&format!("    V{i}(u32),\n"));
+    }
+    s.push_str("}\n");
+    s
+}
+
+#[test]
+fn enum_name_change_fires_with_template_paste_and_round_trips() {
+    // WI-8 slice 2: `enum Old` → `pub enum New` (same variants) moving
+    // files compresses to a cut + enum-template paste and round-trips
+    // byte-identical.
+    let minus_item = big_enum("", "Old");
+    let plus_item = big_enum("pub", "New");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_item}");
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus_blank = "+\n".to_string();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!(
+                "@@ -1,0 +2,{} @@\n{plus_blank}{plus}",
+                plus_item.lines().count() + 1
+            )
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        out.rsmpl.contains("# bind="),
+        "evolved enum cut missing, got:\n{}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("+ pub enum New { ... }"),
+        "enum template paste missing, got:\n{}",
+        out.rsmpl
+    );
+    let pre_refs: Vec<(&str, &str)> = vec![("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    let post_refs: Vec<(&str, &str)> = vec![("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
+}
+
+#[test]
+fn enum_variant_edited_pair_stays_ordinary() {
+    // Same vis/name evolution, but a variant changes payload: two
+    // changes, not one move — stays a full delete+insert.
+    let minus_item = big_enum("", "Old");
+    let plus_item = big_enum("pub", "New").replace("V1(u32),", "V1(i64),");
+    let a_old = format!("fn keep() {{}}\n{minus_item}");
+    let b_old = "fn other() {}\n".to_string();
+    let minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+    let plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+    let raw = format!(
+        "{}{}",
+        section(
+            "a.rs",
+            &format!("@@ -2,{} +2,0 @@\n{minus}", minus_item.lines().count())
+        ),
+        section(
+            "b.rs",
+            &format!("@@ -1,0 +2,{} @@\n+\n{plus}", plus_item.lines().count() + 1)
+        )
+    );
+    let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
+    assert!(
+        !out.rsmpl.contains("# bind="),
+        "variant edits veto the enum move, got:\n{}",
+        out.rsmpl
+    );
+}

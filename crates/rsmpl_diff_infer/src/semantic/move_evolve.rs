@@ -1,24 +1,27 @@
-//! WI-8a + WI-8 slice 1: `fn` and `struct` move + header evolution
-//! pairing.
+//! WI-8a + WI-8 slices 1-2: `fn`, `struct`, and `enum` move + header
+//! evolution pairing.
 //!
 //! Byte-identical pairing (`moves::try_move_sweep`) misses moves that
 //! also rename the item or change its header — the common case
-//! (`fn foo` → `pub async fn bar`, `struct Old` → `pub struct New` in a
-//! new module file). This module pairs `fn`/`struct` items whose bodies
-//! (and signatures/fields) are token-equal but whose header prefix
-//! (vis + qualifiers, verbatim) and/or name evolve, and builds the
-//! single-line header template the engine's evolution paste
+//! (`fn foo` → `pub async fn bar`, `struct Old` → `pub struct New`,
+//! `enum Old` → `pub enum New` in a new module file). This module
+//! pairs `fn`/`struct`/`enum` items whose bodies (and
+//! signatures/fields/variants) are token-equal but whose header
+//! prefix (vis + qualifiers, verbatim) and/or name evolve, and builds
+//! the single-line header template the engine's evolution paste
 //! (`# use=N` + `+ <prefix>fn <New>(...) { ... }` /
-//! `+ <prefix>struct <New> { ... }`) splices the captured body under.
+//! `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }`)
+//! splices the captured body under.
 //!
-//! Scope is deliberately narrow (WI-8a + slice 1): `fn` and `struct`
-//! items only; generics, params/fields, return type, `where` clause,
-//! attrs, and bodies must be token-equal. The evolving prefix is
-//! verbatim plus-side text, never an inferred hole, so qualifier
-//! evolution (`fn` → `pub async fn`) rides the same safe mechanism as
-//! vis/name. Everything else (other item kinds, attr/signature/field/
-//! body deltas) stays ordinary — the byte-exact path owns identical
-//! items (an evolved pair requires a prefix or name delta).
+//! Scope is deliberately narrow (WI-8a + slices 1-2): `fn`, `struct`,
+//! and `enum` items only; generics, params/fields/variants, return
+//! type, `where` clause, attrs, and bodies must be token-equal. The
+//! evolving prefix is verbatim plus-side text, never an inferred hole,
+//! so qualifier evolution (`fn` → `pub async fn`) rides the same safe
+//! mechanism as vis/name. Everything else (other item kinds,
+//! attr/signature/field/variant/body deltas) stays ordinary — the
+//! byte-exact path owns identical items (an evolved pair requires a
+//! prefix or name delta).
 
 use quote::ToTokens;
 use syn::spanned::Spanned;
@@ -300,6 +303,134 @@ pub(crate) fn struct_evolution_template(prefix: &str, name: &str) -> String {
     }
 }
 
+/// Evolved `enum` pair check (WI-8 slice 2): same shape modulo the
+/// visibility prefix and the ident. Generics (params + where),
+/// attrs, and variants must be token-equal. Returns the plus-side
+/// ident when the pair evolves (a vis or name delta is required —
+/// the byte-exact path owns identical items).
+pub(crate) fn enum_evolved_match(minus: &syn::ItemEnum, plus: &syn::ItemEnum) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    let vis_same = tok(&minus.vis) == tok(&plus.vis);
+    let name_same = minus.ident == plus.ident;
+    if vis_same && name_same {
+        return None;
+    }
+    if tok(&minus.generics) != tok(&plus.generics) {
+        return None;
+    }
+    if tok(&minus.variants) != tok(&plus.variants) {
+        return None;
+    }
+    Some(plus.ident.to_string())
+}
+
+/// All evolved `enum` hits of one minus item text in a pure-plus
+/// hunk body (WI-8 slice 2). Mirrors `find_struct_evolved_hits`;
+/// spans coincide with parsed `enum` item spans by construction.
+pub(crate) fn find_enum_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemEnum>(minus_text) else {
+        return Vec::new();
+    };
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Enum(plus) = it else {
+            continue;
+        };
+        if enum_evolved_match(&minus, plus).is_none() {
+            continue;
+        }
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let name = plus.ident.to_string();
+        let Some(prefix) = enum_header_prefix(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1, e - 1, prefix, name));
+    }
+    out
+}
+
+/// The verbatim text before the `enum <name>` keyword on the item's
+/// header line (visibility, leading whitespace stripped).
+/// Attr/doc lines never match: the header is always a code line.
+pub(crate) fn enum_header_prefix(item_lines: &[String], name: &str) -> Option<String> {
+    for line in item_lines {
+        let text = line.get(1..).unwrap_or("");
+        let t = text.trim_start();
+        if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
+            continue;
+        }
+        if let Some(e_pos) = find_enum_name(text, name) {
+            return Some(text[..e_pos].trim_start().to_string());
+        }
+    }
+    None
+}
+
+/// Byte offset of a word-bounded `enum <name>` pair (`None` when
+/// the line holds no such pair: comments, strings, or other idents).
+fn find_enum_name(line: &str, name: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i..].starts_with(b"enum")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 4).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 4;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if line.get(start..j) == Some(name) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Single-line enum evolution-paste template: the plus-side
+/// visibility verbatim, `{ ... }` body marker. `prefix` is trimmed;
+/// an empty prefix yields a bare `enum` header. The `{ ... }` tail
+/// is a shape marker only — the splice keeps the captured suffix
+/// (generics/variants) verbatim.
+pub(crate) fn enum_evolution_template(prefix: &str, name: &str) -> String {
+    let pre = prefix.trim_end();
+    if pre.is_empty() {
+        format!("enum {name} {{ ... }}")
+    } else {
+        format!("{pre} enum {name} {{ ... }}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,5 +573,51 @@ mod tests {
             "pub struct New { ... }"
         );
         assert_eq!(struct_evolution_template("", "New"), "struct New { ... }");
+    }
+
+    fn item_enum(text: &str) -> syn::ItemEnum {
+        syn::parse_str(text).expect("test enum must parse")
+    }
+
+    #[test]
+    fn enum_vis_and_name_evolve_fires() {
+        let minus = item_enum("enum Old {\n    A,\n    B(i32),\n}");
+        let plus = item_enum("pub enum New {\n    A,\n    B(i32),\n}");
+        assert_eq!(enum_evolved_match(&minus, &plus), Some("New".to_string()));
+    }
+
+    #[test]
+    fn enum_name_only_and_vis_only_fire() {
+        let minus = item_enum("enum Old {\n    A,\n    B,\n}");
+        let plus = item_enum("enum New {\n    A,\n    B,\n}");
+        assert_eq!(enum_evolved_match(&minus, &plus), Some("New".to_string()));
+        let plus = item_enum("pub(crate) enum Old {\n    A,\n    B,\n}");
+        assert_eq!(enum_evolved_match(&minus, &plus), Some("Old".to_string()));
+    }
+
+    #[test]
+    fn enum_identical_and_deltas_veto() {
+        let base = item_enum("enum Old {\n    A,\n    B(i32),\n}");
+        let same = item_enum("enum Old {\n    A,\n    B(i32),\n}");
+        assert_eq!(enum_evolved_match(&base, &same), None);
+        // Variant delta.
+        let plus = item_enum("pub enum New {\n    A,\n    C,\n}");
+        assert_eq!(enum_evolved_match(&base, &plus), None);
+        // Generic delta.
+        let minus_g = item_enum("enum Old<T> {\n    A(T),\n}");
+        let plus_g = item_enum("pub enum New<T: Clone> {\n    A(T),\n}");
+        assert_eq!(enum_evolved_match(&minus_g, &plus_g), None);
+        // Attr delta.
+        let plus_a = item_enum("#[derive(Clone)]\npub enum New {\n    A,\n    B(i32),\n}");
+        assert_eq!(enum_evolved_match(&base, &plus_a), None);
+    }
+
+    #[test]
+    fn enum_template_shapes() {
+        assert_eq!(
+            enum_evolution_template("pub ", "New"),
+            "pub enum New { ... }"
+        );
+        assert_eq!(enum_evolution_template("", "New"), "enum New { ... }");
     }
 }
