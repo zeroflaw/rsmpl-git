@@ -1,22 +1,25 @@
-//! WI-8a + WI-8 slices 1-4: `fn`, `struct`, `enum`, `union`, and `type`
-//! move + header evolution pairing.
+//! WI-8a + WI-8 slices 1-5: `fn`, `struct`, `enum`, `union`, `type`,
+//! and `const` move + header evolution pairing.
 //!
 //! Byte-identical pairing (`moves::try_move_sweep`) misses moves that
 //! also rename the item or change its header — the common case
 //! (`fn foo` → `pub async fn bar`, `struct Old` → `pub struct New`,
 //! `enum Old` → `pub enum New`, `union Old` → `pub union New`,
-//! `type Old` → `pub type New` in a new
-//! module file). This module pairs `fn`/`struct`/`enum`/`union`/`type` items
-//! whose bodies (and signatures/fields/variants/aliased types) are token-equal but
+//! `type Old` → `pub type New`,
+//! `const Old` → `pub const New` in a new
+//! module file). This module pairs `fn`/`struct`/`enum`/`union`/`type`/`const` items
+//! whose bodies (and signatures/fields/variants/aliased types/const
+//! type+expr) are token-equal but
 //! whose header prefix (vis + qualifiers, verbatim) and/or name evolve,
 //! and builds the single-line header template the engine's evolution
 //! paste (`# use=N` + `+ <prefix>fn <New>(...) { ... }` /
 //! `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` /
-//! `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;`) splices the captured body under.
+//! `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` /
+//! `+ <prefix>const <New> = ...;`) splices the captured body under.
 //!
-//! Scope is deliberately narrow (WI-8a + slices 1-4): `fn`, `struct`,
-//! `enum`, `union`, and `type` items only; generics, params/fields/variants/
-//! aliased type, return type, `where` clause, attrs, and bodies must be token-equal.
+//! Scope is deliberately narrow (WI-8a + slices 1-5): `fn`, `struct`,
+//! `enum`, `union`, `type`, and `const` items only; generics, params/fields/variants/
+//! aliased type/const type+expr, return type, `where` clause, attrs, and bodies must be token-equal.
 //! The evolving prefix is verbatim plus-side text, never an inferred
 //! hole, so qualifier evolution (`fn` → `pub async fn`) rides the same
 //! safe mechanism as vis/name. Everything else (other item kinds,
@@ -688,6 +691,138 @@ pub(crate) fn type_evolution_template(prefix: &str, name: &str) -> String {
     }
 }
 
+/// Evolved `const` pair check (WI-8 slice 5): same shape modulo the
+/// visibility prefix and the ident. Generics (params + where),
+/// attrs, the const type, and the initializer expr must be
+/// token-equal. Returns the plus-side ident when the pair evolves (a
+/// vis or name delta is required — the byte-exact path owns identical
+/// items).
+pub(crate) fn const_evolved_match(minus: &syn::ItemConst, plus: &syn::ItemConst) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    let vis_same = tok(&minus.vis) == tok(&plus.vis);
+    let name_same = minus.ident == plus.ident;
+    if vis_same && name_same {
+        return None;
+    }
+    if tok(&minus.generics) != tok(&plus.generics) {
+        return None;
+    }
+    if tok(&minus.ty) != tok(&plus.ty) {
+        return None;
+    }
+    if tok(&minus.expr) != tok(&plus.expr) {
+        return None;
+    }
+    Some(plus.ident.to_string())
+}
+
+/// All evolved `const` hits of one minus item text in a pure-plus
+/// hunk body (WI-8 slice 5). Mirrors `find_type_evolved_hits`;
+/// spans coincide with parsed `const` item spans by construction.
+pub(crate) fn find_const_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemConst>(minus_text) else {
+        return Vec::new();
+    };
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Const(plus) = it else {
+            continue;
+        };
+        if const_evolved_match(&minus, plus).is_none() {
+            continue;
+        }
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let name = plus.ident.to_string();
+        let Some(prefix) = const_header_prefix(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1, e - 1, prefix, name));
+    }
+    out
+}
+
+/// The verbatim text before the `const <name>` keyword on the item's
+/// header line (visibility, leading whitespace stripped).
+/// Attr/doc lines never match: the header is always a code line.
+pub(crate) fn const_header_prefix(item_lines: &[String], name: &str) -> Option<String> {
+    for line in item_lines {
+        let text = line.get(1..).unwrap_or("");
+        let t = text.trim_start();
+        if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
+            continue;
+        }
+        if let Some(c_pos) = find_const_name(text, name) {
+            return Some(text[..c_pos].trim_start().to_string());
+        }
+    }
+    None
+}
+
+/// Byte offset of a word-bounded `const <name>` pair (`None` when
+/// the line holds no such pair: comments, strings, or other idents).
+fn find_const_name(line: &str, name: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if bytes[i..].starts_with(b"const")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 5).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let mut j = i + 5;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            let start = j;
+            while bytes.get(j).is_some_and(|c| is_ident(*c)) {
+                j += 1;
+            }
+            if line.get(start..j) == Some(name) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Single-line const evolution-paste template: the plus-side
+/// visibility verbatim, `= ...;` body marker. `prefix` is trimmed;
+/// an empty prefix yields a bare `const` header. The `= ...;` tail
+/// is a shape marker only — the splice keeps the captured suffix
+/// (generics/`: ty = expr;`) verbatim.
+pub(crate) fn const_evolution_template(prefix: &str, name: &str) -> String {
+    let pre = prefix.trim_end();
+    if pre.is_empty() {
+        format!("const {name} = ...;")
+    } else {
+        format!("{pre} const {name} = ...;")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -968,5 +1103,50 @@ mod tests {
             "pub type New = ...;"
         );
         assert_eq!(type_evolution_template("", "New"), "type New = ...;");
+    }
+
+    fn item_const(text: &str) -> syn::ItemConst {
+        syn::parse_str(text).expect("test const must parse")
+    }
+
+    #[test]
+    fn const_vis_and_name_evolve_fires() {
+        let minus = item_const("const Old: u32 = 1;");
+        let plus = item_const("pub const New: u32 = 1;");
+        assert_eq!(const_evolved_match(&minus, &plus), Some("New".to_string()));
+    }
+
+    #[test]
+    fn const_name_only_and_vis_only_fire() {
+        let minus = item_const("const Old: u32 = 1;");
+        let plus = item_const("const New: u32 = 1;");
+        assert_eq!(const_evolved_match(&minus, &plus), Some("New".to_string()));
+        let plus = item_const("pub(crate) const Old: u32 = 1;");
+        assert_eq!(const_evolved_match(&minus, &plus), Some("Old".to_string()));
+    }
+
+    #[test]
+    fn const_identical_and_deltas_veto() {
+        let base = item_const("const Old: u32 = 1;");
+        let same = item_const("const Old: u32 = 1;");
+        assert_eq!(const_evolved_match(&base, &same), None);
+        // Type delta.
+        let plus = item_const("pub const New: i64 = 1;");
+        assert_eq!(const_evolved_match(&base, &plus), None);
+        // Expr delta.
+        let plus = item_const("pub const New: u32 = 2;");
+        assert_eq!(const_evolved_match(&base, &plus), None);
+        // Attr delta.
+        let plus_a = item_const("#[allow(dead_code)]\npub const New: u32 = 1;");
+        assert_eq!(const_evolved_match(&base, &plus_a), None);
+    }
+
+    #[test]
+    fn const_template_shapes() {
+        assert_eq!(
+            const_evolution_template("pub ", "New"),
+            "pub const New = ...;"
+        );
+        assert_eq!(const_evolution_template("", "New"), "const New = ...;");
     }
 }

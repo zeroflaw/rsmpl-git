@@ -419,3 +419,77 @@ fn struct_template_on_type_capture_is_loud() {
     .expect_err("kind mismatch must fail loud");
     assert!(err.contains("captured `struct`"), "got: {err}");
 }
+
+// WI-8 slice 5: const evolution pastes.
+
+const CONST_SRC: &str = "const Old: u32 = 1;\n";
+const B_CONST: &str = "fn other() {}\n";
+
+fn cut_and_paste_const(template: &str) -> String {
+    format!(
+        "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ {template}\n"
+    )
+}
+
+#[test]
+fn const_name_and_vis_evolve_cross_file() {
+    let files = apply_multi(
+        &cut_and_paste_const("pub const New = ...;"),
+        vec![("a.rs", CONST_SRC), ("b.rs", B_CONST)],
+    )
+    .unwrap();
+    assert_eq!(files["a.rs"], "", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub const New: u32 = 1;\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn const_generic_suffix_rides_verbatim() {
+    let src = "const Old: [u8; 3] = [1, 2, 3];\n";
+    let files = apply_multi(
+        &cut_and_paste_const("pub const New = ...;"),
+        vec![("a.rs", src), ("b.rs", B_CONST)],
+    )
+    .unwrap();
+    assert!(
+        files["b.rs"].contains("pub const New: [u8; 3] = [1, 2, 3];"),
+        "type+expr suffix must ride verbatim, got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn const_malformed_template_is_loud() {
+    let err = apply_multi(
+        &cut_and_paste_const("pub const New"),
+        vec![("a.rs", CONST_SRC), ("b.rs", B_CONST)],
+    )
+    .expect_err("malformed const template must fail loud");
+    assert!(err.contains("evolution paste template"), "got: {err}");
+}
+
+#[test]
+fn const_template_on_struct_capture_is_loud() {
+    // Kind mismatch: a `const` template cannot splice a `struct` capture.
+    let err = apply_multi(
+        &cut_and_paste_struct("pub const New = ...;"),
+        vec![("a.rs", STRUCT_SRC), ("b.rs", B_STRUCT)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `const`"), "got: {err}");
+}
+
+#[test]
+fn struct_template_on_const_capture_is_loud() {
+    // Converse kind mismatch: a `struct` template cannot splice a
+    // `const` capture.
+    let err = apply_multi(
+        &cut_and_paste_const("pub struct New { ... }"),
+        vec![("a.rs", CONST_SRC), ("b.rs", B_CONST)],
+    )
+    .expect_err("kind mismatch must fail loud");
+    assert!(err.contains("captured `struct`"), "got: {err}");
+}

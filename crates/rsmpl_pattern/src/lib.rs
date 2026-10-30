@@ -24,9 +24,10 @@ pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, V
 pub use item_rename::{parse_side as parse_item_rename_side, ItemKind, ItemRenameSide};
 pub use metavar::{MetavarTable, TokenKind};
 pub use pattern::{
-    compile, is_trait_header, parse_enum_evolution_template, parse_evolution_template,
-    parse_struct_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
-    split_leading_attrs, trait_header_ident, CompiledPattern, GeneralShape, PatternKind,
+    compile, is_trait_header, parse_const_evolution_template, parse_enum_evolution_template,
+    parse_evolution_template, parse_struct_evolution_template, parse_type_evolution_template,
+    parse_union_evolution_template, split_leading_attrs, trait_header_ident, CompiledPattern,
+    GeneralShape, PatternKind,
 };
 pub use quote_utils::{
     char_lit_len, count_ellipsis_markers, has_ellipsis_marker, is_ellipsis_marker_ident,

@@ -1216,9 +1216,39 @@ fn type_evolution_template_accepts_visibility() {
     assert!(parse_type_evolution_template("pub struct New { ... }").is_none());
     assert!(parse_type_evolution_template("pub enum New { ... }").is_none());
     assert!(parse_type_evolution_template("pub union New { ... }").is_none());
+    assert!(parse_type_evolution_template("pub const New = ...;").is_none());
     // Missing marker, missing `=`, garbage prefix, multi-line all rejected.
     assert!(parse_type_evolution_template("pub type New").is_none());
     assert!(parse_type_evolution_template("pub type New ...;").is_none());
     assert!(parse_type_evolution_template("a;b type New = ...;").is_none());
     assert!(parse_type_evolution_template("pub type New = ...;\nfoo").is_none());
+}
+
+#[test]
+fn const_evolution_template_accepts_visibility() {
+    // WI-8 slice 5: `const` evolution pastes accept visibility
+    // prefixes and require an `= ...;` body marker.
+    use rsmpl_pattern::parse_const_evolution_template;
+    for prefix in ["", "pub", "pub(crate)", "pub(super)", "pub(in crate::x)"] {
+        let tmpl = if prefix.is_empty() {
+            "const New = ...;".to_string()
+        } else {
+            format!("{prefix} const New = ...;")
+        };
+        let (pre, name) =
+            parse_const_evolution_template(&tmpl).unwrap_or_else(|| panic!("must accept {tmpl:?}"));
+        assert_eq!(name, "New", "got: {tmpl:?}");
+        assert_eq!(pre.trim(), prefix, "got: {tmpl:?}");
+    }
+    // `fn`/`struct`/`enum`/`union`/`type` templates are different parsers — never cross-accept.
+    assert!(parse_const_evolution_template("pub fn new(...) { ... }").is_none());
+    assert!(parse_const_evolution_template("pub struct New { ... }").is_none());
+    assert!(parse_const_evolution_template("pub enum New { ... }").is_none());
+    assert!(parse_const_evolution_template("pub union New { ... }").is_none());
+    assert!(parse_const_evolution_template("pub type New = ...;").is_none());
+    // Missing marker, missing `=`, garbage prefix, multi-line all rejected.
+    assert!(parse_const_evolution_template("pub const New").is_none());
+    assert!(parse_const_evolution_template("pub const New ...;").is_none());
+    assert!(parse_const_evolution_template("a;b const New = ...;").is_none());
+    assert!(parse_const_evolution_template("pub const New = ...;\nfoo").is_none());
 }
