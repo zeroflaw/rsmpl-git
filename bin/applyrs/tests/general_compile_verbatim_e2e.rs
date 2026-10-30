@@ -196,3 +196,15 @@ fn c12_attrs_differ() {
         true,
     );
 }
+
+#[test]
+fn c18_multi_statement_minus() {
+    // WI-9c(c): a minus side that parses as two or more Rust statements
+    // fails fast at compile time instead of dying at match with a
+    // misleading "no match found".
+    check(
+        "diff --git a.rs\n@@ -2,2 @@ rule=r\n# allow=many\n- let a = foo(E);\n- let b = bar(E);\n+ let a = foo2(E);\n+ let b = bar2(E);\n",
+        "multi-statement sequences are not supported in v1 general patterns (the minus side parses as 2 Rust statements, not one); write one hunk per statement or item, or use an ordinary hunk",
+        false,
+    );
+}

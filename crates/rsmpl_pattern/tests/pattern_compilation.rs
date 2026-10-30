@@ -604,6 +604,47 @@ fn method_ident_symbol_rejected_at_compile() {
 }
 
 #[test]
+fn multi_statement_minus_fails_fast_at_compile() {
+    // WI-9c(c): a minus side that parses as two or more Rust statements
+    // is a sequence, which v1 general patterns cannot express (no
+    // multi-statement kind until WI-9c(a)). Fail fast at compile time
+    // naming the pattern instead of degrading to `Raw` and dying at
+    // match with a misleading "no match found".
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    let patch = format!(
+        "{head}@@ -2,2 @@ rule=x\n# lang=rust\n# allow=many\n- let a = foo(E);\n- let b = bar(E);\n+ let a = foo2(E);\n+ let b = bar2(E);\n"
+    );
+    let err = compile(&hunk_of(&patch)).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render()
+            .contains("multi-statement sequences are not supported"),
+        "missing needle:\n{}",
+        err.render()
+    );
+    assert!(
+        err.render().contains("parses as 2 Rust statements"),
+        "missing count:\n{}",
+        err.render()
+    );
+    // Negative control: a multi-line SINGLE `let` (line-continued call)
+    // still compiles — the sequence gate must never false-positive.
+    let ok = format!(
+        "{head}@@ -2,3 @@ rule=x\n# lang=rust\n# allow=many\n- let a = foo(\n- E\n- );\n+ let a = foo2(E);\n"
+    );
+    assert!(
+        matches!(
+            compile(&hunk_of(&ok)).unwrap().kind,
+            PatternKind::General {
+                shape: GeneralShape::Stmt,
+                ..
+            }
+        ),
+        "multi-line single let should be General::Stmt"
+    );
+}
+
+#[test]
 fn inert_directives_fail_fast() {
     // T169: a lone `# fallback=syntax` (no `# symbol`) and a
     // non-default `# attrs=` on call/macro shapes are silent no-ops,

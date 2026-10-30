@@ -957,6 +957,29 @@ fn try_general(
             "`# root=type` requires a Rust type pattern",
         ));
     }
+    // WI-9c(c): a minus side that parses as two or more Rust statements is
+    // a statement sequence, which v1 general patterns cannot express (no
+    // multi-statement pattern kind until WI-9c(a)). Fail fast at compile
+    // time naming the pattern instead of degrading to `Raw` and dying at
+    // match with a misleading "no match found" that points at the file.
+    // Single-statement text (including multi-line single shapes such as
+    // line-continued calls) and unparsable wraps still fall through to
+    // `Ok(None)` — never a false positive. C1 precedent: the repair rides
+    // in the reason, no separate suggestion.
+    let (masked_seq, sentinels_seq) = mask_literal_spans(&minus_rest)?;
+    let (sub_seq, _) = ExprPattern::placeholder_expr(&masked_seq, table);
+    let sub_seq = unmask_literal_spans(&sub_seq, &sentinels_seq);
+    if let Ok(block) = syn::parse_str::<syn::Block>(&format!("{{ {sub_seq} }}")) {
+        if block.stmts.len() >= 2 {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "multi-statement sequences are not supported in v1 general patterns (the minus side parses as {} Rust statements, not one); write one hunk per statement or item, or use an ordinary hunk",
+                    block.stmts.len()
+                ),
+            ));
+        }
+    }
     Ok(None)
 }
 
