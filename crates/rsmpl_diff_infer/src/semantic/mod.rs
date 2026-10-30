@@ -25,6 +25,7 @@ mod macro_hetero;
 mod macros;
 mod methods;
 mod move_evolve;
+mod move_parts;
 mod moves;
 mod paths;
 mod peel;
