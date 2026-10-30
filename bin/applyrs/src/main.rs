@@ -597,10 +597,16 @@ fn run() -> Result<(), CliError> {
                 // in span order. Omitted when no site binds (renames,
                 // insertions, deletes, use-prefix carry no evidence).
                 if !r.sites.is_empty() {
-                    let (sites_val, sites_trunc) = sites_json(&r.sites);
+                    let (sites_val, sites_trunc, bindings_cut) = sites_json(&r.sites);
                     entry["sites"] = sites_val;
                     if sites_trunc > 0 {
                         entry["sites_truncated"] = serde_json::json!(sites_trunc);
+                    }
+                    // WI-1a: marked truncation — a cut binding value carries
+                    // a trailing `…`, counted here (additive within v2).
+                    if bindings_cut > 0 {
+                        entry["bindings_truncated_chars"] =
+                            serde_json::json!(bindings_cut);
                     }
                 }
                 // `# follow=uses` skip notes stay hunk-level (no span).
@@ -609,10 +615,16 @@ fn run() -> Result<(), CliError> {
                 }
                 // WI-7c: report-only orphan evidence, capped like bindings.
                 if !r.orphans.is_empty() {
-                    let (orphans_val, orphans_trunc) = orphans_json(&r.orphans);
+                    let (orphans_val, orphans_trunc, orphans_cut) = orphans_json(&r.orphans);
                     entry["orphans"] = orphans_val;
                     if orphans_trunc > 0 {
                         entry["orphans_truncated"] = serde_json::json!(orphans_trunc);
+                    }
+                    // WI-1a: marked truncation for orphan `text` (same `…`
+                    // posture as bindings; additive within v2).
+                    if orphans_cut > 0 {
+                        entry["orphans_truncated_chars"] =
+                            serde_json::json!(orphans_cut);
                     }
                 }
                 entry
@@ -839,19 +851,28 @@ fn post_sha_hex(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-/// WI-2b/2c: token-bounded per-site evidence (SPEC D.2). One entry per emitted
-/// edit in span order — `[{span: [s, e], bindings: {...}}]` — with 8-entry
-/// / 80-char per-site truncation. Returns the
-/// JSON array plus the summed omitted-entry count (`sites_truncated`).
-fn sites_json(sites: &[rsmpl_engine::SiteReport]) -> (serde_json::Value, usize) {
+/// WI-2b/2c + WI-1a: token-bounded per-site evidence (SPEC D.2). One entry
+/// per emitted edit in span order — `[{span: [s, e], bindings: {...}}]` —
+/// with 8-entry / 80-char per-site truncation. A value cut at 80 chars
+/// carries a trailing `…` (U+2026) so agents can tell a truncated binding
+/// from a complete one. Returns the JSON array plus the summed
+/// omitted-entry count (`sites_truncated`) plus the number of cut values
+/// (`bindings_truncated_chars`).
+fn sites_json(sites: &[rsmpl_engine::SiteReport]) -> (serde_json::Value, usize, usize) {
     const MAX_ENTRIES: usize = 8;
     const MAX_CHARS: usize = 80;
     let mut arr = Vec::with_capacity(sites.len());
     let mut omitted_total = 0usize;
+    let mut cut_total = 0usize;
     for site in sites {
         let mut map = serde_json::Map::new();
         for (k, v) in site.bindings.iter().take(MAX_ENTRIES) {
-            let truncated: String = v.chars().take(MAX_CHARS).collect();
+            let cut = v.chars().count() > MAX_CHARS;
+            let mut truncated: String = v.chars().take(MAX_CHARS).collect();
+            if cut {
+                truncated.push('…');
+                cut_total += 1;
+            }
             map.insert(k.clone(), serde_json::Value::String(truncated));
         }
         omitted_total += site.bindings.len().saturating_sub(map.len());
@@ -860,7 +881,7 @@ fn sites_json(sites: &[rsmpl_engine::SiteReport]) -> (serde_json::Value, usize) 
             "bindings": serde_json::Value::Object(map),
         }));
     }
-    (serde_json::Value::Array(arr), omitted_total)
+    (serde_json::Value::Array(arr), omitted_total, cut_total)
 }
 
 /// WI-2a + WI-7c `--verify build`: `cargo check --quiet` in `repo`
@@ -884,19 +905,27 @@ fn run_verify_build_with_orphans(
     }
 }
 
-/// WI-7c: token-bounded orphan evidence (SPEC D.2). Max 8 entries per
-/// rule, each `text` truncated to 80 chars. Returns the JSON array plus
-/// the omitted-entry count (`orphans_truncated`).
-fn orphans_json(orphans: &[rsmpl_engine::OrphanReport]) -> (serde_json::Value, usize) {
+/// WI-7c + WI-1a: token-bounded orphan evidence (SPEC D.2). Max 8 entries
+/// per rule, each `text` truncated to 80 chars with a trailing `…` when
+/// cut. Returns the JSON array plus the omitted-entry count
+/// (`orphans_truncated`) plus the number of cut texts
+/// (`orphans_truncated_chars`).
+fn orphans_json(orphans: &[rsmpl_engine::OrphanReport]) -> (serde_json::Value, usize, usize) {
     const MAX_ORPHANS: usize = 8;
     const MAX_CHARS: usize = 80;
     let mut arr = Vec::with_capacity(orphans.len().min(MAX_ORPHANS));
+    let mut cut_total = 0usize;
     for o in orphans.iter().take(MAX_ORPHANS) {
-        let text: String = o.text.chars().take(MAX_CHARS).collect();
+        let cut = o.text.chars().count() > MAX_CHARS;
+        let mut text: String = o.text.chars().take(MAX_CHARS).collect();
+        if cut {
+            text.push('…');
+            cut_total += 1;
+        }
         arr.push(serde_json::json!({"file": o.file, "line": o.line, "text": text}));
     }
     let omitted = orphans.len().saturating_sub(arr.len());
-    (serde_json::Value::Array(arr), omitted)
+    (serde_json::Value::Array(arr), omitted, cut_total)
 }
 
 /// WI-7c: short `file:line` hint (first 3 orphans) for `--verify build`
@@ -921,13 +950,18 @@ fn orphan_hint(report: &rsmpl_engine::ApplyReport) -> Option<String> {
     }
 }
 
-/// WI-7c: one stderr line for text mode (same 8-entry / 80-char caps).
+/// WI-7c + WI-1a: one stderr line for text mode (same 8-entry / 80-char
+/// caps; cut texts carry a trailing `…`).
 fn orphan_text_line(report: &rsmpl_engine::ApplyReport) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     let mut total = 0usize;
     for r in &report.rules {
         for o in r.orphans.iter().take(8) {
-            let text: String = o.text.chars().take(80).collect();
+            let cut = o.text.chars().count() > 80;
+            let mut text: String = o.text.chars().take(80).collect();
+            if cut {
+                text.push('…');
+            }
             parts.push(format!("{}:{}: {text}", o.file, o.line));
             total += 1;
         }

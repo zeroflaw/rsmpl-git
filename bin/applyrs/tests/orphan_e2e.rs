@@ -88,6 +88,43 @@ fn orphans_truncate_at_eight_per_rule() {
 }
 
 #[test]
+fn long_orphan_text_carries_ellipsis_marker() {
+    // WI-1a: an orphan `text` cut at 80 chars carries a trailing `…` and
+    // the rule counts the cut in `orphans_truncated_chars`.
+    let dir = init_repo();
+    write(dir.path(), "src/a.rs", "pub struct Old;\n");
+    let pad = "x".repeat(100);
+    write(
+        dir.path(),
+        "src/b.rs",
+        &format!("fn f(x: Old) -> Old {{ // {pad}\n    x\n}}\n"),
+    );
+    let out = run_stdin(
+        dir.path(),
+        RENAME,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(out.status.success());
+    let v = json_of(&out);
+    let orphans = v["rules"][0]["orphans"].as_array().unwrap();
+    assert_eq!(orphans.len(), 1, "got: {v}");
+    let text = orphans[0]["text"].as_str().unwrap();
+    assert_eq!(text.chars().count(), 81, "got: {v}");
+    assert!(text.ends_with('…'), "got: {v}");
+    assert_eq!(
+        v["rules"][0]["orphans_truncated_chars"],
+        serde_json::json!(1),
+        "got: {v}"
+    );
+    assert!(v["rules"][0].get("orphans_truncated").is_none(), "got: {v}");
+    // Text mode marks the same cut with `…`.
+    let out = run_stdin(dir.path(), RENAME, &["--check"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains('…'), "got: {stderr}");
+}
+
+#[test]
 fn text_mode_warns_about_orphans() {
     let dir = init_repo();
     write(dir.path(), "src/a.rs", "pub struct Old;\n");

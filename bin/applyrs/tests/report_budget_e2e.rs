@@ -79,7 +79,14 @@ fn json_report_overhead_within_absolute_budget() {
                 let map = site["bindings"].as_object().unwrap();
                 assert!(map.len() <= 8, "got: {v}");
                 for (_, val) in map {
-                    assert!(val.as_str().unwrap().chars().count() <= 80, "got: {v}");
+                    // WI-1a: values are ≤ 80 chars, or an 80-char prefix
+                    // plus the `…` truncation marker.
+                    let s = val.as_str().unwrap();
+                    if let Some(prefix) = s.strip_suffix('…') {
+                        assert!(prefix.chars().count() <= 80, "got: {v}");
+                    } else {
+                        assert!(s.chars().count() <= 80, "got: {v}");
+                    }
                 }
             }
         }
@@ -89,4 +96,61 @@ fn json_report_overhead_within_absolute_budget() {
         serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
         "got: {v}"
     );
+}
+
+#[test]
+fn json_bindings_truncate_and_omit_empty() {
+    // WI-2b/2c v2 token bounds: per-site values cut at 80 chars (ASCII
+    // here, so chars == bytes) with a trailing `…` marker (WI-1a), and
+    // shapes that bind nothing omit the `sites` key (first-site `bindings`
+    // removed with `version: 2`).
+    let dir = init_repo();
+    let long_arg = "a".repeat(100);
+    write(
+        dir.path(),
+        "src/lib.rs",
+        &format!("fn foo() {{}}\nfn m() {{\n    foo({long_arg});\n    foo({long_arg});\n}}\n"),
+    );
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    // WI-2b: per-site truncation; both sites truncate (WI-1a: 80-char
+    // prefix plus the `…` marker, counted in `bindings_truncated_chars`).
+    let sites = v["rules"][0]["sites"].as_array().unwrap();
+    assert_eq!(sites.len(), 2, "got: {v}");
+    for site in sites {
+        let s = site["bindings"]["E"].as_str().unwrap();
+        assert_eq!(s.chars().count(), 81, "got: {v}");
+        assert!(s.ends_with('…'), "got: {v}");
+        assert!(
+            s.strip_suffix('…').unwrap().chars().all(|c| c == 'a'),
+            "got: {v}"
+        );
+    }
+    assert_eq!(
+        v["rules"][0]["bindings_truncated_chars"],
+        serde_json::json!(2),
+        "got: {v}"
+    );
+
+    // A definition-only rename binds nothing: sites key absent.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert!(v["rules"][0].get("sites").is_none(), "got: {v}");
+    assert!(v["rules"][0].get("sites_truncated").is_none(), "got: {v}");
 }

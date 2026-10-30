@@ -2293,7 +2293,8 @@ same syntactic index in report-only mode. The JSON rule entry gains
 `orphans: [{file, line, text}]` (one entry per stale-use line, sorted by
 `file`/`line`, `text` is the trimmed source line) plus
 `orphans_truncated` when more than 8 lines name the old ident (each
-`text` truncated to 80 chars). Opaque macro/attribute/`qself` lines
+`text` truncated to 80 chars with a trailing `…` when cut) plus
+`orphans_truncated_chars` counting cut texts (absent when zero). Opaque macro/attribute/`qself` lines
 count as orphans; unparseable files are excluded (the tripwire above
 owns them). `--check` stays green — the rename may be intentional —
 and text mode prints one `orphans:` stderr line. With `--verify build`
@@ -5938,17 +5939,19 @@ prints one JSON object to stdout:
   (an empty map plus a zero count carries no evidence). A
   `# follow=uses` hunk with skipped sites carries hunk-level (no span)
   `follow_skipped`: the `; `-joined skip notes (absent when no site
-  was skipped). Values truncate at 80 chars and entries at 8
-  (sorted order) per site; `sites_truncated` sums omitted entries
-  across sites (absent when zero), so the report stays within an
-  absolute byte budget while an over-broad hunk still shows its extra
-  span before apply. Budget (bytes beyond
+  was skipped). Values truncate at 80 chars (a cut value carries a
+  trailing `…` so a truncated binding is never mistaken for a complete
+  one) and entries at 8 (sorted order) per site; `sites_truncated` sums
+  omitted entries across sites (absent when zero) and
+  `bindings_truncated_chars` counts cut values (absent when zero), so
+  the report stays within an absolute byte budget while an over-broad
+  hunk still shows its extra span before apply. Budget (bytes beyond
   the reported `diff` string, `--diff-max-lines 0`): fixed envelope
   ≈90 B (`checked` + keys) + ≈80 B per `files[]` entry (64-hex
   `post_sha` dominates) + ≈110 B per `rules[]` entry (single-span,
   no bindings) + ≈90 B per span (`[s,e]` plus per-site `{span,
   bindings}` evidence — that growth is evidence, not overhead) + at most
-  8×80 B per binding site. Operational pin:
+  8×83 B per binding site (80 chars plus the 3-byte `…` marker when cut). Operational pin:
   overhead ≤ `200 + 150·F + 150·R + 90·S` bytes (`F` = files,
   `R` = rules, `S` = total spans). There is deliberately no relative
   % bound: a sub-KB report can exceed any % while staying within
@@ -5979,14 +5982,16 @@ prints one JSON object to stdout:
 - Per-rule `orphans` reports definition-only rename fallout
   (Section 14.8): `[{file, line, text}]` plus `orphans_truncated`
   when more than 8 lines name the old ident (each `text` truncated to
-  80 chars); absent when no use names the old ident. Additive within
-  `version: 2`.
+  80 chars with a trailing `…` when cut) plus `orphans_truncated_chars`
+  counting cut texts (absent when zero); absent when no use names the
+  old ident. Additive within `version: 2`.
 - `version` is the JSON report schema version (`2` = this contract:
   `checked` object, `sites`-only evidence, `follow_skipped` key; `v1`
   had boolean `check`, first-site `bindings`, and `verified`). Agents
   pin parsing on it; any future breaking JSON change bumps it
   (additive keys like `history`, `post_sha`, `sites_truncated`,
-  `follow_files`, `follow_source`, `orphans`, `orphans_truncated`
+  `bindings_truncated_chars`, `follow_files`, `follow_source`,
+  `orphans`, `orphans_truncated`, `orphans_truncated_chars`
   do not bump).
 - `checked` is the trust envelope: `{lowering, semantics, build}` on
   every successful run, each computed by a check that can fail on real
