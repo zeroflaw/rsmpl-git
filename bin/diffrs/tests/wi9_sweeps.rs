@@ -1,7 +1,9 @@
-//! WI-9a/WI-9b1 shape pins for `test-fixtures/diffrs/{27,82,83,84}-*`:
-//! same-name macro-interior sweep (27 fires hetero, 82 bracket-delimiter
-//! veto stays ordinary, 83 hetero fire with a stable long arg, 84
-//! single-site stays ordinary). Split out of
+//! WI-9a/WI-9b1/WI-9b2b shape pins for
+//! `test-fixtures/diffrs/{27,82,83,84,85,86}-*`: same-name
+//! macro-interior sweep (27 fires hetero, 82 bracket-delimiter veto
+//! stays ordinary, 83 hetero fire with a stable long arg, 84
+//! single-site stays ordinary, 85 concrete twin recovery, 86 nested
+//! `env!` extraction). Split out of
 //! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
 //! (helpers duplicated, not shared — T246 precedent). The generic
 //! native → semantic → native round-trip for these fixtures already
@@ -344,6 +346,46 @@ fn wi9_macro_concrete_twin_fires() {
     assert!(
         semantic.len() < native_input.len(),
         "concrete sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
+fn wi9_macro_nested_fires() {
+    // Fixture 86 (WI-9b2b): three `let` statements differing only inside
+    // the nested `env!` macro (bench-17 `tool.rs` shape). The whole-line
+    // interior parse declines (the `let` init is a Call) and verbatim
+    // vetoes (macro in the init); the nested extraction emits one
+    // concrete `# allow=many` hunk spelling just the macro pair.
+    let (native_input, semantic) = convert_fixture("86-macro-nested-fires");
+    assert!(
+        semantic.contains("rule=r1"),
+        "nested interior must fire, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# macro"),
+        "plain `!` routing, no directive, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- env!(\"CARGO_BIN_EXE_gitrs\")\n"),
+        "nested minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ env!(\"CARGO_BIN_EXE_applyrs\")\n"),
+        "nested plus missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("E0"),
+        "no holes expected, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("-    let out = Command::new"),
+        "nested minus lines must be consumed, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "nested sweep must beat native bytes ({} vs {})",
         semantic.len(),
         native_input.len()
     );

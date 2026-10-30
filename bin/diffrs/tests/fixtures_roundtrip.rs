@@ -976,40 +976,49 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
-        } else if name == "23-macro-veto" {
-            // T445: both probed veto shapes stay ordinary — the
+        } else if name == "23-macro-nested-fires" {
+            // WI-9b2b (was `23-macro-veto`, the T445 stays-ordinary pin):
+            // the env!-in-init lets (e06313c miniature,
+            // verbatim_init_ok macro gate) now compress to one nested
+            // concrete hunk spelling just the macro pair, while the
             // format!-interior sites (33a8cbb miniature, engine-blind
-            // macro bodies) and the env!-in-init lets (e06313c
-            // miniature, verbatim_init_ok macro gate). No rule= lines;
-            // passthrough is exactly normalized native.
+            // macro bodies) stay ordinary — macro-body descent is WI-9b2
+            // remainder territory.
             assert!(
-                !semantic.contains("rule="),
-                "macro-gate shapes must stay ordinary, got: {semantic}"
+                semantic.contains("rule=r1"),
+                "nested interior must fire, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("- env!(\"CARGO_BIN_EXE_gitrs\")\n"),
+                "nested minus missing, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+ env!(\"CARGO_BIN_EXE_applyrs\")\n"),
+                "nested plus missing, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains("E0"),
+                "no holes expected, got: {semantic}"
+            );
+            assert!(
+                !semantic.contains(
+                    "-    let out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));"
+                ),
+                "nested minus lines must be consumed, got: {semantic}"
             );
             assert!(
                 semantic.contains("-        header = rsmpl_patch::collapse_git_header(&format!(\"diff --git a/{path} b/{path}\"))"),
-                "macro-interior minus lines must be preserved, got: {semantic}"
+                "format-body minus lines must be preserved, got: {semantic}"
             );
             assert!(
                 semantic.contains("+        header = super::git_header(path)"),
-                "macro-interior plus lines must be preserved, got: {semantic}"
+                "format-body plus lines must be preserved, got: {semantic}"
             );
             assert!(
-                semantic.contains(
-                    "-    let out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));"
-                ),
-                "macro-init minus lines must be preserved, got: {semantic}"
-            );
-            assert!(
-                semantic.contains(
-                    "+    let out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));"
-                ),
-                "macro-init plus lines must be preserved, got: {semantic}"
-            );
-            let normalized = normalize_native(&native_input);
-            assert!(
-                semantic == normalized,
-                "[{name}] ordinary passthrough must equal normalized native"
+                semantic.len() < native_input.len(),
+                "nested sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
             );
         } else if name == "24-call-arg-add" {
             // T447: homo trailing addition compresses (a.rs), hetero

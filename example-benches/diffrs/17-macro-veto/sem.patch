@@ -13,12 +13,7 @@ diff --git src/lib.rs
 diff --git src/tool.rs
 --- a/src/tool.rs
 +++ b/src/tool.rs
-@@ -2 +2 @@
--    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")));
-+    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")));
-@@ -7 +7 @@
--    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")));
-+    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")));
-@@ -12 +12 @@
--    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_gitrs")));
-+    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_applyrs")));
+@@ -2,11 @@ rule=r1
+# allow=many
+- env!("CARGO_BIN_EXE_gitrs")
++ env!("CARGO_BIN_EXE_applyrs")

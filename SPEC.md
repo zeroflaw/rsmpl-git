@@ -6375,9 +6375,21 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   minus/plus diet pair applied to a scratch pre-image must match exactly
   N — a self-rewrite probe would infer literal uppercase deltas as holes
   and count a more general domain than the hunk matches).
-  WI-9b2a: the concrete fallback probes the real pair too (same
-  soundness — the self probe holed shared uppercase deltas and vetoed on
-  second-arg twins a sound concrete group must ignore).
+   WI-9b2a: the concrete fallback probes the real pair too (same
+   soundness — the self probe holed shared uppercase deltas and vetoed on
+   second-arg twins a sound concrete group must ignore).
+   WI-9b2b nested extraction: pairs the whole-line parse declines whose
+   lines parse as one `Stmt` (fallback `Expr`) holding the same count
+   (≥1) of expression-position macros, all token-equal except exactly one
+   delta with the same rendered path, paren delimiters, and different
+   tokens, with the rendered delta texts each occurring byte-exact once
+   per line and the plus line equal to the minus line under that one
+   substring replacement — → the same concrete hunk shape spelling just
+   the macro pair (`- env!("OLD")` / `+ env!("NEW")`, concrete-only, no
+   hetero, no stranded claims). Macros inside other macro bodies stay
+   ordinary (`syn::visit` never enters opaque token streams); nested
+   renames, multi-delta lines, and any outside-macro difference stay
+   ordinary.
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

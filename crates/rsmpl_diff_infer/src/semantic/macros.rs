@@ -169,14 +169,17 @@ struct InteriorGroup {
 
 /// Same-name concrete macro-interior sweep (WI-9a): N ≥ 2 balanced
 /// whole-line pairs rendering to one identical `(minus, plus)` macro
-/// pair — same rendered path, paren delimiters, body delta, no holes.
-/// Cross-hunk driver mirroring the peel section skeleton plus the
-/// verbatim stranded join (exactly-1-minus pure unbalanced hunks whose
-/// first plus matches shed minus + first plus and stay a pure-insertion
-/// leftover), so sections with a pure addition (bench 18 shape) still
-/// compress their runs. Emission is the concrete invocation pair under
-/// `# allow=many` (plain `!` routing, probed — no `# macro`
-/// directive); totality is the generic engine-count
+/// pair — same rendered path, paren delimiters, body delta, no holes —
+/// plus WI-9b2b nested groups (sub-line pairs the whole-line parse
+/// declines whose lines differ only inside one paren-delimited
+/// same-path nested macro; concrete-only, no hetero, no stranded
+/// claims). Cross-hunk driver mirroring the peel section skeleton plus
+/// the verbatim stranded join (exactly-1-minus pure unbalanced hunks
+/// whose first plus matches shed minus + first plus and stay a
+/// pure-insertion leftover), so sections with a pure addition (bench 18
+/// shape) still compress their runs. Emission is the concrete
+/// invocation pair under `# allow=many` (plain `!` routing, probed —
+/// no `# macro` directive); totality is the generic engine-count
 /// `template_expr_holds` on the rendered minus (the engine's own match
 /// domain: macro-body/string twins veto exactly as the engine sees
 /// them). Interior deltas on `![...]`/`!{...}` stay ordinary: the
@@ -256,6 +259,23 @@ pub(crate) fn try_macro_interior_section(
             None => classes.push((key, vec![idx])),
         }
     }
+    // WI-9b2b: sub-line nested-macro extraction (bench-17 `tool.rs`
+    // shape) — pairs the whole-line parse declines whose lines differ
+    // only inside one paren-delimited same-path nested macro.
+    // First-occurrence order after the whole-line classes.
+    let mut nested_classes: Vec<((String, String), Vec<usize>)> = Vec::new();
+    for (idx, (.., m, p)) in pairs.iter().enumerate() {
+        if parse_macro_interior_pair(m, p).is_some() {
+            continue;
+        }
+        let Some(key) = parse_nested_macro_pair(m, p) else {
+            continue;
+        };
+        match nested_classes.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(idx),
+            None => nested_classes.push((key, vec![idx])),
+        }
+    }
     let checkpoint = used_rules.len();
     // Stranded-join claims (verbatim T441 slice): at most one claim per
     // unbalanced hunk (exactly 1 minus, pure, first plus renders into
@@ -333,13 +353,7 @@ pub(crate) fn try_macro_interior_section(
         };
         // WI-1b: precise emission sites are the member pair old lines
         // plus joined stranded old lines for this group.
-        let mut sites: Vec<usize> = Vec::new();
-        for &idx in members {
-            let old_line = pair_old.get(idx).copied().unwrap_or(0);
-            if !sites.contains(&old_line) {
-                sites.push(old_line);
-            }
-        }
+        let mut sites = member_sites(members, &pair_old);
         for (j, claim) in joined.iter().enumerate() {
             if claim
                 .as_ref()
@@ -363,12 +377,35 @@ pub(crate) fn try_macro_interior_section(
             sites,
         });
     }
+    // WI-9b2b nested groups: concrete-only (no hetero — nested string
+    // args never hole and hetero-nested is deferred to WI-9b2), no
+    // stranded claims; same InteriorGroup shape so member sites, the
+    // atomicity fixed point below, T375, and ranged-vs-sweep emission
+    // are shared with the whole-line groups above.
+    for ((minus, plus), members) in &nested_classes {
+        if members.len() < 2 {
+            continue;
+        }
+        let n_eff = members.len();
+        if !crate::totality::template_pair_holds(path, file_old, minus, plus, n_eff) {
+            continue;
+        }
+        passing.push(InteriorGroup {
+            key: (minus.clone(), plus.clone()),
+            minus: minus.clone(),
+            plus: plus.clone(),
+            members: members.clone(),
+            sites: member_sites(members, &pair_old),
+        });
+    }
     // Hunk-atomicity fixed point (aa23c77 soundness): a group fires only
     // if every balanced hunk holding a member pair is fully covered by
     // passing groups — otherwise the group hunk and the leftover
     // ordinary hunk would rewrite the same line (GIT_HUNK_CONFLICT
     // "overlapping edits cannot be merged"). Drop violators (releasing
-    // claims) to a fixed point.
+    // claims) to a fixed point. Coverage is whole-line OR nested keys
+    // (WI-9b2b: the two key domains are disjoint — nested requires the
+    // whole-line parse to fail — so one shared key list is exact).
     loop {
         let keys: Vec<(String, String)> = passing.iter().map(|g| g.key.clone()).collect();
         let mut victim: Option<usize> = None;
@@ -379,9 +416,7 @@ pub(crate) fn try_macro_interior_section(
                     if *jj != hj {
                         continue;
                     }
-                    let covered =
-                        parse_macro_interior_pair(m2, p2).is_some_and(|k| keys.contains(&k));
-                    if !covered {
+                    if !pair_key_matches(m2, p2, &keys) {
                         victim = Some(gi);
                         break 'scan;
                     }
@@ -431,16 +466,17 @@ pub(crate) fn try_macro_interior_section(
         };
         split_leftovers[j] = Some((gm.clone(), gp.clone(), leftover));
     }
-    // A hunk is covered iff balanced and every pair sits in a group.
+    // A hunk is covered iff balanced and every pair sits in a group
+    // (whole-line or nested — WI-9b2b unified domain).
+    let group_keys: Vec<(String, String)> = passing.iter().map(|(g, _)| g.key.clone()).collect();
     let covered_hunk: Vec<bool> = hunk_balanced
         .iter()
         .enumerate()
         .map(|(i, b)| {
-            *b && pairs.iter().filter(|(j, _, _)| *j == i).all(|(_, m, p)| {
-                parse_macro_interior_pair(m, p).is_some_and(|(gm, gp)| {
-                    passing.iter().any(|(g, _)| g.key.0 == gm && g.key.1 == gp)
-                })
-            })
+            *b && pairs
+                .iter()
+                .filter(|(j, _, _)| *j == i)
+                .all(|(_, m, p)| pair_key_matches(m, p, &group_keys))
         })
         .collect();
     // WI-1b ranged bodies per group when spans are disjoint and ≤64;
@@ -520,14 +556,12 @@ pub(crate) fn try_macro_interior_section(
     let mut emitted = vec![false; passing.len()];
     for (i, hunk) in hunks.iter().enumerate() {
         let holds_pair = |(g, _): &(InteriorGroup, String)| {
-            pairs.iter().any(|(j, m, p)| {
-                *j == i
-                    && parse_macro_interior_pair(m, p)
-                        .as_ref()
-                        .is_some_and(|(gm, gp)| *gm == g.key.0 && *gp == g.key.1)
-            }) || split_leftovers[i]
-                .as_ref()
-                .is_some_and(|(gm, gp, _)| *gm == g.key.0 && *gp == g.key.1)
+            pairs
+                .iter()
+                .any(|(j, m, p)| *j == i && pair_key_matches(m, p, std::slice::from_ref(&g.key)))
+                || split_leftovers[i]
+                    .as_ref()
+                    .is_some_and(|(gm, gp, _)| *gm == g.key.0 && *gp == g.key.1)
         };
         if covered_hunk[i] || split_leftovers[i].is_some() {
             for (gi, g) in passing.iter().enumerate() {
@@ -544,6 +578,27 @@ pub(crate) fn try_macro_interior_section(
         out.push_str(hunk);
     }
     Some(out)
+}
+
+/// Old-side lines for group member pairs, deduped, first-occurrence
+/// order (WI-1b precise emission sites, shared by whole-line and
+/// WI-9b2b nested groups).
+fn member_sites(members: &[usize], pair_old: &[usize]) -> Vec<usize> {
+    let mut sites = Vec::new();
+    for &idx in members {
+        let old_line = pair_old.get(idx).copied().unwrap_or(0);
+        if !sites.contains(&old_line) {
+            sites.push(old_line);
+        }
+    }
+    sites
+}
+
+/// A line pair is covered iff its whole-line OR nested interior key is
+/// among the passing groups (WI-9b2b unified hunk-atomicity domain).
+fn pair_key_matches(old_line: &str, new_line: &str, keys: &[(String, String)]) -> bool {
+    parse_macro_interior_pair(old_line, new_line).is_some_and(|k| keys.contains(&k))
+        || parse_nested_macro_pair(old_line, new_line).is_some_and(|k| keys.contains(&k))
 }
 
 /// Parse a `-`/`+` line pair as a same-name concrete macro interior:
@@ -578,6 +633,98 @@ fn parse_macro_interior_pair(old_line: &str, new_line: &str) -> Option<(String, 
         format!("{old_path}!({old_args})"),
         format!("{new_path}!({new_args})"),
     ))
+}
+
+/// Expression-position macro invocations of one diff line in visit
+/// (source) order. `syn::visit` never descends into macro bodies
+/// (opaque token streams), so macros nested inside other macro
+/// arguments are invisible by construction (WI-9b2 non-goal) — only
+/// macros in real expression positions (call args, `let` inits,
+/// operands) collect.
+struct MacroNodes {
+    out: Vec<syn::ExprMacro>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for MacroNodes {
+    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
+        self.out.push(node.clone());
+        syn::visit::visit_expr_macro(self, node);
+    }
+}
+
+/// Expression-position macros of one diff line in source order, via one
+/// `Stmt` parse (fallback: `Expr`). `None` when neither parses.
+fn line_macros(line: &str) -> Option<Vec<syn::ExprMacro>> {
+    use syn::visit::Visit as _;
+    let mut out = MacroNodes { out: Vec::new() };
+    if let Ok(stmt) = syn::parse_str::<syn::Stmt>(line.trim()) {
+        out.visit_stmt(&stmt);
+        return Some(out.out);
+    }
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(line.trim()) {
+        out.visit_expr(&expr);
+        return Some(out.out);
+    }
+    None
+}
+
+/// Sub-line nested-macro interior pair (WI-9b2b, bench-17 `tool.rs`
+/// shape): the whole-line interior parse fails, but both lines parse
+/// as one `Stmt` (fallback `Expr`) holding the same count (≥1) of
+/// expression-position macros, all token-equal except exactly one delta
+/// with the same rendered path, paren delimiters on both sides, and
+/// different tokens. The rendered delta texts must each occur
+/// byte-exact exactly once in their line, and the plus line must equal
+/// the minus line with exactly that one substring replaced (the rest of
+/// the line is byte-identical). Returns the rendered
+/// `(macro_minus, macro_plus)` pair. `None` for renames (path delta —
+/// the rename sweep owns whole-line renames; nested renames stay
+/// ordinary), bracket/brace deltas (the engine splice normalizes to
+/// `!(...)`, probed corrupt), leading-`::`/generic paths (no engine
+/// spelling), multi-delta lines, and any outside-macro difference.
+fn parse_nested_macro_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
+    // Whole-line pairs belong to the whole-line sweep (no double-claim).
+    if parse_macro_interior_pair(old_line, new_line).is_some() {
+        return None;
+    }
+    let old_macros = line_macros(old_line)?;
+    let new_macros = line_macros(new_line)?;
+    if old_macros.len() != new_macros.len() || old_macros.is_empty() {
+        return None;
+    }
+    let mut delta: Option<usize> = None;
+    for (i, (o, n)) in old_macros.iter().zip(new_macros.iter()).enumerate() {
+        let (Some(op), Some(np)) = (macro_path(o), macro_path(n)) else {
+            return None;
+        };
+        let paren = matches!(o.mac.delimiter, syn::MacroDelimiter::Paren(_))
+            && matches!(n.mac.delimiter, syn::MacroDelimiter::Paren(_));
+        if op == np && paren {
+            if o.mac.tokens.to_string() == n.mac.tokens.to_string() {
+                continue;
+            }
+            if delta.is_some() {
+                return None;
+            }
+            delta = Some(i);
+            continue;
+        }
+        return None;
+    }
+    let i = delta?;
+    let (o, n) = (&old_macros[i], &new_macros[i]);
+    let minus = format!("{}!({})", macro_path(o)?, o.mac.tokens);
+    let plus = format!("{}!({})", macro_path(n)?, n.mac.tokens);
+    if minus == plus {
+        return None;
+    }
+    if old_line.match_indices(&minus).count() != 1 || new_line.match_indices(&plus).count() != 1 {
+        return None;
+    }
+    if *new_line != old_line.replacen(&minus, &plus, 1) {
+        return None;
+    }
+    Some((minus, plus))
 }
 
 /// Split macro inner-args text into top-level comma-group byte spans
@@ -1452,5 +1599,118 @@ mod tests {
         assert!(!is_string_arg("TEXT_SECTION"));
         assert!(!is_string_arg("out.rsmpl"));
         assert!(!is_string_arg("'a'"));
+    }
+
+    #[test]
+    fn macro_nested_fires() {
+        // WI-9b2b (bench-17 `tool.rs` shape): two identical `let`
+        // statements differing only inside the nested `env!` macro
+        // compress to one concrete `# allow=many` hunk spelling just the
+        // macro pair (the engine rewrites nested occurrences in place —
+        // probed). The minus/plus lines are complete statements the
+        // verbatim sweep vetoes (macro inside the init), and the
+        // whole-line interior parse declines (the init is a Call).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n-    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n+    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n+    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=r1"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# macro"), "plain routing, got: {out}");
+        assert!(
+            out.contains("- env!(\"CARGO_BIN_EXE_gitrs\")\n"),
+            "nested minus missing, got: {out}"
+        );
+        assert!(
+            out.contains("+ env!(\"CARGO_BIN_EXE_applyrs\")\n"),
+            "nested plus missing, got: {out}"
+        );
+        assert!(!out.contains("E0"), "concrete, no holes, got: {out}");
+    }
+
+    #[test]
+    fn macro_nested_extra_site_vetoes() {
+        // A third untouched `env!("CARGO_BIN_EXE_gitrs")` in the
+        // pre-image also matches the nested minus — totality vetoes.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n-    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n+    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n+    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n    let third_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn macro_nested_multi_delta_stays_passthrough() {
+        // Two differing nested macros in one line pair is not one
+        // interior — stays ordinary (array init keeps the whole-line
+        // interior parse out: the init is not a macro invocation).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let both = [env!(\"OLD_A\"), env!(\"OLD_B\")];\n-    let both = [env!(\"OLD_A\"), env!(\"OLD_B\")];\n+    let both = [env!(\"NEW_A\"), env!(\"NEW_B\")];\n+    let both = [env!(\"NEW_A\"), env!(\"NEW_B\")];\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_nested_outside_delta_stays_passthrough() {
+        // The lines must differ ONLY inside the nested macro: a
+        // simultaneous `let`-binding rename keeps the pair ordinary
+        // (the macro hunk plus a leftover whole-line hunk would rewrite
+        // the shared line twice).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n-    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n+    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n+    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_nested_bracket_stays_passthrough() {
+        // A bracket-delimited nested delta shares the whole-line gate:
+        // the engine splice normalizes to `!(...)` (probed corrupt), so
+        // the paren-only gate keeps it ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = my_vec![1, 2];\n-    let second_value = my_vec![1, 2];\n+    let first_value = my_vec![1, 3];\n+    let second_value = my_vec![1, 3];\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_nested_rename_stays_passthrough() {
+        // A nested path delta is a rename, not an interior — and bodies
+        // differ too, so the rename sweep also declines: stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = old_mac!(first_argument);\n-    let second_value = old_mac!(first_argument);\n+    let first_value = new_mac!(second_argument);\n+    let second_value = new_mac!(second_argument);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_nested_format_body_stays_ordinary() {
+        // Bench-17 `lib.rs` shape: single-line fragments changed inside a
+        // multi-line `format!` body. The minus line carries the macro
+        // while the plus line carries none (macro-count divergent), so
+        // nested extraction declines — macro-body descent is WI-9b2
+        // remainder territory.
+        let raw = section(
+            "f.rs",
+            "@@ -4 +4 @@\n fn render() {\n-        header = rsmpl_patch::collapse_git_header(&format!(\"diff --git a/{path} b/{path}\"))\n-        header = rsmpl_patch::collapse_git_header(&format!(\"diff --git a/{path} b/{path}\"))\n+        header = super::git_header(path)\n+        header = super::git_header(path)\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
 }
