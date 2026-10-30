@@ -34,13 +34,12 @@ use std::collections::HashMap;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
-use rsmpl_patch::{AttrsPolicy, ErrorCode, RsmplHunk, Scope, StructuredError};
-use rsmpl_pattern::{CompiledPattern, GeneralShape, PatternKind};
-
 use crate::edits::{fragments_equal, TextEdit};
 use crate::lines::LineIndex;
-use crate::matcher_expr::substitute_plus;
 use crate::matcher_fn::delete_lines;
+use crate::matcher_general_tails::substitute_general_plus;
+use rsmpl_patch::{AttrsPolicy, ErrorCode, RsmplHunk, Scope, StructuredError};
+use rsmpl_pattern::{CompiledPattern, GeneralShape, PatternKind};
 
 /// A match candidate with original byte range + line span.
 #[derive(Debug, Clone)]
@@ -134,6 +133,11 @@ pub(crate) struct MatchCx<'a> {
     pub(crate) reverse: HashMap<String, String>,
     /// declared name -> bound original text.
     bindings: HashMap<String, String>,
+    /// WI-5b: absorbed trailing-block tails in match order. `match_block`
+    /// pushes one entry per trailing `...` (empty for a zero-tail match);
+    /// substitution replays them into the plus `...` slots in order, or
+    /// drops them when the plus side omits `...`.
+    pub(crate) block_tails: Vec<String>,
 }
 
 impl<'a> MatchCx<'a> {
@@ -143,6 +147,47 @@ impl<'a> MatchCx<'a> {
         let start = self.index.offset(s.line as u32, s.column)?;
         let end = self.index.offset(e.line as u32, e.column)?;
         self.original.get(start..end).map(|t| t.to_string())
+    }
+
+    /// WI-5b: record the absorbed tail of a trailing-`...` block match.
+    /// Slices original source from the first absorbed statement (including
+    /// its attribute envelope) through the end of the last target
+    /// statement; an empty tail records an empty string. Returns false
+    /// when spans fall outside the line index (caller rejects).
+    pub(crate) fn push_block_tail(&mut self, tail: &[syn::Stmt]) -> bool {
+        if tail.is_empty() {
+            self.block_tails.push(String::new());
+            return true;
+        }
+        let first = &tail[0];
+        let last = &tail[tail.len() - 1];
+        let start_lc = match first {
+            syn::Stmt::Local(l) => l
+                .attrs
+                .first()
+                .map(|a| a.span().start())
+                .unwrap_or_else(|| first.span().start()),
+            _ => first.span().start(),
+        };
+        let end_lc = last.span().end();
+        let start = self.index.offset(start_lc.line as u32, start_lc.column);
+        let mut end = self.index.offset(end_lc.line as u32, end_lc.column);
+        // A `Stmt::Expr` span may exclude its `;`: extend through it so
+        // the replayed tail keeps its terminators.
+        if let syn::Stmt::Expr(_, Some(semi)) = last {
+            let se = semi.span.end();
+            if let Some(so) = self.index.offset(se.line as u32, se.column) {
+                end = end.map(|v| v.max(so));
+            }
+        }
+        match (start, end) {
+            (Some(a), Some(b)) if a <= b && b <= self.original.len() => {
+                self.block_tails
+                    .push(self.original.get(a..b).unwrap_or("").to_string());
+                true
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn bind(&mut self, name: &str, text: &str) -> bool {
@@ -611,21 +656,6 @@ fn attr_prefix<'a>(original: &'a str, index: &LineIndex, local: &syn::Local) -> 
     original.get(s..e)
 }
 
-/// Substitute bound metavariables into the plus pattern, restoring backtick
-/// literals (masked so substitution cannot touch them).
-fn substitute_general_plus(
-    plus_raw: &str,
-    bindings: &HashMap<String, String>,
-    sigiled: bool,
-) -> Result<String, StructuredError> {
-    let (masked, sentinels) = rsmpl_pattern::mask_literal_spans(plus_raw)?;
-    let mut out = substitute_plus(&masked, bindings, &[], sigiled);
-    for (sent, lit) in &sentinels {
-        out = out.replace(sent, lit);
-    }
-    Ok(out)
-}
-
 /// Backstop for `# repeat` nesting (T126: same bound as the call-matcher
 /// fold — bindings are strict sub-slices of the matched candidate, so
 /// structural descent terminates on its own; this only guards
@@ -722,6 +752,7 @@ fn rewrite_nested_general(
             index: &index,
             reverse: reverse.clone(),
             bindings: HashMap::new(),
+            block_tails: Vec::new(),
         };
         if !match_expr(pat_expr, tgt, &mut cx) {
             continue;
@@ -744,8 +775,12 @@ fn rewrite_nested_general(
             depth + 1,
             rule,
         )?;
-        let replacement =
-            substitute_general_plus(nested_plus, &cx.bindings, compiled.table.sigiled)?;
+        let replacement = substitute_general_plus(
+            nested_plus,
+            &cx.bindings,
+            &cx.block_tails,
+            compiled.table.sigiled,
+        )?;
         edits.push(TextEdit::new(node.start, node.end, replacement));
         accepted.push((node.start, node.end));
     }
@@ -904,6 +939,7 @@ pub fn apply_general_hunk(
                     index,
                     reverse: reverse.clone(),
                     bindings: HashMap::new(),
+                    block_tails: Vec::new(),
                 };
                 if !crate::matcher_general_ctrl::match_local(pat_local, tgt, &mut cx) {
                     continue;
@@ -978,11 +1014,17 @@ pub fn apply_general_hunk(
                         with_prefix.push_str(&substitute_general_plus(
                             &plus_body,
                             &cx.bindings,
+                            &cx.block_tails,
                             compiled.table.sigiled,
                         )?);
                         with_prefix
                     } else {
-                        substitute_general_plus(&plus_raw, &cx.bindings, compiled.table.sigiled)?
+                        substitute_general_plus(
+                            &plus_raw,
+                            &cx.bindings,
+                            &cx.block_tails,
+                            compiled.table.sigiled,
+                        )?
                     };
                     if hunk.attrs_policy() == AttrsPolicy::Preserve && minus_attrs.is_empty() {
                         let mut with_prefix = prefix.to_string();
@@ -1039,6 +1081,7 @@ pub fn apply_general_hunk(
                     index,
                     reverse: reverse.clone(),
                     bindings: HashMap::new(),
+                    block_tails: Vec::new(),
                 };
                 if !match_expr(&pat_expr, tgt, &mut cx) {
                     continue;
@@ -1067,8 +1110,12 @@ pub fn apply_general_hunk(
                         &rule,
                     )?);
                 } else {
-                    let mut replacement =
-                        substitute_general_plus(&plus_raw, &cx.bindings, compiled.table.sigiled)?;
+                    let mut replacement = substitute_general_plus(
+                        &plus_raw,
+                        &cx.bindings,
+                        &cx.block_tails,
+                        compiled.table.sigiled,
+                    )?;
                     let mut end = node.end;
                     if had_semi {
                         // The candidate span excludes the statement's `;`:
@@ -1132,12 +1179,17 @@ pub fn apply_general_hunk(
                     index,
                     reverse: reverse.clone(),
                     bindings: HashMap::new(),
+                    block_tails: Vec::new(),
                 };
                 if !match_type(&pat_ty, tgt, &mut cx) {
                     continue;
                 }
-                let replacement =
-                    substitute_general_plus(&plus_raw, &cx.bindings, compiled.table.sigiled)?;
+                let replacement = substitute_general_plus(
+                    &plus_raw,
+                    &cx.bindings,
+                    &cx.block_tails,
+                    compiled.table.sigiled,
+                )?;
                 edits.push(TextEdit::new(node.start, node.end, replacement));
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {

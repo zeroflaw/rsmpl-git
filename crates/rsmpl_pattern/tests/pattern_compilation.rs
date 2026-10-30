@@ -6,7 +6,9 @@
 //! duplicated here, not shared (split-file precedent: `ellipsis_e2e.rs`).
 
 use rsmpl_patch::{parse_patch, Hunk, RsmplHunk};
-use rsmpl_pattern::{compile, split_leading_attrs, ExprPatternKind, GeneralShape, PatternKind};
+use rsmpl_pattern::{
+    compile, split_leading_attrs, ArgPat, ExprPatternKind, GeneralShape, PatternKind,
+};
 
 fn hunk_of(patch: &str) -> RsmplHunk {
     let p = parse_patch(patch).unwrap();
@@ -23,6 +25,102 @@ fn compiles_fn_rename() {
     );
     let c = compile(&h).unwrap();
     assert!(matches!(c.kind, PatternKind::Fn { .. }));
+}
+
+// WI-5b: trailing block `...` compiles in Stmt and Expr shapes; every
+// other `...` position stays C1 (plus-without-minus and count-mismatch
+// carry their own C1 reasons; types never admit `...`).
+#[test]
+fn trailing_block_ellipsis_compiles() {
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    // Stmt shape (`let` init) with replay.
+    let stmt = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- let v = if E {{ foo(); ... }} else {{ 0 }};\n+ let v = if E {{ bar(); ... }} else {{ 0 }};\n"
+    );
+    assert!(
+        matches!(
+            compile(&hunk_of(&stmt)).unwrap().kind,
+            PatternKind::General { .. }
+        ),
+        "stmt trailing ... must compile"
+    );
+    // Expr shape with drop (no plus `...`).
+    let drop = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- if E {{ foo(); ... }}\n+ if E {{ bar(); }}\n"
+    );
+    assert!(
+        matches!(
+            compile(&hunk_of(&drop)).unwrap().kind,
+            PatternKind::General { .. }
+        ),
+        "drop must compile"
+    );
+    // A `"..."` string literal is concrete text, never a wildcard: the
+    // call arg classifies as Concrete, not Ellipsis.
+    let lit = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- log(E, \"...\");\n+ log(E, \"...\");\n"
+    );
+    match compile(&hunk_of(&lit)).unwrap().kind {
+        PatternKind::Expr {
+            minus: ExprPatternKind::Call { args, .. },
+            ..
+        } => assert!(
+            args.iter().all(|a| !matches!(a, ArgPat::Ellipsis)),
+            "`\"...\"` must stay a concrete arg, got: {args:?}"
+        ),
+        other => panic!("expected Call, got: {other:?}"),
+    }
+    // Mid-block `...` stays C1.
+    let mid = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- if E {{ ... foo(); }}\n+ if E {{ ... bar(); }}\n"
+    );
+    let err = compile(&hunk_of(&mid)).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render().contains("only as trailing block statements"),
+        "mid-block ... must stay C1:\n{}",
+        err.render()
+    );
+    // Plus `...` with no minus `...` names the replay fence.
+    let orphan = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- if E {{ foo(); }}\n+ if E {{ bar(); ... }}\n"
+    );
+    let err = compile(&hunk_of(&orphan)).unwrap_err();
+    assert!(
+        err.render().contains("no matching `- ...`"),
+        "plus-without-minus must name the fence:\n{}",
+        err.render()
+    );
+    // Partial plus count fails loud.
+    let cnt = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- if E {{ foo(); ... }} else {{ bar(); ... }}\n+ if E {{ foo2(); ... }} else {{ bar2(); }}\n"
+    );
+    let err = compile(&hunk_of(&cnt)).unwrap_err();
+    assert!(
+        err.render().contains("count differs"),
+        "count mismatch must fail loud:\n{}",
+        err.render()
+    );
+    // Types never admit `...`.
+    let ty = format!("{head}@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# type T\n- Vec<...>\n+ Vec<T>\n");
+    let err = compile(&hunk_of(&ty)).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render().contains("only as trailing block statements"),
+        "type ... must stay C1:\n{}",
+        err.render()
+    );
+    // Match-arm `...` is not a block tail.
+    let arm = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- match E {{ ... }}\n+ match E {{ ... }}\n"
+    );
+    let err = compile(&hunk_of(&arm)).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render().contains("only as trailing block statements"),
+        "arm ... must stay C1:\n{}",
+        err.render()
+    );
 }
 
 #[test]
@@ -442,12 +540,13 @@ fn general_coverage_diagnostics_are_pinned() {
         "C2 let-else minus must compile to General Stmt"
     );
     let cases = [
-        // C1: `...` in a general shape.
+        // C1: `...` in a general shape (WI-5b: only trailing block
+        // statements are admitted; a binary-operand `...` still fails).
         (
             format!(
                 "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n- E + ...\n+ E\n"
             ),
-            "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
+            "v1 general patterns support `...` only as trailing block statements",
         ),
         // C3: `# root=stmt` with a non-`let` shape.
         (

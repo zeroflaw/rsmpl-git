@@ -3,7 +3,8 @@
 //! Split from `matcher_general` per D5 (the parent file sits at the
 //! 2000-line gate). Owns the statement-level structural matching:
 //! `match_local` (`let` with or without `let-else`, `P @ sub`),
-//! `match_block` (concrete-length statement sequences), `match_stmt`,
+//! `match_block` (concrete prefix plus an optional trailing `...` tail,
+//! WI-5b), `match_stmt`,
 //! `match_if`, `match_match` (+ `match_arm`), `match_loop`,
 //! `match_while`, `match_for`, `match_closure` (+ param helper),
 //! `match_let_expr`, and the `@`-subpattern helper `match_pat`.
@@ -103,12 +104,51 @@ pub(crate) fn match_local(pat: &syn::Local, tgt: &syn::Local, cx: &mut MatchCx) 
 /// Match two statement sequences: lengths must be equal (concrete —
 /// this is not ellipsis), then each member matches structurally.
 pub(crate) fn match_block(pat: &syn::Block, tgt: &syn::Block, cx: &mut MatchCx) -> bool {
+    // WI-5b: a trailing bare `...` pseudo-statement absorbs any remaining
+    // target statements (zero or more). The absorbed tail is sliced in
+    // source order for plus-side replay (or dropped when the plus side
+    // omits `...`); the concrete prefix still matches pairwise. Any other
+    // `...` position fails at compile time (C1), never here.
+    let ellipsis = pat.stmts.last().is_some_and(is_block_ellipsis_stmt);
+    let prefix = if ellipsis {
+        pat.stmts.len() - 1
+    } else {
+        pat.stmts.len()
+    };
+    if ellipsis {
+        if tgt.stmts.len() < prefix {
+            return false;
+        }
+        if !pat.stmts[..prefix]
+            .iter()
+            .zip(tgt.stmts.iter())
+            .all(|(a, b)| match_stmt(a, b, cx))
+        {
+            return false;
+        }
+        return cx.push_block_tail(&tgt.stmts[prefix..]);
+    }
     pat.stmts.len() == tgt.stmts.len()
         && pat
             .stmts
             .iter()
             .zip(tgt.stmts.iter())
             .all(|(a, b)| match_stmt(a, b, cx))
+}
+
+/// A trailing-block pseudo-statement: a bare `...` expression statement
+/// (post-substitution `__RSMPL_ELLIPSIS_N` ident, with or without `;`).
+fn is_block_ellipsis_stmt(stmt: &syn::Stmt) -> bool {
+    matches!(stmt, syn::Stmt::Expr(syn::Expr::Path(p), _) if p.qself.is_none()
+    && p.path.segments.len() == 1
+    && p.path.segments[0].arguments.is_none()
+    && p.path.segments[0]
+        .ident
+        .to_string()
+        .strip_prefix("__RSMPL_ELLIPSIS")
+        .is_some_and(|rest| {
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }))
 }
 
 /// Match one block member statement.
@@ -569,5 +609,131 @@ mod tests {
         let src = "fn a(o: Option<i32>) {\n    let v = match o { v @ Some(x) => 1, _ => 2 };\n    let _ = v;\n}\n";
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("_ => 3"), "got: {out}");
+    }
+
+    // WI-5b: trailing block `...` replays the absorbed tail into the plus
+    // `...` slot, preserving the tail verbatim (indent included).
+    #[test]
+    fn block_trailing_ellipsis_replays_tail() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }}\n+ if E {{ bar(); ... }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n        extra1();\n        extra2();\n    }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("bar();"), "got: {out}");
+        assert!(out.contains("extra1();"), "got: {out}");
+        assert!(out.contains("extra2();"), "got: {out}");
+        assert!(!out.contains("foo();"), "got: {out}");
+    }
+
+    // WI-5b: omitting the plus `...` deliberately drops the tail.
+    #[test]
+    fn block_trailing_ellipsis_drop_omits_tail() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }}\n+ if E {{ bar(); }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n        extra1();\n    }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("bar();"), "got: {out}");
+        assert!(!out.contains("extra1();"), "got: {out}");
+        assert!(!out.contains("foo();"), "got: {out}");
+    }
+
+    // WI-5b: an exact-length target matches with an empty tail.
+    #[test]
+    fn block_trailing_ellipsis_zero_tail_matches() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }}\n+ if E {{ bar(); ... }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n    }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("bar();"), "got: {out}");
+        assert!(!out.contains("foo();"), "got: {out}");
+    }
+
+    // WI-5b: a shorter target (fewer than the concrete prefix) vetoes.
+    #[test]
+    fn block_trailing_ellipsis_short_target_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); extra(); ... }}\n+ if E {{ bar(); ... }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n    }\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-5b: a divergent concrete prefix never matches, tail or not.
+    #[test]
+    fn block_trailing_ellipsis_prefix_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }}\n+ if E {{ bar(); ... }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        other();\n        extra();\n    }\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-5b: two trailing blocks map tails in source order.
+    #[test]
+    fn block_trailing_ellipsis_two_blocks_replay_in_order() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }} else {{ bar(); ... }}\n+ if E {{ foo2(); ... }} else {{ bar2(); ... }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n        a1();\n    } else {\n        bar();\n        b1();\n    }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("foo2();"), "got: {out}");
+        assert!(out.contains("bar2();"), "got: {out}");
+        assert!(out.contains("a1();"), "got: {out}");
+        assert!(out.contains("b1();"), "got: {out}");
+        assert!(!out.contains("foo();"), "got: {out}");
+    }
+
+    // WI-5b: `...` outside the trailing position fails at compile time.
+    #[test]
+    fn block_mid_ellipsis_is_compile_conflict() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ ... foo(); }}\n+ if E {{ ... bar(); }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n    }\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("trailing block"), "got: {err}");
+    }
+
+    // WI-5b: a plus `...` with no minus `...` names the replay fence.
+    #[test]
+    fn block_plus_ellipsis_without_minus_is_conflict() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); }}\n+ if E {{ bar(); ... }}\n"
+        );
+        let src = "fn f(c: bool) {\n    if c {\n        foo();\n    }\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("no matching `- ...`"), "got: {err}");
+    }
+
+    // WI-5b: replay is all-or-nothing — a partial plus count fails loud
+    // instead of misaligning tails.
+    #[test]
+    fn block_ellipsis_count_mismatch_is_conflict() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- if E {{ foo(); ... }} else {{ bar(); ... }}\n+ if E {{ foo2(); ... }} else {{ bar2(); }}\n"
+        );
+        let src =
+            "fn f(c: bool) {\n    if c {\n        foo();\n    } else {\n        bar();\n    }\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("count differs"), "got: {err}");
+    }
+
+    // WI-5b: `let` initializers ride the same arm (Stmt shape).
+    #[test]
+    fn block_ellipsis_in_let_init_replays() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# expr E\n- let v = if E {{ foo(); ... }} else {{ 0 }};\n+ let v = if E {{ bar(); ... }} else {{ 0 }};\n"
+        );
+        let src = "fn f(c: bool) {\n    let v = if c { foo(); extra(); } else { 0 };\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("bar();"), "got: {out}");
+        assert!(out.contains("extra();"), "got: {out}");
+        assert!(!out.contains("foo();"), "got: {out}");
     }
 }

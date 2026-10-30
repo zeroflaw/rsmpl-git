@@ -6,6 +6,7 @@
 
 use rsmpl_patch::{AttrsPolicy, Directive, ErrorCode, MetavarKind, RsmplHunk, StructuredError};
 use std::collections::HashSet;
+use syn::visit::Visit;
 
 use crate::expr_pattern::{
     classify_call_pattern, find_macro_bang, ExprPattern, ExprPatternKind, PlaceholderMaps,
@@ -891,7 +892,8 @@ fn has_path_ellipsis(text: &str) -> bool {
 /// Routing (forced by `# root=` or heuristic): a `syn::Stmt::Local` (`let`,
 /// with or without `let-else`) becomes `Stmt`; otherwise a Rust `Type` when forced or when
 /// a type-level metavariable is declared; otherwise a Rust `Expr`.
-/// `...` is rejected: v1 general patterns are concrete-or-metavariable only.
+/// WI-5b: `...` is admitted only as trailing block pseudo-statements
+/// (replayed/dropped tails); any other position fails at C1.
 #[allow(clippy::too_many_lines)]
 fn try_general(
     minus_raw: &str,
@@ -899,16 +901,7 @@ fn try_general(
     table: &MetavarTable,
     forced: Option<GeneralShape>,
 ) -> Result<Option<PatternKind>, StructuredError> {
-    if minus_raw.contains("...") || plus_raw.contains("...") {
-        return Err(StructuredError::new(
-            ErrorCode::PatternConflict,
-            "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
-        )
-        .with_repair(StructuredError::fix_pattern_repair(
-            "C1",
-            "use a call pattern or a concrete shape",
-        )));
-    }
+    let has_ellipsis = minus_raw.contains("...") || plus_raw.contains("...");
     let (minus_attrs, minus_rest) = split_leading_attrs(minus_raw);
     let (plus_attrs, plus_rest) = split_leading_attrs(plus_raw);
     // A leading `/*` the peel cannot normalize (multi-line block doc,
@@ -944,6 +937,9 @@ fn try_general(
         match syn::parse_str::<syn::Stmt>(&sub) {
             Ok(syn::Stmt::Local(local)) => {
                 check_let_pat(&local)?;
+                if has_ellipsis {
+                    check_general_ellipsis_stmt(&local, &plus_rest, table)?;
+                }
                 return Ok(Some(build_general(
                     GeneralShape::Stmt,
                     sub,
@@ -985,6 +981,10 @@ fn try_general(
     // metavariables (so `Vec<T>` with `# type T` is a type pattern).
     let type_first = forced == Some(GeneralShape::Type) || (forced.is_none() && has_type_decl);
     if want(GeneralShape::Type) && type_first && syn::parse_str::<syn::Type>(&sub).is_ok() {
+        if has_ellipsis {
+            // Types never contain blocks: any `...` here is misplaced.
+            return Err(c1_err());
+        }
         return check_type_deletion(plus_rest.trim(), || {
             build_general(
                 GeneralShape::Type,
@@ -1011,6 +1011,15 @@ fn try_general(
                     "C6",
                     "match a `let` statement or write an explicit replacement",
                 )));
+            }
+            if has_ellipsis {
+                let pat_expr: syn::Expr = syn::parse_str(&src).map_err(|e| {
+                    StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        format!("invalid expression pattern: {e}"),
+                    )
+                })?;
+                check_general_ellipsis_expr(&pat_expr, &plus_rest, table)?;
             }
             return Ok(Some(build_general(
                 GeneralShape::Expr,
@@ -1042,6 +1051,10 @@ fn try_general(
         let (mut sub2, _) = ExprPattern::placeholder_expr(&masked2, table);
         sub2 = unmask_literal_spans(&sub2, &sentinels2);
         if syn::parse_str::<syn::Type>(&sub2).is_ok() {
+            if has_ellipsis {
+                // Types never contain blocks: any `...` here is misplaced.
+                return Err(c1_err());
+            }
             return check_type_deletion(plus_rest.trim(), || {
                 build_general(
                     GeneralShape::Type,
@@ -1091,6 +1104,12 @@ fn try_general(
                 "write one hunk per statement or item, or use an ordinary hunk",
             )));
         }
+    }
+    if has_ellipsis {
+        // No Stmt/Expr/Type shape parsed, yet `...` is present: it sits in
+        // no trailing-block position (those parse). Fail at C1, not as a
+        // misleading `Raw` match-time miss.
+        return Err(c1_err());
     }
     Ok(None)
 }
@@ -1231,6 +1250,282 @@ fn embedded_pat_err() -> StructuredError {
         "C8",
         "use a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts",
     ))
+}
+
+/// WI-5b C1 diagnostic: `...` in general patterns is admitted only as
+/// trailing block pseudo-statements.
+fn c1_err() -> StructuredError {
+    StructuredError::new(
+        ErrorCode::PatternConflict,
+        "v1 general patterns support `...` only as trailing block statements (`{ prefix; ... }` replays the absorbed tail, omitting it drops the tail); any other `...` position needs a call pattern or a concrete shape",
+    )
+    .with_repair(StructuredError::fix_pattern_repair(
+        "C1",
+        "keep `...` only as the last statement of a block, or use a call pattern or a concrete shape",
+    ))
+}
+
+/// True when the ident is a substituted `...` marker (`__RSMPL_ELLIPSIS_N`).
+fn is_ellipsis_ident(ident: &str) -> bool {
+    ident.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+fn is_bare_ellipsis_path(path: &syn::Path) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == 1
+        && path.segments[0].arguments.is_none()
+        && is_ellipsis_ident(&path.segments[0].ident.to_string())
+}
+
+fn is_bare_ellipsis_expr(expr: &syn::Expr) -> bool {
+    matches!(expr, syn::Expr::Path(p) if is_bare_ellipsis_path(&p.path))
+}
+
+/// A trailing-block pseudo-statement: a bare `...` expression statement,
+/// with or without its `;`.
+fn is_block_ellipsis_stmt(stmt: &syn::Stmt) -> bool {
+    matches!(stmt, syn::Stmt::Expr(e, _) if is_bare_ellipsis_expr(e))
+}
+
+/// WI-5b trailing-`...` validator: every substituted `...` marker must sit
+/// as the final pseudo-statement of a `syn::Block`. Counts the valid tails;
+/// flags anything elsewhere (call args, operands, types, patterns, match
+/// arms, mid-block, macro token streams are opaque to the walk and trip
+/// the total-vs-valid comparison at the call sites).
+struct EllipsisCheck {
+    valid: usize,
+    misplaced: bool,
+}
+
+impl<'ast> Visit<'ast> for EllipsisCheck {
+    fn visit_block(&mut self, node: &'ast syn::Block) {
+        for (i, stmt) in node.stmts.iter().enumerate() {
+            let last = i + 1 == node.stmts.len();
+            if is_block_ellipsis_stmt(stmt) {
+                if last {
+                    self.valid += 1;
+                } else {
+                    self.misplaced = true;
+                }
+            }
+        }
+        for stmt in &node.stmts {
+            if !is_block_ellipsis_stmt(stmt) {
+                self.visit_stmt(stmt);
+            }
+        }
+    }
+
+    fn visit_path(&mut self, node: &'ast syn::Path) {
+        if node
+            .segments
+            .iter()
+            .any(|s| is_ellipsis_ident(&s.ident.to_string()))
+        {
+            self.misplaced = true;
+            return;
+        }
+        syn::visit::visit_path(self, node);
+    }
+
+    fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+        if is_ellipsis_ident(&node.ident.to_string()) {
+            self.misplaced = true;
+            return;
+        }
+        syn::visit::visit_pat_ident(self, node);
+    }
+}
+
+/// Count `syn::Block` nodes in a visited tree (v1 replay-alignment guard).
+struct BlockCounter {
+    count: usize,
+}
+
+impl<'ast> Visit<'ast> for BlockCounter {
+    fn visit_block(&mut self, node: &'ast syn::Block) {
+        self.count += 1;
+        syn::visit::visit_block(self, node);
+    }
+}
+
+/// Substitute the plus side the same way the minus was substituted, so
+/// ellipsis positions can be validated structurally.
+fn plus_sub_for_ellipsis(
+    plus_rest: &str,
+    table: &MetavarTable,
+) -> Result<(String, usize), StructuredError> {
+    if plus_rest.trim().is_empty() {
+        return Ok((String::new(), 0));
+    }
+    let (masked, sentinels) = mask_literal_spans(plus_rest)?;
+    let (sub, maps) = ExprPattern::placeholder_expr(&masked, table);
+    let total = maps.ellipsis_ids.len();
+    Ok((unmask_literal_spans(&sub, &sentinels), total))
+}
+
+/// Shared tail-count rule (mirrors the SPEC 16.3 call-argument replay/drop
+/// discipline): the plus side replays every minus tail (`J == K`) or drops
+/// them all (`J == 0`); anything between cannot map tails to `...` in order
+/// and fails loud. A plus `...` with no minus `...` names the replay fence.
+fn check_tail_counts(minus_count: usize, plus_count: usize) -> Result<(), StructuredError> {
+    if plus_count == 0 {
+        return Ok(());
+    }
+    if minus_count == 0 {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "`...` in `+` has no matching `- ...` to replay",
+        )
+        .with_suggestion("drop the `+ ...` or add a `- ...` tail absorbing the replayed statements")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C1",
+            "drop the `+ ...` or add a `- ...` tail absorbing the replayed statements",
+        )));
+    }
+    if plus_count != minus_count {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!(
+                "trailing block `...` count differs (`-` has {minus_count}, `+` has {plus_count}); v1 replays all tails in order or drops them all — write the same number of `...` on both sides, or none on `+`"
+            ),
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C1",
+            "write the same number of `...` on both sides, or none on `+`",
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a Stmt-shape (`let`) pair: minus must already parse as Local.
+fn check_general_ellipsis_stmt(
+    local: &syn::Local,
+    plus_rest: &str,
+    table: &MetavarTable,
+) -> Result<(), StructuredError> {
+    let mut ck = EllipsisCheck {
+        valid: 0,
+        misplaced: false,
+    };
+    ck.visit_local(local);
+    let (plus_sub, plus_total) = plus_sub_for_ellipsis(plus_rest, table)?;
+    let mut pk = EllipsisCheck {
+        valid: 0,
+        misplaced: false,
+    };
+    let mut plus_blocks = 0;
+    if !plus_sub.trim().is_empty() {
+        match syn::parse_str::<syn::Stmt>(&plus_sub) {
+            Ok(syn::Stmt::Local(plus_local)) => {
+                pk.visit_local(&plus_local);
+                let mut bc = BlockCounter { count: 0 };
+                bc.visit_local(&plus_local);
+                plus_blocks = bc.count;
+            }
+            _ if plus_total > 0 => return Err(c1_err()),
+            _ => {}
+        }
+    }
+    // Total-vs-valid: macro token streams are opaque to the walk, so a
+    // `...` hiding there counts in the total but never as valid.
+    let minus_total = {
+        let rendered = quote::quote!(#local).to_string();
+        rendered.matches("__RSMPL_ELLIPSIS").count()
+    };
+    if ck.misplaced || ck.valid != minus_total {
+        return Err(c1_err());
+    }
+    if pk.misplaced || pk.valid != plus_total {
+        return Err(c1_err());
+    }
+    check_tail_counts(ck.valid, pk.valid)?;
+    if pk.valid > 0 {
+        let mut bc = BlockCounter { count: 0 };
+        bc.visit_local(local);
+        if bc.count != plus_blocks {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "trailing block `...` replay needs the same block structure on both sides (`-` has {} blocks, `+` has {plus_blocks}); v1 maps tails to `...` in source order",
+                    bc.count
+                ),
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C1",
+                "keep the same block structure on both sides, or drop the `+ ...` tails",
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate an Expr-shape pair: minus must already parse as Expr.
+fn check_general_ellipsis_expr(
+    pat_expr: &syn::Expr,
+    plus_rest: &str,
+    table: &MetavarTable,
+) -> Result<(), StructuredError> {
+    let mut ck = EllipsisCheck {
+        valid: 0,
+        misplaced: false,
+    };
+    ck.visit_expr(pat_expr);
+    let (plus_sub, plus_total) = plus_sub_for_ellipsis(plus_rest, table)?;
+    let mut pk = EllipsisCheck {
+        valid: 0,
+        misplaced: false,
+    };
+    let mut plus_blocks = 0;
+    if !plus_sub.trim().is_empty() {
+        // Mirror the `had_semi` peel: `...;` statement forms compile as
+        // their inner expression.
+        let inner: String = match syn::parse_str::<syn::Stmt>(&plus_sub) {
+            Ok(syn::Stmt::Expr(e, Some(_))) => quote::quote!(#e).to_string(),
+            _ => plus_sub.clone(),
+        };
+        match syn::parse_str::<syn::Expr>(&inner) {
+            Ok(plus_expr) => {
+                pk.visit_expr(&plus_expr);
+                let mut bc = BlockCounter { count: 0 };
+                bc.visit_expr(&plus_expr);
+                plus_blocks = bc.count;
+            }
+            _ if plus_total > 0 => return Err(c1_err()),
+            _ => {}
+        }
+    }
+    let minus_total = {
+        let rendered = quote::quote!(#pat_expr).to_string();
+        rendered.matches("__RSMPL_ELLIPSIS").count()
+    };
+    if ck.misplaced || ck.valid != minus_total {
+        return Err(c1_err());
+    }
+    if pk.misplaced || pk.valid != plus_total {
+        return Err(c1_err());
+    }
+    check_tail_counts(ck.valid, pk.valid)?;
+    if pk.valid > 0 {
+        let mut bc = BlockCounter { count: 0 };
+        bc.visit_expr(pat_expr);
+        if bc.count != plus_blocks {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "trailing block `...` replay needs the same block structure on both sides (`-` has {} blocks, `+` has {plus_blocks}); v1 maps tails to `...` in source order",
+                    bc.count
+                ),
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C1",
+                "keep the same block structure on both sides, or drop the `+ ...` tails",
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Split leading attribute lines (`#[...]`, possibly multi-line, and

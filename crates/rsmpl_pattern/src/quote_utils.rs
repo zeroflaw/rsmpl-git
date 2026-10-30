@@ -180,6 +180,53 @@ fn validate_single_token(inner: &str) -> Result<(), StructuredError> {
     Ok(())
 }
 
+/// Byte index just past the closing `"` of the string starting at `start`
+/// (the opening quote), escape-aware. Returns `None` when unclosed before
+/// the newline — the caller then treats the rest of the line as opaque.
+pub fn string_end(text: &str, start: usize) -> Option<usize> {
+    let mut it = text[start + 1..].char_indices();
+    while let Some((rel, c)) = it.next() {
+        if c == '\n' {
+            return None;
+        }
+        if c == '\\' {
+            it.next();
+            continue;
+        }
+        if c == '"' {
+            return Some(start + 1 + rel + c.len_utf8());
+        }
+    }
+    None
+}
+
+/// Byte length of the char literal starting at `start` (`'<c>'` or
+/// `'<esc>'`), else `None`. Lifetimes (`'a`, `'static`) never match: only
+/// a quote-closed one- or two-char body counts.
+pub fn char_lit_len(text: &str, start: usize) -> Option<usize> {
+    let mut it = text[start + 1..].chars();
+    let first = it.next()?;
+    if first == '\n' {
+        return None;
+    }
+    if first == '\\' {
+        let esc = it.next()?;
+        if esc == '\n' {
+            return None;
+        }
+        let q = it.next()?;
+        if q != '\'' {
+            return None;
+        }
+        return Some(2 + first.len_utf8() + esc.len_utf8());
+    }
+    let q = it.next()?;
+    if q != '\'' {
+        return None;
+    }
+    Some(1 + first.len_utf8() + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

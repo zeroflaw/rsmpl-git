@@ -78,7 +78,7 @@ fn check(patch: &str, reason: &str, want_suggestion: bool) {
 fn c1_ellipsis_in_general_shape() {
     check(
         "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n- E + ...\n+ E + 1\n",
-        "v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)",
+        "v1 general patterns support `...` only as trailing block statements (`{ prefix; ... }` replays the absorbed tail, omitting it drops the tail); any other `...` position needs a call pattern or a concrete shape",
         false,
     );
 }

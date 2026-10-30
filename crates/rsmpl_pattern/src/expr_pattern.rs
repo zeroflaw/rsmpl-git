@@ -9,7 +9,7 @@ use rsmpl_patch::{ErrorCode, StructuredError};
 use std::collections::HashMap;
 
 use crate::metavar::MetavarTable;
-use crate::quote_utils::{mask_literal_spans, unmask_literal_spans};
+use crate::quote_utils::{char_lit_len, mask_literal_spans, string_end, unmask_literal_spans};
 
 /// An argument slot in a call-like pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,14 +65,73 @@ impl ExprPattern {
     /// Substitute metavars with placeholders for syn parsing.
     pub fn placeholder_expr(text: &str, table: &MetavarTable) -> (String, PlaceholderMaps) {
         let mut maps = PlaceholderMaps::default();
-        let mut out = text.to_string();
-        // Replace `...` first with a comma-safe marker.
+        // Replace `...` first with a comma-safe marker, skipping string
+        // literals, char literals, and comments (WI-5b: a `"..."` string
+        // is a concrete literal, never a wildcard — same string-aware
+        // discipline as the call-router helpers below).
+        let mut out = String::with_capacity(text.len());
+        let bytes = text.as_bytes();
+        let mut i = 0;
         let mut ell_n = 0;
-        while let Some(pos) = out.find("...") {
-            let id = format!("__RSMPL_ELLIPSIS_{ell_n}");
-            out.replace_range(pos..pos + 3, &id);
-            maps.ellipsis_ids.push(id);
-            ell_n += 1;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == '"' {
+                // Unclosed before the newline: rest of line is opaque
+                // (comment text or an invalid pattern — no slots there).
+                match string_end(text, i) {
+                    Some(end) => {
+                        out.push_str(&text[i..end]);
+                        i = end;
+                    }
+                    None => {
+                        let rest = &text[i..];
+                        let end = rest.find('\n').map(|p| i + p).unwrap_or(text.len());
+                        out.push_str(&text[i..end]);
+                        i = end;
+                    }
+                }
+                continue;
+            }
+            if c == '\'' {
+                // Char literal (`'x'`, `'\n'`); lifetimes never match.
+                match char_lit_len(text, i) {
+                    Some(len) => {
+                        out.push_str(&text[i..i + len]);
+                        i += len;
+                    }
+                    None => {
+                        out.push(c);
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                let rest = &text[i..];
+                let end = rest.find('\n').map(|p| i + p).unwrap_or(text.len());
+                out.push_str(&text[i..end]);
+                i = end;
+                continue;
+            }
+            if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                if let Some(rel) = text[i + 2..].find("*/") {
+                    out.push_str(&text[i..i + 2 + rel + 2]);
+                    i += 2 + rel + 2;
+                    continue;
+                }
+                out.push_str(&text[i..]);
+                break;
+            }
+            if c == '.' && i + 2 < bytes.len() && &text[i..i + 3] == "..." {
+                let id = format!("__RSMPL_ELLIPSIS_{ell_n}");
+                out.push_str(&id);
+                maps.ellipsis_ids.push(id);
+                ell_n += 1;
+                i += 3;
+                continue;
+            }
+            out.push(c);
+            i += 1;
         }
         // Replace declared metavars (longest names first) as whole tokens.
         let mut names: Vec<String> = table.kinds.keys().cloned().collect();

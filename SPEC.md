@@ -2870,6 +2870,7 @@ It never implicitly matches missing visibility, missing qualifiers, missing gene
 | `crate::...::foo` | any path segment sequence |
 | `[ ... ]` | any array elements |
 | `( ... )` | any tuple elements depending on context |
+| `{ prefix; ... }` | remaining block statements after a concrete prefix (general patterns only, Section 16.4.1) |
 
 ### 16.2 Function ellipsis
 
@@ -2977,6 +2978,33 @@ Pattern:
 ```
 
 matches any block body, including an empty body.
+
+#### 16.4.1 Trailing-statement ellipsis in general patterns (WI-5b)
+
+A general-pattern block (`if`/`while`/`for`/`loop` bodies, `match` arm
+bodies, block expressions, `let-else` diverge blocks, closure bodies)
+may end with one final pseudo-statement `...`:
+
+```rust
+if E {
+    foo();
+    ...
+}
+```
+
+The `...` absorbs any remaining target statements (zero or more) after
+the concrete prefix matched pairwise. The plus side carries `...` in the
+same block to replay the absorbed tail verbatim, or omits it to
+deliberately drop the tail (mirroring the Section 16.3 argument
+replay/drop discipline). Replay is all-or-nothing in v1: the plus side
+carries either every minus `...` (same count, same block structure, tails
+replay in minus block order) or none (all tails dropped); anything
+between fails at compile time, as does a plus `...` with no matching
+minus `...`. No other `...` position is admitted in general patterns
+(mid-block, second trailing, arm-level, operand, type, pattern) — those
+fail at C1. Tails slice original source (indent included); a zero-tail
+match replays empty. `# repeat` composes per site (tails are per-match).
+A `"..."` string literal is concrete text, never a tail marker.
 
 ### 16.5 Path ellipsis
 
@@ -3326,7 +3354,7 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 >
 > Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, with or without a `let-else` diverge block — both sides must agree structurally): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, spell an ascribed shape `P: T` with placeholder parts, or spell `P @ sub` with a placeholder head (WI-5a: `P` binds the whole target pattern text, `sub` matches recursively). A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
 >
-> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break` (optional label plus value), `continue` (optional label), `if` (condition plus then-block plus else branch — `else if` chains recurse), blocks (concrete-length statement sequences, never ellipsis), `match` (scrutinee plus arms — arm patterns bind whole placeholders or compare strictly, guards and bodies match structurally, arm count must agree), `loop`/`while`/`for` (labels strictly equal, conditions/iterators matched structurally, bound patterns via `# pat P`, bodies as concrete statement sequences), closures (async/move/qualifier strict, params decomposed like `P: T`, return type and body structural), and `let` expressions (pattern plus scrutinee — the `if let`/`while let` condition form). General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, raw pointers (`*const`/`*mut`), fn-pointer types, `impl Trait`, `dyn Trait`, and `_` (which matches any type). Anything else (async/try/unsafe blocks, yield, macro types, mixed `let-else` where only one side carries the diverge, parenthesized path arguments such as `Fn(A) -> B` with placeholders, `...` wildcards in these shapes) rejects the candidate rather than guessing. (WI-5b: the whole control-flow family is implemented; `break`/`continue` arms exist because loop bodies almost always contain one.) Placeholder path segments may carry generic arguments (`P<u8>`, `P::<T>`) and method-call turbofish compares structurally (`collect::<T>` binds `T`); lifetimes are wildcards in v1 and are not compared. A call shape must consume the whole pattern: `foo(E) + 1` and `E.foo() + 1` route to the general matcher, not to a `foo(E)`/`E.foo()` call prefix (only a trailing `;` keeps call routing, so `foo(E);` stays a call). An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
+> General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break` (optional label plus value), `continue` (optional label), `if` (condition plus then-block plus else branch — `else if` chains recurse), blocks (concrete prefix plus an optional trailing `...` tail, Section 16.4.1), `match` (scrutinee plus arms — arm patterns bind whole placeholders or compare strictly, guards and bodies match structurally, arm count must agree), `loop`/`while`/`for` (labels strictly equal, conditions/iterators matched structurally, bound patterns via `# pat P`, bodies as concrete prefixes with optional trailing `...` tails), closures (async/move/qualifier strict, params decomposed like `P: T`, return type and body structural), and `let` expressions (pattern plus scrutinee — the `if let`/`while let` condition form). General types cover paths with generic arguments, references, slices, arrays, tuples, parentheses, raw pointers (`*const`/`*mut`), fn-pointer types, `impl Trait`, `dyn Trait`, and `_` (which matches any type). Anything else (async/try/unsafe blocks, yield, macro types, mixed `let-else` where only one side carries the diverge, parenthesized path arguments such as `Fn(A) -> B` with placeholders, `...` outside trailing-block position) rejects the candidate rather than guessing. (WI-5b: the whole control-flow family is implemented; `break`/`continue` arms exist because loop bodies almost always contain one.) Placeholder path segments may carry generic arguments (`P<u8>`, `P::<T>`) and method-call turbofish compares structurally (`collect::<T>` binds `T`); lifetimes are wildcards in v1 and are not compared. A call shape must consume the whole pattern: `foo(E) + 1` and `E.foo() + 1` route to the general matcher, not to a `foo(E)`/`E.foo()` call prefix (only a trailing `;` keeps call routing, so `foo(E);` stays a call). An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
 
 Example:
 
@@ -3417,8 +3445,8 @@ case where an ordinary hunk cannot express the edit.
 
 | # | Trigger | Exact diagnostic |
 |---|---|---|
-| C1 | `...` anywhere in a general minus/plus side | `v1 general stmt/expr/type patterns do not support `...` (use a call pattern or a concrete shape)` |
-| C2 | (closed by WI-5a) `let-else` in the minus pattern now matches a `let-else` target structurally: both diverge blocks must be present and compare as `Block`s (concrete-length statement sequences); mixed `let-else` (only one side carries the diverge) rejects at match time under R2 | — |
+| C1 | `...` outside trailing-block position in a general minus/plus side (WI-5b: one final `...` per block is admitted, Section 16.4.1) | `v1 general patterns support `...` only as trailing block statements (`{ prefix; ... }` replays the absorbed tail, omitting it drops the tail); any other `...` position needs a call pattern or a concrete shape` |
+| C2 | (closed by WI-5a) `let-else` in the minus pattern now matches a `let-else` target structurally: both diverge blocks must be present and compare as `Block`s (concrete prefix plus optional trailing `...` tail, Section 16.4.1); mixed `let-else` (only one side carries the diverge) rejects at match time under R2 | — |
 | C3 | `# root=stmt` with a non-`let` shape | `` `# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`) `` |
 | C4 | `# root=expr` with a non-expression shape | `` `# root=expr` requires a Rust expression pattern `` |
 | C5 | `# root=type` with a non-type shape | `` `# root=type` requires a Rust type pattern `` |
@@ -3473,7 +3501,7 @@ WI-5a (now a firing shape, pinned end to end) and no longer fails.
 
 | # | Trigger | Mechanism | Write instead |
 |---|---|---|---|
-| R1 | (closed by WI-5a/WI-5b) async/try/unsafe blocks, yield, or macro types as the general expression | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break`/`continue` (labels strict), `if` (condition, then-block as a concrete statement sequence, else branch — `else if` chains recurse), blocks (statement sequences of equal length, members matched structurally — never ellipsis), `match` (scrutinee plus equal-count arms in order; arm pattern via `# pat P` or strict, guard/body structural), `loop`/`while`/`for` (labels strict; `for` bound pattern via `# pat P`), closures (qualifiers strict; params like `P: T`; body structural), `let` expressions (pattern plus scrutinee); anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
+| R1 | (closed by WI-5a/WI-5b) async/try/unsafe blocks, yield, or macro types as the general expression | bounded variant set: paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break`/`continue` (labels strict), `if` (condition, then-block as a concrete prefix plus optional trailing `...` tail, else branch — `else if` chains recurse), blocks (concrete prefix matched pairwise plus an optional trailing `...` tail absorbing the rest, Section 16.4.1), `match` (scrutinee plus equal-count arms in order; arm pattern via `# pat P` or strict, guard/body structural), `loop`/`while`/`for` (labels strict; `for` bound pattern via `# pat P`), closures (qualifiers strict; params like `P: T`; body structural), `let` expressions (pattern plus scrutinee); anything else rejects the candidate | an ordinary Git hunk, or a call/expr shape around the inner expression |
 | R2 | mixed `let-else` (only one side carries the diverge block) | agreed `let-else` matches structurally (WI-5a: both diverge blocks present, compared as `Block`s); mixed presence rejects the candidate | an ordinary Git hunk |
 | R3 | (closed by T144/T145) placeholder path segments with generic arguments match structurally (`P<u8>`, `P::<T>` bind the segment ident and compare args via `match_generic_arg`); method-call turbofish compares structurally too (lifetimes wildcard, `_` matches any type; T176: call-shape `R.collect::<T>()` binds through the call router, not only via the general matcher; placeholder `R.M::<T>()` binds the method ident like callee `P::<T>`, and bare `R.M()` never matches a turbofish site (T177 parity, T178)). T177: a bare call/method pattern without `::<...>` never matches a turbofish site (None-vs-Some fails on both arms, general-matcher parity) — spell `::<T>` explicitly. Function-call turbofish compares structurally as well (`id::<T>` binds `T` to the target source text; concrete args compare token-normalized; the pattern must use the `::<>` form — a bare `id<T>` pattern never matches a real call) | parenthesized path arguments (`Fn(A) -> B` shapes with placeholders) still reject via rendered-text comparison | — |
 | R4 | `P @ sub` with a concrete head, or a composite-placeholder subpattern | WI-5a: a placeholder head `P` binds the whole target pattern text and `sub` matches recursively (a target `@` unwraps to its subpattern, otherwise the whole target pattern; single-placeholder subs bind, concrete subs compare strictly token-equal); WI-5b: the same rule applies in match-arm, `for`-loop, closure-param, and `let`-expression pattern positions; write plus sides with `P` alone (repeating the `P @ sub` spelling re-splices the whole target text and duplicates the subpattern); non-placeholder heads and composite subs fail at C8 | a whole-pattern `# pat P` placeholder or a concrete pattern |
