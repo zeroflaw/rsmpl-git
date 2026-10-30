@@ -113,8 +113,10 @@ const CASES: &[Case] = &[
         rev: None,
         root: false,
         // T465: one partial-file item deletion (2 removed `use` lines
-        // tile whole items; --check green + byte-identical).
-        expect_sem: 1,
+        // tile whole items; --check green + byte-identical) + WI-9b2b:
+        // the env!-in-init lets compress to one nested macro-interior
+        // hunk (sweep 43->44 attribution, hunk verified exact).
+        expect_sem: 2,
     },
     // Symlink create (T121) and symlink delete (T298: the T353
     // `wrong type` dogfood gap) — ordinary passthrough, zero semantic.
@@ -128,7 +130,10 @@ const CASES: &[Case] = &[
         commit: "53372c43752e2ad1523fe2688525429f47fca7fe",
         rev: None,
         root: false,
-        expect_sem: 0,
+        // WI-9b2b: `env!("CARGO_BIN_EXE_rsmpl-git")` /
+        // `env!("CARGO_BIN_EXE_gitrs")` nested-macro hunk (N=2 in that
+        // file, verified exact; sweep 43->44 attribution).
+        expect_sem: 1,
     },
     // T403 verbatim sweep pins: 50d4a49 (`&state.parsed,` x11 -> `parsed,`)
     // and 3e0b9bc (`cur.push(c)` x2 -> `push_str_byte(&mut cur, c)`) compress
