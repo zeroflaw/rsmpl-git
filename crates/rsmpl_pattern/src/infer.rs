@@ -25,6 +25,19 @@ pub fn is_candidate(name: &str) -> bool {
     name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// WI-5b-follow: `ELLIPSIS*` never infers — the placeholder would read as a
+/// `...` marker (`__RSMPL_ELLIPSIS_FOO`, or byte-identical to marker 0 for
+/// `ELLIPSIS_0`). Declared names hit the same fence in `directives.rs`.
+fn check_reserved_ellipsis(name: &str) -> Result<(), StructuredError> {
+    if name == "ELLIPSIS" || name.starts_with("ELLIPSIS_") {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!("reserved name `{name}` (`ELLIPSIS*` names the `...` marker; rename the metavariable, e.g. `E`)"),
+        ));
+    }
+    Ok(())
+}
+
 /// Scan ident-like tokens (mirrors `metavar.rs` tokenization).
 fn scan_idents(text: &str, sigiled: bool) -> Vec<String> {
     let mut out = Vec::new();
@@ -191,6 +204,7 @@ pub fn infer_table(
         if set.is_empty() {
             continue; // literal position only
         }
+        check_reserved_ellipsis(&name)?;
         // Explicit declaration disambiguates a multi-kind set when it
         // names one member (e.g. `# visibility V` for single pre-`fn`
         // `V`, which is otherwise `{visibility, qualifier_list}`).
@@ -238,6 +252,7 @@ fn commit_sigiled(
         if set.is_empty() {
             continue;
         }
+        check_reserved_ellipsis(&name)?;
         if let Some(prev) = base.kind_of(&name) {
             if set.contains(&prev) {
                 continue;
@@ -1315,6 +1330,19 @@ mod tests {
     fn single_uppercase_arg_infers_expr() {
         let t = infer("foo(E)", "bar(E)");
         assert_eq!(t.kind_of("E"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn ellipsis_name_never_infers() {
+        // WI-5b-follow: an undeclared `ELLIPSIS_*` in a hole position fails
+        // loud instead of placeholder-substituting into the marker
+        // namespace (declared names hit the `directives.rs` fence).
+        for (m, p) in [
+            ("foo(ELLIPSIS_0)", "bar(ELLIPSIS_0)"),
+            ("foo(ELLIPSIS_FOO)", "bar(ELLIPSIS_FOO)"),
+        ] {
+            assert!(infer_table(base(vec![]), m, p, None).is_err(), "{m}");
+        }
     }
 
     #[test]

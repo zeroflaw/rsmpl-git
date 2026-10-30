@@ -218,9 +218,9 @@ fn is_bare_ellipsis(t: &str) -> bool {
     if t == "..." {
         return true;
     }
-    t.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
-        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
+    // WI-5b-follow: digit-suffixed only — `__RSMPL_ELLIPSIS_FOO` (from an
+    // `ELLIPSIS_*` metavar, now fenced at parse) never reads as a marker.
+    crate::quote_utils::is_ellipsis_marker_ident(t)
 }
 
 /// True when `t` is exactly one `__RSMPL_` placeholder ident (no dots,
@@ -561,7 +561,7 @@ pub fn classify_call_pattern(
     if let Some(bang) = find_macro_bang(&sub) {
         let before = sub[..bang].trim();
         if !before.contains(char::is_whitespace) && !before.is_empty() {
-            let body_ellipsis = sub.contains("__RSMPL_ELLIPSIS");
+            let body_ellipsis = crate::quote_utils::has_ellipsis_marker(&sub);
             return Ok((
                 ExprPatternKind::Macro {
                     name: unmask_literal_spans(before, &sentinels),

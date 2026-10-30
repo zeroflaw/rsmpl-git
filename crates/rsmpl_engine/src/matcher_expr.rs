@@ -397,6 +397,45 @@ fn replace_ellipsis_tokens(text: &str, replacements: &[String]) -> String {
     let mut i = 0;
     let mut n = 0;
     while i < bytes.len() {
+        // WI-5b-follow: `...` inside strings, chars, or comments is concrete
+        // text (same discipline as the general path) — copy it verbatim.
+        let c = bytes[i] as char;
+        if c == '"' {
+            match rsmpl_pattern::string_end(text, i) {
+                Some(end) => {
+                    out.push_str(&text[i..end]);
+                    i = end;
+                    continue;
+                }
+                None => {
+                    out.push_str(&text[i..]);
+                    break;
+                }
+            }
+        }
+        if c == '\'' {
+            if let Some(len) = rsmpl_pattern::char_lit_len(text, i) {
+                out.push_str(&text[i..i + len]);
+                i += len;
+                continue;
+            }
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            let rest = &text[i..];
+            let end = rest.find('\n').map(|p| i + p).unwrap_or(text.len());
+            out.push_str(&text[i..end]);
+            i = end;
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            if let Some(rel) = text[i + 2..].find("*/") {
+                out.push_str(&text[i..i + 2 + rel + 2]);
+                i += 2 + rel + 2;
+                continue;
+            }
+            out.push_str(&text[i..]);
+            break;
+        }
         if i + 2 < bytes.len() && &text[i..i + 3] == "..." {
             let before_ok = i == 0 || bytes[i - 1] != b'.';
             let after_ok = i + 3 >= bytes.len() || bytes[i + 3] != b'.';
@@ -458,6 +497,35 @@ fn count_ellipsis_tokens(text: &str) -> usize {
     let mut count = 0;
     let mut i = 0;
     while i < bytes.len() {
+        // WI-5b-follow: strings, chars, and comments hold no ellipsis tokens.
+        let c = bytes[i] as char;
+        if c == '"' {
+            match rsmpl_pattern::string_end(text, i) {
+                Some(end) => {
+                    i = end;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if c == '\'' {
+            if let Some(len) = rsmpl_pattern::char_lit_len(text, i) {
+                i += len;
+                continue;
+            }
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            let rest = &text[i..];
+            i = rest.find('\n').map(|p| i + p).unwrap_or(text.len());
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            if let Some(rel) = text[i + 2..].find("*/") {
+                i += 2 + rel + 2;
+                continue;
+            }
+            break;
+        }
         if i + 2 < bytes.len() && &text[i..i + 3] == "..." {
             let before_ok = i == 0 || bytes[i - 1] != b'.';
             let after_ok = i + 3 >= bytes.len() || bytes[i + 3] != b'.';
@@ -476,7 +544,48 @@ fn count_ellipsis_tokens(text: &str) -> usize {
 /// to argument/body ellipsis `foo(...)`. Local copy of the pattern-crate
 /// predicate (which is private there).
 fn plus_has_path_ellipsis(text: &str) -> bool {
-    text.contains("::...") || text.contains("...::")
+    // WI-5b-follow: path `...` inside strings/comments is concrete text.
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' {
+            match rsmpl_pattern::string_end(text, i) {
+                Some(end) => {
+                    i = end;
+                    continue;
+                }
+                None => {
+                    let rest = &text[i..];
+                    i = rest.find('\n').map(|p| i + p).unwrap_or(text.len());
+                    continue;
+                }
+            }
+        }
+        if c == '\'' {
+            if let Some(len) = rsmpl_pattern::char_lit_len(text, i) {
+                i += len;
+                continue;
+            }
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            let rest = &text[i..];
+            i = rest.find('\n').map(|p| i + p).unwrap_or(text.len());
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            if let Some(rel) = text[i + 2..].find("*/") {
+                i += 2 + rel + 2;
+                continue;
+            }
+            return false;
+        }
+        if text[i..].starts_with("::...") || text[i..].starts_with("...::") {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -1505,6 +1614,28 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr P\n# expr E\n- P(E)\n+ bar(E)\n";
         let src = "fn a() {\n    let a = foo::<u8>(1u8);\n}\n";
         assert!(apply(patch, src).is_err());
+    }
+
+    #[test]
+    fn plus_string_dots_stay_concrete_on_replay() {
+        // WI-5b-follow: `...` inside a plus-side string literal is concrete
+        // text (same discipline as the general path) — only the code-level
+        // `...` replays the absorbed remainder.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E, ...)\n+ bar(\"...\", E, ...)\n";
+        let src = "fn a() {\n    foo(x, 1);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(\"...\", x, 1);"), "got: {out}");
+    }
+
+    #[test]
+    fn plus_string_only_dots_never_trip_replay_gate() {
+        // WI-5b-follow control: a plus side whose only `...` sits inside a
+        // string holds zero ellipsis tokens, so the replay gate passes and
+        // the string emits verbatim.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(\"...\", E)\n";
+        let src = "fn a() {\n    foo(x);\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert!(out.contains("bar(\"...\", x);"), "got: {out}");
     }
 
     #[test]

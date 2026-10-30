@@ -142,13 +142,8 @@ fn is_block_ellipsis_stmt(stmt: &syn::Stmt) -> bool {
     matches!(stmt, syn::Stmt::Expr(syn::Expr::Path(p), _) if p.qself.is_none()
     && p.path.segments.len() == 1
     && p.path.segments[0].arguments.is_none()
-    && p.path.segments[0]
-        .ident
-        .to_string()
-        .strip_prefix("__RSMPL_ELLIPSIS")
-        .is_some_and(|rest| {
-            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        }))
+    // WI-5b-follow: digit-suffixed markers only (see rsmpl_pattern::quote_utils).
+    && rsmpl_pattern::is_ellipsis_marker_ident(&p.path.segments[0].ident.to_string()))
 }
 
 /// Match one block member statement.

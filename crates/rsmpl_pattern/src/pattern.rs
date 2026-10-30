@@ -13,7 +13,10 @@ use crate::expr_pattern::{
 };
 use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
-use crate::quote_utils::{mask_literal_spans, unmask_literal_spans, validate_quoting};
+use crate::quote_utils::{
+    count_ellipsis_markers, has_ellipsis_marker, is_ellipsis_marker_ident, mask_literal_spans,
+    unmask_literal_spans, validate_quoting,
+};
 
 /// Shape of a generalized (non-call) pattern (T10 v1 subset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -957,7 +960,7 @@ fn try_sequence(
     // `...` (outside strings/comments, which ride sentinels) to an
     // `__RSMPL_ELLIPSIS_N` marker, so a marker here is a real `...`
     // position — rejected at C1, never a silent match-time miss.
-    if minus_sub.contains("__RSMPL_ELLIPSIS") {
+    if has_ellipsis_marker(minus_sub) {
         return Err(c1_err());
     }
     for stmt in &minus_block.stmts {
@@ -981,7 +984,7 @@ fn try_sequence(
     let (masked_p, sentinels_p) = mask_literal_spans(&plus_rest)?;
     let (mut sub_p, _) = ExprPattern::placeholder_expr(&masked_p, table);
     sub_p = unmask_literal_spans(&sub_p, &sentinels_p);
-    if sub_p.contains("__RSMPL_ELLIPSIS") {
+    if has_ellipsis_marker(&sub_p) {
         return Err(c1_err());
     }
     let k = minus_block.stmts.len();
@@ -1394,9 +1397,8 @@ fn c1_err() -> StructuredError {
 
 /// True when the ident is a substituted `...` marker (`__RSMPL_ELLIPSIS_N`).
 fn is_ellipsis_ident(ident: &str) -> bool {
-    ident.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
-        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
+    // WI-5b-follow: digit-suffixed only (see quote_utils).
+    is_ellipsis_marker_ident(ident)
 }
 
 fn is_bare_ellipsis_path(path: &syn::Path) -> bool {
@@ -1560,7 +1562,7 @@ fn check_general_ellipsis_stmt(
     // `...` hiding there counts in the total but never as valid.
     let minus_total = {
         let rendered = quote::quote!(#local).to_string();
-        rendered.matches("__RSMPL_ELLIPSIS").count()
+        count_ellipsis_markers(&rendered)
     };
     if ck.misplaced || ck.valid != minus_total {
         return Err(c1_err());
@@ -1626,7 +1628,7 @@ fn check_general_ellipsis_expr(
     }
     let minus_total = {
         let rendered = quote::quote!(#pat_expr).to_string();
-        rendered.matches("__RSMPL_ELLIPSIS").count()
+        count_ellipsis_markers(&rendered)
     };
     if ck.misplaced || ck.valid != minus_total {
         return Err(c1_err());

@@ -604,9 +604,8 @@ fn rsmpl_pattern_args(pattern_args: &str, reverse_map: &HashMap<String, String>)
 /// (T442: `starts_with` alone misclassified args containing `...` inside
 /// a larger expression as arg-level `Ellipsis`).
 fn is_bare_ellipsis(t: &str) -> bool {
-    t.strip_prefix("__RSMPL_ELLIPSIS").is_some_and(|rest| {
-        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
+    // WI-5b-follow: digit-suffixed only (see rsmpl_pattern::quote_utils).
+    rsmpl_pattern::is_ellipsis_marker_ident(t)
 }
 
 fn split_top_level(s: &str) -> Vec<String> {

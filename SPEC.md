@@ -977,6 +977,7 @@ invalid symbol directive (want `# symbol Name=path`): # symbol JustName
 metavariable directive missing name: # expr
 invalid name `1bad` (must start with letter or _)
 invalid name `foo-bar` (only alphanumeric + _ allowed)
+reserved name `ELLIPSIS_FOO` (`ELLIPSIS*` names the `...` marker; rename the metavariable, e.g. `E`)
 symbol path must not be empty: # symbol Old=
 empty metavariable/capture name
 empty directive: #
@@ -2827,6 +2828,9 @@ Rules:
   one is the same conflict (`metavariable `T` declared as expr but
   used as type`). An explicit declaration disambiguates the single
   pre-`fn` case (`# visibility V` + `V fn` is `visibility`).
+  `ELLIPSIS` / `ELLIPSIS_*` never infers and never declares (WI-5b-follow):
+  the placeholder would read as a `...` marker, so both paths fail fast
+  with `reserved name`.
 
 Engine-verbatim (both exit 2; `rule:`/`file:` lines; text omits the
 null `range:`/`suggestion:` lines, JSON carries explicit nulls):
@@ -2945,6 +2949,10 @@ arg-level `...`: the call router treats that arg as concrete, the
 placeholder bypass routes the hunk to the general matcher, and the general
 matcher rejects `...` as a pattern error — never a silent literal emission
 (T442).
+`...` inside a plus-side string literal, char literal, or comment is concrete
+text (WI-5b-follow, same discipline as trailing-block tails): `- foo(E, ...)`
+/ `+ bar("...", E, ...)` rewrites `foo(x, 1)` to `bar("...", x, 1)` — only
+the code-level `...` replays the absorbed remainder.
   The engine reports this verbatim (rule + file lines; text carries the suggestion line, JSON explicit nulls):
   ```text
   RSMPL_PATTERN_CONFLICT

@@ -413,6 +413,19 @@ fn validate_metavar_name(n: &str) -> Result<()> {
         )
         .into());
     }
+    // WI-5b-follow: `ELLIPSIS*` is reserved for `...` markers — a declared
+    // `ELLIPSIS_FOO` would placeholder-substitute to `__RSMPL_ELLIPSIS_FOO`
+    // (and `ELLIPSIS_0` byte-identical to marker 0), misreading as an
+    // ellipsis. Backticked `` `ELLIPSIS_FOO` `` stays a literal (quoting
+    // bypasses this validation).
+    if n == "ELLIPSIS" || n.starts_with("ELLIPSIS_") {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!("reserved name `{n}` (`ELLIPSIS*` names the `...` marker; rename the metavariable, e.g. `E`)"),
+        )
+        .with_suggestion("rename the metavariable (e.g. `E`); quote the literal with backticks (e.g. `` `ELLIPSIS_FOO` ``)".to_string())
+        .into());
+    }
     Ok(())
 }
 
@@ -436,5 +449,26 @@ mod tests {
             }
             crate::parser::ParseError::Message(m) => panic!("unexpected message: {m}"),
         }
+    }
+
+    #[test]
+    fn ellipsis_names_reserved() {
+        // WI-5b-follow: `ELLIPSIS*` would placeholder-substitute into the
+        // internal marker namespace (`__RSMPL_ELLIPSIS_FOO`, or byte-identical
+        // to marker 0 for `ELLIPSIS_0`).
+        for bad in [
+            "# expr ELLIPSIS",
+            "# expr ELLIPSIS_FOO",
+            "# expr ELLIPSIS_0",
+        ] {
+            let err = parse_directives(&[bad.to_string()]).unwrap_err();
+            match err {
+                crate::parser::ParseError::Structured(s) => {
+                    assert!(s.message.contains("reserved"), "got: {}", s.message);
+                }
+                crate::parser::ParseError::Message(m) => panic!("unexpected message: {m}"),
+            }
+        }
+        assert!(parse_directives(&["# expr E".to_string()]).is_ok());
     }
 }

@@ -227,6 +227,52 @@ pub fn char_lit_len(text: &str, start: usize) -> Option<usize> {
     Some(1 + first.len_utf8() + 1)
 }
 
+/// True when `s` is exactly a minted `...` marker (`__RSMPL_ELLIPSIS_<digits>`).
+/// Metavar placeholders (`__RSMPL_{name}`) with `ELLIPSIS_*` names are fenced
+/// at parse time, but the predicate stays exact so such text never reads as
+/// a marker even if it reaches here (WI-5b-follow).
+pub fn is_ellipsis_marker_ident(s: &str) -> bool {
+    s.strip_prefix("__RSMPL_ELLIPSIS_")
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// True when `text` holds a minted `...` marker anywhere (digit-suffixed only,
+/// so `__RSMPL_ELLIPSIS_FOO` never counts — WI-5b-follow).
+pub fn has_ellipsis_marker(text: &str) -> bool {
+    let mut i = 0;
+    while let Some(rel) = text[i..].find("__RSMPL_ELLIPSIS_") {
+        let start = i + rel + "__RSMPL_ELLIPSIS_".len();
+        let mut j = start;
+        while j < text.len() && text.as_bytes()[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > start {
+            return true;
+        }
+        i = start;
+    }
+    false
+}
+
+/// Count minted `...` markers (`__RSMPL_ELLIPSIS_<digits>`) in `text`.
+/// Digit-suffixed only, matching `is_ellipsis_marker_ident` (WI-5b-follow).
+pub fn count_ellipsis_markers(text: &str) -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while let Some(rel) = text[i..].find("__RSMPL_ELLIPSIS_") {
+        let start = i + rel + "__RSMPL_ELLIPSIS_".len();
+        let mut j = start;
+        while j < text.len() && text.as_bytes()[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > start {
+            n += 1;
+        }
+        i = start;
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +298,27 @@ mod tests {
     #[test]
     fn unbalanced_rejected() {
         assert!(validate_quoting("`E").is_err());
+    }
+
+    #[test]
+    fn ellipsis_marker_is_digit_suffixed_only() {
+        // WI-5b-follow: only minted `__RSMPL_ELLIPSIS_<digits>` counts.
+        assert!(is_ellipsis_marker_ident("__RSMPL_ELLIPSIS_0"));
+        assert!(is_ellipsis_marker_ident("__RSMPL_ELLIPSIS_12"));
+        assert!(!is_ellipsis_marker_ident("__RSMPL_ELLIPSIS"));
+        assert!(!is_ellipsis_marker_ident("__RSMPL_ELLIPSIS_"));
+        assert!(!is_ellipsis_marker_ident("__RSMPL_ELLIPSIS_FOO"));
+        assert!(!is_ellipsis_marker_ident("__RSMPL_E_0"));
+    }
+
+    #[test]
+    fn ellipsis_marker_scan_ignores_non_digits() {
+        assert!(has_ellipsis_marker("call(__RSMPL_ELLIPSIS_3)"));
+        assert_eq!(
+            count_ellipsis_markers("a __RSMPL_ELLIPSIS_1 b __RSMPL_ELLIPSIS_2"),
+            2
+        );
+        assert!(!has_ellipsis_marker("declares __RSMPL_ELLIPSIS_FOO here"));
+        assert_eq!(count_ellipsis_markers("__RSMPL_ELLIPSIS_FOO"), 0);
     }
 }
