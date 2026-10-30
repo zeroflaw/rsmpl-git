@@ -62,8 +62,15 @@ pub(crate) fn try_method_to_fn_sweep(
     } else {
         format!("Receiver, {args}")
     };
+    // WI-7-upper: an uppercase method ident infers as an `expr` hole —
+    // a raw `Receiver.Old(E0)` silently matches (and rewrites) any twin
+    // method (probed: `Other` rewritten with a bogus `Old` binding).
+    // Backticks pin the literal; likewise an uppercase plus-side bare
+    // callee would leave `New` unbound.
     hunk.push_str(&format!(
-        "- Receiver.{old_method}({args})\n+ {new_func}({tail})\n"
+        "- Receiver.{old}({args})\n+ {new}({tail})\n",
+        old = super::shape::literal_callee(&old_method),
+        new = super::shape::literal_callee(&new_func),
     ));
     Some(hunk)
 }
@@ -175,8 +182,13 @@ pub(crate) fn try_method_to_method_sweep(
         vars.push(v);
     }
     let args = vars.join(", ");
+    // WI-7-upper: an uppercase method ident infers as an `expr` hole
+    // (raw `Receiver.Old(E0)` leaves plus-side `New` unbound) — backticks
+    // pin the literal, lowercase passes through untouched.
     hunk.push_str(&format!(
-        "- Receiver.{old_method}({args})\n+ Receiver.{new_method}({args})\n"
+        "- Receiver.{old}({args})\n+ Receiver.{new}({args})\n",
+        old = super::shape::literal_callee(&old_method),
+        new = super::shape::literal_callee(&new_method),
     ));
     Some(hunk)
 }
@@ -285,8 +297,11 @@ pub(crate) fn try_method_same_literal_sweep(
     let old = old_args.join(", ");
     let new = new_args.join(", ");
     let mut hunk = crate::emission_header(path, &rule, changed);
+    // WI-7-upper: same hole class as the rename sweep — a raw uppercase
+    // `Receiver.Old(...)` binds `Old` and over-matches twin methods.
+    let lit = super::shape::literal_callee(&method);
     hunk.push_str(&format!(
-        "- Receiver.{method}({old})\n+ Receiver.{method}({new})\n"
+        "- Receiver.{lit}({old})\n+ Receiver.{lit}({new})\n"
     ));
     Some(hunk)
 }
@@ -384,7 +399,10 @@ pub(crate) fn try_ref_method_strip_sweep(
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
     let argv = args.join(", ");
     let mut hunk = crate::emission_header(path, &rule, changed);
-    hunk.push_str(&format!("- &Receiver.{method}({argv})\n+ Receiver\n"));
+    // WI-7-upper: same hole class — a raw uppercase `&Receiver.Old(...)`
+    // binds `Old` (probed bogus binding); backticks pin the literal.
+    let lit = super::shape::literal_callee(&method);
+    hunk.push_str(&format!("- &Receiver.{lit}({argv})\n+ Receiver\n"));
     Some(hunk)
 }
 
@@ -958,5 +976,131 @@ mod tests {
             "@@ -1,3 +1,3 @@\n fn m() {\n-    &a.join(\"\");\n+    a;\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn method_to_method_uppercase_fires_backticked() {
+        // WI-7-upper: a bare `Receiver.Old(E0)` leaves plus-side `New`
+        // unbound — both method idents ride backticks (engine-probed).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.Old(first);\n-    b.Old(second);\n+    a.New(first);\n+    b.New(second);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.Old(first);\n    b.Old(second);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- Receiver.`Old`(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.`New`(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("a.New(first)"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn method_to_fn_uppercase_backticks_and_ignores_twin() {
+        // WI-7-upper: a raw `Receiver.Old(E0)` silently rewrote an
+        // `Other` twin (probed post `new_fn(a, first)` x2 with a bogus
+        // `Old` binding). Backticked, the twin survives.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.Old(first);\n-    b.Old(second);\n+    new_function(a, first);\n+    new_function(b, second);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.Old(first);\n    b.Old(second);\n    c.Other(third);\n}\n",
+        )]);
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("uppercase method-to-function must compress");
+        validated_live(&out, &pre);
+        assert!(out.contains("- Receiver.`Old`(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("c.Other(third)"),
+            "twin must survive, got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("new_function(a, first)"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn method_to_fn_uppercase_plus_callee_backticked() {
+        // WI-7-upper: an uppercase plus-side bare callee (`New`) is
+        // unbound without backticks — `` `New`(Receiver, E0) `` applies.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.old(first);\n-    b.old(second);\n+    New(a, first);\n+    New(b, second);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.old(first);\n    b.old(second);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("+ `New`(Receiver, E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn method_same_literal_uppercase_fires_backticked() {
+        // WI-7-upper: same hole class — a raw uppercase
+        // `Receiver.Old(...)` binds `Old` and over-matches twins.
+        // (The sweep replays cross-site-identical tuples concretely.)
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    a.Old(shared, false);\n-    b.Old(shared, false);\n+    a.Old(shared, true);\n+    b.Old(shared, true);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.Old(shared, false);\n    b.Old(shared, false);\n    c.Other(shared, false);\n}\n",
+        )]);
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("uppercase same-literal must compress");
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- Receiver.`Old`(shared, false)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.`Old`(shared, true)\n"),
+            "got: {out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("c.Other(shared, false)"),
+            "twin must survive, got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn ref_strip_uppercase_fires_backticked() {
+        // WI-7-upper: same hole class (probed bogus `Old` binding on
+        // the raw shape) — backticks pin the literal.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.Old(\"\");\n-    &b.Old(\"\");\n+    a;\n+    b;\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    &a.Old(\"\");\n    &b.Old(\"\");\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- &Receiver.`Old`(\"\")\n"), "got: {out}");
     }
 }

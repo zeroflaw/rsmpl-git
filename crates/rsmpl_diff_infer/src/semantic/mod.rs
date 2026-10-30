@@ -1284,6 +1284,110 @@ mod tests {
     }
 
     #[test]
+    fn verbatim_uppercase_callee_backticks_and_spares_twin() {
+        // WI-7-upper: a raw `Old(alpha)` verbatim binds `Old` as a hole
+        // and rewrites an in-range `Other(alpha)` twin (probed: 3
+        // matches). Backticked, the emission is literal and the twin
+        // survives — including twin-outside-range layouts, where the
+        // masked head skips the engine-count backstop by construction.
+        let a = section(
+            "a.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    Old(alpha);\n     Other(alpha);\n-    Old(alpha);\n+    Old(beta);\n+    Old(beta);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "a.rs",
+            "fn m() {\n    Old(alpha);\n    Other(alpha);\n    Old(alpha);\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(&[a], &pre).unwrap();
+        assert!(out.contains("- `Old`(alpha)\n"), "got: {out}");
+        assert!(out.contains("+ `Old`(beta)\n"), "got: {out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["a.rs"].contains("Other(alpha)"),
+            "twin must survive, got: {}",
+            files["a.rs"]
+        );
+    }
+
+    #[test]
+    fn verbatim_uppercase_method_backticks_and_spares_twin() {
+        // WI-7-upper: method-shape twin of the above. A same-method
+        // cross-receiver twin (`c.Old`) vetoes the method-literal sweep
+        // (its totality counts by method ident), so verbatim owns the
+        // pair — raw `a.Old(x)` matched 3 sites (probed); `a.`Old`(x)`
+        // matches exactly the 2 `a` sites (concrete receiver).
+        let a = section(
+            "a.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.Old(alpha);\n     c.Old(alpha);\n-    a.Old(alpha);\n+    a.Old(beta);\n+    a.Old(beta);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "a.rs",
+            "fn m() {\n    a.Old(alpha);\n    c.Old(alpha);\n    a.Old(alpha);\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(&[a], &pre).unwrap();
+        assert!(out.contains("- a.`Old`(alpha)\n"), "got: {out}");
+        assert!(out.contains("+ a.`Old`(beta)\n"), "got: {out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["a.rs"].contains("c.Old(alpha)"),
+            "twin must survive, got: {}",
+            files["a.rs"]
+        );
+    }
+
+    #[test]
+    fn verbatim_uppercase_let_twin_vetoes_to_ordinary() {
+        // WI-7-upper backstop: a `let Old = ...` hole has no backtick
+        // spelling in this run, so an uncleansable twin vetoes the
+        // group via the engine self-rewrite count (3 != 2) and the
+        // section stays ordinary instead of rewriting the twin.
+        let a = section(
+            "a.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let Old = foo();\n-    let Old = foo();\n+    let Old = bar();\n+    let Old = bar();\n }\n",
+        );
+        let pre = pre_map(&[(
+            "a.rs",
+            "fn m() {\n    let Old = foo();\n    let Old = foo();\n    let Other = foo();\n}\n",
+        )]);
+        assert!(
+            infer_semantic_with_pre_images(&[a], &pre).is_none(),
+            "twin-present let-hole group must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn verbatim_uppercase_let_without_twin_compresses() {
+        // WI-7-upper backstop precision: with no twin the engine count
+        // equals the group size, so the hole-risk group still compresses
+        // (and real-applies exactly — the hole binds the same ident
+        // at every site).
+        let a = section(
+            "a.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let Old = foo();\n-    let Old = foo();\n+    let Old = bar();\n+    let Old = bar();\n }\n",
+        );
+        let pre = pre_map(&[(
+            "a.rs",
+            "fn m() {\n    let Old = foo();\n    let Old = foo();\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(&[a], &pre).unwrap();
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["a.rs"].contains("let Old = bar();"),
+            "got: {}",
+            files["a.rs"]
+        );
+    }
+
+    #[test]
     fn per_hunk_sweep_compresses_beside_ordinary_hunk() {
         // Mixed file: hunk 1 is a 3-site call sweep, hunk 2 a body
         // edit. The whole-section detectors stay passthrough; the

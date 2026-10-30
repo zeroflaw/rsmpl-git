@@ -426,4 +426,43 @@ mod tests {
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
+
+    #[test]
+    fn macro_uppercase_fires_plain() {
+        // WI-7-upper: macro names never infer (no `# macro` hole for
+        // the name — probed clean), so uppercase renames stay plain:
+        // no backticks, real-apply byte-exact.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    Old!(first_argument);\n-    Old!(second_argument);\n+    New!(first_argument);\n+    New!(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    Old!(first_argument);\n    Old!(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(!out.contains('`'), "no backticks expected, got: {out}");
+        assert!(out.contains("- Old!(...)\n"), "got: {out}");
+        assert!(out.contains("+ New!(...)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_qualified_uppercase_fires_plain() {
+        // WI-7-upper: qualified twin of the above — the whole path
+        // stays verbatim (probed clean, names never infer).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::Old!(first_argument);\n-    crate::Old!(second_argument);\n+    crate::New!(first_argument);\n+    crate::New!(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::Old!(first_argument);\n    crate::Old!(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(!out.contains('`'), "no backticks expected, got: {out}");
+        assert!(out.contains("- crate::Old!(...)\n"), "got: {out}");
+        assert!(out.contains("+ crate::New!(...)\n"), "got: {out}");
+    }
 }

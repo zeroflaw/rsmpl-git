@@ -6139,9 +6139,17 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   (tuple-struct and enum-variant constructors) emits backticked
   (`` `Old`(E0) `` → `` `New`(E0) ``, SPEC 15.4): bare `Old` would
   otherwise infer as an `expr` hole (SPEC 15.8), failing loud on the
-  plus side when the callee changes and over-matching when it does
-  not. The same rule covers the trailing-arg-addition,
-  trailing-literal, and head-peel sweeps below.
+   plus side when the callee changes and over-matching when it does
+   not. The same rule covers the trailing-arg-addition,
+   trailing-literal, and head-peel sweeps below, the qualified-call and
+   turbofish sweeps (backtick on the last segment only —
+   `` crate::`Old`(E0) ``, `` `Old`::<u8>(E0) ``; a full-path quote is
+   an invalid literal token), and the method sweeps (backtick on the
+   method ident — `` Receiver.`Old`(E0) ``); turbofish-suffixed method
+   idents stay plain (the `::<` suffix defeats hole inference, so the
+   pattern is already literal), as do macro names (never inferred) and
+   `use` paths (backticks rejected there — the concrete path is
+   already literal).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
@@ -6225,37 +6233,49 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   whose rest token-equals the method args, with one shared method
   ident, one shared function callee, and uniform minus-arity →
   one `# allow=many` hunk (`# expr Receiver` + `# expr E0…`).
+  Uppercase idents ride backticks on the method
+  (`` Receiver.`Old`(E0) `` — raw `Receiver.Old(E0)` binds `Old` and
+  silently rewrites twin methods) and on an uppercase plus-side bare
+  callee (`` `New`(Receiver, E0) ``).
 - Method-to-method sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish either side, non-`&` receivers) →
   a method call whose receiver and args token-equal per site, with
   one shared old-method ident, one shared new-method ident
   (`old != new`), and uniform arity → one `# allow=many` hunk
-  (`# expr Receiver` + `# expr E0…`).
+  (`# expr Receiver` + `# expr E0…`; uppercase idents backticked —
+  `` Receiver.`Old`(E0) `` → `` Receiver.`New`(E0) ``, same hole
+  class as the call sweep).
 - Same-method literal sweep (T420): N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish either side, non-`&` receivers, one trailing
   `;`/`,` stripped) → the same method ident with per-site token-equal
   receivers and cross-site token-equal old-arg and new-arg tuples with a
-  real old/new delta → one `# allow=many` hunk (`# expr Receiver` only,
-  concrete `ToTokens` spellings: backtick literals are ident-only per
-  SPEC 15.4, and a plus-only `E` would be unbound). Pre-image totality
-  keys on method + old-arg tuple (plain callee+arity would over-count
-  same-method/different-arg sites that the pattern can never match).
+   real old/new delta → one `# allow=many` hunk (`# expr Receiver` only,
+   concrete `ToTokens` spellings: backtick literals are ident-only per
+   SPEC 15.4, and a plus-only `E` would be unbound; an uppercase method
+   rides backticks — `` Receiver.`Old`(E0, lit) ``, same hole class).
+   Pre-image totality
+   keys on method + old-arg tuple (plain callee+arity would over-count
+   same-method/different-arg sites that the pattern can never match).
 - `&`-receiver strip sweep: N ≥ 2 `-`/`+` pairs, each containing
-  exactly one shared-reference-to-method call (`syn`-parsed, no
-  turbofish/`&mut`/explicit lifetime) with the plus side equal to
-  the minus with that span replaced by its receiver; one shared
-  method ident and shared arg token-texts (typically literals, bound
-  verbatim so `&d.join("repo")`-style sites can never over-match) →
-  one `# allow=many` general-expr hunk (`# expr Receiver` only).
+   exactly one shared-reference-to-method call (`syn`-parsed, no
+   turbofish/`&mut`/explicit lifetime) with the plus side equal to
+   the minus with that span replaced by its receiver; one shared
+   method ident and shared arg token-texts (typically literals, bound
+   verbatim so `&d.join("repo")`-style sites can never over-match) →
+   one `# allow=many` general-expr hunk (`# expr Receiver` only;
+   an uppercase method rides backticks — `&Receiver.`Old`(argv)`).
    Trailing `;`/`,` tolerated.
 - Qualified-call sweep: N ≥ 2 `-`/`+` pairs, each a multi-segment
   (`syn`-parsed, generic-free, qself-free) `P::Old(args)` →
   `P::New(args)` call with a shared prefix (leading `::` has no engine
   spelling and declines), one shared last-segment delta, uniform arity,
   and per-site token-equal args → one `# allow=many` hunk with the
-  concrete path form (`- crate::old_api(E0…)` /
-  `+ crate::new_api(E0…)`; SPEC 19.3 prefers concrete paths, no `# symbol`
-  tax). Leading-`::` and qself sites stay ordinary. Call sites inside
+   concrete path form (`- crate::old_api(E0…)` /
+   `+ crate::new_api(E0…)`; SPEC 19.3 prefers concrete paths, no `# symbol`
+   tax). An uppercase last segment rides backticks on that segment only
+   (`` crate::`Old`(E0) `` — bare `crate::Old(E0)` leaves plus-side
+   `New` unbound; only the last segment can infer, so prefixes stay
+   verbatim). Leading-`::` and qself sites stay ordinary. Call sites inside
   `let` inits unwrap to their init call (T449 precedent). Pre-image
   totality keys on the exact rendered path + arity (bare twins never
   match a qualified pattern and vice versa — probed parity).
@@ -6268,8 +6288,13 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   Value args token-equal per site with uniform value arity; turbofish
   uniform turbo-arity with per-site minus token-equals plus; across all
   sites at most one turbo position varies — that position emits an
-  inferred `T` on both sides (`- foo::<T>(E0)` /
-  `+ bar::<T>(E0)`), the rest verbatim. A bare-without-turbofish
+   inferred `T` on both sides (`- foo::<T>(E0)` /
+   `+ bar::<T>(E0)`), the rest verbatim. An uppercase bare/qualified
+   callee rides backticks (`` `Old`::<u8>(E0) ``,
+   `` crate::`Old`::<T>(E0) `` — bare `Old::<u8>(E0)` leaves plus-side
+   `New` unbound); turbofish-suffixed method idents stay plain (the
+   `::<` suffix defeats hole inference — probed literal, no backticks).
+   A bare-without-turbofish
   pattern never matches a turbofish site (R3 parity, probed), and
   turbo-arity is match-exact, so totality keys on callee + value arity
   + turbo arity + concrete non-hole turbo texts (`&`-receivers counted
@@ -6285,9 +6310,11 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   bodies (bodies vary across sites; delimiters unrestricted — the
   engine `...` matches `!()`, `![]`, `!{}` alike, probed, including
   for qualified paths) → one `# allow=many` `# macro=token_tree`
-  hunk (`- old!(...)` / `+ new!(...)`, or the concrete qualified
-  form `- prefix::old!(...)` / `+ prefix::new!(...)`; SPEC 19.3
-  prefers concrete paths, no `# symbol` tax). Token-tree matching is
+   hunk (`- old!(...)` / `+ new!(...)`, or the concrete qualified
+   form `- prefix::old!(...)` / `+ prefix::new!(...)`; SPEC 19.3
+   prefers concrete paths, no `# symbol` tax). Uppercase macro names
+   stay plain (macro names never infer — probed clean, no backticks).
+   Token-tree matching is
   verbatim-only by design, so the body is never spelled. Leading-`::`
   (no engine spelling, probed), same-name body rewrites (macro
   interiors, WI-9), and divergent new names stay ordinary. Pre-image
@@ -6406,10 +6433,17 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   first plus and stays as a pure-insertion leftover (`@@ -O,0 +N+1,K-1 @@`);
   multi-minus, context-bearing, or first-plus-mismatch hunks stay
   ordinary (the leftover would split in two).
-  Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
-  subterm and does not veto (probe-verified). Leftover balanced hunks
-  retry the standard chain in place; the T375 guard applies to the
-  verbatim-covered set as a whole.
+   Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
+   subterm and does not veto (probe-verified). Uppercase call heads
+   ride backticks (`` `Old`(alpha) ``, `` a.`Old`(alpha) `` — a raw
+   uppercase callee/method infers as a hole and rewrites twin sites);
+   any other surviving uppercase ident (let-pat, general-expr
+   positions) is judged by an engine self-rewrite count
+   (`template_expr_holds`): the minus template must match exactly
+   group-size times or the group stays ordinary (conservative:
+   whole-file count, so an out-of-range twin still vetoes). Leftover balanced hunks
+   retry the standard chain in place; the T375 guard applies to the
+   verbatim-covered set as a whole.
   All seven metavar sweeps carry the same pre-image subterm totality
   (T409): matchable-unit count (calls/methods by callee+arity, same-method
   literals by method+old-args, strips by method+args, slots by fn ident

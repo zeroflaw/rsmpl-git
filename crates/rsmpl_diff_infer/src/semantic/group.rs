@@ -633,6 +633,24 @@ mod tests {
             Some(("Old".to_string(), "New".to_string()))
         );
         assert_eq!(call_delta("`Old`(E0)", "`Old`(E1)"), None);
+        // WI-7-upper: qualified, turbofish, and method heads strip the
+        // same way (`call_expr` drops all backticks before parsing).
+        assert_eq!(
+            call_delta("crate::`Old`(E0)", "crate::`New`(E0)"),
+            Some(("Old".to_string(), "New".to_string()))
+        );
+        assert_eq!(
+            call_delta("`Old`::<u8>(E0)", "`New`::<u8>(E0)"),
+            Some(("Old".to_string(), "New".to_string()))
+        );
+        assert_eq!(
+            call_delta("crate::`Old`::<T>(E0)", "crate::`New`::<T>(E0)"),
+            Some(("Old".to_string(), "New".to_string()))
+        );
+        assert_eq!(
+            call_delta("Receiver.`Old`(E0)", "Receiver.`New`(E0)"),
+            Some(("Old".to_string(), "New".to_string()))
+        );
     }
 
     #[test]

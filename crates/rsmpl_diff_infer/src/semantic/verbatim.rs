@@ -197,6 +197,9 @@ pub(crate) fn try_verbatim_sweep(
         if plus_introduces_unbound_name(&emit_minus, &emit_plus) {
             continue;
         }
+        // WI-7-upper: literal emission starts as the raw lines; the
+        // Expr path may backtick an uppercase call head below.
+        let (mut lit_minus, mut lit_plus) = (emit_minus.clone(), emit_plus.clone());
         if !is_let {
             let (minus_expr, plus_expr) = match (
                 syn::parse_str::<syn::Expr>(&emit_minus),
@@ -208,6 +211,11 @@ pub(crate) fn try_verbatim_sweep(
             if !verbatim_shape_ok(&minus_expr, &plus_expr) {
                 continue;
             }
+            // WI-7-upper: backtick an uppercase call head (bare callee,
+            // qualified last segment, turbofish-free method) so it stays
+            // literal; the backstop below judges anything left over.
+            lit_minus = literal_call_emit(&minus_expr, &emit_minus);
+            lit_plus = literal_call_emit(&plus_expr, &emit_plus);
         }
         // Section-visible uniqueness, legacy path only (no pre-image):
         // the stripped minus occurs exactly once per own pair across
@@ -255,6 +263,28 @@ pub(crate) fn try_verbatim_sweep(
                 }
             }
             let n_eff = *n + extra;
+            // WI-7-upper backstop: any surviving uppercase ident still
+            // rides as an inferred hole (let-pat, general-expr positions;
+            // backticked call heads are masked out above), so the engine
+            // self-rewrite count must equal the group size or the group
+            // stays ordinary instead of rewriting an untouched twin.
+            // Non-code lines (doc comments) skip the probe — the legacy
+            // path judges them. `None` pre-image keeps the legacy allow.
+            {
+                let code = syn::parse_str::<syn::Expr>(&lit_minus).is_ok()
+                    || syn::parse_str::<syn::Stmt>(&lit_minus).is_ok();
+                if code
+                    && !upper_idents(&mask_code_words(&lit_minus)).is_empty()
+                    && !crate::totality::template_expr_holds(path, file_old, &lit_minus, n_eff)
+                {
+                    for claim in joined.iter_mut() {
+                        if claim.as_ref().is_some_and(|(gm, gp)| gm == m && gp == p) {
+                            *claim = None;
+                        }
+                    }
+                    continue;
+                }
+            }
             // Changed lines of the hunks holding this group's pairs.
             let mut group_changed: Vec<usize> = Vec::new();
             for (j, gm, gp) in pairs.iter() {
@@ -320,8 +350,10 @@ pub(crate) fn try_verbatim_sweep(
         passing.push(VerbatimGroup {
             minus_trim: m.clone(),
             plus_trim: p.clone(),
-            minus: emit_minus,
-            plus: emit_plus,
+            // WI-7-upper: literal emission (backticked call heads);
+            // `minus_trim`/`needle` stay raw for grouping/counting.
+            minus: lit_minus,
+            plus: lit_plus,
             rule,
             sites,
         });
@@ -679,6 +711,60 @@ fn upper_idents(s: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Backtick a top-level call head (WI-7-upper): a bare uppercase callee
+/// (`Old(x)`), an uppercase last path segment (`crate::Old(x)`), or an
+/// uppercase turbofish-free method ident (`a.Old(x)`) infers as an
+/// `expr` hole and over-matches twin sites (probed: an interleaved
+/// `Other` twin rewritten with a bogus `Old` binding). Backticks pin
+/// the literal (engine-probed spellings); lowercase heads pass through
+/// untouched via `literal_path_last`/`literal_callee` (zero churn).
+/// Leading-`::` (no engine spelling — declined like the qualified
+/// sweep), qself, turbofish-carrying methods (already literal-safe:
+/// the `::<` suffix defeats `is_candidate`, probed), and non-call exprs
+/// pass through for the engine-count backstop at the call site.
+fn literal_call_emit(expr: &syn::Expr, emit: &str) -> String {
+    match expr {
+        syn::Expr::Call(call) => {
+            let syn::Expr::Path(p) = call.func.as_ref() else {
+                return emit.to_string();
+            };
+            if p.qself.is_some() {
+                return emit.to_string();
+            }
+            let Some(paren) = emit.find('(') else {
+                return emit.to_string();
+            };
+            let (head, tail) = emit.split_at(paren);
+            if head.starts_with("::") {
+                return emit.to_string();
+            }
+            format!("{}{tail}", super::shape::literal_path_last(head))
+        }
+        syn::Expr::MethodCall(method) => {
+            if method.turbofish.is_some() {
+                return emit.to_string();
+            }
+            let m = method.method.to_string();
+            let lit = super::shape::literal_callee(&m);
+            if lit == m {
+                return emit.to_string();
+            }
+            let Some(paren) = emit.find('(') else {
+                return emit.to_string();
+            };
+            let (head, tail) = emit.split_at(paren);
+            let Some(idx) = head.rfind('.') else {
+                return emit.to_string();
+            };
+            if head[idx + 1..] != m {
+                return emit.to_string();
+            }
+            format!("{}.{lit}{tail}", &head[..idx])
+        }
+        _ => emit.to_string(),
+    }
 }
 
 /// Engine-capability gates for one verbatim pair (T403): both sides

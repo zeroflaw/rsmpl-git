@@ -613,6 +613,46 @@ pub(crate) fn template_type_holds(
     report.rules.iter().map(|r| r.matches).sum::<usize>() == n
 }
 
+/// Generic expression-template totality (WI-7-upper): the emitted minus
+/// expression template `minus_template` (e.g. a verbatim `Old(alpha)`
+/// whose uppercase callee infers as an `expr` hole) must match exactly
+/// `n` sub-expressions in the pre-image file. Same self-rewrite probe
+/// prescription as `template_type_holds` (`- M` / `+ M` under `# sweep`,
+/// engine-applied to a scratch tree, match count must equal `n`):
+/// a hole that also matches an untouched twin (probed: `Other(alpha)`
+/// next to two `Old(alpha)` sites) counts `n + 1` and vetoes, so the
+/// group stays ordinary instead of silently rewriting the twin.
+/// `None` pre-image keeps the legacy allow; probe parse/apply failure
+/// vetoes. Conservative by construction: the sweep probe counts
+/// whole-file matches, so a twin outside the emitted range still vetoes
+/// (same posture as `template_fn_holds`).
+pub(crate) fn template_expr_holds(
+    path: &str,
+    file_old: Option<&str>,
+    minus_template: &str,
+    n: usize,
+) -> bool {
+    if n == 0 || minus_template.contains('\n') {
+        return false;
+    }
+    let Some(pre) = file_old else {
+        return true;
+    };
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {minus_template}\n+ {minus_template}\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+}
+
 /// Generic template totality for fn-header sweeps (WI-4c): the emitted
 /// minus header template `minus_header` (e.g. `fn old (...)`, concrete
 /// evolving slots, preserved slots omitted or `(...)`) must match exactly
@@ -1227,6 +1267,49 @@ mod tests {
             Some(pre),
             "Vec<u32>",
             1
+        ));
+    }
+    #[test]
+    fn template_expr_hole_twin_vetoes_and_exact_passes() {
+        // WI-7-upper: an uppercase hole matches a same-shape twin, so
+        // the count exceeds the group size and vetoes; without the twin
+        // the count is exact and passes. `None` pre-image keeps the
+        // legacy allow.
+        let pre = "fn m() {\n    Old(alpha);\n    Old(alpha);\n    Other(alpha);\n}\n";
+        assert!(!crate::totality::template_expr_holds(
+            "f.rs",
+            Some(pre),
+            "Old(alpha)",
+            2
+        ));
+        let clean = "fn m() {\n    Old(alpha);\n    Old(alpha);\n}\n";
+        assert!(crate::totality::template_expr_holds(
+            "f.rs",
+            Some(clean),
+            "Old(alpha)",
+            2
+        ));
+        // Backticked literal counts exactly (the verbatim emission).
+        assert!(crate::totality::template_expr_holds(
+            "f.rs",
+            Some(pre),
+            "`Old`(alpha)",
+            2
+        ));
+        // Let-shape hole risk is judged the same way.
+        let let_pre =
+            "fn m() {\n    let Old = foo();\n    let Old = foo();\n    let Other = foo();\n}\n";
+        assert!(!crate::totality::template_expr_holds(
+            "f.rs",
+            Some(let_pre),
+            "let Old = foo();",
+            2
+        ));
+        assert!(crate::totality::template_expr_holds(
+            "f.rs",
+            None,
+            "Old(alpha)",
+            2
         ));
     }
     #[test]

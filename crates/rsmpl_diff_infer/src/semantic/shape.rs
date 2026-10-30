@@ -128,6 +128,23 @@ pub(crate) fn literal_callee(callee: &str) -> String {
     }
 }
 
+/// Render a concrete qualified path literal-safe (WI-7-upper): only the
+/// last `::` segment can infer as an `expr` hole (diet candidates are
+/// single idents — `assign_call_slots` checks the last segment only,
+/// probed: `MyMod::old` stays literal while `crate::Old` binds `Old`),
+/// so only an uppercase last segment rides backticks
+/// (`crate::Old` -> "crate::`Old`"). A full-path backtick quote is an
+/// invalid literal token (engine-probed), and the prefix stays verbatim.
+/// Lowercase last segments pass through untouched (zero churn).
+pub(crate) fn literal_path_last(path: &str) -> String {
+    match path.rfind("::") {
+        Some(idx) => {
+            let (head, tail) = path.split_at(idx + 2);
+            format!("{head}{}", literal_callee(tail))
+        }
+        None => literal_callee(path),
+    }
+}
 /// Strict single-expression gate shared by the `let`-init paths: the
 /// engine `Stmt` path matches inits structurally via `match_expr`, so a
 /// pattern containing macros or unsupported nodes matches nothing and
@@ -221,5 +238,18 @@ mod tests {
         assert_eq!(literal_callee("New"), "`New`");
         assert_eq!(literal_callee("Some"), "`Some`");
         assert_eq!(literal_callee("A1_b2"), "`A1_b2`");
+    }
+
+    #[test]
+    fn literal_path_last_backticks_only_last_uppercase() {
+        // Lowercase last segment: verbatim, prefix untouched.
+        assert_eq!(literal_path_last("crate::old"), "crate::old");
+        assert_eq!(literal_path_last("MyMod::old"), "MyMod::old");
+        // Uppercase last segment: backticked (the prefix never infers).
+        assert_eq!(literal_path_last("crate::Old"), "crate::`Old`");
+        assert_eq!(literal_path_last("MyMod::Old"), "MyMod::`Old`");
+        // Bare paths delegate to `literal_callee`.
+        assert_eq!(literal_path_last("old"), "old");
+        assert_eq!(literal_path_last("Old"), "`Old`");
     }
 }

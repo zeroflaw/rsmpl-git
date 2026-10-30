@@ -110,6 +110,12 @@ pub(crate) fn try_qualified_call_sweep(
     }
     let args = vars.join(", ");
     let new_path = format!("{}{new_cal}", render_prefix(leading, &pre_segs));
+    // WI-7-upper: an uppercase last segment infers as an `expr` hole
+    // (bare `crate::Old(E0)` leaves plus-side `New` unbound) — backtick
+    // the last segment only (full-path quotes are engine-rejected).
+    // Lowercase paths pass through untouched (zero churn).
+    let old_path = super::shape::literal_path_last(&old_path);
+    let new_path = super::shape::literal_path_last(&new_path);
     hunk.push_str(&format!("- {old_path}({args})\n+ {new_path}({args})\n"));
     Some(hunk)
 }
@@ -220,6 +226,12 @@ enum TurboShape {
 impl TurboShape {
     /// Render `(minus pattern, plus pattern, rule tag)` for the decided
     /// turbo spelling (`u8` verbatim or `T` hole) and value arity.
+    /// WI-7-upper: bare/qualified callee idents ride
+    /// `literal_callee` (an uppercase `Old::<u8>` leaves plus-side `New`
+    /// unbound); the Method arm stays plain — a turbofish-suffixed
+    /// method ident never infers (the `::<` suffix defeats
+    /// `is_candidate`, probed), so backticks would be pure churn.
+    /// Prefixes stay verbatim (only the last segment can infer).
     fn render(&self, turbo: &str, arity: usize) -> (String, String, String) {
         let mut vars = Vec::new();
         for i in 0..arity {
@@ -228,8 +240,14 @@ impl TurboShape {
         let args = vars.join(", ");
         match self {
             TurboShape::BareCall { old, new } => (
-                format!("{old}::<{turbo}>({args})"),
-                format!("{new}::<{turbo}>({args})"),
+                format!(
+                    "{old}::<{turbo}>({args})",
+                    old = super::shape::literal_callee(old)
+                ),
+                format!(
+                    "{new}::<{turbo}>({args})",
+                    new = super::shape::literal_callee(new)
+                ),
                 format!("{old}_to_{new}_turbo"),
             ),
             TurboShape::QualCall {
@@ -240,8 +258,14 @@ impl TurboShape {
             } => {
                 let pre = render_prefix(*leading, prefix);
                 (
-                    format!("{pre}{old}::<{turbo}>({args})"),
-                    format!("{pre}{new}::<{turbo}>({args})"),
+                    format!(
+                        "{pre}{old}::<{turbo}>({args})",
+                        old = super::shape::literal_callee(old)
+                    ),
+                    format!(
+                        "{pre}{new}::<{turbo}>({args})",
+                        new = super::shape::literal_callee(new)
+                    ),
                     format!("{old}_to_{new}_turbo"),
                 )
             }
@@ -896,6 +920,151 @@ mod tests {
         assert!(
             files["f.rs"].contains("new_deserializer_name::<i32>(second_argument)"),
             "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn qualified_uppercase_fires_backticked() {
+        // WI-7-upper: a bare `crate::Old(E0)` leaves plus-side `New`
+        // unbound (diet infers the last segment as an `expr` hole) —
+        // the last segment rides backticks (engine-probed spelling).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::Old(first_argument);\n-    crate::Old(second_argument);\n+    crate::New(first_argument);\n+    crate::New(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::Old(first_argument);\n    crate::Old(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- crate::`Old`(E0)\n"), "got: {out}");
+        assert!(out.contains("+ crate::`New`(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("crate::New(first_argument)"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("crate::New(second_argument)"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn qualified_uppercase_prefix_only_stays_plain() {
+        // WI-7-upper: only the last segment infers — an uppercase
+        // prefix with a lowercase delta stays plain (probed: `MyMod`
+        // binds nothing). Zero churn on the common path.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    MyMod::old_handler_name(first_argument);\n-    MyMod::old_handler_name(second_argument);\n+    MyMod::new_handler_name(first_argument);\n+    MyMod::new_handler_name(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    MyMod::old_handler_name(first_argument);\n    MyMod::old_handler_name(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- MyMod::old_handler_name(E0)\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains('`'), "no backticks expected, got: {out}");
+    }
+
+    #[test]
+    fn turbofish_bare_uppercase_fires_backticked() {
+        // WI-7-upper: bare `Old::<u8>(E0)` leaves plus-side `New`
+        // unbound — the callee rides backticks (engine-probed).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    Old::<u8>(first_argument);\n-    Old::<u8>(second_argument);\n+    New::<u8>(first_argument);\n+    New::<u8>(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    Old::<u8>(first_argument);\n    Old::<u8>(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- `Old`::<u8>(E0)\n"), "got: {out}");
+        assert!(out.contains("+ `New`::<u8>(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn turbofish_qualified_uppercase_fires_backticked() {
+        // WI-7-upper: qualified turbofish backticks the last segment
+        // only (engine-probed: `crate::`Old`::<u8>(E0)` checks clean).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::Old::<u8>(first_argument);\n-    crate::Old::<u8>(second_argument);\n+    crate::New::<u8>(first_argument);\n+    crate::New::<u8>(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::Old::<u8>(first_argument);\n    crate::Old::<u8>(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- crate::`Old`::<u8>(E0)\n"), "got: {out}");
+        assert!(out.contains("+ crate::`New`::<u8>(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn turbofish_type_hole_uppercase_fires_backticked() {
+        // WI-7-upper: the `T` hole still binds per-site types under a
+        // backticked uppercase callee.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    Old::<u8>(first_argument);\n-    Old::<i32>(second_argument);\n+    New::<u8>(first_argument);\n+    New::<i32>(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    Old::<u8>(first_argument);\n    Old::<i32>(second_argument);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- `Old`::<T>(E0)\n"), "got: {out}");
+        assert!(out.contains("+ `New`::<T>(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("New::<i32>(second_argument)"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn turbofish_method_uppercase_stays_plain_and_exact() {
+        // WI-7-upper: a turbofish-suffixed method ident never infers
+        // (the `::<` suffix defeats `is_candidate`, probed — bindings
+        // carry no `Old`), so the emission stays plain, and an `Other`
+        // twin is never touched (the pattern matches literally).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    alpha.Old::<u8>(first_argument);\n-    beta.Old::<u8>(second_argument);\n+    alpha.New::<u8>(first_argument);\n+    beta.New::<u8>(second_argument);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    alpha.Old::<u8>(first_argument);\n    beta.Old::<u8>(second_argument);\n    gamma.Other::<u8>(twin_argument);\n}\n",
+        )]);
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("uppercase turbofish method must compress");
+        validated_live(&out, &pre);
+        assert!(!out.contains('`'), "no backticks expected, got: {out}");
+        assert!(out.contains("- Receiver.Old::<u8>(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("gamma.Other::<u8>(twin_argument)"),
+            "twin must survive, got: {}",
             files["f.rs"]
         );
     }
