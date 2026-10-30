@@ -697,13 +697,15 @@ pub(crate) fn template_repeat_holds(
     report.rules.iter().map(|r| r.matches).sum::<usize>() == n
 }
 
-/// Sequence totality (WI-5c): the emitted K-line minus template must
-/// match exactly `n` statement windows in the pre-image file. Counted
-/// by the engine itself with the real pair spelling: a `# sweep` probe
-/// carrying the K minus/plus lines is applied to a scratch tree and its
-/// window-match count must equal `n` (blocks). An untouched twin window
-/// anywhere in the file counts `n + 1` and vetoes, so the group stays
-/// ordinary instead of silently rewriting the twin. `None` pre-image
+/// Sequence totality (WI-5c, WI-5d): the emitted K-line minus template
+/// must match exactly `n` statement windows in the pre-image file.
+/// Counted by the engine itself with the real pair spelling: a
+/// `# sweep` probe carrying the K minus/plus lines is applied to a
+/// scratch tree and its window-match count must equal `n` (blocks). An
+/// untouched twin window anywhere in the file counts `n + 1` and
+/// vetoes, so the group stays ordinary instead of silently rewriting
+/// the twin. WI-5d single-block fusion is the n = 1 case (one window);
+/// the probe is identical, only the count differs. `None` pre-image
 /// keeps the legacy allow; probe parse/apply failure vetoes. Opaque
 /// positions need no extra veto: sequence windows only match plain
 /// `let` statements, which never sit inside macros or string literals.
@@ -714,7 +716,7 @@ pub(crate) fn template_sequence_holds(
     plus_tpls: &[String],
     n: usize,
 ) -> bool {
-    if n < 2 || !(2..=4).contains(&minus_tpls.len()) || minus_tpls.len() != plus_tpls.len() {
+    if n < 1 || !(2..=4).contains(&minus_tpls.len()) || minus_tpls.len() != plus_tpls.len() {
         return false;
     }
     if minus_tpls.iter().any(|l| l.contains('\n')) || plus_tpls.iter().any(|l| l.contains('\n')) {

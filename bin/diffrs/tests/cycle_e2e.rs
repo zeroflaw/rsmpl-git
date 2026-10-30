@@ -264,6 +264,7 @@ const CYCLE_OK: &[&str] = &[
     "27-call-sweep",
     "24-pat-sweep",
     "40-sequence-sweep",
+    "41-single-block-sweep",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -308,7 +309,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "12-stmt-rewrite",
-        "hetero: type+let+expr shapes stay ordinary (sequence detector is WI-5c)",
+        "hetero: header+let mixed single block; v1 fuses pure let runs only (WI-5d), no sub-hunk split or header+body joint shape",
     ),
     (
         "13-sig-evolution",

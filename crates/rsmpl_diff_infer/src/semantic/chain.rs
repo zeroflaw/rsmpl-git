@@ -30,7 +30,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 /// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more): slot → sig-evolution → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
-/// call-literal → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip. Returns the winning semantic section
+/// call-literal → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -186,6 +186,15 @@ pub(crate) fn run_pair_chain(
         super::try_partial_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((strip, "partial_strip"));
+    }
+    // WI-5d: single-block hetero `let` run (one contiguous K = 2–4
+    // window, within-pair abstraction) — last: every earlier detector
+    // keeps its classes (this owns only runs declined by all of
+    // them), before the verbatim stage in the caller.
+    if let Some(single) =
+        super::try_single_block_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((single, "single_block"));
     }
     None
 }

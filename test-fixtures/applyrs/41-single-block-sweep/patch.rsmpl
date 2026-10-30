@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -2,2 @@ rule=r1
+- let alpha = E0;
+- let P1 = count + 1;
++ let aaa = E0;
++ let P1 = count + 2;

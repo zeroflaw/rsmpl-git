@@ -289,7 +289,7 @@ fn rename_holes(s: &str, j: usize) -> String {
 }
 
 /// One untyped `let` side: inner pattern plus init expr (no ascription).
-fn parse_untyped_let_full(line: &str) -> Option<(syn::Pat, syn::Expr)> {
+pub(crate) fn parse_untyped_let_full(line: &str) -> Option<(syn::Pat, syn::Expr)> {
     let untyped = parse_untyped_let(line)?;
     Some((untyped.pat, untyped.init))
 }
@@ -361,8 +361,8 @@ fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, S
 
 /// True when the single-line text parses as a plain `let` (no attrs,
 /// init present, no `let-else` diverge) — the WI-5c sequence member and
-/// template gate.
-fn is_plain_let_line(line: &str) -> bool {
+/// template gate, shared with the WI-5d single-block core.
+pub(crate) fn is_plain_let_line(line: &str) -> bool {
     let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(line.trim()) else {
         return false;
     };
@@ -377,8 +377,8 @@ fn is_plain_let_line(line: &str) -> bool {
 
 /// One typed `let` side: inner pattern, ascribed type, init expr.
 /// Attributes, missing inits, and `let-else` diverge veto (later
-/// slices own those classes).
-fn parse_typed_let_full(line: &str) -> Option<(syn::Pat, syn::Type, syn::Expr)> {
+/// slices own those classes). Shared with the WI-5d single-block core.
+pub(crate) fn parse_typed_let_full(line: &str) -> Option<(syn::Pat, syn::Type, syn::Expr)> {
     let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(line.trim()) else {
         return None;
     };
@@ -599,7 +599,7 @@ fn parse_typed_let(line: &str) -> Option<(syn::Pat, syn::Type, syn::Expr)> {
     Some((*pt.pat, *pt.ty, *init.expr))
 }
 
-fn tok<T: ToTokens>(node: &T) -> String {
+pub(crate) fn tok<T: ToTokens>(node: &T) -> String {
     node.to_token_stream().to_string()
 }
 

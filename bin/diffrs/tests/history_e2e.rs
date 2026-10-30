@@ -160,7 +160,10 @@ const CASES: &[Case] = &[
         root: false,
         // T416 field-label sweep: two identical `text: f(&sub)` struct
         // fields sweep on the inner call (label preserved by the engine).
-        expect_sem: 1,
+        // WI-5d: +1 single-block fusion (3-let hetero run in
+        // expr_pattern.rs — mask/sentinels rename with within-pair
+        // P1/P2 holes, allow-one, pre-image totality n = 1).
+        expect_sem: 2,
     },
     Case {
         commit: "b9c00d537adf49568b957837307208821ab4ccd0",

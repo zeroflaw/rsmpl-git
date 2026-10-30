@@ -787,7 +787,9 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
         // hunks (a pure addition vetoes whole-section balance, the
         // 7025a14 shape) group into one literal sweep via the
         // cross-hunk section driver; the addition stays ordinary
-        // in place, and hetero-trailing b.rs stays ordinary.
+        // in place. WI-5d: hetero-trailing b.rs is family-uniform
+        // (same `make_call` callee — literal-sweep territory, whose
+        // hetero-trailing veto stands), so it stays ordinary.
         assert!(
             semantic.contains("rule=r1"),
             "literal cross-hunk sweep must fire, got: {semantic}"

@@ -6228,7 +6228,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `repeat_fold`, `partial_strip`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+ `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `repeat_fold`, `partial_strip`, `single_block`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -6449,15 +6449,43 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   edits); hetero positions ride positionally-numbered holes (`P0`/`E0`
   in position 0, `P1`/`T1`/`E1` in position 1, … — windows bind
   independently, Section 15.7), identical ones stay concrete. Guards:
-  single-block classes stay ordinary (single-block hetero fusion is
-  WI-5d); K tried largest-first (4, 3, 2); all-identical whole classes
-  stay for the tighter verbatim sweep (T422 precedent); non-`let`
-  members, attribute/diverge carriers, and divergent positions stay
-  ordinary. One `# allow=many` hunk with K minus/plus lines (tight
-  original range, Section D.5). Pre-image totality is the real-pair
-  engine-count check (`template_sequence_holds`): the emitted K-line
-  minus must match exactly N block windows in the pre-image — an
-  untouched twin window vetoes. Detector name `sequence`.
+  K tried largest-first (4, 3, 2); all-identical whole classes stay
+  for the tighter verbatim sweep (T422 precedent); non-`let` members,
+  attribute/diverge carriers, and divergent positions stay ordinary.
+  A single block (N = 1) declines — single-block runs are the
+  `single_block` detector below, never this one. One `# allow=many`
+  hunk with K minus/plus lines (tight original range, Section D.5).
+  Pre-image totality is the real-pair engine-count check
+  (`template_sequence_holds`): the emitted K-line minus must match
+  exactly N block windows in the pre-image — an untouched twin window
+  vetoes. Detector name `sequence`.
+- Single-block sweep (WI-5d, fifth anti-unification shape): one
+  contiguous run of K = 2–4 hetero plain-`let` pairs (a single block
+  window, N = 1; changed old lines consecutive — the engine only
+  matches consecutive statement windows), each position
+  anti-unified *within* its own pair: a subterm preserved verbatim
+  between that pair's minus and plus rides a positional hole
+  (`Pj`/`Tj`/`Ej`, same numbering as the sequence detector so window
+  statements bind independently, Section 15.7), anything that differs
+  stays concrete in original site spelling (span-sliced, never
+  token-normalized; concrete inits ride the same engine-matchability
+  gate as holes, so macro/opaque inits decline instead of emitting a
+  dead hunk). No hole is shared across lines. Territory gate: the
+  run must mix init families (expression kinds) — a family-uniform
+  run is an earlier detector's class and its verdict (fire or veto)
+  stands, never undercut by a narrower re-spelling here. Guards:
+  mixed runs decline (a header, expression, or any non-plain-`let`
+  member — v1 does no sub-hunk split); one-sided ascriptions decline
+  (a type-add/removal inside the run is another detector's class);
+  K = 1 true singles stay ordinary (Section D.4 N = 1 rule); K > 4
+  exceeds the `Sequence` engine arm's exact-K bound; all-identical
+  whole classes stay for the tighter verbatim sweep (T422 precedent).
+  One allow-one hunk (tight original range, no `# allow=many`, no
+  `# sweep` — a twin fails loud as too-many at apply time). Pre-image
+  totality is the same real-pair engine-count check
+  (`template_sequence_holds` with n = 1): the K-line minus must match
+  exactly one window — an untouched twin vetoes. Detector name
+  `single_block`.
 - Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
   1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
   qself, and generic args decline, same gates as the qualified sweep)
@@ -6984,7 +7012,7 @@ stripping is deliberate. Equalities per origin close the contract:
   byte-identical); no canonical equality is owed, since the inferred
   side is deliberately ordinary.
 
-Corpus in scope: all applyrs fixtures (40), all diffrs fixtures
+Corpus in scope: all applyrs fixtures (41), all diffrs fixtures
 (60), all example benches, plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
@@ -6994,11 +7022,12 @@ Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 `19`, `21`, `22`); heterogeneous sites no template fires on stay
- ordinary (`12` single-block hetero fusion — one block, no
- cross-block holes; owned by WI-5d, while WI-5c covers N ≥ 2
- repeated blocks, `14` divergent single-file renames whose
- deltas never share one intent, `30` trait decl/def pairs as WI-7
- grouping territory); zero-edit optional (`05`) re-diffs to empty,
+  ordinary (`12` header+let mixed single block — v1 fuses pure let
+  runs only (WI-5d `single_block`), with no sub-hunk split and no
+  header+body joint shape, so the mixed re-diff stays mixed by
+  construction; `14` divergent single-file renames whose
+  deltas never share one intent, `30` trait decl/def pairs as WI-7
+  grouping territory); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only
 non-tree-canonical cycles; every other corpus case is
 canonically lossless, and one further iteration is a byte-identical

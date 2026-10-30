@@ -34,6 +34,7 @@ pub(crate) mod prefix;
 pub(crate) mod prov;
 mod repeat;
 pub(crate) mod shape;
+mod single_block;
 mod slot;
 pub(crate) mod subline;
 mod verbatim;
@@ -61,6 +62,7 @@ pub(crate) use generalized::{
 };
 pub(crate) use peel::try_call_peel_sweep;
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
+pub(crate) use single_block::try_single_block_sweep;
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the
