@@ -442,6 +442,15 @@ pub fn find_macro_bang(text: &str) -> Option<usize> {
     let mut i = 0;
     let mut in_str = false;
     let mut escaped = false;
+    // WI-6c: bracket depth so a `!` nested inside generics/args
+    // (`Vec<m!(x)>`) does not route the whole pattern to macro — only
+    // a depth-0 bang opens a `NAME!(...)` invocation pattern. Angle
+    // depth is heuristic (`<` +1, `>` -1 when positive, so `->`/`=>`
+    // are no-ops); round/square/curly track exactly.
+    let mut angle = 0i32;
+    let mut round = 0i32;
+    let mut square = 0i32;
+    let mut curly = 0i32;
     while i < bytes.len() {
         let b = bytes[i];
         if in_str {
@@ -460,6 +469,17 @@ pub fn find_macro_bang(text: &str) -> Option<usize> {
             i += 1;
             continue;
         }
+        match b {
+            b'<' => angle += 1,
+            b'>' if angle > 0 => angle -= 1,
+            b'(' => round += 1,
+            b')' if round > 0 => round -= 1,
+            b'[' => square += 1,
+            b']' if square > 0 => square -= 1,
+            b'{' => curly += 1,
+            b'}' if curly > 0 => curly -= 1,
+            _ => {}
+        }
         if b == b'!' {
             let mut j = i + 1;
             while j < bytes.len() && (bytes[j] as char).is_whitespace() {
@@ -474,7 +494,16 @@ pub fn find_macro_bang(text: &str) -> Option<usize> {
                 let c = bytes[k - 1] as char;
                 c.is_ascii_alphanumeric() || c == '_' || c == ':'
             };
-            if opens_body && preceded_by_name {
+            // Depth is measured from brackets *before* the `!` (the
+            // opener after it is not yet scanned): a nested bang sits
+            // at depth ≥ 1 and is skipped, never returned.
+            if opens_body
+                && preceded_by_name
+                && angle == 0
+                && round == 0
+                && square == 0
+                && curly == 0
+            {
                 return Some(i);
             }
         }
@@ -1008,6 +1037,11 @@ mod tests {
             "a != b",
             "!foo(E)",
             "log(\"a!(b\", E)",
+            // WI-6c: a bang nested inside brackets is not an invocation
+            // (`Vec<m!(x)>` is a type containing a macro, routed to the
+            // general matcher — only a depth-0 bang opens `NAME!(...)`).
+            "Vec<m!(x)>",
+            "foo(bar!(x))",
         ] {
             let (kind, _, _) = classify_call_pattern(text, &table()).unwrap();
             assert!(!matches!(kind, ExprPatternKind::Macro { .. }), "{text}");
@@ -1023,6 +1057,8 @@ mod tests {
         assert!(find_macro_bang("foo! (E)").is_some());
         assert!(find_macro_bang("foo(!E)").is_none());
         assert!(find_macro_bang("a != b").is_none());
+        // WI-6c: nested bangs never route (general matcher owns them).
+        assert!(find_macro_bang("Vec<m!(x)>").is_none());
     }
 
     #[test]

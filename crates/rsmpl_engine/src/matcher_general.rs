@@ -295,6 +295,18 @@ fn match_path_args(pat: &syn::PathArguments, tgt: &syn::PathArguments, cx: &mut 
             }
             true
         }
+        // WI-6c: parenthesized `Fn(A) -> B` args match structurally —
+        // inputs pairwise via `match_type` (holes bind), output via
+        // `match_return_type`. Cross-kind pairs (e.g. `P(T)` vs
+        // `Vec<u8>`) stay `render_eq` below (fail safe, never equal).
+        (syn::PathArguments::Parenthesized(a), syn::PathArguments::Parenthesized(b)) => {
+            a.inputs.len() == b.inputs.len()
+                && a.inputs
+                    .iter()
+                    .zip(b.inputs.iter())
+                    .all(|(x, y)| match_type(x, y, cx))
+                && match_return_type(&a.output, &b.output, cx)
+        }
         _ => render_eq(pat, tgt),
     }
 }
@@ -595,6 +607,10 @@ pub(crate) fn match_type(pat: &syn::Type, tgt: &syn::Type, cx: &mut MatchCx) -> 
         // `_` matches any type.
         (syn::Type::Infer(_), _) => true,
         (syn::Type::Never(_), syn::Type::Never(_)) => true,
+        // WI-6c: macro types are verbatim-only — token-equal, never
+        // holed. A substituted `__RSMPL_*` hole can never render-equal
+        // a target, so holes inside macros reject by construction.
+        (syn::Type::Macro(a), syn::Type::Macro(b)) => render_eq(a, b),
         _ => false,
     }
 }
@@ -1853,8 +1869,9 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type T\n- Vec<T, T>\n+ Box<T>\n";
         let err = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
-        // Parenthesized path args still reject via rendered-text comparison
-        // (SPEC 18.6 R3 exception): `P(T)` never equals angle-bracketed `Vec<u8>`.
+        // Parenthesized-vs-angle cross-kind still rejects (SPEC 18.6
+        // R3): `P(T)` never equals angle-bracketed `Vec<u8>` (WI-6c
+        // structural arm is Parenthesized/Parenthesized only).
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# type P\n# type T\n- P(T)\n+ Box<T>\n";
         let err = apply(patch, "fn a(x: Vec<u8>) {}\n").unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
@@ -1925,6 +1942,42 @@ mod tests {
         // T149: a plain `fn(i32)` pattern never matches `unsafe fn(i32)`.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=cb\n# lang=rust\n- fn(i32)\n+ fn(u8)\n";
         let err = apply(patch, "fn a(cb: unsafe fn(i32)) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn macro_type_verbatim_fires_and_holes_never_bind() {
+        // WI-6c: `m!(x)` matches `m!(x)` token-equal (verbatim) and
+        // rewrites around it; a `# type T` hole inside a macro never
+        // binds (verbatim-only, never holed).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=m\n# lang=rust\n- Vec<m!(x)>\n+ Box<m!(x)>\n";
+        let out = apply(patch, "fn a(x: Vec<m!(x)>) {}\n").unwrap();
+        assert!(out.contains("Box<m!(x)>"), "got: {out}");
+        let err = apply(patch, "fn a(x: Vec<m!(y)>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=m\n# lang=rust\n# type T\n- Vec<m!(T)>\n+ Box<T>\n";
+        let err = apply(patch, "fn a(x: Vec<m!(u8)>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn parenthesized_fn_args_match_structurally() {
+        // WI-6c: `Fn(T) -> T` binds `T=u8` with repeated-hole equality;
+        // arity and output-shape mismatches reject; cross-kind
+        // (`P(T)` vs `Vec<u8>`) is covered by
+        // `turbofish_mismatch_still_rejects`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=f\n# lang=rust\n# type T\n- Box<dyn Fn(T) -> T>\n+ Box<dyn Fn(T) -> Box<T>>\n";
+        let out = apply(patch, "fn a(x: Box<dyn Fn(u8) -> u8>) {}\n").unwrap();
+        assert!(out.contains("Box<dyn Fn(u8) -> Box<u8>>"), "got: {out}");
+        let err = apply(patch, "fn a(x: Box<dyn Fn(u8) -> u16>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Arity mismatch rejects.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=f\n# lang=rust\n# type T\n- Box<dyn Fn(T, T)>\n+ Box<T>\n";
+        let err = apply(patch, "fn a(x: Box<dyn Fn(u8)>) {}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Output-shape mismatch (Default vs Type) rejects.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=f\n# lang=rust\n- Box<dyn Fn(u8)>\n+ Box<dyn Fn(u8) -> u8>\n";
+        let err = apply(patch, "fn a(x: Box<dyn Fn(u8) -> u8>) {}\n").unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 }

@@ -647,8 +647,10 @@ struct Hole {
 /// - hole correspondence: same hole count on both sides with identical
 ///   ordered per-site values (an unbound plus-side hole is
 ///   T442-illegal; a dropped or reordered hole stays ordinary);
-/// - macro/verbatype types veto (engine-opaque); rendered templates
-///   must differ and re-parse as `syn::Type`.
+/// - macro/verbatype types are verbatim-only (WI-6c): agreeing
+///   macro text stays literal, varying macro positions veto instead
+///   of holing (the engine never binds inside macros); rendered
+///   templates must differ and re-parse as `syn::Type`.
 pub(crate) fn antiunify_types(minus: &[TypedSite], plus: &[TypedSite]) -> Option<(String, String)> {
     if minus.len() != plus.len() || minus.len() < 2 {
         return None;
@@ -758,6 +760,16 @@ fn tok_qself(q: &Option<syn::QSelf>) -> String {
 fn hole_or_gen(tys: &[syn::Type], depth: usize, holes: &mut Vec<Hole>) -> Option<syn::Type> {
     if tys.iter().all(|t| tok(t) == tok(&tys[0])) {
         return Some(tys[0].clone());
+    }
+    // WI-6c: macro/verbatype types are verbatim-only (engine
+    // `match_type` never binds inside them) — a varying nested macro
+    // must veto instead of holing whole (a `T{i}` hole would match
+    // any type, including macro text the engine keeps literal).
+    if tys
+        .iter()
+        .any(|t| matches!(t, syn::Type::Macro(_) | syn::Type::Verbatim(_)))
+    {
+        return None;
     }
     let mark = holes.len();
     if let Some(tpl) = gen_ty(tys, depth, holes) {
@@ -1068,8 +1080,11 @@ fn gen_path(paths: &[&syn::Path], depth: usize, holes: &mut Vec<Hole>) -> Option
 }
 
 /// Generalize N segment-argument lists: all bare, or all `<>` with
-/// agreeing `::` and arity and per-position generalization; `Fn(..)`
-/// parenthesized args must agree (no holes inside — rare, safe).
+/// agreeing `::` and arity and per-position generalization; all
+/// `Fn(..)` parenthesized args generalize inputs/output structurally
+/// (WI-6c — mirrors the engine `match_path_args` arm); mixed kinds
+/// veto. Agreeing parenthesized lists (identical text) took the fast
+/// path in `hole_or_gen` before reaching here.
 fn gen_path_args(
     args: &[&syn::PathArguments],
     depth: usize,
@@ -1077,6 +1092,50 @@ fn gen_path_args(
 ) -> Option<syn::PathArguments> {
     if args.iter().all(|a| matches!(a, syn::PathArguments::None)) {
         return Some(syn::PathArguments::None);
+    }
+    if args
+        .iter()
+        .all(|a| matches!(a, syn::PathArguments::Parenthesized(_)))
+    {
+        let pars: Vec<&syn::ParenthesizedGenericArguments> = args
+            .iter()
+            .map(|a| match a {
+                syn::PathArguments::Parenthesized(p) => Some(p),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        if pars.iter().any(|p| p.inputs.len() != pars[0].inputs.len()) {
+            return None;
+        }
+        // Output shapes must agree across sites (all absent or all
+        // present) — a mixed Default/Type pair is inexpressible.
+        let out_is_default = matches!(pars[0].output, syn::ReturnType::Default);
+        if pars
+            .iter()
+            .any(|p| matches!(p.output, syn::ReturnType::Default) != out_is_default)
+        {
+            return None;
+        }
+        let mut out = pars[0].clone();
+        for (i, input) in out.inputs.iter_mut().enumerate() {
+            let nth: Vec<syn::Type> = pars.iter().map(|p| p.inputs[i].clone()).collect();
+            *input = hole_or_gen(&nth, depth, holes)?;
+        }
+        match (&pars[0].output, &mut out.output) {
+            (syn::ReturnType::Default, syn::ReturnType::Default) => {}
+            (syn::ReturnType::Type(_, _), syn::ReturnType::Type(_, out_ty)) => {
+                let nth: Vec<syn::Type> = pars
+                    .iter()
+                    .map(|p| match &p.output {
+                        syn::ReturnType::Type(_, ty) => Some(ty.as_ref().clone()),
+                        _ => None,
+                    })
+                    .collect::<Option<_>>()?;
+                **out_ty = hole_or_gen(&nth, depth, holes)?;
+            }
+            _ => return None,
+        }
+        return Some(syn::PathArguments::Parenthesized(out));
     }
     let mut abs = Vec::with_capacity(args.len());
     for a in args {
@@ -1409,9 +1468,58 @@ mod tests {
 
     #[test]
     fn types_macro_vetoes() {
-        // Macro types are engine-opaque.
+        // WI-6c: macro types are verbatim-only, never holed.
         assert!(syn::parse_str::<syn::Type>("m!(x)").is_ok());
         let out = antiunify_strs(&["m!(x)", "m!(y)"], &["Box<m!(x)>", "Box<m!(y)>"]);
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn types_nested_macro_vetoes_instead_of_holing() {
+        // WI-6c: a varying nested macro must veto (a `T{i}` hole would
+        // match any type, but the engine keeps macros literal).
+        let out = antiunify_strs(&["Vec<m!(x)>", "Vec<m!(y)>"], &["Box<m!(x)>", "Box<m!(y)>"]);
+        assert_eq!(out, None, "got: {out:?}");
+        // Agreeing macro text stays literal while a sibling position
+        // generalizes around it.
+        let out = antiunify_strs(
+            &["Pair<m!(x), u8>", "Pair<m!(x), u16>"],
+            &["Other<m!(x), u8>", "Other<m!(x), u16>"],
+        );
+        assert!(out.is_some(), "agreeing macro + varying sibling must fire");
+    }
+
+    #[test]
+    fn types_parenthesized_fn_args_generalize() {
+        // WI-6c: parenthesized inputs generalize like angle args
+        // (mirrors the engine structural arm); the uniform output rides
+        // literal while the template delta fires.
+        let out = antiunify_strs(
+            &["dyn Fn(u8) -> u8", "dyn Fn(u16) -> u8"],
+            &["dyn Fn(u8) -> bool", "dyn Fn(u16) -> bool"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "dyn Fn(T0) -> u8".to_string(),
+                "dyn Fn(T0) -> bool".to_string()
+            )),
+            "got: {out:?}"
+        );
+        // Arity mismatch vetoes.
+        let out = antiunify_strs(
+            &["dyn Fn(u8) -> u8", "dyn Fn(u8, u8) -> u8"],
+            &["dyn Fn(u8) -> bool", "dyn Fn(u8) -> bool"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+        // Output-shape mismatch within one side (Default vs Type) vetoes.
+        let out = antiunify_strs(
+            &["dyn Fn(u8)", "dyn Fn(u8) -> u8"],
+            &["dyn Fn(u8) -> bool", "dyn Fn(u8) -> bool"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+        // Mixed parenthesized/angle kinds veto.
+        let out = antiunify_strs(&["dyn Fn(u8)", "dyn Vec<u8>"], &["Box<u8>", "Box<u8>"]);
         assert_eq!(out, None, "got: {out:?}");
     }
 
