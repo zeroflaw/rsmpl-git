@@ -142,19 +142,17 @@ impl CompiledPattern {
 
 /// Compile an RSmPL hunk's pattern body.
 ///
-/// WI-3b: any `PatternConflict` reaching this boundary without a specific
-/// `repair` gains a generic `fix_pattern` payload (`code: "pattern"`,
-/// `write_instead` = the reason, which already says what to write
-/// instead). Specific C-table gates above pin exact codes; this covers
-/// the long tail (slot/type/macro sub-compilers) so no failure is
-/// prose-only.
+/// WI-3b/2b: any `PatternConflict` reaching this boundary without a specific
+/// `repair` gains the keyed generic `fix_pattern` payload (`code: "pattern"`,
+/// concrete template — never the echoed reason, per SPEC D.2). Specific
+/// C-table gates pin exact codes; this covers the long tail
+/// (slot/type/macro sub-compilers) so no failure is prose-only.
 pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     compile_inner(hunk).map_err(|e| {
         if e.code == ErrorCode::PatternConflict && e.repair.is_none() {
-            let write_instead = e.message.clone();
             e.with_repair(StructuredError::fix_pattern_repair(
                 "pattern",
-                &write_instead,
+                "rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk",
             ))
         } else {
             e

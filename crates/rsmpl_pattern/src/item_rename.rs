@@ -421,7 +421,12 @@ fn validate_suffix(after: &str, kind: ItemKind) -> Result<(), StructuredError> {
 }
 
 fn err<T>(msg: impl Into<String>) -> Result<T, StructuredError> {
-    Err(StructuredError::new(ErrorCode::PatternConflict, msg.into()))
+    Err(StructuredError::new(ErrorCode::PatternConflict, msg.into()).with_repair(
+        StructuredError::fix_pattern_repair(
+            "pattern",
+            "write the bare `<kind> <Name>` form (e.g. `- struct Old` / `+ struct New`) or use an ordinary hunk",
+        ),
+    ))
 }
 
 #[cfg(test)]

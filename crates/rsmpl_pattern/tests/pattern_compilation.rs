@@ -1406,3 +1406,59 @@ fn trait_evolution_template_accepts_visibility_and_unsafe() {
     assert!(parse_trait_evolution_template("a;b trait New { ... }").is_none());
     assert!(parse_trait_evolution_template("pub trait New { ... }\nfoo").is_none());
 }
+
+// Repair-keying follow-up: no `PatternConflict` repair echoes its own
+// reason — `write_instead` is always a concrete, non-empty template an
+// agent can apply (SPEC D.2). Covers the keyed fn/item/use gates plus
+// the generic compile-boundary fallback (declared-vs-used kind
+// disagreement, which carries no gate-specific repair).
+#[test]
+fn keyed_repairs_never_echo_the_reason() {
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    let patches = [
+        // fn trailing-tokens gate (the REVIEW gap 1 example).
+        format!(
+            "{head}@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- fn foo(...)\n+ fn bar(...)\n      ...\n"
+        ),
+        // fn missing-parameter-list gate.
+        format!(
+            "{head}@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- fn foo<T> {{\n+ fn bar<T> {{\n      ...\n  }}\n"
+        ),
+        // item concrete-shape gate.
+        format!(
+            "{head}@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- struct Old {{ x: i32 }}\n+ struct New {{ x: i32 }}\n"
+        ),
+        // use metavariable gate.
+        format!(
+            "{head}@@ -1,1 +1,1 @@ rule=x\n# allow=many\n# expr M\n- use crate::M\n+ use crate::new\n"
+        ),
+        // generic fallback: no gate-specific repair exists.
+        format!("{head}@@ -1,1 +1,1 @@ rule=x\n# expr T\n- Vec<T>\n+ Box<[T]>\n"),
+    ];
+    let codes = ["fn-pattern", "fn-pattern", "pattern", "pattern", "pattern"];
+    for (patch, code) in patches.iter().zip(codes) {
+        let err = compile(&hunk_of(patch)).unwrap_err();
+        assert_eq!(
+            err.code,
+            rsmpl_patch::ErrorCode::PatternConflict,
+            "got: {patch:?}"
+        );
+        let repair = err.repair.expect("PatternConflict must carry repair");
+        assert_eq!(
+            repair["action"].as_str(),
+            Some("fix_pattern"),
+            "got: {patch:?}"
+        );
+        assert_eq!(repair["code"].as_str(), Some(code), "got: {patch:?}");
+        let write_instead = repair["write_instead"].as_str().expect("template");
+        assert!(!write_instead.is_empty(), "got: {patch:?}");
+        assert_ne!(write_instead, err.message, "echoes reason: {patch:?}");
+    }
+    // The fallback template is the WI-2b generic filler text.
+    let err = compile(&hunk_of(&patches[4])).unwrap_err();
+    let repair = err.repair.expect("fallback must carry repair");
+    assert_eq!(
+        repair["write_instead"].as_str(),
+        Some("rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk"),
+    );
+}

@@ -142,7 +142,12 @@ fn skip_visibility(s: &str) -> &str {
 }
 
 fn err<T>(msg: impl Into<String>) -> Result<T, StructuredError> {
-    Err(StructuredError::new(ErrorCode::PatternConflict, msg.into()))
+    Err(StructuredError::new(ErrorCode::PatternConflict, msg.into()).with_repair(
+        StructuredError::fix_pattern_repair(
+            "pattern",
+            "write a bare `use <path>` prefix pair (e.g. `- use crate::old` / `+ use crate::new`) or use an ordinary hunk",
+        ),
+    ))
 }
 
 /// Parse one `use`-prefix pattern side.

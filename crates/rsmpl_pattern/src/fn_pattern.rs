@@ -248,7 +248,14 @@ pub fn parse_fn_pattern(
     type_metas: &[String],
     returns_none: bool,
 ) -> Result<FnPattern, StructuredError> {
-    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg);
+    // Every gate keys a concrete `fix_pattern` template (code
+    // `fn-pattern`) so `write_instead` never echoes the reason (SPEC D.2):
+    // the first arg is the diagnostic, the second what to write instead.
+    let fail = |msg: String, write_instead: &str| {
+        StructuredError::new(ErrorCode::PatternConflict, msg).with_repair(
+            StructuredError::fix_pattern_repair("fn-pattern", write_instead),
+        )
+    };
     // Leading doc-comment lines (`///`, `//!`, single-line `/** */`):
     // peel at the string level — the whitespace tokenizer below cannot
     // preserve a doc line's trailing text — and normalize to
@@ -272,6 +279,7 @@ pub fn parse_fn_pattern(
         return Err(fail(
             "block comments (`/* ... */`) are not supported in patterns in v1 (mirror doc comments with `#[doc = \"...\"]` or use an ordinary hunk)"
                 .to_string(),
+            "write `#[doc = \"...\"]` for doc comments, or use an ordinary hunk",
         ));
     }
     let toks = tokenize_pattern(&all_lines[peeled..].join("\n"));
@@ -304,7 +312,10 @@ pub fn parse_fn_pattern(
                 i += 1;
             }
             if depth != 0 {
-                return Err(fail("unbalanced attribute in fn pattern".to_string()));
+                return Err(fail(
+                    "unbalanced attribute in fn pattern".to_string(),
+                    "close the `#[...]` attribute with `]` before the `fn` line",
+                ));
             }
             attrs_written.push(acc.join(" "));
         } else {
@@ -333,7 +344,10 @@ pub fn parse_fn_pattern(
                 i += 1;
             }
             if depth != 0 {
-                return Err(fail("unbalanced pub(...) in fn pattern".to_string()));
+                return Err(fail(
+                    "unbalanced pub(...) in fn pattern".to_string(),
+                    "close the visibility with `)` (e.g. `pub(crate) fn foo(...) { ... })`",
+                ));
             }
         }
         visibility = VisPat::Concrete(vis);
@@ -368,15 +382,19 @@ pub fn parse_fn_pattern(
 
     // `fn` keyword required.
     if i >= toks.len() || toks[i] != "fn" {
-        return Err(fail(format!(
-            "fn pattern must contain `fn` keyword, got `{text}`"
-        )));
+        return Err(fail(
+            format!("fn pattern must contain `fn` keyword, got `{text}`"),
+            "start the pattern with the `fn` keyword (e.g. `fn foo(...) { ... })`",
+        ));
     }
     i += 1;
 
     // Name.
     if i >= toks.len() {
-        return Err(fail("fn pattern missing function name".to_string()));
+        return Err(fail(
+            "fn pattern missing function name".to_string(),
+            "write `fn <name>(...) { ... }` with the function name after `fn`",
+        ));
     }
     let name = if generic_metas.contains(&toks[i])
         || vis_metas.contains(&toks[i])
@@ -411,6 +429,7 @@ pub fn parse_fn_pattern(
         return Err(fail(
             "terse fn rename takes no body lines: write just `- fn foo` / `+ fn bar` (no `(...)`, `{`, `...`), or spell both sides long (`fn foo(...) { ... }`, SPEC 14.1)"
                 .to_string(),
+            "write just `- fn foo` / `+ fn bar`, or spell both sides long as `fn foo(...) { ... }`",
         ));
     }
     // Generics: `<...>` or generic metavariable or absent.
@@ -435,7 +454,10 @@ pub fn parse_fn_pattern(
             i += 1;
         }
         if depth != 0 {
-            return Err(fail("unbalanced generics in fn pattern".to_string()));
+            return Err(fail(
+                "unbalanced generics in fn pattern".to_string(),
+                "close the `<...>` generic list with `>` (e.g. `fn foo<T>(...) { ... })`",
+            ));
         }
         // T161: `...` inside `<...>` can never equal a real target slice
         // (engine compares generics via normalized equality), so every
@@ -444,6 +466,7 @@ pub fn parse_fn_pattern(
         if acc.iter().any(|t| t == "...") {
             return Err(fail(
                 "`...` is not supported in generic parameter lists in v0.1: write concrete `<T>` or abstract with `# generic_params G` + `fn foo G (...)` (SPEC 14.7)".to_string(),
+                "write `fn foo<T>(...) { ... }` with a concrete generic list, or add `# generic_params G` and write `fn foo G (...) { ... }`",
             ));
         }
         generics = GenericPat::Concrete(acc.join(" "));
@@ -454,7 +477,10 @@ pub fn parse_fn_pattern(
 
     // Parameter list.
     if i >= toks.len() || toks[i] != "(" {
-        return Err(fail("fn pattern missing parameter list".to_string()));
+        return Err(fail(
+            "fn pattern missing parameter list".to_string(),
+            "write `fn <name>(...)` with a parameter list after the name",
+        ));
     }
     let mut depth = 0;
     let mut params_inner = Vec::new();
@@ -481,7 +507,10 @@ pub fn parse_fn_pattern(
         i += 1;
     }
     if depth != 0 {
-        return Err(fail("unbalanced parameter list in fn pattern".to_string()));
+        return Err(fail(
+            "unbalanced parameter list in fn pattern".to_string(),
+            "close the parameter list with `)` (e.g. `fn foo(...) { ... })`",
+        ));
     }
     let params_joined = params_inner.join(" ");
     // T160: `...` must stand alone in a parameter list. The old
@@ -497,6 +526,7 @@ pub fn parse_fn_pattern(
         return Err(fail(
             "`...` in a function parameter list must stand alone: write `(...)` to match any parameters or fully-concrete parameters (SPEC 14.7)"
                 .to_string(),
+            "write `(...)` for any parameters, or spell every parameter concretely",
         ));
     }
     let params_ellipsis = params_inner.iter().any(|t| t == "...");
@@ -523,10 +553,16 @@ pub fn parse_fn_pattern(
                 i += 1;
             }
             if i == toks.len() && acc.iter().any(|t| t == "..." || t == "}") {
-                return Err(fail(unterminated_sig("`->` return type")));
+                return Err(fail(
+                    unterminated_sig("`->` return type"),
+                    "put the `{ ... }` body brace (or `;` for declarations) on the signature line",
+                ));
             }
             if acc.is_empty() {
-                return Err(fail("`->` without return type in fn pattern".to_string()));
+                return Err(fail(
+                    "`->` without return type in fn pattern".to_string(),
+                    "write a concrete type after `->` (e.g. `fn foo(...) -> T { ... })`, or omit `->` to match any return type",
+                ));
             }
             // T161: `-> ...` can never equal a real return type (engine
             // compares via normalized equality) — fail fast instead of a
@@ -534,6 +570,7 @@ pub fn parse_fn_pattern(
             if acc.iter().any(|t| t == "...") {
                 return Err(fail(
                     "`...` is not supported as a return type in v0.1: omit `->` to match any return type or write a concrete type (SPEC 14.7)".to_string(),
+                    "write `fn foo(...)` with no `->` to match any return type, or `fn foo(...) -> T { ... }` with a concrete type",
                 ));
             }
             ret = RetPat::Concrete(acc.join(" "));
@@ -552,7 +589,10 @@ pub fn parse_fn_pattern(
             i += 1;
         }
         if i == toks.len() && acc.iter().any(|t| t == "..." || t == "}") {
-            return Err(fail(unterminated_sig("`where` clause")));
+            return Err(fail(
+                unterminated_sig("`where` clause"),
+                "put the `{ ... }` body brace (or `;` for declarations) on the signature line",
+            ));
         }
         if acc.len() == 1 && where_metas.contains(&acc[0]) {
             where_clause = WherePat::Meta(acc[0].clone());
@@ -563,6 +603,7 @@ pub fn parse_fn_pattern(
             if acc.iter().any(|t| t == "...") {
                 return Err(fail(
                     "`...` is not supported in where clauses in v0.1: write concrete predicates or abstract with `# where_clause W` + `... W ...` (SPEC 14.7)".to_string(),
+                    "write `where T: Clone` with concrete predicates, or add `# where_clause W` and write `... W ...`",
                 ));
             }
             where_clause = WherePat::Concrete(acc.join(" "));
@@ -600,7 +641,10 @@ pub fn parse_fn_pattern(
             i += 1;
         }
         if depth != 0 {
-            return Err(fail("unbalanced body block in fn pattern".to_string()));
+            return Err(fail(
+                "unbalanced body block in fn pattern".to_string(),
+                "close the body block with `}` (e.g. `fn foo(...) { ... })`",
+            ));
         }
         // T160: `...` must stand alone in a body block too. The old
         // `any(...)" rule let mixed shapes like `{ ..., foo(); }`
@@ -609,6 +653,7 @@ pub fn parse_fn_pattern(
         if inner.iter().any(|t| t == "...") && inner.iter().any(|t| t != "...") {
             return Err(fail(
                 "function pattern bodies must be exactly `...` in v0.1 (body evolution is not supported; the original body is always preserved)".to_string(),
+                "write the body as exactly `{ ... }`",
             ));
         }
         body_ellipsis = inner.iter().any(|t| t == "...");
@@ -617,10 +662,13 @@ pub fn parse_fn_pattern(
         i += 1;
     }
     if i < toks.len() {
-        return Err(fail(format!(
-            "unexpected trailing tokens in fn pattern: `{}`",
-            toks[i..].join(" ")
-        )));
+        return Err(fail(
+            format!(
+                "unexpected trailing tokens in fn pattern: `{}`",
+                toks[i..].join(" ")
+            ),
+            "end the pattern after the `{ ... }` body block (or `;` for declarations)",
+        ));
     }
 
     Ok(FnPattern {
