@@ -32,6 +32,7 @@ mod paths;
 mod peel;
 pub(crate) mod prefix;
 pub(crate) mod prov;
+mod repeat;
 pub(crate) mod shape;
 mod slot;
 mod verbatim;
@@ -130,6 +131,7 @@ pub(crate) fn item_emission_header(
 }
 pub(crate) use generalized::{try_let_sweep, try_sig_evolution_sweep, try_type_sweep};
 pub(crate) use peel::try_call_peel_sweep;
+pub(crate) use repeat::try_repeat_fold_sweep;
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the

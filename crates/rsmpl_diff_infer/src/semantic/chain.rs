@@ -148,6 +148,15 @@ pub(crate) fn run_pair_chain(
     {
         return Some((type_sweep, "type_sweep"));
     }
+    // WI-1c: nested same-callee full-strip fold (`Box::new(Box::new(x))`
+    // → `x`, `# repeat`) — after the type sweep (those own whole-statement
+    // templates; this owns call-spine strips), before the verbatim stage
+    // in the caller. No earlier detector claims a call→non-call pair.
+    if let Some(fold) =
+        super::try_repeat_fold_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((fold, "repeat_fold"));
+    }
     None
 }
 

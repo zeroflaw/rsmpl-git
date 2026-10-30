@@ -239,6 +239,7 @@ const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
     "15-use-rename",
+    "16-repeat-fold",
     "17-scope-file",
     "20-returns-none",
     "23-slot-sweep",
@@ -306,10 +307,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "14-item-rename",
         "hetero: 8 renames re-infer as 1 semantic + 7 ordinary (grouping is WI-7)",
-    ),
-    (
-        "16-repeat-fold",
-        "nodet: nested Box::new stays ordinary (no general repeat-fold detector)",
     ),
     (
         "18-general-expr",

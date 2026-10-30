@@ -655,8 +655,44 @@ pub(crate) fn template_pair_holds(
     report.rules.iter().map(|r| r.matches).sum::<usize>() == n
 }
 
-/// Generic expression-template totality (WI-7-upper): the emitted minus
-/// expression template `minus_template` (e.g. a verbatim `Old(alpha)`
+/// Fold totality (WI-1c): the emitted minus fold template `minus_template`
+/// (e.g. `Box::new(E0)`, exactly one `E0` hole) must match exactly `n`
+/// outermost sites in the pre-image file. Counted by the engine itself
+/// with the real fold spelling: a `# sweep` + `# repeat` probe
+/// (`- M` / `+ E0`) is applied to a scratch tree and its match count
+/// must equal `n`. The `# repeat` matters: without it a nested site
+/// counts once per nesting level, while the real sweep folds bottom-up
+/// and counts outermost only (T20) — a self-rewrite probe would
+/// over-count every nested site and veto every fold. `None` pre-image
+/// keeps the legacy allow; probe parse/apply failure vetoes. Opaque
+/// positions need no extra veto: the engine never matches inside
+/// macros or string literals, so hidden twins never count.
+pub(crate) fn template_repeat_holds(
+    path: &str,
+    file_old: Option<&str>,
+    minus_template: &str,
+    n: usize,
+) -> bool {
+    if n == 0 || minus_template.contains('\n') {
+        return false;
+    }
+    let Some(pre) = file_old else {
+        return true;
+    };
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# repeat\n- {minus_template}\n+ E0\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+}
 /// whose uppercase callee infers as an `expr` hole) must match exactly
 /// `n` sub-expressions in the pre-image file. Same self-rewrite probe
 /// prescription as `template_type_holds` (`- M` / `+ M` under `# sweep`,

@@ -6111,7 +6111,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`). `totality` is
 `"pre-image"` when the section had pre-image text to count against,
@@ -6291,6 +6291,28 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   (macro/string twins never count — the engine never enters them;
   nested matches count outer-only, exactly like the real sweep
   rewrites). Detector name `type_sweep`.
+- Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
+  1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
+  qself, and generic args decline, same gates as the qualified sweep)
+  applied one or more times around a plus side that is exactly the
+  full-strip fixpoint (peeling that callee repeatedly from the minus
+  reaches the plus; partial strips stay ordinary — a `# repeat`
+  emission would over-strip the untouched layers). Call sites inside
+  `let` inits unwrap to their init call (T449 precedent — the emission
+  stays a bare pattern and the engine rewrites the call sub-expression
+  in place); `&`-led sides decline (general-expr territory);
+  all-byte-identical classes stay for the tighter verbatim sweep (T422
+  precedent). One `# allow=many` hunk (`- C(E0)` / `+ E0`, inferred
+  hole, Section 15.8; uppercase last segments ride backticks per the
+  call-sweep rule) with `# repeat` when some pair nested two or more
+  deep — flat single-unwrap sweeps emit the plain hunk — so one hunk
+  strips every depth bottom-up (Section 17.8). The plus side must hold
+  no same-callee call (repeat would keep folding past the diff's
+  post-state). Pre-image totality is the engine-count fold check: the
+  real fold probe (`- C(E0)` / `+ E0` with `# sweep` + `# repeat`)
+  must match exactly N outermost sites (nested matches are folds, not
+  separate sites; macro/string twins never count — the engine never
+  enters them). Detector name `repeat_fold`.
 - Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
   single-segment call whose first arg token-equals the receiver and
@@ -6743,9 +6765,9 @@ cycle must still be tree-lossless).
 Exclusions (WI-1d — canonical divergence the `cycle_e2e` harness
 pins, not bugs in the cycle itself): single-site semantic shapes
 demote to ordinary under the T375 byte-win guard (`01`, `04`, `06`,
-`08`–`11`, `13`, `18`, `19`, `21`, `22`); multi-site shapes with no
-detector yet stay ordinary (`16` repeat-fold, `25` qualified-path
-calls, `26` macro renames — owned by WI-3/WI-4); heterogeneous sites
+   `08`–`11`, `13`, `18`, `19`, `21`, `22`); multi-site shapes with no
+   detector yet stay ordinary (`25` qualified-path calls, `26` macro
+   renames — owned by WI-3); heterogeneous sites
 no template fires on stay ordinary (`12` statement sequences, `14`
 divergent single-file renames — cross-file shared deltas group under
 one `rename_Old_to_New` rule (WI-7b) with provenance `group`; divergent
