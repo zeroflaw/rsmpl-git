@@ -124,7 +124,18 @@ pub(crate) fn try_verbatim_sweep(
         }
     }
     let checkpoint = used_rules.len();
-    let mut passing: Vec<VerbatimGroup> = Vec::new();
+    // Group candidates reserve no rules: the atomicity fixed point
+    // below drops violators first (macros.rs aa23c77 precedent), so
+    // dropped groups burn no `rN` names and leave no stale records.
+    struct Candidate {
+        minus_trim: String,
+        plus_trim: String,
+        minus: String,
+        plus: String,
+        sites: Vec<usize>,
+        members: Vec<usize>,
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
     // Pre-image parse, once per section (None = no entry: legacy
     // section-visible evidence only; Some(Err) = unparseable: veto all).
     let old_file: Option<Option<syn::File>> = file_old.map(|t| syn::parse_str::<syn::File>(t).ok());
@@ -326,8 +337,10 @@ pub(crate) fn try_verbatim_sweep(
         // WI-1b: precise emission sites are the member pair old lines
         // plus joined stranded old lines for this group.
         let mut sites: Vec<usize> = Vec::new();
+        let mut members: Vec<usize> = Vec::new();
         for (idx, (_j, gm, gp)) in pairs.iter().enumerate() {
             if gm == m && gp == p {
+                members.push(idx);
                 let old_line = pair_old.get(idx).copied().unwrap_or(0);
                 if !sites.contains(&old_line) {
                     sites.push(old_line);
@@ -345,22 +358,79 @@ pub(crate) fn try_verbatim_sweep(
         // WI-2: record the group rule with its detector; failures below
         // truncate `used_rules`, and commit filters by presence in the
         // final text, so stale records never surface.
-        let rule = unique_rule(used_rules, "verbatim");
-        fired.push((rule.clone(), "verbatim"));
-        passing.push(VerbatimGroup {
+        candidates.push(Candidate {
             minus_trim: m.clone(),
             plus_trim: p.clone(),
             // WI-7-upper: literal emission (backticked call heads);
-            // `minus_trim`/`needle` stay raw for grouping/counting.
+            // `minus_trim` stays raw for grouping/counting.
             minus: lit_minus,
             plus: lit_plus,
-            rule,
             sites,
+            members,
         });
     }
-    if passing.is_empty() {
-        used_rules.truncate(checkpoint);
+    // Hunk-atomicity fixed point (macros.rs aa23c77): a group fires
+    // only if every balanced hunk holding a member pair is fully
+    // covered by passing groups — otherwise the group hunk and the
+    // leftover ordinary hunk would rewrite the same line
+    // (GIT_HUNK_CONFLICT overlapping edits). Drop violators (releasing
+    // stranded-join claims) to a fixed point (cascade: dropping
+    // uncovers hunks).
+    loop {
+        let covered: std::collections::HashSet<usize> = candidates
+            .iter()
+            .flat_map(|c| c.members.iter().copied())
+            .collect();
+        let mut victim: Option<usize> = None;
+        'scan: for (gi, cand) in candidates.iter().enumerate() {
+            for &idx in &cand.members {
+                let hj = pairs[idx].0;
+                for (jj, (hj2, _, _)) in pairs.iter().enumerate() {
+                    if *hj2 != hj {
+                        continue;
+                    }
+                    if !covered.contains(&jj) {
+                        victim = Some(gi);
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        let Some(gi) = victim else {
+            break;
+        };
+        let (dm, dp) = (
+            candidates[gi].minus_trim.clone(),
+            candidates[gi].plus_trim.clone(),
+        );
+        for claim in joined.iter_mut() {
+            if claim
+                .as_ref()
+                .is_some_and(|(gm, gp)| gm == &dm && gp == &dp)
+            {
+                *claim = None;
+            }
+        }
+        candidates.remove(gi);
+    }
+    if candidates.is_empty() {
         return None;
+    }
+    // Reserve rules + WI-2 detector records for survivors only;
+    // failures below truncate `used_rules`, and commit filters by
+    // presence in the final text, so stale records never surface.
+    let mut passing: Vec<VerbatimGroup> = Vec::new();
+    for cand in candidates {
+        let rule = unique_rule(used_rules, "verbatim");
+        fired.push((rule.clone(), "verbatim"));
+        passing.push(VerbatimGroup {
+            minus_trim: cand.minus_trim,
+            plus_trim: cand.plus_trim,
+            minus: cand.minus,
+            plus: cand.plus,
+            rule,
+            sites: cand.sites,
+        });
     }
     // Leftover insertions for joined unbalanced hunks (T441 slice):
     // each claimed hunk sheds its minus + first plus and stays as a
@@ -965,6 +1035,28 @@ impl<'ast> syn::visit::Visit<'ast> for TotalityScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn section(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+    }
 
     #[test]
     fn split_leftover_insertion_pins_shape() {
@@ -986,5 +1078,48 @@ mod tests {
         // Header/body length mismatch.
         let bad = "@@ -20,1 +21,9 @@\n-    a();\n+    b();\n+    c();\n";
         assert_eq!(split_leftover_insertion(bad), None);
+    }
+
+    #[test]
+    fn verbatim_mixed_hunk_atomicity_drops_group() {
+        // WI-9e: H1 holds a repeated pair (foo, 3 sites) plus a
+        // singleton (bar); the foo group must drop — emitting it would
+        // overlap the H1 ordinary leftover — so inference declines and
+        // the section falls through to ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@ pub fn a() {\n-    foo(x);\n-    bar(1);\n+    foo(y);\n+    bar(2);\n@@ -6 +6 @@ pub fn b() {\n-    foo(x);\n+    foo(y);\n@@ -9 +9 @@ pub fn c() {\n-    foo(x);\n+    foo(y);\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "pub fn a() {\n    foo(x);\n    bar(1);\n}\npub fn b() {\n    foo(x);\n}\npub fn c() {\n    foo(x);\n}\n",
+        )]);
+        assert!(
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn verbatim_fully_covered_groups_fire() {
+        // WI-9e control: both pairs repeat across two fully-covered
+        // hunks — the fixed point drops nothing and both groups emit.
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@ pub fn a() {\n-    foo(x);\n-    bar(1);\n+    foo(y);\n+    bar(2);\n@@ -6,2 +6,2 @@ pub fn b() {\n-    foo(x);\n-    bar(1);\n+    foo(y);\n+    bar(2);\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "pub fn a() {\n    foo(x);\n    bar(1);\n}\npub fn b() {\n    foo(x);\n    bar(1);\n}\n",
+        )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("must compress");
+        validated_live(&out, &pre);
+        assert!(out.contains("- foo(x)\n"), "got: {out}");
+        assert!(out.contains("- bar(1)\n"), "got: {out}");
+        assert!(
+            !out.contains("-    foo(x);"),
+            "covered lines must be consumed, got: {out}"
+        );
     }
 }

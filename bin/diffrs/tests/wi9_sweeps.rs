@@ -1,11 +1,13 @@
-//! WI-9a/WI-9b1/WI-9b2b/WI-9b2 shape pins for
-//! `test-fixtures/diffrs/{27,82,83,84,85,86,87,88,89}-*`: same-name
-//! macro-interior sweep (27 fires hetero, 82 bracket fires
+//! WI-9a/WI-9b1/WI-9b2b/WI-9b2/WI-9e shape pins for
+//! `test-fixtures/diffrs/{27,82,83,84,85,86,87,88,89,90,91,92}-*`:
+//! same-name macro-interior sweep (27 fires hetero, 82 bracket fires
 //! delimiter-exact, 83 hetero fire with a stable long arg, 84
 //! single-site stays ordinary, 85 concrete twin recovery, 86 nested
 //! `env!` extraction, 87 brace fires delimiter-exact, 88 nested
 //! multi-token raw-span fire, 89 cross-site hetero grouping with a
-//! varying stable arg). Split out of
+//! varying stable arg) plus WI-9e hunk-atomicity vetoes (90 verbatim,
+//! 91 peel, 92 literal: a repeated group co-located with a singleton
+//! drops instead of overlapping/dropping hunks). Split out of
 //! `fixtures_roundtrip.rs` to hold that file's 2000-line budget
 //! (helpers duplicated, not shared — T246 precedent). The generic
 //! native → semantic → native round-trip for these fixtures already
@@ -515,5 +517,87 @@ fn wi9_macro_nested_multi_fires() {
         "nested sweep must beat native bytes ({} vs {})",
         semantic.len(),
         native_input.len()
+    );
+}
+
+#[test]
+fn wi9e_verbatim_atomicity_stays_ordinary() {
+    // Fixture 90 (WI-9e): H1 holds a repeated pair (foo, 3 sites) plus
+    // a singleton (bar) — the foo group drops under hunk atomicity
+    // (emitting it would overlap the H1 ordinary leftover), so the
+    // section stays ordinary passthrough.
+    let (native_input, semantic) = convert_fixture("90-verbatim-atomicity-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "atomicity drop must stay ordinary, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    foo(x);"),
+        "minus lines must be preserved, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+    foo(y);"),
+        "plus lines must be preserved, got: {semantic}"
+    );
+    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
+    assert!(
+        semantic == normalize_native(&native_input),
+        "ordinary passthrough must equal normalized native, got: {semantic}"
+    );
+}
+
+#[test]
+fn wi9e_peel_atomicity_stays_ordinary() {
+    // Fixture 91 (WI-9e): H1 holds a peel pair plus a singleton;
+    // H2..H5 hold the same hetero peel class. The class drops under
+    // hunk atomicity (its first member sits in uncovered H1, so the
+    // body could never emit and covered hunks would silently drop) —
+    // ordinary passthrough, every line preserved.
+    let (native_input, semantic) = convert_fixture("91-peel-atomicity-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "atomicity drop must stay ordinary, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    let r = load(ctx, &[\"h\", m2, t1]);"),
+        "covered minus lines must be preserved, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+    let r = fetch(ctx, m2, &[t1]);"),
+        "covered plus lines must be preserved, got: {semantic}"
+    );
+    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
+    assert!(
+        semantic == normalize_native(&native_input),
+        "ordinary passthrough must equal normalized native, got: {semantic}"
+    );
+}
+
+#[test]
+fn wi9e_literal_atomicity_stays_ordinary() {
+    // Fixture 92 (WI-9e): H1 holds a literal-delta pair plus a
+    // singleton; H2..H5 hold the same hetero literal class. Same
+    // first-member-in-uncovered-hunk drop as the peel driver —
+    // ordinary passthrough, every line preserved.
+    let (native_input, semantic) = convert_fixture("92-literal-atomicity-stays-ordinary");
+    assert!(
+        !semantic.contains("rule="),
+        "atomicity drop must stay ordinary, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    check(c2, \"a\");"),
+        "covered minus lines must be preserved, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+    check(c2, \"b\");"),
+        "covered plus lines must be preserved, got: {semantic}"
+    );
+    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
+    assert!(
+        semantic == normalize_native(&native_input),
+        "ordinary passthrough must equal normalized native, got: {semantic}"
     );
 }

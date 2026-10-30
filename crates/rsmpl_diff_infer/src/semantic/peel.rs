@@ -146,9 +146,18 @@ pub(crate) fn try_call_peel_section(
     }
     let checkpoint = used_rules.len();
     // Fire at most one hunk per hetero class (all-identical classes
-    // stay for verbatim, which is tighter there).
-    let mut passing: Vec<(usize, String, Vec<usize>, String)> = Vec::new();
-    let mut covered_pair = vec![false; pairs.len()];
+    // stay for verbatim, which is tighter there). Candidates reserve
+    // no rules: the atomicity fixed point below drops violators first
+    // (macros.rs aa23c77 precedent), so dropped classes burn no `rN`
+    // names and leave no stale `fired` records.
+    struct Candidate {
+        first: usize,
+        tail: String,
+        sites: Vec<usize>,
+        members: Vec<usize>,
+        label: String,
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
     for (class, members) in &classes {
         if members.len() < 2 {
             continue;
@@ -180,12 +189,6 @@ pub(crate) fn try_call_peel_section(
         ) {
             continue;
         }
-        let rule = unique_rule(
-            used_rules,
-            &format!("calls_{}_to_{}_peel", class.old_cal, class.new_cal),
-        );
-        // WI-2: exact detector record (commit filters by presence).
-        fired.push((rule.clone(), "call_peel_section"));
         let mut tails = Vec::new();
         for i in 0..class.tails {
             let v = format!("T{i}");
@@ -206,14 +209,61 @@ pub(crate) fn try_call_peel_section(
         );
         // WI-1b: precise emission sites are the member old lines.
         let sites: Vec<usize> = members.iter().map(|&idx| pair_old[idx]).collect();
-        for &idx in members {
+        candidates.push(Candidate {
+            first: members[0],
+            tail,
+            sites,
+            members: members.clone(),
+            label: format!("calls_{}_to_{}_peel", class.old_cal, class.new_cal),
+        });
+    }
+    // Hunk-atomicity fixed point (macros.rs aa23c77): a class fires
+    // only if every balanced hunk holding a member pair is fully
+    // covered by passing classes — otherwise the class hunk and the
+    // leftover ordinary hunk would rewrite the same line
+    // (GIT_HUNK_CONFLICT overlapping edits), or — when the first
+    // member sits in the uncovered hunk — the body would never emit
+    // and covered hunks would silently drop. Drop violators to a
+    // fixed point (cascade: dropping uncovers hunks).
+    loop {
+        let covered: std::collections::HashSet<usize> = candidates
+            .iter()
+            .flat_map(|c| c.members.iter().copied())
+            .collect();
+        let mut victim: Option<usize> = None;
+        'scan: for (gi, cand) in candidates.iter().enumerate() {
+            for &idx in &cand.members {
+                let hj = pairs[idx].0;
+                for (jj, (hj2, _, _)) in pairs.iter().enumerate() {
+                    if *hj2 != hj {
+                        continue;
+                    }
+                    if !covered.contains(&jj) {
+                        victim = Some(gi);
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        let Some(gi) = victim else {
+            break;
+        };
+        candidates.remove(gi);
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    // Reserve rules + WI-2 detector records for survivors only.
+    let mut passing: Vec<(usize, String, Vec<usize>, String)> = Vec::new();
+    let mut covered_pair = vec![false; pairs.len()];
+    for cand in candidates {
+        let rule = unique_rule(used_rules, &cand.label);
+        // WI-2: exact detector record (commit filters by presence).
+        fired.push((rule.clone(), "call_peel_section"));
+        for &idx in &cand.members {
             covered_pair[idx] = true;
         }
-        passing.push((members[0], tail, sites, rule));
-    }
-    if passing.is_empty() {
-        used_rules.truncate(checkpoint);
-        return None;
+        passing.push((cand.first, cand.tail, cand.sites, rule));
     }
     // WI-1b: ranged bodies per group when spans are disjoint and ≤64;
     // overlapping groups share the sweep dummy (SPEC 10.6).
@@ -405,4 +455,73 @@ fn parse_peel_pair(old_line: &str, new_line: &str) -> Option<PeelClass> {
         head_value: head_str.value(),
         tails,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    fn section(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+    }
+
+    #[test]
+    fn peel_mixed_hunk_atomicity_drops_class() {
+        // WI-9e: H1 holds a peel pair plus a singleton; H2..H5 hold the
+        // same hetero peel class. The class must drop (its first member
+        // sits in uncovered H1, so the body could never emit there and
+        // covered hunks would silently drop) — inference declines and
+        // the section falls through to ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@ pub fn a() {\n-    let r = load(ctx, &[\"h\", m1, t1]);\n-    ping(1);\n+    let r = fetch(ctx, m1, &[t1]);\n+    ping(2);\n@@ -6 +6 @@ pub fn b() {\n-    let r = load(ctx, &[\"h\", m2, t1]);\n+    let r = fetch(ctx, m2, &[t1]);\n@@ -9 +9 @@ pub fn c() {\n-    let r = load(ctx, &[\"h\", m3, t1]);\n+    let r = fetch(ctx, m3, &[t1]);\n@@ -12 +12 @@ pub fn d() {\n-    let r = load(ctx, &[\"h\", m4, t1]);\n+    let r = fetch(ctx, m4, &[t1]);\n@@ -15 +15 @@ pub fn e() {\n-    let r = load(ctx, &[\"h\", m5, t1]);\n+    let r = fetch(ctx, m5, &[t1]);\n@@ -21 +20,0 @@ pub fn gone() {\n-    drop();\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "pub fn a() {\n    let r = load(ctx, &[\"h\", m1, t1]);\n    ping(1);\n}\npub fn b() {\n    let r = load(ctx, &[\"h\", m2, t1]);\n}\npub fn c() {\n    let r = load(ctx, &[\"h\", m3, t1]);\n}\npub fn d() {\n    let r = load(ctx, &[\"h\", m4, t1]);\n}\npub fn e() {\n    let r = load(ctx, &[\"h\", m5, t1]);\n}\npub fn filler() {\n    keep();\n}\npub fn gone() {\n    drop();\n}\n",
+        )]);
+        assert!(
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn peel_fully_covered_class_fires() {
+        // WI-9e control: every member hunk is fully covered — the fixed
+        // point drops nothing and the class emits.
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@ pub fn a() {\n-    let r = load(ctx, &[\"h\", m1, t1]);\n+    let r = fetch(ctx, m1, &[t1]);\n@@ -5 +5 @@ pub fn b() {\n-    let r = load(ctx, &[\"h\", m2, t1]);\n+    let r = fetch(ctx, m2, &[t1]);\n@@ -8 +8 @@ pub fn c() {\n-    let r = load(ctx, &[\"h\", m3, t1]);\n+    let r = fetch(ctx, m3, &[t1]);\n@@ -14 +13,0 @@ pub fn gone() {\n-    drop();\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "pub fn a() {\n    let r = load(ctx, &[\"h\", m1, t1]);\n}\npub fn b() {\n    let r = load(ctx, &[\"h\", m2, t1]);\n}\npub fn c() {\n    let r = load(ctx, &[\"h\", m3, t1]);\n}\npub fn filler() {\n    keep();\n}\npub fn gone() {\n    drop();\n}\n",
+        )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("must compress");
+        validated_live(&out, &pre);
+        assert!(out.contains("fetch(D, M,"), "got: {out}");
+        assert!(
+            !out.contains("load(ctx"),
+            "covered lines must be consumed, got: {out}"
+        );
+    }
 }

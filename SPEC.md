@@ -6225,7 +6225,13 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   Cross-hunk classes compress non-whole sections (T449: singleton
   `-U0` hunks split by distance or pure additions elsewhere, e.g.
   spaced `let` sites — peel-driver precedent); all-identical classes
-  stay for verbatim and the emitted bodies are invisible to it.
+  stay for verbatim and the emitted bodies are invisible to it. Hunk
+  atomicity (WI-9e, same index-based fixed point as the macro-interior
+  sweep): a class fires only if every balanced hunk holding a member
+  pair is fully covered by passing classes — a class whose member hunk
+  also holds an uncovered pair drops to a fixed point (cascade:
+  dropping uncovers hunks) and the section falls through to ordinary;
+  rules reserve only for survivors.
 - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
@@ -6240,7 +6246,12 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   match and never count). Cross-hunk classes compress non-whole
    sections (pure additions elsewhere veto whole-section balance but
    not this sweep); the emitted single-pattern bodies are invisible to
-   the later verbatim pass.
+   the later verbatim pass. Hunk atomicity (WI-9e, same index-based
+  fixed point as the macro-interior sweep): a class fires only if
+  every balanced hunk holding a member pair is fully covered by passing
+  classes — a class whose member hunk also holds an uncovered pair
+  drops to a fixed point (cascade: dropping uncovers hunks) and the
+  section falls through to ordinary; rules reserve only for survivors.
 - Let type-addition sweep (WI-4a, first anti-unification shape): N ≥ 2
   `-`/`+` pairs, each a complete single-line `let PAT = INIT;` →
   `let PAT: T = INIT;` — the pattern and initializer token-equal per
@@ -6572,7 +6583,14 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    group-size times or the group stays ordinary (conservative:
    whole-file count, so an out-of-range twin still vetoes). Leftover balanced hunks
    retry the standard chain in place; the T375 guard applies to the
-   verbatim-covered set as a whole.
+   retry the standard chain in place; the T375 guard applies to the
+   verbatim-covered set as a whole. Hunk atomicity (WI-9e, same
+  index-based fixed point as the macro-interior sweep): a group fires
+  only if every balanced hunk holding a member pair is fully covered
+  by passing groups — a group whose member hunk also holds an
+  uncovered pair drops (releasing its stranded-join claims) to a fixed
+  point, and uncovered leftovers stay ordinary; rules reserve only for
+  survivors.
   All seven metavar sweeps carry the same pre-image subterm totality
   (T409): matchable-unit count (calls/methods by callee+arity, same-method
   literals by method+old-args, strips by method+args, slots by fn ident
