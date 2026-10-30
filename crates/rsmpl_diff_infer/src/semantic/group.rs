@@ -15,7 +15,8 @@
 //! `macro_rename`, `method_to_method`, `method_to_fn`, `use_prefix`.
 //! Same-callee shapes (`call_arg_add`, `call_literal`,
 //! `method_same_literal`, `ref_strip`), template shapes
-//! (`let_type_add`, `type_sweep`), and non-pair shapes (`verbatim`,
+//! (`let_type_add`, `type_sweep`), concrete macro interiors
+//! (`macro_interior`, no ident delta), and non-pair shapes (`verbatim`,
 //! `delete`, `move`) never group. A group needs ≥2 hunks spanning ≥2
 //! distinct files; single-file repeats (sweeps) and divergent deltas
 //! stay `""`.

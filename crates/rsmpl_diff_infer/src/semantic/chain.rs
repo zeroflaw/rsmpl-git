@@ -368,8 +368,17 @@ pub(crate) fn compress_section(
             rewritten = Some(lit);
         }
         let after_lit = rewritten.as_deref().unwrap_or(section);
+        // WI-9a: same-name concrete macro interiors (whole-line pairs and
+        // stranded joins) before verbatim (which vetoes every macro, so no
+        // double-claim); emitted single-pattern hunks group at n=1 below.
+        if let Some(interior) =
+            super::try_macro_interior_section(after_lit, path, used_rules, file_old, &mut fired)
+        {
+            rewritten = Some(interior);
+        }
+        let after_mac = rewritten.as_deref().unwrap_or(section);
         if let Some(verbatim) =
-            super::verbatim::try_verbatim_sweep(after_lit, path, used_rules, file_old, &mut fired)
+            super::verbatim::try_verbatim_sweep(after_mac, path, used_rules, file_old, &mut fired)
         {
             commit_prov(
                 prov,
@@ -435,6 +444,22 @@ pub(crate) fn compress_section(
         }
     }
     let mut verb_fired: Vec<(String, &'static str)> = Vec::new();
+    // WI-9a: same-name concrete macro interiors before verbatim (which
+    // vetoes every macro, so no double-claim).
+    if let Some(interior) =
+        super::try_macro_interior_section(section, path, used_rules, file_old, &mut verb_fired)
+    {
+        commit_prov(
+            prov,
+            &interior,
+            section.len(),
+            path,
+            &verb_fired,
+            &changed,
+            file_old,
+        );
+        return Some(interior);
+    }
     if let Some(verbatim) =
         super::verbatim::try_verbatim_sweep(section, path, used_rules, file_old, &mut verb_fired)
     {

@@ -38,7 +38,7 @@ pub(crate) use slot::try_fn_slot_sweep;
 
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
 pub(crate) use literal::try_call_literal_sweep;
-pub(crate) use macros::try_macro_rename_sweep;
+pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,

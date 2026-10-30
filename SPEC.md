@@ -6084,7 +6084,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `sig_evolution`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`). `totality` is
 `"pre-image"` when the section had pre-image text to count against,
@@ -6337,11 +6337,29 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    stay plain (macro names never infer — probed clean, no backticks).
    Token-tree matching is
   verbatim-only by design, so the body is never spelled. Leading-`::`
-  (no engine spelling, probed), same-name body rewrites (macro
-  interiors, WI-9), and divergent new names stay ordinary. Pre-image
+  (no engine spelling, probed), hetero same-name body rewrites and
+  macro-body-descent interiors (WI-9b), and divergent new names stay
+  ordinary. Pre-image
   totality counts every invocation of the exact rendered path (any
   delimiter/body — the `...` pattern matches all; bare twins never
   match a qualified pattern and vice versa, probed).
+- Macro-interior sweep (WI-9a): N ≥ 2 `-`/`+` pairs rendering (whole-line
+  statements and `let`-init unwraps — the emitted pattern is the bare
+  `name!(args)`, never `let`) to one identical same-name pair —
+  exact rendered path (bare or qualified, one uniform class per hunk),
+  paren delimiters, body delta, no holes — → one `# allow=many` hunk
+  (`- name!(args)` / `+ name!(new_args)`, plain `!` routing, no
+  `# macro` directive, first-site raw spacing). Cross-hunk driver with
+  the verbatim stranded join (exactly-1-minus pure unbalanced hunks
+  whose first plus matches shed minus + first plus and stay a
+  pure-insertion leftover), so sections with a pure addition still
+  compress their runs. Totality is the generic engine-count probe on
+  the emitted minus (the engine's own match domain). `![...]`/`!{}`
+  interiors stay ordinary (the engine's interior-change splice
+  normalizes to `!(...)`, probed corrupt); renames (name delta),
+  hetero pairs (per-site differing bodies), and macro-body-descent
+  edits (changed lines nested inside a macro body the pattern never
+  enters) stay ordinary for WI-9b.
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

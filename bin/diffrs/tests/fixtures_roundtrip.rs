@@ -1130,32 +1130,39 @@ fn native_to_semantic_to_native_round_trip() {
                 semantic.len(),
                 native_input.len()
             );
-        } else if name == "27-macro-invocation-veto" {
-            // T450: top-level macro invocations stay ordinary even as a
-            // clean same-callee same-arity literal-delta pair (68f092f
-            // miniature: 2x assert_eq!(out.rsmpl, TEXT_SECTION) ->
-            // TEXT_STRIPPED in singleton hunks + a pure addition forcing
-            // the unbalanced section). Expr::Macro never reaches
-            // call_parts and verbatim rejects macros > 0 (engine-blind
-            // macro gate, SPEC 21/22, T445 family) — the literal
-            // cross-hunk driver skips the unparseable pairs, no rule=
-            // lines, passthrough is exactly normalized native.
+        } else if name == "27-macro-interior-fires" {
+            // WI-9a (was T450 veto): same-name concrete macro interiors
+            // now compress — 2x assert_eq!(out.rsmpl, TEXT_SECTION) ->
+            // TEXT_STRIPPED in singleton hunks join with the stranded
+            // claim (the pure addition forces the unbalanced section).
+            // The T450 engine-blind gate (verbatim macro veto) is
+            // bypassed by the dedicated interior section driver, whose
+            // concrete patterns route to the macro matcher (probed).
             assert!(
-                !semantic.contains("rule="),
-                "macro-invocation pairs must stay ordinary, got: {semantic}"
+                semantic.contains("rule=r1"),
+                "macro interior must fire, got: {semantic}"
             );
             assert!(
-                semantic.contains("-    assert_eq!(out.rsmpl, TEXT_SECTION);"),
-                "macro-invocation minus lines must be preserved, got: {semantic}"
+                !semantic.contains("# macro"),
+                "plain `!` routing, no directive, got: {semantic}"
             );
             assert!(
-                semantic.contains("+    assert_eq!(out.rsmpl, TEXT_STRIPPED);"),
-                "macro-invocation plus lines must be preserved, got: {semantic}"
+                semantic.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)"),
+                "interior minus lines must be consumed, got: {semantic}"
             );
-            let normalized = normalize_native(&native_input);
             assert!(
-                semantic == normalized,
-                "[{name}] ordinary passthrough must equal normalized native"
+                semantic.contains("+ assert_eq!(out.rsmpl, TEXT_STRIPPED)"),
+                "interior plus lines must be consumed, got: {semantic}"
+            );
+            assert!(
+                semantic.contains("+#[test]"),
+                "pure-addition leftover must stay ordinary, got: {semantic}"
+            );
+            assert!(
+                semantic.len() < native_input.len(),
+                "interior sweep must beat native bytes ({} vs {})",
+                semantic.len(),
+                native_input.len()
             );
         } else if name == "28-verbatim-return" {
             // T452: return-shape verbatim (b9c00d5/T418 miniature) — two

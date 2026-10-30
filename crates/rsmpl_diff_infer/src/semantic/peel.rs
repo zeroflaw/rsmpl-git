@@ -304,7 +304,7 @@ pub(crate) fn try_call_peel_section(
 
 /// Split a section into its prelude lines and native hunks (the same
 /// split the per-hunk fallback uses; each part keeps trailing newlines).
-fn split_section_hunks(section: &str) -> (String, Vec<String>) {
+pub(crate) fn split_section_hunks(section: &str) -> (String, Vec<String>) {
     let mut prelude = String::new();
     let mut hunks: Vec<String> = Vec::new();
     let mut current: Option<String> = None;

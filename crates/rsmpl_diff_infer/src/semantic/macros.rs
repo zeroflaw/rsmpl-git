@@ -154,6 +154,458 @@ fn macro_path(mac: &syn::ExprMacro) -> Option<String> {
     Some(segs.join("::"))
 }
 
+/// One N-site (N ≥ 2) same-name concrete macro-interior group: the
+/// token-normalized grouping key, the raw-spelled emission pair, the
+/// member pair indices, and the covered old-side sites. Rules are
+/// reserved after the atomicity fixed point below, so vetoed
+/// candidates never burn `rN` names.
+struct InteriorGroup {
+    key: (String, String),
+    minus: String,
+    plus: String,
+    members: Vec<usize>,
+    sites: Vec<usize>,
+}
+
+/// Same-name concrete macro-interior sweep (WI-9a): N ≥ 2 balanced
+/// whole-line pairs rendering to one identical `(minus, plus)` macro
+/// pair — same rendered path, paren delimiters, body delta, no holes.
+/// Cross-hunk driver mirroring the peel section skeleton plus the
+/// verbatim stranded join (exactly-1-minus pure unbalanced hunks whose
+/// first plus matches shed minus + first plus and stay a pure-insertion
+/// leftover), so sections with a pure addition (bench 18 shape) still
+/// compress their runs. Emission is the concrete invocation pair under
+/// `# allow=many` (plain `!` routing, probed — no `# macro`
+/// directive); totality is the generic engine-count
+/// `template_expr_holds` on the rendered minus (the engine's own match
+/// domain: macro-body/string twins veto exactly as the engine sees
+/// them). Interior deltas on `![...]`/`!{...}` stay ordinary: the
+/// engine's interior-change splice normalizes to `!(...)` (probed
+/// corrupt), while renames keep their delimiter-exact path splice.
+/// Runs before verbatim in both section paths (verbatim still vetoes
+/// every macro, so no double-claim); emitted bodies are single-pattern
+/// `@@ -1,1 @@` hunks the later verbatim pass groups at n=1 and
+/// passes through unchanged (peel-skeleton precedent).
+pub(crate) fn try_macro_interior_section(
+    section: &str,
+    path: &str,
+    used_rules: &mut Vec<String>,
+    file_old: Option<&str>,
+    fired: &mut Vec<(String, &'static str)>,
+) -> Option<String> {
+    let (prelude, hunks) = super::peel::split_section_hunks(section);
+    if hunks.is_empty() {
+        return None;
+    }
+    let hunk_changed: Vec<Vec<usize>> = hunks
+        .iter()
+        .map(|h| crate::totality::changed_old_lines(h))
+        .collect();
+    // Balanced-hunk pairs in order; unbalanced hunks can only join via
+    // the stranded claim below. Every old-side line feeds nothing here
+    // (totality is the engine-count probe, not a textual needle).
+    let mut pairs: Vec<(usize, String, String)> = Vec::new();
+    let mut pair_old: Vec<usize> = Vec::new();
+    let mut hunk_balanced = vec![false; hunks.len()];
+    let mut hunk_pure = vec![true; hunks.len()];
+    let mut hunk_minuses: Vec<Vec<String>> = Vec::with_capacity(hunks.len());
+    let mut hunk_pluses: Vec<Vec<String>> = Vec::with_capacity(hunks.len());
+    for (i, hunk) in hunks.iter().enumerate() {
+        let mut minuses = Vec::new();
+        let mut pluses = Vec::new();
+        let mut pure = true;
+        for line in hunk.lines().skip(1) {
+            if line.starts_with('-') && !line.starts_with("---") {
+                minuses.push(line[1..].to_string());
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                pluses.push(line[1..].to_string());
+            } else {
+                // Context/blank/marker lines: not `-U0`-pure, ineligible
+                // to join (verbatim T441 precedent).
+                pure = false;
+            }
+        }
+        if minuses.len() == pluses.len() && !minuses.is_empty() {
+            hunk_balanced[i] = true;
+            for (k, (m, p)) in minuses
+                .iter()
+                .cloned()
+                .zip(pluses.iter().cloned())
+                .enumerate()
+            {
+                if m.trim() == p.trim() {
+                    continue;
+                }
+                let old_line = hunk_changed[i].get(k).copied().unwrap_or(0);
+                pairs.push((i, m, p));
+                pair_old.push(old_line);
+            }
+        }
+        hunk_pure[i] = pure;
+        hunk_minuses.push(minuses);
+        hunk_pluses.push(pluses);
+    }
+    // Group identical rendered interior pairs, first-occurrence order.
+    let mut classes: Vec<((String, String), Vec<usize>)> = Vec::new();
+    for (idx, (.., m, p)) in pairs.iter().enumerate() {
+        let Some(key) = parse_macro_interior_pair(m, p) else {
+            continue;
+        };
+        match classes.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(idx),
+            None => classes.push((key, vec![idx])),
+        }
+    }
+    let checkpoint = used_rules.len();
+    // Stranded-join claims (verbatim T441 slice): at most one claim per
+    // unbalanced hunk (exactly 1 minus, pure, first plus renders into
+    // the group); claims release when the group vetoes.
+    let mut joined: Vec<Option<(String, String)>> = vec![None; hunks.len()];
+    let mut passing: Vec<InteriorGroup> = Vec::new();
+    for ((minus, plus), members) in &classes {
+        // Claim stranded mates for this group (verbatim T441 slice):
+        // unbalanced pure hunks with exactly 1 minus whose first plus
+        // renders into the group. Lone-pair groups claim at most one
+        // mate (the break below); multi-pair groups claim every match.
+        let mut n_eff = members.len();
+        for j in 0..hunks.len() {
+            if hunk_balanced[j] || !hunk_pure[j] || joined[j].is_some() {
+                continue;
+            }
+            if hunk_minuses[j].len() != 1 || hunk_pluses[j].is_empty() {
+                continue;
+            }
+            let m0 = &hunk_minuses[j][0];
+            let p0 = &hunk_pluses[j][0];
+            if parse_macro_interior_pair(m0, p0).as_ref() == Some(&(minus.clone(), plus.clone())) {
+                joined[j] = Some((minus.clone(), plus.clone()));
+                n_eff += 1;
+                if members.len() < 2 {
+                    break;
+                }
+            }
+        }
+        if n_eff < 2 {
+            continue;
+        }
+        // Emission spells the pair with the first site's raw argument
+        // text (byte-faithful, original spacing) instead of the
+        // token-normalized grouping key (`out.rsmpl` renders as
+        // `out . rsmpl` through `TokenStream` display — still
+        // engine-matchable, but noisier and T375-poorer).
+        let (m0, p0) = (&pairs[members[0]].1, &pairs[members[0]].2);
+        let (emit_minus, emit_plus) = emit_pair(m0, p0, minus, plus);
+        if !crate::totality::template_expr_holds(path, file_old, &emit_minus, n_eff) {
+            // Release this group's claims: the hunks stay ordinary.
+            for claim in joined.iter_mut() {
+                if claim
+                    .as_ref()
+                    .is_some_and(|(gm, gp)| gm == minus && gp == plus)
+                {
+                    *claim = None;
+                }
+            }
+            continue;
+        }
+        // WI-1b: precise emission sites are the member pair old lines
+        // plus joined stranded old lines for this group.
+        let mut sites: Vec<usize> = Vec::new();
+        for &idx in members {
+            let old_line = pair_old.get(idx).copied().unwrap_or(0);
+            if !sites.contains(&old_line) {
+                sites.push(old_line);
+            }
+        }
+        for (j, claim) in joined.iter().enumerate() {
+            if claim
+                .as_ref()
+                .is_some_and(|(gm, gp)| gm == minus && gp == plus)
+            {
+                let old_line = hunk_changed[j].first().copied().unwrap_or(0);
+                if !sites.contains(&old_line) {
+                    sites.push(old_line);
+                }
+            }
+        }
+        // WI-2: the rule is reserved after the atomicity fixed point
+        // below (vetoed candidates never burn `rN` names); commit
+        // filters by presence in the final text, so stale records never
+        // surface.
+        passing.push(InteriorGroup {
+            key: (minus.clone(), plus.clone()),
+            minus: emit_minus,
+            plus: emit_plus,
+            members: members.clone(),
+            sites,
+        });
+    }
+    // Hunk-atomicity fixed point (aa23c77 soundness): a group fires only
+    // if every balanced hunk holding a member pair is fully covered by
+    // passing groups — otherwise the group hunk and the leftover
+    // ordinary hunk would rewrite the same line (GIT_HUNK_CONFLICT
+    // "overlapping edits cannot be merged"). Drop violators (releasing
+    // claims) to a fixed point.
+    loop {
+        let keys: Vec<(String, String)> = passing.iter().map(|g| g.key.clone()).collect();
+        let mut victim: Option<usize> = None;
+        'scan: for (gi, g) in passing.iter().enumerate() {
+            for &idx in &g.members {
+                let hj = pairs[idx].0;
+                for (jj, m2, p2) in pairs.iter() {
+                    if *jj != hj {
+                        continue;
+                    }
+                    let covered =
+                        parse_macro_interior_pair(m2, p2).is_some_and(|k| keys.contains(&k));
+                    if !covered {
+                        victim = Some(gi);
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        let Some(gi) = victim else {
+            break;
+        };
+        let key = passing[gi].key.clone();
+        for claim in joined.iter_mut() {
+            if claim.as_ref().is_some_and(|c| *c == key) {
+                *claim = None;
+            }
+        }
+        passing.remove(gi);
+    }
+    if passing.is_empty() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // Reserve rules + WI-2 detector records for survivors only.
+    let mut fired_groups: Vec<(InteriorGroup, String)> = Vec::new();
+    for g in passing {
+        let rule = unique_rule(used_rules, &format!("macro_interior_{}", g.minus));
+        fired.push((rule.clone(), "macro_interior"));
+        fired_groups.push((g, rule));
+    }
+    let passing: Vec<(InteriorGroup, String)> = fired_groups;
+    // Leftover insertions for joined unbalanced hunks: each claimed hunk
+    // sheds its minus + first plus and stays a pure insertion. Claims of
+    // vetoed groups were released above, so every surviving claim belongs
+    // to a passing group; a header that does not split shape-exactly
+    // vetoes the whole sweep (fail safe).
+    let mut split_leftovers: Vec<Option<(String, String, String)>> = vec![None; hunks.len()];
+    for (j, claim) in joined.iter().enumerate() {
+        let Some((gm, gp)) = claim else { continue };
+        if !passing
+            .iter()
+            .any(|(g, _)| g.key.0 == *gm && g.key.1 == *gp)
+        {
+            continue;
+        }
+        let Some(leftover) = super::verbatim::split_leftover_insertion(&hunks[j]) else {
+            used_rules.truncate(checkpoint);
+            return None;
+        };
+        split_leftovers[j] = Some((gm.clone(), gp.clone(), leftover));
+    }
+    // A hunk is covered iff balanced and every pair sits in a group.
+    let covered_hunk: Vec<bool> = hunk_balanced
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            *b && pairs.iter().filter(|(j, _, _)| *j == i).all(|(_, m, p)| {
+                parse_macro_interior_pair(m, p).is_some_and(|(gm, gp)| {
+                    passing.iter().any(|(g, _)| g.key.0 == gm && g.key.1 == gp)
+                })
+            })
+        })
+        .collect();
+    // WI-1b ranged bodies per group when spans are disjoint and ≤64;
+    // overlapping groups share the sweep dummy (SPEC 10.6).
+    let mut spans: Vec<Option<(usize, usize)>> = Vec::new();
+    for (g, _) in &passing {
+        if g.sites.contains(&0) {
+            spans.push(None);
+            continue;
+        }
+        let min = g.sites.iter().min().copied().unwrap_or(0);
+        let max = g.sites.iter().max().copied().unwrap_or(0);
+        if min >= 1 && max.saturating_sub(min).saturating_add(1) <= 64 {
+            spans.push(Some((min, max)));
+        } else {
+            spans.push(None);
+        }
+    }
+    let mut overlap = vec![false; passing.len()];
+    for a in 0..spans.len() {
+        for b in (a + 1)..spans.len() {
+            if let (Some((a0, a1)), Some((b0, b1))) = (spans[a], spans[b]) {
+                if a0 <= b1 && b0 <= a1 {
+                    overlap[a] = true;
+                    overlap[b] = true;
+                }
+            }
+        }
+    }
+    let bodies: Vec<String> = passing
+        .iter()
+        .enumerate()
+        .map(|(gi, (g, rule))| {
+            if overlap[gi] || spans[gi].is_none() {
+                format!(
+                    "@@ -1,1 @@ rule={rule}\n# sweep\n- {}\n+ {}\n",
+                    g.minus, g.plus
+                )
+            } else {
+                format!(
+                    "{}- {}\n+ {}\n",
+                    crate::emission_body(rule, &g.sites),
+                    g.minus,
+                    g.plus
+                )
+            }
+        })
+        .collect();
+    // T375 over the covered set, joined leftovers counted both sides
+    // (verbatim precedent: the fallback would emit the whole hunk, so
+    // the joined bytes join the guard on both sides).
+    let covered_len: usize = hunks
+        .iter()
+        .zip(&covered_hunk)
+        .filter(|(_, b)| **b)
+        .map(|(h, _)| h.len())
+        .sum();
+    let joined_orig_len: usize = hunks
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| split_leftovers[*i].is_some())
+        .map(|(_, h)| h.len())
+        .sum();
+    let leftover_len: usize = split_leftovers
+        .iter()
+        .flatten()
+        .map(|(_, _, s)| s.len())
+        .sum();
+    if bodies.iter().map(|b| b.len()).sum::<usize>() + leftover_len >= covered_len + joined_orig_len
+    {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // Emit each group's hunk at its first covered or joined hunk;
+    // split insertions and ordinary hunks stay in place.
+    let mut out = prelude;
+    let mut emitted = vec![false; passing.len()];
+    for (i, hunk) in hunks.iter().enumerate() {
+        let holds_pair = |(g, _): &(InteriorGroup, String)| {
+            pairs.iter().any(|(j, m, p)| {
+                *j == i
+                    && parse_macro_interior_pair(m, p)
+                        .as_ref()
+                        .is_some_and(|(gm, gp)| *gm == g.key.0 && *gp == g.key.1)
+            }) || split_leftovers[i]
+                .as_ref()
+                .is_some_and(|(gm, gp, _)| *gm == g.key.0 && *gp == g.key.1)
+        };
+        if covered_hunk[i] || split_leftovers[i].is_some() {
+            for (gi, g) in passing.iter().enumerate() {
+                if !emitted[gi] && holds_pair(g) {
+                    out.push_str(&bodies[gi]);
+                    emitted[gi] = true;
+                }
+            }
+            if let Some((_, _, leftover)) = &split_leftovers[i] {
+                out.push_str(leftover);
+            }
+            continue;
+        }
+        out.push_str(hunk);
+    }
+    Some(out)
+}
+
+/// Parse a `-`/`+` line pair as a same-name concrete macro interior:
+/// both sides render (via the rename sweep's `parse_macro_expr` —
+/// whole-line invocations and `let`-init unwraps, `let-else` never) to
+/// one identical path with paren delimiters and a body delta. Returns
+/// the rendered `(minus, plus)` invocation pair (`path!(args)`). `None`
+/// for renames (name delta — the rename sweep owns those), bracket /
+/// brace interiors (the engine's interior-change splice normalizes to
+/// `!(...)`, probed corrupt — renames keep their delimiter-exact path
+/// splice), leading-`::`/generic paths (no engine spelling), and
+/// identical bodies (no change).
+fn parse_macro_interior_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
+    let o_mac = parse_macro_expr(old_line)?;
+    let n_mac = parse_macro_expr(new_line)?;
+    if !matches!(o_mac.mac.delimiter, syn::MacroDelimiter::Paren(_))
+        || !matches!(n_mac.mac.delimiter, syn::MacroDelimiter::Paren(_))
+    {
+        return None;
+    }
+    let old_path = macro_path(&o_mac)?;
+    let new_path = macro_path(&n_mac)?;
+    if old_path != new_path {
+        return None;
+    }
+    let old_args = o_mac.mac.tokens.to_string();
+    let new_args = n_mac.mac.tokens.to_string();
+    if old_args == new_args {
+        return None;
+    }
+    Some((
+        format!("{old_path}!({old_args})"),
+        format!("{new_path}!({new_args})"),
+    ))
+}
+
+/// Spell an interior pair with the first site's raw argument text
+/// (original spacing) instead of the token-normalized grouping key.
+/// Falls back to the normalized pair when the raw slice fails (never
+/// expected — both lines parsed — but emission must never go loud on
+/// a rendering detail).
+fn emit_pair(
+    minus_evidence: &str,
+    plus_evidence: &str,
+    norm_minus: &str,
+    norm_plus: &str,
+) -> (String, String) {
+    let fallback = || (norm_minus.to_string(), norm_plus.to_string());
+    let (Some(o_mac), Some(n_mac)) = (
+        parse_macro_expr(minus_evidence),
+        parse_macro_expr(plus_evidence),
+    ) else {
+        return fallback();
+    };
+    let (Some(o_path), Some(n_path)) = (macro_path(&o_mac), macro_path(&n_mac)) else {
+        return fallback();
+    };
+    if o_path != n_path {
+        return fallback();
+    }
+    let (Some(o_args), Some(n_args)) = (
+        macro_raw_args(minus_evidence),
+        macro_raw_args(plus_evidence),
+    ) else {
+        return fallback();
+    };
+    (
+        format!("{o_path}!({o_args})"),
+        format!("{n_path}!({n_args})"),
+    )
+}
+
+/// The raw argument text between a line's macro-invocation parens:
+/// everything after the first `(` past `!` up to the final `)` (mod a
+/// trailing `;`). Exact because the line parsed as a complete
+/// invocation — nothing trails the close paren but `;`/whitespace —
+/// so interior `)` inside strings cannot mislead the `rfind`.
+fn macro_raw_args(line: &str) -> Option<String> {
+    let bang = line.find('!')?;
+    let after = &line[bang + 1..];
+    let open = after.find('(')?;
+    let mut inner = after[open + 1..].trim_end();
+    inner = inner.strip_suffix(';').unwrap_or(inner).trim_end();
+    Some(inner.strip_suffix(')')?.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;
@@ -464,5 +916,166 @@ mod tests {
         assert!(!out.contains('`'), "no backticks expected, got: {out}");
         assert!(out.contains("- crate::Old!(...)\n"), "got: {out}");
         assert!(out.contains("+ crate::New!(...)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_interior_fires() {
+        // WI-9a: two identical same-name interior pairs compress to one
+        // concrete `# allow=many` hunk (plain `!` routing, no `# macro`
+        // directive). Tokens render normalized; the engine replays them
+        // byte-exact (validated_live).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=r1"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(!out.contains("# macro"), "plain routing, got: {out}");
+        assert!(
+            out.contains("- assert_eq!(out.rsmpl, TEXT_SECTION)\n"),
+            "raw spelling, got: {out}"
+        );
+        assert!(
+            out.contains("+ assert_eq!(out.rsmpl, TEXT_STRIPPED)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn macro_interior_qualified_fires() {
+        // Same-name qualified interiors share the uniform-class rule:
+        // exact rendered path, one group.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::check!(first_value);\n-    crate::check!(first_value);\n+    crate::check!(second_value);\n+    crate::check!(second_value);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::check!(first_value);\n    crate::check!(first_value);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- crate::check!"), "got: {out}");
+        assert!(out.contains("+ crate::check!"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_interior_let_wrapped_fires() {
+        // `let`-wrapped evidence emits the bare macro pattern (T449
+        // precedent — the pattern shape is `NAME!(...)`, never `let`).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = same_mac!(1);\n-    let second_value = same_mac!(1);\n+    let first_value = same_mac!(2);\n+    let second_value = same_mac!(2);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_value = same_mac!(1);\n    let second_value = same_mac!(1);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- same_mac!(1)\n"), "got: {out}");
+        assert!(out.contains("+ same_mac!(2)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_interior_single_site_stays_passthrough() {
+        // N=1 never pays (T375 + the N≥2 gate).
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_interior_rename_divergent_stays_passthrough() {
+        // Name delta + body delta is neither rename (bodies differ) nor
+        // interior (names differ) — stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_mac!(first_value);\n-    old_mac!(first_value);\n+    new_mac!(second_value);\n+    new_mac!(second_value);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_interior_bracket_stays_passthrough() {
+        // Bracket interiors would normalize to `!(...)` (probed corrupt)
+        // — the paren-only gate keeps them ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    my_vec![1, 2];\n-    my_vec![1, 2];\n+    my_vec![1, 3];\n+    my_vec![1, 3];\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_interior_extra_site_vetoes() {
+        // A third untouched `assert_eq!(out.rsmpl, TEXT_SECTION)` in the
+        // pre-image would also match the concrete minus — totality vetoes.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn macro_interior_partial_hunk_vetoes() {
+        // aa23c77 soundness (hunk atomicity): a hunk mixing a repeated
+        // pair (`move_big`, grouped elsewhere) with a singleton
+        // (`move_one`, no group) stays fully ordinary — emitting the
+        // group hunk alongside the leftover ordinary hunk would rewrite
+        // the shared line twice (GIT_HUNK_CONFLICT "overlapping edits
+        // cannot be merged").
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    assert!(text.contains(\"rule=move_big\"), \"got\");\n-    assert!(text.contains(\"rule=move_one\"), \"got\");\n+    assert!(text.contains(\"rule=r1\"), \"got\");\n+    assert!(text.contains(\"rule=r1\"), \"got\");\n }\n@@ -6,2 +6,2 @@\n fn n() {\n-    assert!(text.contains(\"rule=move_big\"), \"got\");\n-    other_call_site();\n+    assert!(text.contains(\"rule=r1\"), \"got\");\n+    other_call_site();\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    assert!(text.contains(\"rule=move_big\"), \"got\");\n    assert!(text.contains(\"rule=move_one\"), \"got\");\n}\nfn n() {\n    assert!(text.contains(\"rule=move_big\"), \"got\");\n    other_call_site();\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn macro_interior_stranded_join_fires() {
+        // Bench-18 shape: one balanced pair plus one unbalanced hunk
+        // (minus + first-plus match, pure-insertion tail) join to N=2;
+        // the tail stays an ordinary insertion.
+        let raw = section(
+            "f.rs",
+            "@@ -6,1 +6,1 @@\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n@@ -10,1 +10,2 @@\n-    assert_eq!(out.rsmpl, TEXT_SECTION);\n+    assert_eq!(out.rsmpl, TEXT_STRIPPED);\n+fn extra_tail() {}\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn alpha() {}\nfn beta() {}\nfn gamma() {}\nfn delta() {}\nfn check_one() {\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n}\nfn epsilon() {}\nfn check_two() {\n    assert_eq!(out.rsmpl, TEXT_SECTION);\n}\n",
+        )]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=r1"), "got: {out}");
+        assert!(out.contains("assert_eq!(out.rsmpl"), "got: {out}");
+        assert!(
+            out.contains("+fn extra_tail() {}"),
+            "tail stays, got: {out}"
+        );
     }
 }

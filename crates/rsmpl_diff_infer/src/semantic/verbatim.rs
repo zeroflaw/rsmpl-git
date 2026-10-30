@@ -542,7 +542,7 @@ pub(crate) fn try_verbatim_sweep(
 /// the hunk is not exactly that shape (fail safe — the caller vetoes
 /// the sweep). The consumed first plus is identical text to the sweep
 /// rewrite, so the byte order is exact either way.
-fn split_leftover_insertion(hunk: &str) -> Option<String> {
+pub(crate) fn split_leftover_insertion(hunk: &str) -> Option<String> {
     let mut lines = hunk.lines();
     let header = lines.next()?;
     let mut parts = header.split_whitespace();
