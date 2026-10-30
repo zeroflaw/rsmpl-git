@@ -310,16 +310,23 @@ fn run() -> Result<(), CliError> {
         }
     }
 
-    // WI-6b1: a patch with `# follow=uses` searches the whole workspace.
-    // Load every other repo `.rs` file (sorted) so the engine can rewrite
-    // cross-file uses; unreadable files warn and are skipped (the engine
-    // tripwire still vetoes when an unparseable file may name the ident).
+    // WI-6b1 + WI-7c: a patch with `# follow=uses` or a plain fn/item
+    // rename searches the whole workspace. Follow rewrites cross-file
+    // uses; orphan scans only report them. Unreadable files warn and are
+    // skipped (the engine tripwire still vetoes when an unparseable file
+    // may name the ident).
     let mut extra_order: Vec<String> = Vec::new();
-    let needs_workspace = patch
-        .files
-        .iter()
-        .flat_map(|s| &s.hunks)
-        .any(|h| matches!(h, rsmpl_patch::Hunk::Rsmpl(rh) if rh.follows_uses()));
+    let needs_workspace = patch.files.iter().flat_map(|s| &s.hunks).any(|h| match h {
+        rsmpl_patch::Hunk::Rsmpl(rh) => {
+            rh.follows_uses()
+                || matches!(
+                    rsmpl_pattern::compile(rh).map(|c| c.kind),
+                    Ok(rsmpl_pattern::PatternKind::Fn { .. }
+                        | rsmpl_pattern::PatternKind::ItemRename { .. })
+                )
+        }
+        rsmpl_patch::Hunk::Ordinary(_) => false,
+    });
     let mut follow_report: Option<(usize, &'static str)> = None;
     if needs_workspace {
         let (workspace_files, source) = workspace_rs_files_with_source(&cli.repo);
@@ -536,6 +543,9 @@ fn run() -> Result<(), CliError> {
         })?;
     }
 
+    // WI-7c: orphan context for `--verify build` failures (first
+    // diagnostic names the breakage the report already lists).
+    let orphans_hint = orphan_hint(&report);
     if cli.format == Format::Json {
         // WI-2a: tracks whether `--verify build` actually ran so the
         // success payload can carry additive `"build": "pass"`.
@@ -555,6 +565,7 @@ fn run() -> Result<(), CliError> {
                         &rename_from,
                         &is_symlink,
                         &patch,
+                        orphans_hint.as_deref(),
                     )?;
                     build_passed = true;
                 }
@@ -566,7 +577,7 @@ fn run() -> Result<(), CliError> {
             // WI-2a `--verify build`: post-apply run; failure names the
             // applied state explicitly (`applied: true` in JSON).
             if cli.verify.as_deref() == Some("build") {
-                run_verify_build(&cli.repo)?;
+                run_verify_build_with_orphans(&cli.repo, orphans_hint.as_deref())?;
                 build_passed = true;
             }
         }
@@ -596,6 +607,14 @@ fn run() -> Result<(), CliError> {
                 if let Some(skipped) = &r.follow_skipped {
                     entry["follow_skipped"] = serde_json::json!(skipped);
                 }
+                // WI-7c: report-only orphan evidence, capped like bindings.
+                if !r.orphans.is_empty() {
+                    let (orphans_val, orphans_trunc) = orphans_json(&r.orphans);
+                    entry["orphans"] = orphans_val;
+                    if orphans_trunc > 0 {
+                        entry["orphans_truncated"] = serde_json::json!(orphans_trunc);
+                    }
+                }
                 entry
             }).collect::<Vec<_>>(),
             "files": changed.iter().map(|(path, added, removed, post_sha)| serde_json::json!({
@@ -608,9 +627,9 @@ fn run() -> Result<(), CliError> {
             "checked": {"lowering": true, "semantics": true, "build": build_status},
             "history": history_display,
         });
-        // WI-7a: workspace provenance for `# follow=uses` runs (additive
-        // within v2): how many files were searched and where the set came
-        // from. Absent when the patch carries no follow hunk.
+        // WI-7a + WI-7c: workspace provenance whenever the workspace
+        // was searched (follow rewrites or orphan scans; additive
+        // within v2). Absent when the patch needed no workspace search.
         if let Some((n, source)) = follow_report {
             payload["follow_files"] = serde_json::json!(n);
             payload["follow_source"] = serde_json::json!(source);
@@ -666,10 +685,14 @@ fn run() -> Result<(), CliError> {
                 &rename_from,
                 &is_symlink,
                 &patch,
+                orphans_hint.as_deref(),
             )?;
             eprintln!("check: lowered patch applies cleanly; build check passed (temp copy, worktree untouched)");
         } else {
             eprintln!("check: lowered patch applies cleanly");
+        }
+        if let Some(line) = orphan_text_line(&report) {
+            eprintln!("{line}");
         }
         return Ok(());
     }
@@ -680,12 +703,15 @@ fn run() -> Result<(), CliError> {
     // WI-2a `--verify build`: post-apply run; failure keeps the patch
     // applied and reports `applied: true` in JSON.
     if cli.verify.as_deref() == Some("build") {
-        run_verify_build(&cli.repo)?;
+        run_verify_build_with_orphans(&cli.repo, orphans_hint.as_deref())?;
     }
     // Single source of truth (T65): diff-based `changed` (old-vs-new
     // contents differ), the same set JSON reports as `files[].path`.
     let names: Vec<&str> = changed.iter().map(|(p, _, _, _)| p.as_str()).collect();
     eprintln!("applied {} file(s): {}", names.len(), names.join(", "));
+    if let Some(line) = orphan_text_line(&report) {
+        eprintln!("{line}");
+    }
     Ok(())
 }
 
@@ -837,18 +863,94 @@ fn sites_json(sites: &[rsmpl_engine::SiteReport]) -> (serde_json::Value, usize) 
     (serde_json::Value::Array(arr), omitted_total)
 }
 
-/// WI-2a `--verify build`: `cargo check --quiet` in `repo` after a
-/// successful apply. Failure exits 2 with the first `error` diagnostic
-/// line (the patch stays applied — the agent decides the next step;
+/// WI-2a + WI-7c `--verify build`: `cargo check --quiet` in `repo`
+/// after a successful apply, with orphan context — the first diagnostic
+/// names the `file:line` breakage the report already lists. Failure
+/// exits 2 (the patch stays applied — the agent decides the next step;
 /// JSON carries `applied: true`).
-fn run_verify_build(repo: &std::path::Path) -> Result<(), CliError> {
+fn run_verify_build_with_orphans(
+    repo: &std::path::Path,
+    orphans: Option<&str>,
+) -> Result<(), CliError> {
     match run_verify_build_in(repo) {
         Ok(()) => Ok(()),
-        Err(short) => Err(CliError::verify(
-            format!("--verify build: {short} (patch stays applied)"),
-            true,
-        )),
+        Err(short) => {
+            let ctx = orphans.map_or(String::new(), |o| format!(" [{o}]"));
+            Err(CliError::verify(
+                format!("--verify build: {short}{ctx} (patch stays applied)"),
+                true,
+            ))
+        }
     }
+}
+
+/// WI-7c: token-bounded orphan evidence (SPEC D.2). Max 8 entries per
+/// rule, each `text` truncated to 80 chars. Returns the JSON array plus
+/// the omitted-entry count (`orphans_truncated`).
+fn orphans_json(orphans: &[rsmpl_engine::OrphanReport]) -> (serde_json::Value, usize) {
+    const MAX_ORPHANS: usize = 8;
+    const MAX_CHARS: usize = 80;
+    let mut arr = Vec::with_capacity(orphans.len().min(MAX_ORPHANS));
+    for o in orphans.iter().take(MAX_ORPHANS) {
+        let text: String = o.text.chars().take(MAX_CHARS).collect();
+        arr.push(serde_json::json!({"file": o.file, "line": o.line, "text": text}));
+    }
+    let omitted = orphans.len().saturating_sub(arr.len());
+    (serde_json::Value::Array(arr), omitted)
+}
+
+/// WI-7c: short `file:line` hint (first 3 orphans) for `--verify build`
+/// failure reasons.
+fn orphan_hint(report: &rsmpl_engine::ApplyReport) -> Option<String> {
+    let mut items: Vec<String> = Vec::new();
+    for r in &report.rules {
+        for o in &r.orphans {
+            items.push(format!("{}:{}", o.file, o.line));
+            if items.len() >= 3 {
+                break;
+            }
+        }
+        if items.len() >= 3 {
+            break;
+        }
+    }
+    if items.is_empty() {
+        None
+    } else {
+        Some(format!("orphans: {}", items.join(", ")))
+    }
+}
+
+/// WI-7c: one stderr line for text mode (same 8-entry / 80-char caps).
+fn orphan_text_line(report: &rsmpl_engine::ApplyReport) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut total = 0usize;
+    for r in &report.rules {
+        for o in r.orphans.iter().take(8) {
+            let text: String = o.text.chars().take(80).collect();
+            parts.push(format!("{}:{}: {text}", o.file, o.line));
+            total += 1;
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let extra: usize = report
+        .rules
+        .iter()
+        .map(|r| r.orphans.len())
+        .sum::<usize>()
+        .saturating_sub(total);
+    let tail = if extra > 0 {
+        format!(" (+{extra} more)")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "orphans: {} use(s) left behind: {}{tail}",
+        total + extra,
+        parts.join("; ")
+    ))
 }
 
 /// Core `cargo check --quiet` probe in `dir`: `Ok` on success, `Err(short)`
@@ -886,6 +988,7 @@ fn verify_in_temp_copy(
     rename_from: &std::collections::HashMap<String, String>,
     is_symlink: &std::collections::HashSet<String>,
     patch: &rsmpl_patch::Patch,
+    orphans: Option<&str>,
 ) -> Result<(), CliError> {
     let tmp = materialize_verify_tree(repo, updated, changed, rename_from, is_symlink, patch)?;
     let result = run_verify_build_in(&tmp);
@@ -898,10 +1001,13 @@ fn verify_in_temp_copy(
     }
     match result {
         Ok(()) => Ok(()),
-        Err(short) => Err(CliError::verify(
-            format!("--verify build: {short} (worktree untouched; verified in temp copy)"),
-            false,
-        )),
+        Err(short) => {
+            let ctx = orphans.map_or(String::new(), |o| format!(" [{o}]"));
+            Err(CliError::verify(
+                format!("--verify build: {short}{ctx} (worktree untouched; verified in temp copy)"),
+                false,
+            ))
+        }
     }
 }
 

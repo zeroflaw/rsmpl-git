@@ -2288,6 +2288,19 @@ Nested definitions must be re-exported with the full file-derived path
 vetoed — without module-tree resolution a longer path may name a
 different nested module.
 
+Orphan evidence (WI-7c): every definition-only fn/item rename runs the
+same syntactic index in report-only mode. The JSON rule entry gains
+`orphans: [{file, line, text}]` (one entry per stale-use line, sorted by
+`file`/`line`, `text` is the trimmed source line) plus
+`orphans_truncated` when more than 8 lines name the old ident (each
+`text` truncated to 80 chars). Opaque macro/attribute/`qself` lines
+count as orphans; unparseable files are excluded (the tripwire above
+owns them). `--check` stays green — the rename may be intentional —
+and text mode prints one `orphans:` stderr line. With `--verify build`
+the first diagnostic names the first orphan `file:line` alongside the
+`applied` flag. A `# follow=uses` hunk never carries `orphans` (its
+uses rewrite; `follow_skipped` owns that signal).
+
 Out of scope in v0.1: non-`.rs` files are never searched; symlinked
 files/dirs are skipped; a workspace `.rs` file that does not parse trips a
 fail-loud tripwire when its text names the ident outside strings/comments
@@ -5845,17 +5858,24 @@ prints one JSON object to stdout:
   changes); `diff_shown` is the line count of the reported `diff` string
   (`0` when omitted or no changes). JSON consumers size the next budget
   as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
-- `follow_files`/`follow_source` report the `# follow=uses` workspace
-  search set (Section 14.8): the count of `.rs` files in the set and
-  `"git"` (tracked + untracked-but-not-ignored) or `"walk"` (lexical
-  fallback outside a worktree). Present only when the patch carries a
-  follow hunk; additive keys that do not bump `version`.
+- `follow_files`/`follow_source` report the workspace search set
+  (Section 14.8): the count of `.rs` files in the set and `"git"`
+  (tracked + untracked-but-not-ignored) or `"walk"` (lexical fallback
+  outside a worktree). Present whenever the patch needed a workspace
+  search (`# follow=uses` rewrites or plain-rename orphan scans);
+  additive keys that do not bump `version`.
+- Per-rule `orphans` reports definition-only rename fallout
+  (Section 14.8): `[{file, line, text}]` plus `orphans_truncated`
+  when more than 8 lines name the old ident (each `text` truncated to
+  80 chars); absent when no use names the old ident. Additive within
+  `version: 2`.
 - `version` is the JSON report schema version (`2` = this contract:
   `checked` object, `sites`-only evidence, `follow_skipped` key; `v1`
   had boolean `check`, first-site `bindings`, and `verified`). Agents
   pin parsing on it; any future breaking JSON change bumps it
   (additive keys like `history`, `post_sha`, `sites_truncated`,
-  `follow_files`, `follow_source` do not bump).
+  `follow_files`, `follow_source`, `orphans`, `orphans_truncated`
+  do not bump).
 - `checked` is the trust envelope: `{lowering, semantics, build}` on
   every successful run, each computed by a check that can fail on real
   input (never true by construction). `lowering` is the `git apply
@@ -5873,8 +5893,9 @@ prints one JSON object to stdout:
   post-images into a temp copy of `--repo` (tree copied minus `.git`,
   `target`, `.history`; symlinks recreated, never followed) and runs
   `cargo check --quiet` there; the worktree stays byte-identical and
-  failure exits 2 with `"applied": false`. Success reports
-  `"build": "pass"` inside `checked`.
+  failure exits 2 with `"applied": false`. When the report carries
+  `orphans`, the reason appends the first orphan `file:line` entries
+  in brackets. Success reports `"build": "pass"` inside `checked`.
   Empty lowerings skip verification. Any other `--verify` value is an
   `RSMPL_IO_CONFLICT` usage error.
 - `history` is the `<repo>/.history/{id}.rsmpl` archive path of the raw

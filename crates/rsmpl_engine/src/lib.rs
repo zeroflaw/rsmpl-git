@@ -28,6 +28,7 @@ mod plan;
 mod postcheck;
 mod suggest;
 mod use_graph;
+mod use_graph_orphan;
 mod validate;
 
 use std::collections::HashMap;
@@ -48,7 +49,7 @@ pub struct RuleReport {
     pub rule: String,
     pub file: String,
     pub matches: usize,
-    /// Original-source 1-based inclusive `[start, end]` line spans, one per
+    /// Original-source 1-based inclusive `[start, end]` line ranges, one per
     /// emitted edit in application order. Ident/call/cut/paste rewrites emit
     /// one edit per match (`spans.len() == matches` holds there, empty when
     /// no match); signature-evolution replacements emit one span per edit
@@ -62,6 +63,18 @@ pub struct RuleReport {
     /// `# fallback=syntax` skip notes from `# follow=uses` hunks (SPEC
     /// 14.8): `; `-joined, present only when sites were skipped.
     pub follow_skipped: Option<String>,
+    /// Report-only orphan evidence (WI-7c, SPEC 14.8): same-name uses a
+    /// definition-only rename leaves behind. Never fails the run.
+    pub orphans: Vec<OrphanReport>,
+}
+
+/// One orphaned use site (WI-7c): repo-relative `file`, 1-based `line`,
+/// and the trimmed source `text` of that line.
+#[derive(Debug, Clone, Default)]
+pub struct OrphanReport {
+    pub file: String,
+    pub line: u32,
+    pub text: String,
 }
 
 /// One emitted edit's evidence (WI-2b): its span plus its own bindings,

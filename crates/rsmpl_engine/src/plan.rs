@@ -22,6 +22,7 @@ use crate::lines::{FileState, LineIndex};
 use crate::postcheck::{noop_sweep_error, sweep_edits_are_noop, sweep_hunk_needs_postcheck};
 use crate::suggest::candidate_preview;
 use crate::use_graph::follow_uses_workspace;
+use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{
     matcher_expr, matcher_fn, matcher_general, matcher_impl, matcher_item, matcher_macro,
@@ -59,6 +60,15 @@ fn apply_inner(
         .iter()
         .flat_map(|s| &s.hunks)
         .any(|h| matches!(h, Hunk::Rsmpl(rh) if rh.follows_uses()));
+    // WI-7c: plain renames need the same workspace for the report-only
+    // orphan index (compile-probe; failures validate later as usual).
+    let patch_has_rename = patch.files.iter().flat_map(|s| &s.hunks).any(|h| match h {
+        Hunk::Rsmpl(rh) => matches!(
+            rsmpl_pattern::compile(rh).map(|c| c.kind),
+            Ok(PatternKind::Fn { .. } | PatternKind::ItemRename { .. })
+        ),
+        Hunk::Ordinary(_) => false,
+    });
     let mut states: HashMap<String, FileState> = HashMap::new();
     // Files that look like Rust but do not parse: the follow step applies
     // the `raw_mentions` tripwire (veto/skip when the text names `old`).
@@ -100,11 +110,12 @@ fn apply_inner(
             },
         );
     }
-    if patch_has_follow {
+    if patch_has_follow || patch_has_rename {
         // Workspace file set: every other loaded `.rs` file is searchable.
         // Parsed files join `states` (empty edit lists below); unparseable
         // ones are recorded for the follow-step tripwire. Non-`.rs` files
         // are never searched (SPEC 14.8). Sorted for deterministic reports.
+        // WI-7c: plain renames load the set for the orphan index too.
         let mut extra: Vec<String> = files
             .keys()
             .filter(|p| !states.contains_key(*p) && p.ends_with(".rs"))
@@ -268,6 +279,7 @@ fn apply_inner(
                     spans: vec![(sl, el)],
                     sites: Vec::new(),
                     follow_skipped: None,
+                    orphans: Vec::new(),
                 },
             ));
         }
@@ -442,6 +454,41 @@ fn apply_inner(
                             });
                         }
                     }
+                    // WI-7c: plain renames report the uses they leave behind.
+                    // Follow hunks never carry orphans (uses rewrite there).
+                    let orphans = if !rh.follows_uses() && found > 0 {
+                        match &compiled.kind {
+                            PatternKind::Fn { minus_name, .. }
+                            | PatternKind::ItemRename { minus_name, .. } => {
+                                let renamed: Vec<(usize, usize)> = file_edits
+                                    .get(path)
+                                    .map(|v| {
+                                        v[edits_before..].iter().map(|e| (e.start, e.end)).collect()
+                                    })
+                                    .unwrap_or_default();
+                                let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> =
+                                    Vec::new();
+                                let mut paths: Vec<&String> = states.keys().collect();
+                                paths.sort();
+                                for p in paths {
+                                    if let Some(st) = states.get(p) {
+                                        if let Some(parsed) = st.parsed.as_ref() {
+                                            refs.push((
+                                                p.clone(),
+                                                parsed,
+                                                st.original.as_str(),
+                                                &st.index,
+                                            ));
+                                        }
+                                    }
+                                }
+                                collect_orphans(&refs, minus_name, path, &renamed)
+                            }
+                            _ => Vec::new(),
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     rule_order.push((
                         (sec_idx, hunk_idx),
                         RuleReport {
@@ -451,6 +498,7 @@ fn apply_inner(
                             spans,
                             sites,
                             follow_skipped,
+                            orphans,
                         },
                     ));
                     // WI-6b1: one follow-only entry per non-definition file
@@ -469,6 +517,7 @@ fn apply_inner(
                                 spans,
                                 sites: Vec::new(),
                                 follow_skipped: None,
+                                orphans: Vec::new(),
                             },
                         ));
                     }
@@ -1337,5 +1386,53 @@ mod tests {
             .collect::<Vec<_>>()
             .join(";");
         assert!(joined.contains("src/b.rs"), "report: {:?}", report.rules);
+    }
+
+    // WI-7c: plain renames report the uses they leave behind.
+
+    const XORPHAN_PATCH: &str = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,1 @@ rule=rename\n- struct Old\n+ struct New\n";
+
+    #[test]
+    fn plain_rename_reports_cross_file_orphans() {
+        let (files, report) = apply_multi_report(
+            XORPHAN_PATCH,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                (
+                    "src/b.rs",
+                    "use crate::Old;\nfn f(x: Old) -> Old {\n    Old\n}\n",
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(files["src/a.rs"], "pub struct New;\n");
+        assert!(files["src/b.rs"].contains("Old"), "orphans stay");
+        assert_eq!(report.rules.len(), 1);
+        let orphans = &report.rules[0].orphans;
+        assert_eq!(orphans.len(), 3, "orphans: {orphans:?}");
+        assert!(orphans.iter().all(|o| o.file == "src/b.rs"));
+        assert!(report.rules[0].follow_skipped.is_none());
+    }
+
+    #[test]
+    fn plain_rename_without_uses_reports_no_orphans() {
+        let (_, report) =
+            apply_multi_report(XORPHAN_PATCH, vec![("src/a.rs", "pub struct Old;\n")]).unwrap();
+        assert!(report.rules[0].orphans.is_empty());
+    }
+
+    #[test]
+    fn follow_hunk_carries_no_orphans() {
+        let (_, report) = apply_multi_report(
+            XFOLLOW_PATCH,
+            vec![
+                ("src/a.rs", "pub struct Old;\n"),
+                ("src/b.rs", "fn f(x: Old) -> Old {\n    x\n}\n"),
+            ],
+        )
+        .unwrap();
+        for r in &report.rules {
+            assert!(r.orphans.is_empty(), "follow rewrites: {r:?}");
+        }
     }
 }

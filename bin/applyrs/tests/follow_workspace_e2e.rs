@@ -139,13 +139,34 @@ fn non_git_dir_falls_back_to_walk() {
 
 #[test]
 fn non_follow_runs_carry_no_follow_keys() {
-    // Report minimalism: plain renames report no workspace provenance.
+    // WI-7c: plain renames run the orphan scan, so they report the same
+    // workspace provenance as follow runs (the search cost stays visible).
+    // Call-shape patches still report no workspace keys.
     let dir = init_repo();
     write(dir.path(), "src/a.rs", "pub struct Old;\n");
     let patch = "diff --git src/a.rs\n@@ -1,1 @@ rule=rename\n- struct Old\n+ struct New\n";
     let out = run_stdin(
         dir.path(),
         patch,
+        &["--format", "json", "--diff-max-lines", "0"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json_of(&out);
+    assert_eq!(v["follow_files"], 1, "got: {v}");
+    assert_eq!(v["follow_source"], "git", "got: {v}");
+    // No uses anywhere: no orphan evidence.
+    assert!(v["rules"][0].get("orphans").is_none(), "got: {v}");
+
+    // Non-rename shapes still skip the workspace search entirely.
+    let call_patch = "diff --git src/a.rs\n@@ -1,3 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
+    write(dir.path(), "src/a.rs", "fn a() {\n    foo(1);\n}\n");
+    let out = run_stdin(
+        dir.path(),
+        call_patch,
         &["--format", "json", "--diff-max-lines", "0"],
     );
     assert!(
