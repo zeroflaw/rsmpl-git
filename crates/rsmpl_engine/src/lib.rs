@@ -8,6 +8,7 @@
 
 #![allow(clippy::result_large_err)]
 
+mod canonical_tree;
 mod capture;
 mod edits;
 mod lines;
@@ -30,6 +31,7 @@ use std::collections::HashMap;
 use rsmpl_patch::Patch;
 use rsmpl_patch::StructuredError;
 
+pub use canonical_tree::canonicalize_with_tree;
 pub use edits::{apply_edits, TextEdit};
 pub use lines::LineIndex;
 pub use ordinary::ordinary_hunk_edits;

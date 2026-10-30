@@ -158,6 +158,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "rsmpl_diff",
+ "rsmpl_engine",
  "rsmpl_patch",
  "serde_json",
  "tempfile",

@@ -16,4 +16,5 @@ serde_json = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serde_json = { workspace = true }
+rsmpl_engine = { workspace = true }
 rsmpl_patch = { workspace = true }

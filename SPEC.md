@@ -6692,9 +6692,18 @@ envelope family (same as `applyrs`, Section D.2). JSON shape:
 ### D.5 Canonical form and lossless cycles
 
 Canonical RSmPL is what `diffrs` emits and what cycle comparisons
-compare: diet spelling (`# sweep`, inferred metavariables, terse
-renames), directives in fixed order, files in canonical order with
-hunks in document order, one hunk per detector class per file. Hunks keep
+compare: diet spelling (tight ranges or `# sweep`, inferred
+metavariables, terse renames), directives in fixed order, files in
+canonical order with hunks in document order, one hunk per detector
+class per file. Two comparators share this form: pure
+`rsmpl_patch::canonicalize` (parse → re-emit) preserves the authored
+locality spelling, while `rsmpl_engine::canonicalize_with_tree`
+matches every `allow == many` hunk against the pre-image tree and
+re-emits it under the range rule below (tight when its sites span at
+most 64 lines, else the `# sweep` dummy) — so an authored sweep and
+an inferred ranged hunk over the same sites share one form. Anchors,
+`allow == one` hunks, ordinary hunks, non-contained/file scopes, and
+hunks with no matched spans keep their authored ranges. Hunks keep
 document order rather than range-sorting: an insertion anchor at a
 range edge applies in document order (Section 20.2 — a paste at
 `(1,0)` plus an edit of `[1,1]` yields different trees when swapped,
@@ -6702,8 +6711,15 @@ probed via the 03-move-fn shape), so range-sorting would change
 application results. Emission
 range rule: if all sites of a class lie within one contiguous
 original range of at most 64 lines, emit that real range with
-`# allow=many` (no `# scope=file`); otherwise `# sweep`. Moves and
-deletes keep today's real ranges/anchors. Rule ids are `r1…` in
+`# allow=many` (no `# scope=file`); otherwise `# sweep` (dummy
+`@@ -1,1 @@`). Moves and deletes keep today's real ranges/anchors.
+Tree-aware comparison derives the same rule from matched spans: the
+union of a hunk's engine-reported site spans (`min` to `max`) decides
+— at most 64 lines cites that tight range, wider spreads become the
+sweep dummy; when the patch fails to apply (zero-match, overlap,
+unparseable target) comparison falls back to the pure form, and the
+tree legs of the harness still pin real breakage. Rule ids are `r1…`
+in
 canonical hunk order, except cross-file shared intents
 `rename_Old_to_New` (WI-7b), which keep their descriptive names —
 making the form deterministic: the same
@@ -6746,15 +6762,21 @@ Concretely (`rsmpl_patch::canonicalize`, parse → re-emit):
 Losslessness is judged on file trees plus canonical patches, never
 raw native bytes: the 0-context lowering cannot reproduce an
 arbitrary hand-written native patch byte-for-byte, and `index`/title
-stripping is deliberate. Two cycles close the contract:
+stripping is deliberate. Equalities per origin close the contract:
 
 - Native → semantic → native (state-lossless): applying the lowered
   native patch to the pre-tree yields a post-tree byte-identical to
   the true post-tree.
-- Semantic → native → semantic (canonical-lossless): re-diffing the
-  post-tree and re-inferring yields `S′` with `canonicalize(S′) ==
-  canonicalize(S)`, and one further iteration is a fixed point
+- Semantic → native → semantic, multi-site (canonical-lossless):
+  re-diffing the post-tree and re-inferring yields `S′` with
+  `canonicalize_with_tree(S′) == canonicalize_with_tree(S)` under the
+  pre-image, and one further iteration is a fixed point
   (`S″ == S′` byte-identical).
+- Semantic → native → semantic, single-site demoted by the T375
+  byte-win guard (defined equality, not an exclusion): the tree legs
+  hold and one further iteration is a fixed point (`S″ == S′`
+  byte-identical); no canonical equality is owed, since the inferred
+  side is deliberately ordinary.
 
 Corpus in scope: all applyrs fixtures (38), all diffrs fixtures
 (60), all example benches, plus the history_e2e pins. Out of scope
@@ -6762,22 +6784,22 @@ Corpus in scope: all applyrs fixtures (38), all diffrs fixtures
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
 
-Exclusions (WI-1d — canonical divergence the `cycle_e2e` harness
-pins, not bugs in the cycle itself): single-site semantic shapes
-demote to ordinary under the T375 byte-win guard (`01`, `04`, `06`,
-   `08`–`11`, `13`, `18`, `19`, `21`, `22`); multi-site shapes with no
-   detector yet stay ordinary (`25` qualified-path calls, `26` macro
-   renames — owned by WI-3); heterogeneous sites
-no template fires on stay ordinary (`12` statement sequences, `14`
-divergent single-file renames — cross-file shared deltas group under
-one `rename_Old_to_New` rule (WI-7b) with provenance `group`; divergent
-deltas and single-file repeats never share a rule, `24` divergent `let` shapes, `27`
-two-calls-per-line sites under line-oriented call totality, `30`
-trait decl/def pairs — owned by WI-4/WI-7); zero-edit optional
-(`05`) re-diffs to empty, which `canonicalize` rejects as
-unparseable. These are the only non-canonical cycles; every other
-corpus case is canonically lossless, and one further iteration is a
-byte-identical fixed point (`S″ == S′`) within a single diff mode.
+Exclusions (canonical divergence the `cycle_e2e` harness pins, not
+bugs in the cycle itself): single-site shapes under the defined
+single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
+`19`, `21`, `22`); spelled-differently multi-site shapes whose
+unification is owned elsewhere (`25` qualified-path call sweeps —
+`# symbol` vs inferred concrete paths, owned by WI-1b);
+heterogeneous sites no template fires on stay ordinary (`12` statement
+sequences — owned by WI-5, `24` divergent `let` shapes — owned by WI-5
+joint-let, `27` two-calls-per-line sites under line-oriented call
+totality — owned by WI-4, `14` divergent single-file renames whose
+deltas never share one intent, `30` trait decl/def pairs as WI-7
+grouping territory); zero-edit optional (`05`) re-diffs to empty,
+which `canonicalize` rejects as unparseable. These are the only
+non-tree-canonical cycles; every other corpus case is
+canonically lossless, and one further iteration is a byte-identical
+fixed point (`S″ == S′`) within a single diff mode.
 
 Cross-mode section order: pending mode appends untracked new-file
 sections after tracked ones while staged/rev flows are git-sorted

@@ -19,8 +19,15 @@
 //! `@@ -1,1 @@` — except zero-length insertion anchors, which ignore
 //! scope (SPEC 10.5) and keep their anchor verbatim.
 
+use std::collections::HashMap;
+
 use crate::model::*;
 use crate::parser::{collapse_git_header, parse_patch, ParseError};
+
+/// D.5 emission range rule: a multi-site hunk whose sites fit in this
+/// many original lines cites the tight range; wider spreads use the
+/// `# sweep` dummy.
+pub const TIGHT_RANGE_MAX_LINES: u32 = 64;
 
 /// Re-emit `patch_text` in canonical form (SPEC D.5).
 ///
@@ -29,11 +36,81 @@ use crate::parser::{collapse_git_header, parse_patch, ParseError};
 /// (fixed point, pinned by test).
 pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
     let mut patch = parse_patch(patch_text)?;
-    patch
-        .files
-        .sort_by(|a, b| a.target_path.cmp(&b.target_path));
-    // WI-7b: shared descriptive intents (`rename_Old_to_New` in ≥2 hunks)
-    // keep their names verbatim; everything else renumbers `r1…`.
+    order_files(&mut patch);
+    Ok(emit_canonical(&mut patch))
+}
+
+/// Tree-aware canonical form (SPEC D.5, WI-1a): like [`canonicalize`],
+/// but every `allow == many` hunk whose key `(target file, rule name)`
+/// has an entry in `spans` is re-emitted under the D.5 range rule —
+/// tight `@@ -min,len @@` with `# allow=many` when the union of its
+/// matched site spans fits in [`TIGHT_RANGE_MAX_LINES`] lines, else the
+/// `# sweep` dummy `@@ -1,1 @@`. This unifies the two spellings of one
+/// rewrite (authored sweep vs inferred ranged) for comparison.
+///
+/// `spans` values are original-coordinate inclusive `[start, end]` line
+/// spans, one per matched site (as reported by the engine). Hunks left
+/// untouched: zero-length insertion anchors (SPEC 10.5), `allow == one`
+/// hunks, ordinary hunks, non-contained/file scopes (`anchor`/`overlap`/
+/// `exact` ranges are load-bearing for matching), and keys with no
+/// spans (zero-match `# optional`, unapplied trees).
+pub fn canonicalize_with_spans(
+    patch_text: &str,
+    spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+) -> Result<String, ParseError> {
+    let mut patch = parse_patch(patch_text)?;
+    normalize_ranges_with_spans(&mut patch, spans);
+    order_files(&mut patch);
+    Ok(emit_canonical(&mut patch))
+}
+
+/// Apply the D.5 range rule to `allow == many` hunks with known spans.
+fn normalize_ranges_with_spans(
+    patch: &mut Patch,
+    spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+) {
+    for sec in &mut patch.files {
+        for hunk in &mut sec.hunks {
+            let Hunk::Rsmpl(r) = hunk else { continue };
+            if r.allow() != Allow::Many || r.header.old_len == 0 {
+                continue;
+            }
+            if !matches!(r.scope(), Scope::Contained | Scope::File) {
+                continue;
+            }
+            let key = (sec.target_path.clone(), r.rule_name());
+            let Some(sites) = spans.get(&key) else {
+                continue;
+            };
+            if sites.is_empty() {
+                continue;
+            }
+            let min_s = sites.iter().map(|(s, _)| *s).min().unwrap_or(1);
+            let max_e = sites.iter().map(|(_, e)| *e).max().unwrap_or(1);
+            if max_e < min_s {
+                continue;
+            }
+            let len = max_e - min_s + 1;
+            if len <= TIGHT_RANGE_MAX_LINES {
+                r.header.old_start = min_s;
+                r.header.old_len = len;
+                // Tight form: `# allow=many` alone (drop file scope).
+                r.directives
+                    .retain(|d| !matches!(d, Directive::Scope(Scope::File)));
+            } else {
+                r.header.old_start = 1;
+                r.header.old_len = 1;
+                if r.scope() != Scope::File {
+                    r.directives.push(Directive::Scope(Scope::File));
+                }
+            }
+        }
+    }
+}
+
+/// WI-7b shared intents: a `rename_*` rule occurring in ≥2 hunks
+/// keeps its name verbatim instead of renumbering to `rN`.
+fn shared_rule_names(patch: &Patch) -> std::collections::HashSet<String> {
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for sec in &patch.files {
         for hunk in &sec.hunks {
@@ -46,11 +123,20 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
             }
         }
     }
-    let shared: std::collections::HashSet<String> = counts
+    counts
         .into_iter()
         .filter(|(_, n)| *n >= 2)
         .map(|(r, _)| r)
-        .collect();
+        .collect()
+}
+
+fn order_files(patch: &mut Patch) {
+    patch
+        .files
+        .sort_by(|a, b| a.target_path.cmp(&b.target_path));
+    // WI-7b: shared descriptive intents (`rename_Old_to_New` in ≥2 hunks)
+    // keep their names verbatim; everything else renumbers `r1…`.
+    let shared = shared_rule_names(patch);
     // WI-7b definition-first file order for shared groups: path-sort,
     // then per shared label (sorted) stable-sort the containing file
     // subsequence definitions-first (item-header minus → definition).
@@ -88,6 +174,10 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
             patch.files[*slot] = snapshot[*src].clone();
         }
     }
+}
+
+fn emit_canonical(patch: &mut Patch) -> String {
+    let shared = shared_rule_names(patch);
     let mut out = String::new();
     if let Some(v) = &patch.version {
         out.push_str(&format!("#{v}\n"));
@@ -123,7 +213,7 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
             }
         }
     }
-    Ok(out)
+    out
 }
 
 /// True when file section `sec` holds an RSmPL hunk named `rule`.
@@ -337,8 +427,9 @@ fn canonical_directives(r: &RsmplHunk) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::canonicalize;
+    use super::{canonicalize, canonicalize_with_spans};
     use crate::parser::parse_patch;
+    use std::collections::HashMap;
 
     fn canon(text: &str) -> String {
         canonicalize(text).expect("canonicalize must succeed")
@@ -515,5 +606,110 @@ mod tests {
         let a = got.find("diff --git src/a.rs").expect("a.rs present");
         assert!(z < a, "definition z.rs must lead:\n{got}");
         assert_eq!(got, canon(&got), "shared-rule form must be fixed-point");
+    }
+
+    type SpanMap = HashMap<(String, String), Vec<(u32, u32)>>;
+    type SpanEntry<'a> = (&'a str, &'a str, Vec<(u32, u32)>);
+    fn spans(pairs: &[SpanEntry<'_>]) -> SpanMap {
+        pairs
+            .iter()
+            .map(|(f, r, v)| ((f.to_string(), r.to_string()), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn with_spans_sweep_tightens_to_union() {
+        // WI-1a: an authored sweep over two sites becomes the tight
+        // ranged form covering their union.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let got =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(2, 2), (5, 7)])]))
+                .unwrap();
+        assert!(
+            got.contains("@@ -2,6 @@ rule=r1\n# allow=many\n"),
+            "union 2..7 → len 6:\n{got}"
+        );
+        assert!(!got.contains("# sweep"), "got:\n{got}");
+    }
+
+    #[test]
+    fn with_spans_ranged_widens_to_sweep() {
+        // The reverse direction: a tight range whose sites actually
+        // spread past 64 lines becomes the sweep dummy.
+        let text = "diff --git src/lib.rs\n@@ -2,3 @@ rule=s\n# allow=many\n- foo(E0)\n+ bar(E0)\n";
+        let got = canonicalize_with_spans(
+            text,
+            &spans(&[("src/lib.rs", "s", vec![(2, 2), (100, 100)])]),
+        )
+        .unwrap();
+        assert!(got.contains("@@ -1,1 @@ rule=r1\n# sweep\n"), "got:\n{got}");
+    }
+
+    #[test]
+    fn with_spans_sixty_four_is_tight_sixty_five_is_sweep() {
+        // D.5 boundary: ≤64 lines tight, 65+ sweep.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let tight =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(1, 1), (64, 64)])]))
+                .unwrap();
+        assert!(tight.contains("@@ -1,64 @@"), "got:\n{tight}");
+        let wide =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(1, 1), (65, 65)])]))
+                .unwrap();
+        assert!(wide.contains("@@ -1,1 @@"), "got:\n{wide}");
+        assert!(wide.contains("# sweep"), "got:\n{wide}");
+    }
+
+    #[test]
+    fn with_spans_unknown_key_keeps_spelling() {
+        // No spans for this hunk (optional zero-match, unapplied tree):
+        // the authored locality survives verbatim.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let got =
+            canonicalize_with_spans(text, &spans(&[("src/other.rs", "s", vec![(2, 2)])])).unwrap();
+        assert!(got.contains("@@ -1,1 @@ rule=r1\n# sweep\n"), "got:\n{got}");
+    }
+
+    #[test]
+    fn with_spans_anchor_and_one_untouched() {
+        // Insertion anchors (SPEC 10.5) and allow=one hunks are never
+        // re-ranged: their coordinates are anchors, not search scopes.
+        let text = "diff --git src/lib.rs\n@@ -7,0 @@ rule=cut\n# scope=file\n# use=H\n+ H\ndiff --git src/other.rs\n@@ -3,9 @@ rule=one\n- foo(E0)\n+ bar(E0)\n";
+        let got = canonicalize_with_spans(
+            text,
+            &spans(&[
+                ("src/lib.rs", "cut", vec![(2, 2)]),
+                ("src/other.rs", "one", vec![(2, 2), (5, 5)]),
+            ]),
+        )
+        .unwrap();
+        assert!(got.contains("@@ -7,0 @@"), "anchor kept:\n{got}");
+        assert!(got.contains("@@ -3,9 @@"), "allow=one kept:\n{got}");
+    }
+
+    #[test]
+    fn with_spans_non_file_scope_untouched() {
+        // `anchor`/`overlap`/`exact` scopes are load-bearing for
+        // matching — only contained/file hunks normalize.
+        let text = "diff --git src/lib.rs\n@@ -2,3 @@ rule=s\n# allow=many\n# scope=anchor\n- foo(E0)\n+ bar(E0)\n";
+        let got = canonicalize_with_spans(
+            text,
+            &spans(&[("src/lib.rs", "s", vec![(10, 10), (12, 12)])]),
+        )
+        .unwrap();
+        assert!(got.contains("@@ -2,3 @@"), "got:\n{got}");
+        assert!(got.contains("# scope=anchor"), "got:\n{got}");
+    }
+
+    #[test]
+    fn with_spans_is_idempotent_under_pure_form() {
+        // Tree-aware output re-parses and is a pure-canonical fixed
+        // point (the normalized range is itself canonical).
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let once =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(2, 2), (5, 5)])]))
+                .unwrap();
+        parse_patch(&once).expect("tree-aware output must re-parse");
+        assert_eq!(once, canon(&once), "must be pure-canonical fixed point");
     }
 }

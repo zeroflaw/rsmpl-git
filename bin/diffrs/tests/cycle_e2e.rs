@@ -1,12 +1,14 @@
-//! WI-1c: S→N→S cycle harness over the full corpus.
+//! WI-1a: S→N→S cycle harness over the full corpus.
 //!
 //! The N→S→N leg (native → semantic → native, tree equality) is pinned
 //! by `fixtures_roundtrip.rs`, `history_e2e.rs`, and
 //! `bin/applyrs/tests/fixtures.rs`. This file pins the S→N→S leg
 //! (SPEC D.5): apply authored/emitted S to the pre-tree → post;
-//! `git diff -U0` pre→post → `diffrs` → S′; `canonicalize(S′) ==
-//! canonicalize(S)` for semantic cases (plain tree equality for
-//! ordinary cases); one more iteration asserts the fixed point
+//! `git diff -U0` pre→post → `diffrs` → S′;
+//! `canonicalize_with_tree(S′) == canonicalize_with_tree(S)` under the
+//! pre-image for semantic cases (tree-aware: authored sweep and inferred
+//! ranged spellings of the same sites compare equal; plain tree equality
+//! for ordinary cases); one more iteration asserts the fixed point
 //! `S″ == S′` byte-identical.
 //!
 //! Requires a workspace build so the sibling `applyrs` binary sits next
@@ -232,15 +234,18 @@ fn commit_all(dir: &Path, what: &str) {
 }
 
 /// Semantic cases whose re-inference is canonically lossless today:
-/// `canonicalize(S′) == canonicalize(S)`. WI-1d re-authored the diet
-/// family to canonical ranged diet, so each entry below asserts the
-/// fixed point with an already-canonical authored S.
+/// `canonicalize_with_tree(S′) == canonicalize_with_tree(S)` under the
+/// fixture pre-image. WI-1d re-authored the diet family to canonical
+/// ranged diet, so each entry below asserts the fixed point with an
+/// already-canonical authored S; WI-1a additionally unifies authored
+/// sweep vs inferred ranged spellings of the same sites.
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
     "15-use-rename",
     "16-repeat-fold",
     "17-scope-file",
+    "26-macro-sweep",
     "20-returns-none",
     "23-slot-sweep",
     "28-attrs-sweep",
@@ -330,10 +335,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "nodet: qualified-path call sweep vetoed, stays ordinary (WI-3)",
     ),
     (
-        "26-macro-sweep",
-        "nodet: macro rename stays ordinary (macro-rename detector is WI-3)",
-    ),
-    (
         "27-call-sweep",
         "hetero: two-calls-per-line sites stay ordinary (line-oriented call totality; WI-3/WI-4)",
     ),
@@ -342,6 +343,29 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "hetero: decl/def trait shapes stay ordinary",
     ),
 ];
+
+/// Load the fixture pre-image: repo-relative path → file text.
+/// Non-UTF-8 files are skipped (semantic compression is UTF-8 by
+/// construction; passthrough cycles stay tree-lossless).
+fn pre_image_of(repo_dir: &Path) -> std::collections::HashMap<String, String> {
+    let mut rels = Vec::new();
+    collect_files(repo_dir, repo_dir, &mut rels);
+    let mut map = std::collections::HashMap::new();
+    for rel in rels {
+        if let Ok(text) = std::fs::read_to_string(repo_dir.join(&rel)) {
+            map.insert(rel.to_string_lossy().replace('\\', "/"), text);
+        }
+    }
+    map
+}
+
+/// Tree-aware canonical form under `repo_dir` (SPEC D.5, WI-1a).
+fn tree_canonical_of(patch: &str, repo_dir: &Path, name: &str, which: &str) -> String {
+    let pre = pre_image_of(repo_dir);
+    rsmpl_engine::canonicalize_with_tree(patch, &pre).unwrap_or_else(|e| {
+        panic!("[{name}] canonicalize_with_tree({which}) failed: {e}\ninput:\n{patch}")
+    })
+}
 
 fn canonical_of(patch: &str, name: &str, which: &str) -> String {
     rsmpl_patch::canonicalize(patch)
@@ -412,24 +436,27 @@ fn applyrs_corpus_sns_cycle() {
             ));
             continue;
         }
-        // Canonical leg.
-        let cs = canonical_of(&s, &name, "S");
-        let cs_prime = canonical_of(&s_prime, &name, "S′");
+        // Canonical leg (WI-1a tree-aware: both sides compared under
+        // the fixture pre-image, so authored sweep and inferred ranged
+        // spellings of the same sites compare equal).
+        let repo_dir = dir.join("repo");
+        let cs = tree_canonical_of(&s, &repo_dir, &name, "S");
+        let cs_prime = tree_canonical_of(&s_prime, &repo_dir, &name, "S′");
         if CYCLE_OK.contains(&name.as_str()) {
             if cs != cs_prime {
                 failures.push(format!(
-                    "[{name}] CYCLE_OK but canonicalize(S′) != canonicalize(S)\n--- S ---\n{cs}\n--- S′ ---\n{cs_prime}"
+                    "[{name}] CYCLE_OK but tree-canonicalize(S′) != tree-canonicalize(S)\n--- S ---\n{cs}\n--- S′ ---\n{cs_prime}"
                 ));
             }
         } else if let Some((_, reason)) = KNOWN_DIVERGENT.iter().find(|(n, _)| *n == name) {
             if cs == cs_prime {
                 failures.push(format!(
-                    "[{name}] FIXED (was: {reason}): canonical forms now equal — move to CYCLE_OK"
+                    "[{name}] FIXED (was: {reason}): tree-canonical forms now equal — move to CYCLE_OK"
                 ));
             }
         } else {
             failures.push(format!(
-                "[{name}] UNCLASSIFIED canonical divergence (S {}B → S′ {}B)\n--- canonical(S) ---\n{cs}\n--- canonical(S′) ---\n{cs_prime}",
+                "[{name}] UNCLASSIFIED canonical divergence (S {}B → S′ {}B)\n--- tree-canonical(S) ---\n{cs}\n--- tree-canonical(S′) ---\n{cs_prime}",
                 s.len(),
                 s_prime.len()
             ));
