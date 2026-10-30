@@ -24,6 +24,11 @@ pub enum GeneralShape {
     Expr,
     /// A general Rust type (bounded engine variant set).
     Type,
+    /// WI-5c: a repeated-block statement sequence (2–4 `let` statements,
+    /// exact count both sides, no `...`/`# repeat`). Stored as
+    /// newline-joined single-statement templates; the engine matches K
+    /// consecutive `Block` statements with shared bindings.
+    Sequence,
 }
 
 /// Top-level pattern kind for a hunk side.
@@ -310,6 +315,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                 GeneralShape::Stmt => "general `let`-statement",
                 GeneralShape::Expr => "general-expression",
                 GeneralShape::Type => "general-type",
+                GeneralShape::Sequence => "general statement-sequence",
             },
             PatternKind::Fn { .. } => "function-item",
             PatternKind::ImplContext { impl_header } => {
@@ -449,6 +455,12 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
                     ..
                 } => {
                     "`# repeat` is not supported on type patterns in v1; emit one ordered hunk per nesting level"
+                }
+                PatternKind::General {
+                    shape: GeneralShape::Sequence,
+                    ..
+                } => {
+                    "`# repeat` is not supported on statement-sequence patterns in v1; emit one ordered hunk per nesting level"
                 }
                 _ => {
                     "`# repeat` requires a call/method-call or general-expression rewrite pattern (other shapes are future work)"
@@ -884,6 +896,112 @@ fn has_path_ellipsis(text: &str) -> bool {
     text.contains("::...") || text.contains("...::")
 }
 
+/// WI-5c sequence member: a plain `let` with an initializer, no
+/// attributes, no `let-else` diverge. The sequence arm matches members
+/// with the existing structural `match_local`; anything else stays
+/// outside the v1 sequence shape (C18).
+fn is_sequence_let(stmt: &syn::Stmt) -> bool {
+    match stmt {
+        syn::Stmt::Local(l) => {
+            l.attrs.is_empty() && l.init.as_ref().is_some_and(|i| i.diverge.is_none())
+        }
+        _ => false,
+    }
+}
+
+/// C18 for a minus that is sequence-shaped but whose plus side is not:
+/// the minus parses as K plain lets while the plus side has a different
+/// count or a non-`let` member. Same code as the generic C18 (one C-table
+/// row), with the admitted shape named.
+fn sequence_shape_err(k: usize) -> StructuredError {
+    StructuredError::new(
+        ErrorCode::PatternConflict,
+        format!(
+            "v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has {k} plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk"
+        ),
+    )
+    .with_repair(StructuredError::fix_pattern_repair(
+        "C18",
+        "write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk",
+    ))
+}
+
+/// WI-5c: compile a repeated-block statement sequence (2–4 plain `let`
+/// statements, exact count both sides) to `GeneralShape::Sequence.
+///
+/// Returns `None` when the minus side is not sequence-shaped (caller
+/// keeps the C18 diagnostic or `Raw`). A sequence-shaped minus with a
+/// mismatched plus side is a loud C18, never a silent `Raw` miss. `...`
+/// anywhere in the minus/plus sides is a C1: sequences are exact-K in
+/// v1 (no trailing-block tail inside a sequence member — each member
+/// matches via `match_stmt`, never `match_block`).
+#[allow(clippy::too_many_arguments)]
+fn try_sequence(
+    minus_sub: &str,
+    plus_raw: &str,
+    table: &MetavarTable,
+    maps: &PlaceholderMaps,
+    minus_attrs: Vec<String>,
+    plus_attrs: Vec<String>,
+) -> Result<Option<PatternKind>, StructuredError> {
+    let Ok(minus_block) = syn::parse_str::<syn::Block>(&format!("{{ {minus_sub} }}")) else {
+        return Ok(None);
+    };
+    if !(2..=4).contains(&minus_block.stmts.len()) {
+        return Ok(None);
+    }
+    if !minus_block.stmts.iter().all(is_sequence_let) {
+        return Ok(None);
+    }
+    // Ellipsis precision: placeholder substitution rewrote every genuine
+    // `...` (outside strings/comments, which ride sentinels) to an
+    // `__RSMPL_ELLIPSIS_N` marker, so a marker here is a real `...`
+    // position — rejected at C1, never a silent match-time miss.
+    if minus_sub.contains("__RSMPL_ELLIPSIS") {
+        return Err(c1_err());
+    }
+    for stmt in &minus_block.stmts {
+        if let syn::Stmt::Local(l) = stmt {
+            check_let_pat(l)?;
+        }
+    }
+    let (_, plus_rest) = split_leading_attrs(plus_raw);
+    if plus_rest.trim().is_empty() {
+        // Deletion: an empty `+` side deletes the K statements (Stmt parity).
+        return Ok(Some(build_general(
+            GeneralShape::Sequence,
+            minus_sub.to_string(),
+            plus_raw,
+            maps,
+            minus_attrs,
+            plus_attrs,
+            false,
+        )));
+    }
+    let (masked_p, sentinels_p) = mask_literal_spans(&plus_rest)?;
+    let (mut sub_p, _) = ExprPattern::placeholder_expr(&masked_p, table);
+    sub_p = unmask_literal_spans(&sub_p, &sentinels_p);
+    if sub_p.contains("__RSMPL_ELLIPSIS") {
+        return Err(c1_err());
+    }
+    let k = minus_block.stmts.len();
+    let Ok(plus_block) = syn::parse_str::<syn::Block>(&format!("{{ {sub_p} }}")) else {
+        return Err(sequence_shape_err(k));
+    };
+    if plus_block.stmts.len() != k || !plus_block.stmts.iter().all(is_sequence_let) {
+        return Err(sequence_shape_err(k));
+    }
+    Ok(Some(build_general(
+        GeneralShape::Sequence,
+        minus_sub.to_string(),
+        plus_raw,
+        maps,
+        minus_attrs,
+        plus_attrs,
+        false,
+    )))
+}
+
 /// Upgrade a non-call `Raw` shape to a generalized Stmt/Expr/Type pattern.
 ///
 /// Returns `None` when the text is none of those (caller keeps `Raw`, which
@@ -976,6 +1094,8 @@ fn try_general(
         expr_src = Some(quote::quote!(#e).to_string());
         had_semi = true;
     }
+    // WI-5c: keep `sub` alive past the expression-shape move below (the
+    // sequence arm reuses the substituted minus text).
 
     // 3. Types before expressions when the author declared type-level
     // metavariables (so `Vec<T>` with `# type T` is a type pattern).
@@ -1000,7 +1120,9 @@ fn try_general(
 
     // 4. Expressions.
     if want(GeneralShape::Expr) {
-        let src = expr_src.unwrap_or(sub);
+        // WI-5c: clone (not move) so the WI-5c sequence arm below can
+        // reuse the substituted minus text.
+        let src = expr_src.unwrap_or_else(|| sub.clone());
         if syn::parse_str::<syn::Expr>(&src).is_ok() {
             if plus_rest.trim().is_empty() && !had_semi {
                 return Err(StructuredError::new(
@@ -1078,15 +1200,20 @@ fn try_general(
             "write a Rust type pattern",
         )));
     }
-    // WI-9c(c): a minus side that parses as two or more Rust statements is
-    // a statement sequence, which v1 general patterns cannot express (no
-    // multi-statement pattern kind until WI-9c(a)). Fail fast at compile
-    // time naming the pattern instead of degrading to `Raw` and dying at
-    // match with a misleading "no match found" that points at the file.
-    // Single-statement text (including multi-line single shapes such as
-    // line-continued calls) and unparsable wraps still fall through to
-    // `Ok(None)` — never a false positive. C1 precedent: the repair rides
-    // in the reason, no separate suggestion.
+    // WI-5c: repeated-block statement sequences (2–4 plain `let`
+    // statements, exact count both sides) compile to `GeneralShape::Sequence`.
+    // Anything else multi-statement keeps the C18 diagnostic below.
+    if let Some(seq) = try_sequence(&sub, plus_raw, table, &maps, minus_attrs, plus_attrs)? {
+        return Ok(Some(seq));
+    }
+    // WI-9c(c): a minus side that parses as two or more Rust statements
+    // outside the WI-5c sequence shape cannot be expressed. Fail fast at
+    // compile time naming the pattern instead of degrading to `Raw` and
+    // dying at match with a misleading "no match found" that points at
+    // the file. Single-statement text (including multi-line single shapes
+    // such as line-continued calls) and unparsable wraps still fall
+    // through to `Ok(None)` — never a false positive. C1 precedent: the
+    // repair rides in the reason, no separate suggestion.
     let (masked_seq, sentinels_seq) = mask_literal_spans(&minus_rest)?;
     let (sub_seq, _) = ExprPattern::placeholder_expr(&masked_seq, table);
     let sub_seq = unmask_literal_spans(&sub_seq, &sentinels_seq);
@@ -1095,13 +1222,13 @@ fn try_general(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "multi-statement sequences are not supported in v1 general patterns (the minus side parses as {} Rust statements, not one); write one hunk per statement or item, or use an ordinary hunk",
+                    "v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as {} Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk",
                     block.stmts.len()
                 ),
             )
             .with_repair(StructuredError::fix_pattern_repair(
                 "C18",
-                "write one hunk per statement or item, or use an ordinary hunk",
+                "write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk",
             )));
         }
     }

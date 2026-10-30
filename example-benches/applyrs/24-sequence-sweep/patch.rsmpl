@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -2,12 @@ rule=sequence_demo
+# allow=many
+- let P0 = E0;
+- let P1: T1 = E1;
++ let P0: u32 = E0;
++ let P1: T1 = E1.wrapping_add(1);

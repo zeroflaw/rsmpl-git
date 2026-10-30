@@ -704,20 +704,19 @@ fn method_ident_symbol_rejected_at_compile() {
 
 #[test]
 fn multi_statement_minus_fails_fast_at_compile() {
-    // WI-9c(c): a minus side that parses as two or more Rust statements
-    // is a sequence, which v1 general patterns cannot express (no
-    // multi-statement kind until WI-9c(a)). Fail fast at compile time
-    // naming the pattern instead of degrading to `Raw` and dying at
-    // match with a misleading "no match found".
+    // WI-9c(c) + WI-5c narrowing: a minus side that parses as two or more
+    // Rust statements outside the 2–4 plain-`let` sequence shape fails
+    // fast at compile time naming the pattern instead of degrading to
+    // `Raw` and dying at match with a misleading "no match found".
     let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
     let patch = format!(
-        "{head}@@ -2,2 @@ rule=x\n# lang=rust\n# allow=many\n- let a = foo(E);\n- let b = bar(E);\n+ let a = foo2(E);\n+ let b = bar2(E);\n"
+        "{head}@@ -2,2 @@ rule=x\n# lang=rust\n# allow=many\n- let a = foo(E);\n- bar(E);\n+ let a = foo2(E);\n+ bar2(E);\n"
     );
     let err = compile(&hunk_of(&patch)).unwrap_err();
     assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
     assert!(
         err.render()
-            .contains("multi-statement sequences are not supported"),
+            .contains("v1 statement sequences need 2–4 plain `let` statements"),
         "missing needle:\n{}",
         err.render()
     );
@@ -740,6 +739,37 @@ fn multi_statement_minus_fails_fast_at_compile() {
             }
         ),
         "multi-line single let should be General::Stmt"
+    );
+}
+
+#[test]
+fn plain_let_pair_compiles_to_sequence() {
+    // WI-5c: two plain `let` statements compile to `GeneralShape::Sequence`
+    // (the C18 pin above covers the still-rejected shapes).
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    let patch = format!(
+        "{head}@@ -2,2 @@ rule=x\n# lang=rust\n# allow=many\n- let a = foo(E);\n- let b = bar(E);\n+ let a = foo2(E);\n+ let b = bar2(E);\n"
+    );
+    assert!(
+        matches!(
+            compile(&hunk_of(&patch)).unwrap().kind,
+            PatternKind::General {
+                shape: GeneralShape::Sequence,
+                ..
+            }
+        ),
+        "two plain lets should be General::Sequence"
+    );
+    // Five lets exceed K ≤ 4 — still C18.
+    let patch = format!(
+        "{head}@@ -2,5 @@ rule=x\n# lang=rust\n# allow=many\n- let a = 1;\n- let b = 2;\n- let c = 3;\n- let d = 4;\n- let e = 5;\n+ let a = 6;\n+ let b = 7;\n+ let c = 8;\n+ let d = 9;\n+ let e = 0;\n"
+    );
+    let err = compile(&hunk_of(&patch)).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render().contains("parses as 5 Rust statements"),
+        "missing count:\n{}",
+        err.render()
     );
 }
 

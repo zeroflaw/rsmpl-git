@@ -123,7 +123,7 @@ SPEC D.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 
-`example-benches/applyrs/` (21 benches) compares the agent-authored `patch.rsmpl`
+`example-benches/applyrs/` (24 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
 same result, RSmPL input vs full Git spelling. Re-measure any time with
 `./example-benches/run.sh`. (A hand-written native patch with conventional
@@ -154,8 +154,9 @@ context would be larger, so these are lower bounds.)
 | 21-if-cond-rewrite (4 sites, 1 hunk) | 115 B / 5 ln | 411 B / 12 ln | 72% |
 | 22-match-scrutinee-rewrite (4 sites, 1 hunk) | 131 B / 5 ln | 463 B / 12 ln | 72% |
 | 23-let-else-init-rewrite (4 sites, 1 hunk) | 122 B / 5 ln | 359 B / 12 ln | 66% |
+| 24-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 155 B / 7 ln | 630 B / 18 ln | 75% |
 
-`example-benches/diffrs/` (26 benches) compares `git diff -U0` (`native.patch`,
+`example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):
 
 | bench | native | semantic | saved |
@@ -188,6 +189,7 @@ context would be larger, so these are lower bounds.)
 | 26-type-sweep (3 sites, type sweep with T hole, `impl` framing) | 513 B / 12 ln | 77 B / 5 ln | 85% |
 | 27-move-evolve (fn move + vis/name evolve, header-template paste) | 942 B / 56 ln | 183 B / 14 ln | 81% |
 | 28-two-per-line (12 lines x 2 sites, sub-line call sweep) | 656 B / 28 ln | 75 B / 5 ln | 89% |
+| 29-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 670 B / 18 ln | 144 B / 7 ln | 79% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

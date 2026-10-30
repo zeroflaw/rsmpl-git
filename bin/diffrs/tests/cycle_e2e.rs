@@ -263,6 +263,7 @@ const CYCLE_OK: &[&str] = &[
     "39-move-evolve",
     "27-call-sweep",
     "24-pat-sweep",
+    "40-sequence-sweep",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5

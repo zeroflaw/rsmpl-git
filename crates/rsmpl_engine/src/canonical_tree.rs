@@ -113,9 +113,16 @@ fn normalize_symbol_spelling(patch: &mut rsmpl_patch::Patch) {
                 continue;
             }
             let mut lines = r.lines.clone();
+            // WI-1b-follow: symbol targets pre-resolve to concrete paths
+            // so the single backtick-aware walker below serves both the
+            // symbol and diet renames (one scanner, not two).
+            let resolved: Vec<(String, String)> = symbols
+                .iter()
+                .map(|(n, p)| (n.clone(), concrete_path_for(p)))
+                .collect();
             for line in &mut lines {
                 if line.is_removal() || line.is_addition() {
-                    line.text = replace_symbol_tokens(&line.text, &symbols);
+                    line.text = replace_token_table(&line.text, &resolved);
                 }
             }
             // Leftover check: every symbol name must be gone from the
@@ -168,16 +175,18 @@ fn normalize_symbol_spelling(patch: &mut rsmpl_patch::Patch) {
     }
 }
 
-/// WI-5 slice 1 diet spelling: a single `-`/`+` `let` pair carrying
-/// declared `# pat`/`# type`/`# expr` metavars is rewritten to the
-/// positional diet the inferrer emits (`P` → `P0`, `T` → `T0`,
-/// `E` → `E0` in first-appearance order per kind), and those
-/// declarations are dropped. Lets the authored long spelling and the
-/// inferred diet share one tree-aware canonical form (the `24-pat-sweep`
-/// leg). All-or-nothing per hunk, mirroring the symbol-hunk posture:
-/// symbol hunks, multi-pair bodies, non-`let` lines, and any token
-/// collision leave the hunk byte-identical so error shapes never
-/// silently heal.
+/// WI-5 slice 1 diet spelling (+ WI-5c sequence widening): a `-`/`+`
+/// `let` pair — or K = 2–4 `let` lines per side (a WI-5c sequence hunk)
+/// — carrying declared `# pat`/`# type`/`# expr` metavars is rewritten
+/// to the positional diet the inferrer emits (`P` → `P0`, `T` → `T0`,
+/// `E` → `E0` in first-appearance order per kind across the whole hunk,
+/// so sequence positions land on `P1`/`T1`/`E1` exactly like emission),
+/// and those declarations are dropped. Lets the authored long spelling
+/// and the inferred diet share one tree-aware canonical form (the
+/// `24-pat-sweep` leg, sequences likewise). All-or-nothing per hunk,
+/// mirroring the symbol-hunk posture: symbol hunks, non-`let` lines,
+/// count-mismatched sides, and any token collision leave the hunk
+/// byte-identical so error shapes never silently heal.
 fn normalize_let_diet_spelling(patch: &mut rsmpl_patch::Patch) {
     use rsmpl_patch::{Directive, MetavarKind};
     for sec in &mut patch.files {
@@ -200,11 +209,14 @@ fn normalize_let_diet_spelling(patch: &mut rsmpl_patch::Patch) {
                     plus.push(l.text.as_str());
                 }
             }
-            if minus.len() != 1 || plus.len() != 1 {
-                continue;
-            }
-            if !minus[0].trim_start().starts_with("let ")
-                || !plus[0].trim_start().starts_with("let ")
+            // WI-5c: single pairs and K = 2–4 `let` sequences alike
+            // (count-matched sides only; anything else is not diet).
+            if minus.len() != plus.len()
+                || !(1..=4).contains(&minus.len())
+                || !minus
+                    .iter()
+                    .chain(plus.iter())
+                    .all(|l| l.trim_start().starts_with("let "))
             {
                 continue;
             }
@@ -384,48 +396,6 @@ fn concrete_path_for(path: &str) -> String {
     path.to_string()
 }
 
-/// Replace whole-token occurrences of each symbol name with its
-/// concrete path, skipping backticked literals (`` `Old` `` is an
-/// explicit literal, never a symbol ref), `::`-qualified occurrences
-/// (`crate::Old` is already qualified), and `$`-sigiled positions.
-/// Turbofish suffixes ride (`Old::<u8>` → `path::<u8>`).
-fn replace_symbol_tokens(text: &str, symbols: &[(String, String)]) -> String {
-    let mut names: Vec<&(String, String)> = symbols.iter().collect();
-    names.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    let mut in_backtick = false;
-    while i < chars.len() {
-        if chars[i] == '`' {
-            in_backtick = !in_backtick;
-            out.push(chars[i]);
-            i += 1;
-            continue;
-        }
-        if !in_backtick {
-            let mut hit: Option<&(String, String)> = None;
-            for s in &names {
-                if text_starts_at(&chars, i, &s.0)
-                    && boundary_before(&chars, i)
-                    && boundary_after(&chars, i + s.0.len())
-                {
-                    hit = Some(*s);
-                    break;
-                }
-            }
-            if let Some((_, path)) = hit {
-                out.push_str(&concrete_path_for(path));
-                i += hit.unwrap().0.len();
-                continue;
-            }
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
 /// True when `text` holds `name` as a bare token outside backticks.
 fn has_bare_token(text: &str, name: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
@@ -571,7 +541,13 @@ fn diet_rename_expr_metavars(lines: &mut [rsmpl_patch::BodyLine], expr_names: &[
     true
 }
 
-/// Whole-token replacement from an explicit (source → target) table.
+/// Whole-token replacement from an explicit (source → target) table,
+/// skipping backticked literals (`` `Old` `` is an explicit literal,
+/// never a rename ref), `::`-qualified occurrences (`crate::Old` is
+/// already qualified), and `$`-sigiled positions. Turbofish suffixes
+/// ride (`Old::<u8>` → `path::<u8>`). Serves both the WI-1b symbol
+/// normalization (targets pre-resolved via [`concrete_path_for`]) and
+/// the diet renames — one backtick-aware walker (WI-1b-follow).
 fn replace_token_table(text: &str, table: &[(String, String)]) -> String {
     let mut names: Vec<&(String, String)> = table.iter().collect();
     names.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
@@ -869,12 +845,24 @@ mod tests {
 
     #[test]
     fn let_diet_multi_pair_untouched() {
-        // Two-pair bodies are out of scope for the single-pair diet
-        // gate — the hunk survives byte-identical.
-        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# pat P\n# expr E\n- let P = E;\n- let P = E;\n+ let P = E;\n+ let P = E;\n";
+        // WI-5c: K = 2–4 `let` sequences share the diet gate — the
+        // declared names rename positionally across the whole hunk.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# pat P\n# expr E\n- let P = E;\n- let P = E;\n+ let P: u32 = E;\n+ let P: u32 = E;\n";
         let p = pre(&[("src/lib.rs", LET_PRE)]);
         let got = canonicalize_with_tree(text, &p).unwrap();
-        assert!(got.contains("# pat P"), "multi-pair untouched:\n{got}");
+        assert!(
+            !got.contains("# pat P"),
+            "diet declarations dropped:\n{got}"
+        );
+        assert!(
+            got.contains("- let P0 = E0;\n- let P0 = E0;\n"),
+            "positional diet:\n{got}"
+        );
+        // Five `let` lines exceed the K ≤ 4 sequence shape — out of
+        // scope, the hunk survives byte-identical.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# pat P\n# expr E\n- let P = E;\n- let P = E;\n- let P = E;\n- let P = E;\n- let P = E;\n+ let P: u32 = E;\n+ let P: u32 = E;\n+ let P: u32 = E;\n+ let P: u32 = E;\n+ let P: u32 = E;\n";
+        let got = canonicalize_with_tree(text, &p).unwrap();
+        assert!(got.contains("# pat P"), "five-pair untouched:\n{got}");
     }
 
     #[test]

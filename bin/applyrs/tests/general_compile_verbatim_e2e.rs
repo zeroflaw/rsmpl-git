@@ -199,12 +199,14 @@ fn c12_attrs_differ() {
 
 #[test]
 fn c18_multi_statement_minus() {
-    // WI-9c(c): a minus side that parses as two or more Rust statements
+    // WI-9c(c) + WI-5c narrowing: a minus side that parses as two or
+    // more Rust statements outside the 2–4 plain-`let` sequence shape
     // fails fast at compile time instead of dying at match with a
-    // misleading "no match found".
+    // misleading "no match found". (Two plain lets compile as a
+    // `Sequence` — pinned by the sequence suites.)
     check(
-        "diff --git a.rs\n@@ -2,2 @@ rule=r\n# allow=many\n- let a = foo(E);\n- let b = bar(E);\n+ let a = foo2(E);\n+ let b = bar2(E);\n",
-        "multi-statement sequences are not supported in v1 general patterns (the minus side parses as 2 Rust statements, not one); write one hunk per statement or item, or use an ordinary hunk",
+        "diff --git a.rs\n@@ -2,2 @@ rule=r\n# allow=many\n- let a = foo(E);\n- bar(E);\n+ let a = foo2(E);\n+ bar2(E);\n",
+        "v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as 2 Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk",
         false,
     );
 }

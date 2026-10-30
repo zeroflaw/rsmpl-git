@@ -42,6 +42,7 @@ below).
 | 21-if-cond-rewrite | 1 hunk rewrites `> 0`→`>= 0` in `if` conditions over 4 sites (WI-5a: condition hole binds per site, then/else blocks concrete) | 115 B / 5 ln | 411 B / 12 ln | 72% |
 | 22-match-scrutinee-rewrite | 1 hunk rewrites `_ => 2`→`_ => 3` in `match` arms over 4 sites (WI-5b: scrutinee hole binds per site, arms concrete) | 131 B / 5 ln | 463 B / 12 ln | 72% |
 | 23-let-else-init-rewrite | 1 hunk rewrites `return 0`→`return 1` in `let-else` diverges over 4 sites (WI-5b: `P`/`E` holes bind per site, diverge concrete) | 122 B / 5 ln | 359 B / 12 ln | 66% |
+| 24-sequence-sweep | 1 hunk rewrites 3 blocks × 2 hetero lets (WI-5c: type-add + joint positions, per-position `P{j}`/`E{j}` holes) | 155 B / 7 ln | 630 B / 18 ln | 75% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even
@@ -79,6 +80,7 @@ counts in the JSON report).
 | 26-type-sweep (3 sites, type sweep with T hole, `impl` framing) | 513 B / 12 ln | 77 B / 5 ln | 85% |
 | 27-move-evolve (fn move + vis/name evolve, header-template paste) | 942 B / 56 ln | 183 B / 14 ln | 81% |
 | 28-two-per-line (12 lines x 2 sites, sub-line call sweep) | 656 B / 28 ln | 75 B / 5 ln | 89% |
+| 29-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 670 B / 18 ln | 144 B / 7 ln | 79% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

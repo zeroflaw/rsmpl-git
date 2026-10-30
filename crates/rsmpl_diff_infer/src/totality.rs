@@ -696,6 +696,53 @@ pub(crate) fn template_repeat_holds(
     };
     report.rules.iter().map(|r| r.matches).sum::<usize>() == n
 }
+
+/// Sequence totality (WI-5c): the emitted K-line minus template must
+/// match exactly `n` statement windows in the pre-image file. Counted
+/// by the engine itself with the real pair spelling: a `# sweep` probe
+/// carrying the K minus/plus lines is applied to a scratch tree and its
+/// window-match count must equal `n` (blocks). An untouched twin window
+/// anywhere in the file counts `n + 1` and vetoes, so the group stays
+/// ordinary instead of silently rewriting the twin. `None` pre-image
+/// keeps the legacy allow; probe parse/apply failure vetoes. Opaque
+/// positions need no extra veto: sequence windows only match plain
+/// `let` statements, which never sit inside macros or string literals.
+pub(crate) fn template_sequence_holds(
+    path: &str,
+    file_old: Option<&str>,
+    minus_tpls: &[String],
+    plus_tpls: &[String],
+    n: usize,
+) -> bool {
+    if n < 2 || !(2..=4).contains(&minus_tpls.len()) || minus_tpls.len() != plus_tpls.len() {
+        return false;
+    }
+    if minus_tpls.iter().any(|l| l.contains('\n')) || plus_tpls.iter().any(|l| l.contains('\n')) {
+        return false;
+    }
+    let Some(pre) = file_old else {
+        return true;
+    };
+    let mut probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n",
+        crate::git_header(path)
+    );
+    for m in minus_tpls {
+        probe.push_str(&format!("- {m}\n"));
+    }
+    for p in plus_tpls {
+        probe.push_str(&format!("+ {p}\n"));
+    }
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+}
 /// whose uppercase callee infers as an `expr` hole) must match exactly
 /// `n` sub-expressions in the pre-image file. Same self-rewrite probe
 /// prescription as `template_type_holds` (`- M` / `+ M` under `# sweep`,

@@ -165,6 +165,216 @@ pub(crate) fn antiunify_let_template(
     Some((minus_tpl, plus_tpl))
 }
 
+/// WI-5c: one statement position across N ≥ 2 blocks. Tries the shared
+/// let cores in order — type-addition (uniform concrete type, holed
+/// `P0`/`E0`), joint typed template (hetero `P0`/`T0`, uniform
+/// `E0`-hole init delta), untyped-init template (same without
+/// ascriptions) — then the uniform-concrete fallback (a repeated
+/// identical edit: every site rewrites the same literal lines, the
+/// anchor of a hetero sequence). Returns full `let` statement
+/// templates, or `None` when the position is not one uniform rewrite.
+/// The whole-sequence all-identical class never reaches here (verbatim
+/// owns it, T422); per-position identical lines are concrete anchors.
+pub(crate) fn antiunify_let_position(
+    minuses: &[&str],
+    pluses: &[&str],
+) -> Option<(String, String)> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    if let Some(ty) = antiunify_let_type_add(minuses, pluses) {
+        return Some(("let P0 = E0;".to_string(), format!("let P0: {ty} = E0;")));
+    }
+    if let Some(t) = antiunify_let_template(minuses, pluses) {
+        return Some(t);
+    }
+    if let Some(t) = antiunify_untyped_let(minuses, pluses) {
+        return Some(t);
+    }
+    if minuses.iter().all(|m| *m == minuses[0])
+        && pluses.iter().all(|p| *p == pluses[0])
+        && minuses[0] != pluses[0]
+        && is_plain_let_line(minuses[0])
+        && is_plain_let_line(pluses[0])
+    {
+        return Some((minuses[0].trim().to_string(), pluses[0].trim().to_string()));
+    }
+    None
+}
+
+/// WI-5c: anti-unification over N blocks × K statements (block-major
+/// flat pairs: block `b` holds indices `b*K .. b*K+K`). Position `j`
+/// anti-unifies across blocks via [`antiunify_let_position`]; hetero
+/// positions ride holes, identical ones stay concrete. Returns the K
+/// minus/plus template lines, or `None` (stays ordinary).
+pub(crate) fn antiunify_sequence(
+    minuses: &[&str],
+    pluses: &[&str],
+    k: usize,
+) -> Option<(Vec<String>, Vec<String>)> {
+    if !(2..=4).contains(&k) || minuses.len() != pluses.len() || !minuses.len().is_multiple_of(k) {
+        return None;
+    }
+    let n = minuses.len() / k;
+    if n < 2 {
+        return None;
+    }
+    // All-identical whole classes stay for the tighter verbatim sweep
+    // (T422 precedent): a concrete literal hunk over the same lines is
+    // always shorter than a metavariable template.
+    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
+        return None;
+    }
+    let mut minus_tpls = Vec::with_capacity(k);
+    let mut plus_tpls = Vec::with_capacity(k);
+    for j in 0..k {
+        let mut pos_m = Vec::with_capacity(n);
+        let mut pos_p = Vec::with_capacity(n);
+        for b in 0..n {
+            pos_m.push(minuses[b * k + j]);
+            pos_p.push(pluses[b * k + j]);
+        }
+        let (m, p) = antiunify_let_position(&pos_m, &pos_p)?;
+        // Per-position hole independence: the shared cores all emit
+        // `P0`/`T0`/`E0`; position `j` renames them to `P{j}`/`T{j}`/
+        // `E{j}` so each window statement binds independently (shared
+        // names would force cross-statement equality, SPEC 15.7).
+        let (m, p) = if j == 0 {
+            (m, p)
+        } else {
+            (rename_holes(&m, j), rename_holes(&p, j))
+        };
+        minus_tpls.push(m);
+        plus_tpls.push(p);
+    }
+    if minus_tpls.iter().zip(plus_tpls.iter()).all(|(m, p)| m == p) {
+        return None;
+    }
+    // Defensive: every template line must re-parse as a plain `let` (the
+    // detector's probe re-checks, but a non-parsing template must never
+    // leave this core).
+    if !minus_tpls.iter().all(|l| is_plain_let_line(l))
+        || !plus_tpls.iter().all(|l| is_plain_let_line(l))
+    {
+        return None;
+    }
+    Some((minus_tpls, plus_tpls))
+}
+
+/// WI-5c: rename the shared cores' `P0`/`T0`/`E0` holes to the
+/// position-`j` spelling (`P{j}`/`T{j}`/`E{j}`), whole tokens only.
+fn rename_holes(s: &str, j: usize) -> String {
+    let mut out = String::new();
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut String| {
+        let repl = match cur.as_str() {
+            "P0" => format!("P{j}"),
+            "T0" => format!("T{j}"),
+            "E0" => format!("E{j}"),
+            _ => cur.clone(),
+        };
+        out.push_str(&repl);
+        cur.clear();
+    };
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            cur.push(c);
+        } else {
+            flush(&mut cur, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// One untyped `let` side: inner pattern plus init expr (no ascription).
+fn parse_untyped_let_full(line: &str) -> Option<(syn::Pat, syn::Expr)> {
+    let untyped = parse_untyped_let(line)?;
+    Some((untyped.pat, untyped.init))
+}
+
+/// WI-5c untyped-init template: N ≥ 2 untyped→untyped `let` pairs with
+/// per-site preserved patterns plus one uniform initializer delta. The
+/// joint-typed core without ascriptions: hetero patterns ride `P0`,
+/// uniform ones stay concrete; the initializer is either a uniform
+/// concrete delta or one `E0` hole with a uniform structural wrapper
+/// (method-call with varying receiver, bare call with one varying
+/// argument, or binary with one varying side — the shared
+/// [`antiunify_plus_with_hole`] discipline). All-identical line
+/// classes decline (verbatim owns them, T422).
+fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    // All-identical line classes decline (verbatim owns them, T422).
+    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
+        return None;
+    }
+    let mut pats: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut minus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
+    let mut plus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (m_pat, m_init) = parse_untyped_let_full(m)?;
+        let (p_pat, p_init) = parse_untyped_let_full(p)?;
+        // Preserved per site (SPEC 15.7 hole reuse): the shared `P0`
+        // binds per-site-equal text on both sides.
+        if tok(&m_pat) != tok(&p_pat) {
+            return None;
+        }
+        pats.push(tok(&m_pat));
+        minus_inits.push(m_init);
+        plus_inits.push(p_init);
+    }
+    let pat_tpl = if pats.iter().all(|x| *x == pats[0]) {
+        pats[0].clone()
+    } else {
+        "P0".to_string()
+    };
+    let minus_vals: Vec<String> = minus_inits.iter().map(tok).collect();
+    let plus_vals: Vec<String> = plus_inits.iter().map(tok).collect();
+    let minus_uniform = minus_vals.iter().all(|v| *v == minus_vals[0]);
+    let plus_uniform = plus_vals.iter().all(|v| *v == plus_vals[0]);
+    let (minus_init_tpl, plus_init_tpl) = if minus_uniform && plus_uniform {
+        if minus_vals[0] == plus_vals[0] {
+            return None;
+        }
+        (minus_vals[0].clone(), plus_vals[0].clone())
+    } else if !minus_uniform && !plus_uniform {
+        let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits)?;
+        ("E0".to_string(), plus_tpl)
+    } else {
+        // One side uniform, the other varying: an unbound or dropped
+        // hole (T442 posture) — stays ordinary.
+        return None;
+    };
+    let minus_tpl = format!("let {pat_tpl} = {minus_init_tpl};");
+    let plus_tpl = format!("let {pat_tpl} = {plus_init_tpl};");
+    if minus_tpl == plus_tpl {
+        return None;
+    }
+    if !is_let_stmt(&minus_tpl) || !is_let_stmt(&plus_tpl) {
+        return None;
+    }
+    Some((minus_tpl, plus_tpl))
+}
+
+/// True when the single-line text parses as a plain `let` (no attrs,
+/// init present, no `let-else` diverge) — the WI-5c sequence member and
+/// template gate.
+fn is_plain_let_line(line: &str) -> bool {
+    let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(line.trim()) else {
+        return false;
+    };
+    if !local.attrs.is_empty() {
+        return false;
+    }
+    let Some(init) = &local.init else {
+        return false;
+    };
+    init.diverge.is_none()
+}
+
 /// One typed `let` side: inner pattern, ascribed type, init expr.
 /// Attributes, missing inits, and `let-else` diverge veto (later
 /// slices own those classes).
@@ -1374,5 +1584,241 @@ mod tests {
         assert_eq!(antiunify_types(&m, &m), None);
         let m2 = [site("Vec<u32>"), site("Vec<u64>")];
         assert_eq!(antiunify_types(&m2, &p[..1]), None);
+    }
+
+    fn seq(minuses: &[&str], pluses: &[&str], k: usize) -> Option<(Vec<String>, Vec<String>)> {
+        antiunify_sequence(minuses, pluses, k)
+    }
+
+    #[test]
+    fn sequence_type_add_2x2_generalizes() {
+        // WI-5c canonical shape: 2 blocks × 2 type-add positions with
+        // hetero pats/inits ride P{j}/E{j}; the uniform type stays
+        // concrete per position.
+        let out = seq(
+            &[
+                "let a = f(x);",
+                "let b = g(y);",
+                "let c = f(z);",
+                "let d = g(w);",
+            ],
+            &[
+                "let a: u32 = f(x);",
+                "let b: u32 = g(y);",
+                "let c: u32 = f(z);",
+                "let d: u32 = g(w);",
+            ],
+            2,
+        );
+        assert_eq!(
+            out,
+            Some((
+                vec!["let P0 = E0;".to_string(), "let P1 = E1;".to_string()],
+                vec![
+                    "let P0: u32 = E0;".to_string(),
+                    "let P1: u32 = E1;".to_string()
+                ]
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn sequence_joint_and_concrete_positions_mix() {
+        // Position 0: joint typed template (hetero pat/ty, uniform
+        // method-delta init). Position 1: repeated identical edit
+        // (concrete anchor — verbatim cannot span the hetero position,
+        // so the sequence owns the window).
+        let out = seq(
+            &[
+                "let a: i32 = x;",
+                "let done = finish();",
+                "let b: u32 = y;",
+                "let done = finish();",
+            ],
+            &[
+                "let a: i32 = x.wrapping_add(1);",
+                "let done: bool = finish();",
+                "let b: u32 = y.wrapping_add(1);",
+                "let done: bool = finish();",
+            ],
+            2,
+        );
+        assert_eq!(
+            out,
+            Some((
+                vec![
+                    "let P0: T0 = E0;".to_string(),
+                    "let done = finish();".to_string()
+                ],
+                vec![
+                    "let P0: T0 = E0.wrapping_add(1);".to_string(),
+                    "let done: bool = finish();".to_string()
+                ]
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn sequence_untyped_init_delta_generalizes() {
+        // Untyped both sides with a uniform method-delta init: E0-hole
+        // plus per-site-preserved (here hetero → P0) patterns.
+        let out = seq(
+            &["let a = x;", "let b = y;", "let c = z;", "let d = w;"],
+            &[
+                "let a = x.foo();",
+                "let b = y.foo();",
+                "let c = z.foo();",
+                "let d = w.foo();",
+            ],
+            2,
+        );
+        assert_eq!(
+            out,
+            Some((
+                vec!["let P0 = E0;".to_string(), "let P1 = E1;".to_string()],
+                vec![
+                    "let P0 = E0.foo();".to_string(),
+                    "let P1 = E1.foo();".to_string()
+                ]
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn sequence_k_mismatch_vetoes() {
+        // 4 pairs are not 3-wide.
+        let minuses = [
+            "let a = f(x);",
+            "let b = g(y);",
+            "let c = f(z);",
+            "let d = g(w);",
+        ];
+        let pluses = [
+            "let a: u32 = f(x);",
+            "let b: u32 = g(y);",
+            "let c: u32 = f(z);",
+            "let d: u32 = g(w);",
+        ];
+        assert_eq!(seq(&minuses, &pluses, 3), None);
+        // Single block (N = 1) never forms a repeated sequence.
+        assert_eq!(seq(&minuses[..2], &pluses[..2], 2), None);
+    }
+
+    #[test]
+    fn sequence_all_identical_declines_for_verbatim() {
+        // One repeated line (flat-identical class) belongs to verbatim
+        // (T422): a literal hunk is shorter than any template.
+        let out = seq(
+            &[
+                "let a = f(x);",
+                "let a = f(x);",
+                "let a = f(x);",
+                "let a = f(x);",
+            ],
+            &[
+                "let a: u32 = f(x);",
+                "let a: u32 = f(x);",
+                "let a: u32 = f(x);",
+                "let a: u32 = f(x);",
+            ],
+            2,
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn sequence_repeated_identical_blocks_fire_concrete() {
+        // Two byte-identical blocks: per-position concrete anchors under
+        // one shared header — tighter than two verbatim patterns, and
+        // totality still proves the count.
+        let out = seq(
+            &[
+                "let a = f(x);",
+                "let b = g(y);",
+                "let a = f(x);",
+                "let b = g(y);",
+            ],
+            &[
+                "let a: u32 = f(x);",
+                "let b: u32 = g(y);",
+                "let a: u32 = f(x);",
+                "let b: u32 = g(y);",
+            ],
+            2,
+        );
+        assert_eq!(
+            out,
+            Some((
+                vec!["let a = f(x);".to_string(), "let b = g(y);".to_string()],
+                vec![
+                    "let a: u32 = f(x);".to_string(),
+                    "let b: u32 = g(y);".to_string()
+                ]
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn sequence_divergent_position_vetoes() {
+        // Position 1 carries two different init deltas — not one
+        // uniform rewrite.
+        let out = seq(
+            &[
+                "let a: i32 = x;",
+                "let b: u32 = y;",
+                "let c: i64 = z;",
+                "let d: u8 = w;",
+            ],
+            &[
+                "let a: i32 = x.wrapping_add(1);",
+                "let b: u32 = y.wrapping_add(1);",
+                "let c: i64 = z.wrapping_add(2);",
+                "let d: u8 = w.wrapping_add(2);",
+            ],
+            2,
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn sequence_non_let_member_vetoes() {
+        // Expression statements are not sequence members.
+        let out = seq(
+            &["let a = f(x);", "g(y);", "let c = f(z);", "g(w);"],
+            &[
+                "let a: u32 = f(x);",
+                "g2(y);",
+                "let c: u32 = f(z);",
+                "g2(w);",
+            ],
+            2,
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn sequence_per_site_pat_delta_vetoes() {
+        // A per-site pattern rename inside one position is not a
+        // sequence template (rename detectors own it).
+        let out = seq(
+            &[
+                "let a: i32 = 0;",
+                "let b: u32 = 1;",
+                "let c: i64 = 2;",
+                "let d: u8 = 3;",
+            ],
+            &[
+                "let ax: i32 = 0.wrapping_add(1);",
+                "let b: u32 = 1.wrapping_add(1);",
+                "let c: i64 = 2.wrapping_add(1);",
+                "let d: u8 = 3.wrapping_add(1);",
+            ],
+            2,
+        );
+        assert_eq!(out, None, "got: {out:?}");
     }
 }

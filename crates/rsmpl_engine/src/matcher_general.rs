@@ -132,7 +132,7 @@ pub(crate) struct MatchCx<'a> {
     /// placeholder ident (`__RSMPL_E`) -> declared name (`E`).
     pub(crate) reverse: HashMap<String, String>,
     /// declared name -> bound original text.
-    bindings: HashMap<String, String>,
+    pub(crate) bindings: HashMap<String, String>,
     /// WI-5b: absorbed trailing-block tails in match order. `match_block`
     /// pushes one entry per trailing `...` (empty for a zero-tail match);
     /// substitution replays them into the plus `...` slots in order, or
@@ -141,6 +141,21 @@ pub(crate) struct MatchCx<'a> {
 }
 
 impl<'a> MatchCx<'a> {
+    /// WI-5c: cross-module constructor for sequence windows (same crate).
+    pub(crate) fn with_reverse(
+        original: &'a str,
+        index: &'a LineIndex,
+        reverse: HashMap<String, String>,
+    ) -> Self {
+        MatchCx {
+            original,
+            index,
+            reverse,
+            bindings: HashMap::new(),
+            block_tails: Vec::new(),
+        }
+    }
+
     fn slice(&self, span: proc_macro2::Span) -> Option<String> {
         let s = span.start();
         let e = span.end();
@@ -619,7 +634,13 @@ pub(crate) fn match_return_type(
     }
 }
 
-fn in_scope(start_line: u32, end_line: u32, scope: Scope, old_start: u32, old_len: u32) -> bool {
+pub(crate) fn in_scope(
+    start_line: u32,
+    end_line: u32,
+    scope: Scope,
+    old_start: u32,
+    old_len: u32,
+) -> bool {
     let end = old_start + old_len.saturating_sub(1);
     let hi = end.max(old_start);
     match scope {
@@ -902,6 +923,14 @@ pub fn apply_general_hunk(
     let mut all_bindings: Vec<HashMap<String, String>> = Vec::new();
 
     match shape {
+        // WI-5c: sequences match K consecutive `Block` statements with
+        // shared bindings — a different candidate domain (windows, not
+        // single statements), so they delegate to the sequence module.
+        GeneralShape::Sequence => {
+            return crate::matcher_sequence::apply_sequence_hunk(
+                parsed, original, index, hunk, compiled, edits,
+            );
+        }
         GeneralShape::Stmt => {
             let pat_stmt = syn::parse_str::<syn::Stmt>(&minus_sub).map_err(|e| {
                 StructuredError::new(

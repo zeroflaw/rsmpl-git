@@ -2773,6 +2773,8 @@ assert_eq!(foo(), bar())
 
 For AST metavariables, structural equality means equality of the matched AST after insignificant trivia normalization. Whitespace, comments outside the captured node, and trailing comma normalization do not make two otherwise identical captures different. Distinct expressions such as `foo()` and `bar()` are not structurally equal.
 
+Cross-statement correspondence (WI-5c): in a statement-sequence pattern (Section 16.4.2) the binding set is shared across all K statements, so a hole repeated in two statements must bind structurally-equal text in both — and holes are independent per position by construction (`P0` in statement 1 never constrains `P1` in statement 2). The inferrer numbers per-position holes positionally for exactly this reason.
+
 For `symbol` metavariables, repeated occurrences must resolve to the same semantic symbol. For `token_tree` metavariables in macro token-tree mode, repeated occurrences must contain the same balanced token-tree sequence after token-level trivia normalization.
 
 In a `+` pattern, each occurrence of a bound metavariable inserts the same captured syntax. A `+` pattern may duplicate a captured value intentionally:
@@ -3005,6 +3007,31 @@ minus `...`. No other `...` position is admitted in general patterns
 fail at C1. Tails slice original source (indent included); a zero-tail
 match replays empty. `# repeat` composes per site (tails are per-match).
 A `"..."` string literal is concrete text, never a tail marker.
+
+#### 16.4.2 Statement sequences (WI-5c)
+
+A general-pattern hunk may instead hold K = 2–4 plain `let` statements
+on each side (no attributes, init present, no `let-else` diverge —
+Section 18.6 C18 admits exactly this shape; any other multi-statement
+minus fails at C18). The engine matches K consecutive `Block`
+statements (function bodies and nested blocks; file top-level items are
+never `Block` members, so sequences never span items) with one shared
+binding set across the K positions (Section 15.7 cross-statement
+correspondence); windows never overlap (Section 17.6 posture — a
+partially overlapping candidate fails loud). Each window position
+matches with the existing structural `let` matcher, so per-statement
+guards (`P: T` shapes, embedded-metavariable vetoes, ascription
+agreement) apply unchanged; the plus side instantiates each line under
+the shared bindings, preserving every target line's indent (the window
+span starts at the first statement, so its line indent rides verbatim
+and continuation lines re-apply theirs). Sequences are exact-K in v1:
+no `...` inside members (C1), no `# repeat` (Section 17.8), no
+deletion of a subset (an empty `+` side deletes all K statements,
+whole-window). The inferrer emits one `# allow=many` hunk per
+repeated-block class (Section D.4 `sequence` detector): N ≥ 2 blocks
+whose statement runs anti-unify position-wise, with per-position holes
+numbered positionally (`P0`/`E0` in position 0, `P1`/`E1` in position
+1, …) so windows bind independently.
 
 ### 16.5 Path ellipsis
 
@@ -3304,10 +3331,12 @@ Rules:
  ```
 
  Type patterns report `` `# repeat` is not supported on type patterns
- in v1; emit one ordered hunk per nesting level ``; every other shape
- reports `` `# repeat` requires a call/method-call or
- general-expression rewrite pattern (other shapes are future work) ``
- (both suggestion null). A `# repeat` hunk that also declares
+ in v1; emit one ordered hunk per nesting level ``; statement-sequence
+ patterns report `` `# repeat` is not supported on
+ statement-sequence patterns in v1; emit one ordered hunk per nesting
+ level ``; every other shape reports `` `# repeat` requires a
+ call/method-call or general-expression rewrite pattern (other shapes
+ are future work) `` (all suggestion null). A `# repeat` hunk that also declares
  `# bind=`/`# use=` reports `` `# repeat` cannot be combined with
  `# bind=`/`# use=` (captures move verbatim) `` with suggestion
  `remove `# repeat` from the cut/paste hunk`. A hunk with only one side
@@ -3445,7 +3474,7 @@ case where an ordinary hunk cannot express the edit.
 
 | # | Trigger | Exact diagnostic |
 |---|---|---|
-| C1 | `...` outside trailing-block position in a general minus/plus side (WI-5b: one final `...` per block is admitted, Section 16.4.1) | `v1 general patterns support `...` only as trailing block statements (`{ prefix; ... }` replays the absorbed tail, omitting it drops the tail); any other `...` position needs a call pattern or a concrete shape` |
+| C1 | `...` outside trailing-block position in a general minus/plus side (WI-5b: one final `...` per block is admitted, Section 16.4.1; WI-5c sequences are exact-K — no `...` inside members, Section 16.4.2) | `v1 general patterns support `...` only as trailing block statements (`{ prefix; ... }` replays the absorbed tail, omitting it drops the tail); any other `...` position needs a call pattern or a concrete shape` |
 | C2 | (closed by WI-5a) `let-else` in the minus pattern now matches a `let-else` target structurally: both diverge blocks must be present and compare as `Block`s (concrete prefix plus optional trailing `...` tail, Section 16.4.1); mixed `let-else` (only one side carries the diverge) rejects at match time under R2 | — |
 | C3 | `# root=stmt` with a non-`let` shape | `` `# root=stmt` requires a `let` statement pattern (v1 supports `let` with or without `let-else`) `` |
 | C4 | `# root=expr` with a non-expression shape | `` `# root=expr` requires a Rust expression pattern `` |
@@ -3462,7 +3491,7 @@ case where an ordinary hunk cannot express the edit.
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
 | C17 | `# follow=uses` on any shape other than a fn or item rename hunk (WI-6a) | `` `# follow=uses` is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
-| C18 | multi-statement minus: parses as two or more Rust statements, not one general stmt/expr/type shape (WI-9c(c)) | `` multi-statement sequences are not supported in v1 general patterns (the minus side parses as N Rust statements, not one); write one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
+| C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -6199,7 +6228,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-`call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+`call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `repeat_fold`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -6410,6 +6439,25 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   engine-count check (`template_pair_holds`): the emitted minus must
   match exactly N typed lets in the pre-image — an untouched twin
   vetoes. Detector name `let_template`.
+- Statement-sequence sweep (WI-5c, fourth anti-unification shape): N
+  flat `-`/`+` pairs splitting block-major into ≥ 2 blocks × K = 2–4
+  `let` statements (each block's changed old lines consecutive — the
+  detector only fuses runs the engine matches as windows, Section
+  16.4.2), each statement position anti-unified across blocks with the
+  shared let cores in order (type-addition, joint typed template,
+  untyped-init template, uniform-concrete anchor for repeated identical
+  edits); hetero positions ride positionally-numbered holes (`P0`/`E0`
+  in position 0, `P1`/`T1`/`E1` in position 1, … — windows bind
+  independently, Section 15.7), identical ones stay concrete. Guards:
+  single-block classes stay ordinary (single-block hetero fusion is
+  WI-5d); K tried largest-first (4, 3, 2); all-identical whole classes
+  stay for the tighter verbatim sweep (T422 precedent); non-`let`
+  members, attribute/diverge carriers, and divergent positions stay
+  ordinary. One `# allow=many` hunk with K minus/plus lines (tight
+  original range, Section D.5). Pre-image totality is the real-pair
+  engine-count check (`template_sequence_holds`): the emitted K-line
+  minus must match exactly N block windows in the pre-image — an
+  untouched twin window vetoes. Detector name `sequence`.
 - Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
   1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
   qself, and generic args decline, same gates as the qualified sweep)
@@ -6832,7 +6880,14 @@ class per file. Two comparators share this form: pure
  order). Only single-pair bare-symbol call hunks normalize this way;
  method shapes, `let` wrappers, multi-pair bodies, and hunks without
  `# fallback=syntax` keep their authored spelling (their error shapes
- must survive comparison, never silently heal). Anchors,
+ must survive comparison, never silently heal). The `let` diet
+ likewise unifies single pairs and WI-5c sequences: an authored long
+ spelling with declared `# pat`/`# type`/`# expr` metavars over one
+ `let` pair — or K = 2–4 `let` lines per side — renames positionally
+ across the whole hunk (`P` → `P0`, `T` → `T0`, `E` → `E0`,
+ second-position names onto `P1`/`T1`/`E1`, …) and drops those
+ declarations, matching inferrer emission; count-mismatched sides,
+ non-`let` lines, and any token collision keep the authored spelling. Anchors,
 `allow == one` hunks, ordinary hunks, non-contained/file scopes, and
 hunks with no matched spans keep their authored ranges. Hunks keep
 document order rather than range-sorting: an insertion anchor at a
@@ -6911,7 +6966,7 @@ stripping is deliberate. Equalities per origin close the contract:
   byte-identical); no canonical equality is owed, since the inferred
   side is deliberately ordinary.
 
-Corpus in scope: all applyrs fixtures (38), all diffrs fixtures
+Corpus in scope: all applyrs fixtures (40), all diffrs fixtures
 (60), all example benches, plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
@@ -6921,8 +6976,9 @@ Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 `19`, `21`, `22`); heterogeneous sites no template fires on stay
- ordinary (`12` statement
- sequences — owned by WI-5c, `14` divergent single-file renames whose
+ ordinary (`12` single-block hetero fusion — one block, no
+ cross-block holes; owned by WI-5d, while WI-5c covers N ≥ 2
+ repeated blocks, `14` divergent single-file renames whose
  deltas never share one intent, `30` trait decl/def pairs as WI-7
  grouping territory); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only

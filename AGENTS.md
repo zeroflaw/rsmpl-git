@@ -100,14 +100,14 @@ matched position rewrite too (`crate::{old, x}` → `crate::{new, x}`),
 but never by suffix (`crate::{x::old}` is untouched) (SPEC 14.9).
 
 Beyond calls — `let` (`- let x = E;` / `+ let y = E;`), general
-expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>`, `T` inferred).
+expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>`, `T` inferred),
+2–4-line `let` sequences (per-position `P0`/`E0` holes, SPEC 16.4.2).
 A bare `P` never matches annotated `x: T` — write `P: T`. Bounded shape
 set: full supported-vs-rejected table with exact errors is SPEC 18.6
 (mixed `let-else`, concrete-head `P @`, async/try/unsafe blocks, yield,
 macro types stay ordinary hunks; blocks, `if`, `match`, loops, closures,
 `break`/`continue`, `let` expressions, agreed `let-else`,
-and placeholder-head `P @` match structurally);
-ellipsis positions are SPEC 16.
+and placeholder-head `P @` match structurally); ellipsis positions are SPEC 16.
 
 ## Ranges (file reads, not a CLI listing)
 

@@ -12,7 +12,7 @@
 //! per the IMPROVE.md WI-4 detector layout.
 
 use super::antiunify::{
-    antiunify_let_template, antiunify_let_type_add, antiunify_types, TypedSite,
+    antiunify_let_template, antiunify_let_type_add, antiunify_sequence, antiunify_types, TypedSite,
 };
 use super::unique_rule;
 use quote::ToTokens;
@@ -123,6 +123,74 @@ pub(crate) fn try_let_template_sweep(
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
     Some(hunk)
+}
+
+/// N-pair (N ≥ 4) repeated-block sequence sweep (WI-5c): N flat pairs
+/// split block-major into ≥ 2 blocks × K = 2–4 `let` statements, each
+/// position anti-unified across blocks (hetero positions ride holes,
+/// identical ones stay concrete anchors). Emits one `# allow=many`
+/// hunk (tight original range, SPEC D.5) with K minus/plus lines.
+/// Contiguity gate: each block's old lines must be consecutive (block
+/// bodies are consecutive statements — the detector only fuses runs the
+/// engine matches as windows). Totality is the real-pair engine-count
+/// check (`template_sequence_holds`): the emitted minus must match
+/// exactly N blocks in the pre-image — an untouched twin window vetoes,
+/// exactly like the real sweep rewrites. Detector name `sequence`.
+pub(crate) fn try_sequence_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    let n = minuses.len();
+    if n != pluses.len() || n < 4 || changed.len() != n {
+        return None;
+    }
+    // All-identical whole classes stay for the tighter verbatim sweep
+    // (T422 precedent).
+    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
+        return None;
+    }
+    // Largest K first: the most specific template wins the byte guard
+    // naturally.
+    for k in [4, 3, 2] {
+        if !n.is_multiple_of(k) || n / k < 2 {
+            continue;
+        }
+        let mut contiguous = true;
+        for b in 0..n / k {
+            let run = &changed[b * k..(b + 1) * k];
+            for w in run.windows(2) {
+                if w[1] != w[0] + 1 {
+                    contiguous = false;
+                    break;
+                }
+            }
+            if !contiguous {
+                break;
+            }
+        }
+        if !contiguous {
+            continue;
+        }
+        let (minus_tpls, plus_tpls) = antiunify_sequence(minuses, pluses, k)?;
+        if !crate::totality::template_sequence_holds(path, file_old, &minus_tpls, &plus_tpls, n / k)
+        {
+            continue;
+        }
+        let rule = unique_rule(used_rules, "sequence");
+        let mut hunk = crate::emission_header(path, &rule, changed);
+        for l in &minus_tpls {
+            hunk.push_str(&format!("- {l}\n"));
+        }
+        for l in &plus_tpls {
+            hunk.push_str(&format!("+ {l}\n"));
+        }
+        return Some(hunk);
+    }
+    None
 }
 
 /// One pair's `(minus, plus)` types plus their original spellings: the
@@ -1202,6 +1270,78 @@ mod tests {
         let raw = section(
             "f.rs",
             "@@ -1,2 +1,2 @@\n fn f() {\n-    let a: i32 = 0;\n+    let a: i32 = 0.wrapping_add(1);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    // WI-5c detector proving shape: 2 blocks × 2 hetero positions no
+    // single-class detector covers — position 0 is a type-addition,
+    // position 1 a joint init-delta template (hetero pat/ty ride P1/T1).
+    const PRE_SEQ: &str = "fn first() {\n    let alpha = compute_first(input);\n    let beta: u32 = wrap(alpha);\n}\n\nfn second() {\n    let delta = compute_second(other);\n    let epsilon: u64 = wrap(delta);\n}\n";
+
+    fn seq_body() -> String {
+        "@@ -2,2 +2,2 @@\n-    let alpha = compute_first(input);\n-    let beta: u32 = wrap(alpha);\n+    let alpha: u32 = compute_first(input);\n+    let beta: u32 = wrap(alpha).wrapping_add(1);\n@@ -7,2 +7,2 @@\n-    let delta = compute_second(other);\n-    let epsilon: u64 = wrap(delta);\n+    let delta: u32 = compute_second(other);\n+    let epsilon: u64 = wrap(delta).wrapping_add(1);\n"
+            .to_string()
+    }
+
+    #[test]
+    fn sequence_two_blocks_fire() {
+        // WI-5c canonical shape: 2 blocks × 2 hetero positions. One
+        // shared header amortized over four lines.
+        let raw = section("f.rs", &seq_body());
+        let pre = pre_map(&[("f.rs", PRE_SEQ)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many\n"), "got: {out}");
+        assert!(out.contains("- let P0 = E0;\n"), "got: {out}");
+        assert!(out.contains("- let P1: T1 = E1;\n"), "got: {out}");
+        assert!(out.contains("+ let P0: u32 = E0;\n"), "got: {out}");
+        assert!(
+            out.contains("+ let P1: T1 = E1.wrapping_add(1);\n"),
+            "got: {out}"
+        );
+        // Inferred holes need no declarations (SPEC 15.8).
+        assert!(!out.contains("# pat"), "got: {out}");
+        assert!(!out.contains("# type"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
+        // Consumed: no native changed lines survive.
+        assert!(!out.contains("compute_first(input);"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_extra_twin_vetoes() {
+        // Totality: an untouched twin window in the pre-image would be
+        // silently rewritten — the sweep vetoes.
+        let raw = section("f.rs", &seq_body());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn first() {\n    let alpha = compute_first(input);\n    let beta: u32 = wrap(alpha);\n}\n\nfn second() {\n    let delta = compute_second(other);\n    let epsilon: u64 = wrap(delta);\n}\n\nfn third() {\n    let guard = compute_third(more);\n    let guard2: u64 = wrap(guard);\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn sequence_single_block_vetoes() {
+        // One hetero block is not a repeated sequence (WI-5d owns
+        // single-block fusion): the type-add position fails on the
+        // typed pair, the joint position on the untyped pair — stays
+        // ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let alpha = compute_first(input);\n-    let beta: u32 = wrap(alpha);\n+    let alpha: u32 = compute_first(input);\n+    let beta: u32 = wrap(alpha).wrapping_add(1);\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn sequence_noncontiguous_vetoes() {
+        // Hetero changed lines split across non-consecutive runs are not
+        // block bodies: singles fail their class gates and the sequence
+        // fails contiguity — stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2,1 +2,1 @@\n-    let alpha = compute_first(input);\n+    let alpha: u32 = compute_first(input);\n@@ -4,1 +4,1 @@\n-    let beta: u32 = wrap(alpha);\n+    let beta: u32 = wrap(alpha).wrapping_add(1);\n@@ -7,1 +7,1 @@\n-    let delta = compute_second(other);\n+    let delta: u32 = compute_second(other);\n@@ -9,1 +9,1 @@\n-    let epsilon: u64 = wrap(delta);\n+    let epsilon: u64 = wrap(delta).wrapping_add(1);\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }

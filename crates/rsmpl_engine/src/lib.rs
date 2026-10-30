@@ -20,6 +20,7 @@ mod matcher_general_tails;
 mod matcher_impl;
 mod matcher_item;
 mod matcher_macro;
+mod matcher_sequence;
 mod matcher_use;
 mod ordinary;
 mod plan;

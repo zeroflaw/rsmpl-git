@@ -158,6 +158,16 @@ pub(crate) fn run_pair_chain(
     {
         return Some((joint, "let_template"));
     }
+    // WI-5c: repeated-block `let` sequences (N ≥ 2 blocks × 2–4 stmts,
+    // hetero positions ride holes) — after the single-statement let
+    // sweeps (those own whole-class templates; this owns multi-line
+    // windows the singles cannot express), before the fold (which owns
+    // call-spine strips, never statement windows).
+    if let Some(seq) =
+        super::try_sequence_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((seq, "sequence"));
+    }
     // WI-1c: nested same-callee full-strip fold (`Box::new(Box::new(x))`
     // → `x`, `# repeat`) — after the type sweep (those own whole-statement
     // templates; this owns call-spine strips), before the verbatim stage
