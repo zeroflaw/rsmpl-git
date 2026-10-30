@@ -8,7 +8,7 @@ Skill: `skills/gitrs/SKILL.md` teaches the patch-first loop
 
 ## Patch skeleton
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -1,5 @@ rule=rename_foo
 - fn foo
@@ -69,7 +69,7 @@ tolerate zero (SPEC 17). Add `# repeat` to fold nested same-rule matches
 structurally (SPEC 15.7, SPEC 17.7); literal `E` needs backticks when `E`
 is declared (SPEC 15.4):
 
-```diff
+```diff rsmpl
 @@ -5,5 @@ rule=rename_calls
 # allow=many
 - foo(E)
@@ -80,7 +80,7 @@ Method-call rewrite — same directives; one bare metavar binds the whole
 receiver chain (`E.to_string()`); composite receivers never match — except a
 leading `&`, which routes to general-expr matching (`- &E.path()` / `+ E.path()`, SPEC 18.5):
 
-```diff
+```diff rsmpl
 @@ -5,5 @@ rule=method_to_function
 # allow=many
 - Receiver.old_method(Arg)

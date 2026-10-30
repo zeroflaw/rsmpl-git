@@ -19,7 +19,7 @@ through `gitrs` as ordinary hunks, so one tool owns every change.
 
 ## Minimal patch
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_foo
 - fn foo
@@ -52,14 +52,14 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 
 ## Shapes (SPEC 14/15/16/18.6)
 
-```diff
+```diff rsmpl
 @@ -5,5 @@ rule=rename_calls
 # allow=many
 - foo(E)
 + bar(E)
 ```
 
-```diff
+```diff rsmpl
 @@ -5,5 @@ rule=method_to_function
 # allow=many
 - Receiver.old_method(Arg)

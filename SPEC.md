@@ -4871,6 +4871,9 @@ conflict (Sections 6, 25.2).
 
 ## 28. Recommended LLM Emission Style
 
+Fences tagged `diff rsmpl` below are executable: `spec_examples`
+extracts and checks every one (Section 29 intro).
+
 ### 28.1 Use ordinary Git hunks for simple line edits
 
 Good:
@@ -4885,13 +4888,12 @@ Do not use RSmPL for trivial additions unless semantic placement is important.
 
 ### 28.2 Use RSmPL for semantic renames
 
-Good (diet form: elided new side, no `# lang=rust` next to other
-directives — Sections 7.1, 10.4):
+Good (diet form: elided new side, inferred `E`, no `# lang=rust`
+next to other directives — Sections 7.1, 10.4, 15.8):
 
-```diff
+```diff rsmpl
 @@ -40,8 @@ rule=rename_calls
 # allow=many
-# expr E
 - old_api(E)
 + new_api(E)
 ```
@@ -4902,12 +4904,10 @@ Keep RSmPL ranges tight: cite the smallest range that contains the match
 (read the file for exact spans). When the agent already holds
 a small file, skip range discovery entirely with whole-file scope:
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -1,1 @@ rule=rename_one_block
-# scope=file
-# allow=many
-# expr E
+# sweep
 - old_api(E)
 + new_api(E)
 ```
@@ -4961,7 +4961,7 @@ unless path abstraction is needed.
 For cross-scope rename safety (copy-pasteable; v0.1 matches the full path
 exactly, so prefer concrete paths — Section 19.3):
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -5,2 @@ rule=rename_symbol
 # allow=many
@@ -4979,7 +4979,6 @@ Do not restate large moved code blocks.
 Use:
 
 ```diff
-# item I
 # bind=Moved
 - I
 ```
@@ -4991,18 +4990,24 @@ and later:
 + Moved
 ```
 
+(Exposition fragments — the complete executable move is §29.6.)
+
 ---
 
 ## 29. Examples
 
 All examples use the diet-minimal recipe from Section 6 (single-path
-header, elided new side, no `# lang=rust` next to other directives —
-the form agents should emit). Bare renames use the terse form plus
-`rule=` with no directive lines (Section 7.1).
+header, elided new side, inferred metavariables with no `# expr`
+declaration, no `# lang=rust` next to other directives — the form
+agents should emit). Bare renames use the terse form plus `rule=`
+with no directive lines (Section 7.1). Fences tagged `diff rsmpl`
+are executable: `bin/applyrs/tests/spec_examples.rs` extracts and
+checks every one (hunk-only fences without a `diff --git` line are
+completed with `diff --git src/lib.rs` before checking).
 
 ### 29.1 Rename a plain function
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_plain_foo
 - fn foo
@@ -5036,10 +5041,9 @@ where
 
 ### 29.2 Rename a public async unsafe generic function
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -30,12 @@ rule=rename_complex_foo
-# lang=rust
 - pub async unsafe fn foo<T>(...) where T: Clone {
 + pub async unsafe fn bar<T>(...) where T: Clone {
       ...
@@ -5050,30 +5054,27 @@ This only matches functions with the explicitly written shape.
 
 ### 29.3 Rename calls in a known range
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -40,8 @@ rule=rename_calls
 # allow=many
-# expr E
 - foo(E)
 + bar(E)
 ```
 
 ### 29.4 Method call to free function
 
-```diff
+```diff rsmpl
 diff --git src/service.rs
 @@ -75,20 @@ rule=method_to_free_function
 # allow=many
-# expr Receiver
-# expr Arg
 - Receiver.old_method(Arg)
 + new_function(Receiver, Arg)
 ```
 
 ### 29.5 Semantic rename with symbol resolution
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -80,20 @@ rule=rename_symbol_calls
 # allow=many
@@ -5086,10 +5087,9 @@ diff --git src/lib.rs
 
 ### 29.6 Move a function between files
 
-```diff
+```diff rsmpl
 diff --git src/old.rs
 @@ -20,12 @@ rule=cut_helper
-# item I
 # bind=Helper
 - I
 
@@ -5101,10 +5101,9 @@ diff --git src/new.rs
 
 ### 29.7 Mixed RSmPL and ordinary Git patch
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -10,7 @@ rule=rename_foo
-# lang=rust
 - fn foo(...) {
 + fn bar(...) {
       ...
@@ -5112,11 +5111,10 @@ diff --git src/lib.rs
 
 @@ -40,8 @@ rule=rename_calls
 # allow=many
-# expr E
 - foo(E)
 + bar(E)
 
-@@ -1,4 +1,5 @@
+@@ -1,3 +1,4 @@
  mod old;
 +mod new;
 
@@ -5125,19 +5123,17 @@ diff --git src/lib.rs
 
 ### 29.8 Insert a use item semantically
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -3,0 @@ rule=insert_use
-# lang=rust
 + use crate::new_module::Thing;
 ```
 
 ### 29.9 Rewrite inside an impl block
 
-```diff
+```diff rsmpl
 diff --git src/service.rs
 @@ -20,40 @@ rule=rename_impl_method
-# lang=rust
   impl Service {
       ...
 -     fn old_name(...) {
@@ -5150,10 +5146,9 @@ diff --git src/service.rs
 The same shape with a `trait` header rewrites trait methods, including
 `;` declarations (the `;` is preserved like a body):
 
-```diff
+```diff rsmpl
 diff --git src/service.rs
 @@ -1,3 @@ rule=rename_trait_method
-# lang=rust
   trait Service {
       ...
 -     fn old_name();
@@ -5164,12 +5159,11 @@ diff --git src/service.rs
 
 ### 29.10 Optional migration
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -100,30 @@ rule=optional_old_api_cleanup
 # optional
 # allow=many
-# expr E
 - old_api(E)
 + new_api(E)
 ```
@@ -5180,10 +5174,9 @@ If no calls exist in the range, the hunk succeeds without changes.
 
 This example demonstrates the original-source coordinate system from Section 10.2. The second semantic hunk keeps using the line number it had in the original file, even though the first hunk inserts a larger replacement before it.
 
-```diff
+```diff rsmpl
 diff --git src/lib.rs
 @@ -10,1 @@ rule=insert_large_block
-# lang=rust
 - old_function()
 + new_function_that_spans(
 +     many,
@@ -5192,7 +5185,6 @@ diff --git src/lib.rs
 + )
 
 @@ -20,5 @@ rule=rename_second_function
-# lang=rust
 - fn second_function(...) {
 + fn renamed_function(...) {
       ...
@@ -5532,8 +5524,11 @@ must keep both ranges); `rule=name` is recommended for multi-hunk patches
 but optional (a hunk without it is valid; diagnostics show `<unnamed>`);
 `# lang=rust` is never required (detection is `rule=` or any `#` line)
 and is omitted when other directives are present (Sections 7.1,
-9.2). The verbose compatible spelling used in the Section 29 examples
-(two-path headers, copied new sides, explicit `# lang=rust`) stays valid.
+9.2). Metavariables are inferred — no `# kind Name` declaration line
+in diet form (Section 15.8); the skeleton above names the position
+only. Fences tagged `diff rsmpl` in Sections 28–29 are executable
+under `spec_examples`; this skeleton is illustrative (placeholders)
+and stays untagged.
 
 The canonical ordinary hunk shape remains:
 

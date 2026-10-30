@@ -8,10 +8,12 @@ mod canonical;
 mod diet_detect;
 mod directives;
 mod errors;
+mod gitpaths;
 mod model;
 mod parser;
 mod sweep;
 mod trailing_blank;
+mod validate;
 
 pub use canonical::{
     canonicalize, canonicalize_with_spans, canonicalize_with_spans_parsed, TIGHT_RANGE_MAX_LINES,
