@@ -35,12 +35,12 @@ fn spawn_no_git(patch: &str, extra: &[&str]) -> (tempfile::TempDir, std::process
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(patch.as_bytes())
-        .unwrap();
+    // Tolerate EPIPE: the child may exit before reading stdin.
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(patch.as_bytes()) {
+            assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
+        }
+    }
     let out = child.wait_with_output().unwrap();
     (dir, out)
 }

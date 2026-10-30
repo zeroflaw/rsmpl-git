@@ -132,12 +132,12 @@ fn failing_check_still_writes_output() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(rename_patch().as_bytes())
-            .unwrap();
+        // Tolerate EPIPE: the child may exit before reading stdin.
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Err(e) = stdin.write_all(rename_patch().as_bytes()) {
+                assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
+            }
+        }
         child.wait_with_output().unwrap()
     };
     assert_eq!(out.status.code(), Some(2));

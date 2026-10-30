@@ -105,12 +105,12 @@ fn check_with_bare_git_unidiff_zero(dir: &Path, patch: &str) -> std::process::Ou
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(patch.as_bytes())
-        .unwrap();
+    // Tolerate EPIPE: the child may exit before reading stdin.
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(patch.as_bytes()) {
+            assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
+        }
+    }
     child.wait_with_output().unwrap()
 }
 

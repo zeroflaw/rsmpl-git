@@ -326,12 +326,12 @@ pub fn run_all(label: &str, filter: impl Fn(&str) -> bool, pins: impl Fn(&str, &
             .spawn()
             .unwrap();
         use std::io::Write;
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(&patch_bytes)
-            .unwrap();
+        // Tolerate EPIPE: the child may exit before reading stdin.
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Err(e) = stdin.write_all(&patch_bytes) {
+                assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe);
+            }
+        }
         let applied = child.wait_with_output().unwrap();
         assert!(
             applied.status.success(),
