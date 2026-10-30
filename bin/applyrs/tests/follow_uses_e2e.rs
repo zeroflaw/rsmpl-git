@@ -104,10 +104,13 @@ fn shadowed_definition_skips_with_fallback_and_reports() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    let bindings = &v["rules"][0]["bindings"];
-    let joined = bindings.to_string();
+    // WI-2c v2: `follow_skipped` is its own rule-level key (hunk-level,
+    // no span), not a `bindings` entry.
+    let skipped = v["rules"][0]["follow_skipped"]
+        .as_str()
+        .expect("follow_skipped present");
     assert!(
-        joined.contains("follow_skipped"),
+        skipped.contains("shadowed"),
         "fallback skip reported, got: {v}"
     );
 }

@@ -130,5 +130,5 @@ fn verify_build_json_applied_flag() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["build"], serde_json::json!("pass"), "got: {v}");
+    assert_eq!(v["checked"]["build"], serde_json::json!("pass"), "got: {v}");
 }

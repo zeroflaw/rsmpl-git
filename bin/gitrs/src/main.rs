@@ -56,7 +56,7 @@ fn wants_json(args: &[String]) -> bool {
 fn fail(reason: &str, args: &[String]) -> ! {
     if wants_json(args) {
         let payload = serde_json::json!({
-            "version": 1,
+            "version": 2,
             "error": {
                 "code": "RSMPL_IO_CONFLICT",
                 "rule": null,

@@ -25,7 +25,7 @@ fn assert_envelope(out: &std::process::Output, needle: &str) {
         "got: {v}"
     );
     // T25: schema version rides alongside the envelope on every failure.
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
     assert!(
         v["error"]["reason"]
             .as_str()
@@ -110,7 +110,7 @@ fn json_patch_flag_is_accepted_inline_source() {
         serde_json::json!("RSMPL_PARSE_CONFLICT"),
         "got: {v}"
     );
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
 }
 
 #[test]

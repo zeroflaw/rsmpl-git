@@ -76,7 +76,7 @@ fn text_check_diff_on_stdout_check_on_stderr() {
 
 #[test]
 fn json_check_has_no_stderr_check_line() {
-    // D.2.3 (T85): JSON `--check` is stdout-only. The `"check":true`
+    // D.2.3 (T85): JSON `--check` is stdout-only. The `"checked"`
     // payload is the machine signal; no redundant stderr `check:` line.
     let dir = init_repo();
     write(
@@ -91,8 +91,12 @@ fn json_check_has_no_stderr_check_line() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
         !stderr.contains("check:"),

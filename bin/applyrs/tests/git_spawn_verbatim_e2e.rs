@@ -86,7 +86,7 @@ fn spawn_failure_rejected_verbatim_json() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
     assert_eq!(
         v["error"]["code"],
         serde_json::json!("GIT_HUNK_CONFLICT"),

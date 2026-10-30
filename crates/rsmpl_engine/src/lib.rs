@@ -22,6 +22,7 @@ mod matcher_macro;
 mod matcher_use;
 mod ordinary;
 mod plan;
+mod postcheck;
 mod suggest;
 mod use_graph;
 mod validate;
@@ -52,13 +53,12 @@ pub struct RuleReport {
     /// one span per rewritten use site, so `spans.len() >= matches` there
     /// (`matches` counts definitions). Insertions report `[anchor, anchor]`.
     pub spans: Vec<(u32, u32)>,
-    /// First-match metavariable bindings (SPEC D.2, compat; WI-2c removes).
-    pub bindings: Vec<(String, String)>,
-    /// Omitted-entry count when the CLI truncates the report (SPEC D.2).
-    pub bindings_truncated: usize,
     /// Per-site evidence (WI-2b, SPEC D.2): one entry per emitted edit in
     /// span order; empty for shapes that bind nothing (omitted from JSON).
     pub sites: Vec<SiteReport>,
+    /// `# fallback=syntax` skip notes from `# follow=uses` hunks (SPEC
+    /// 14.8): `; `-joined, present only when sites were skipped.
+    pub follow_skipped: Option<String>,
 }
 
 /// One emitted edit's evidence (WI-2b): its span plus its own bindings,

@@ -17,10 +17,9 @@ use rsmpl_patch::{Directive, ErrorCode, Hunk, Patch, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
 
 use crate::capture::{paste_capture, CaptureStore, PasteTarget};
-use crate::edits::{
-    apply_edits, check_overlaps, check_untouched, coalesce_deletes, edit_spans, TextEdit,
-};
+use crate::edits::{apply_edits, check_overlaps, coalesce_deletes, edit_spans, TextEdit};
 use crate::lines::{FileState, LineIndex};
+use crate::postcheck::{noop_sweep_error, sweep_edits_are_noop, sweep_hunk_needs_postcheck};
 use crate::suggest::candidate_preview;
 use crate::use_graph::follow_uses_workspace;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
@@ -248,9 +247,8 @@ pub fn apply_with_captures(
                     file: path.clone(),
                     matches: 1,
                     spans: vec![(sl, el)],
-                    bindings: Vec::new(),
-                    bindings_truncated: 0,
                     sites: Vec::new(),
+                    follow_skipped: None,
                 },
             ));
         }
@@ -298,6 +296,22 @@ pub fn apply_with_captures(
                         apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
                             .map_err(|e| e.with_file(path))?
                     };
+                    // WI-2c sweep change gate (SPEC 24.6): a file-scope
+                    // `# allow=many` hunk that matched but changes no bytes
+                    // (identical replacements) fails loud here, before
+                    // follow extras land. Ranged/optional/insertion/cut
+                    // hunks never owe it (see `postcheck`).
+                    let def_len = file_edits
+                        .get(path)
+                        .map(|v| v.len())
+                        .unwrap_or(edits_before);
+                    if found > 0 && sweep_hunk_needs_postcheck(rh, &compiled) {
+                        let state = states.get(path).expect("file state");
+                        let edits = file_edits.get(path).expect("file state");
+                        if sweep_edits_are_noop(&state.original, &edits[edits_before..def_len]) {
+                            return Err(noop_sweep_error(&rule, path, &range_desc));
+                        }
+                    }
                     // T249: record capture-paste edits for blank-join. A
                     // paste hunk pushes exactly one insertion at
                     // `edits_before`, so its index is stable.
@@ -386,14 +400,10 @@ pub fn apply_with_captures(
                         &range_desc,
                         ZeroMatchHint { wide, preview },
                     )?;
-                    // WI-2b: per-site bindings in span order + first-site
-                    // compat. `def_bindings` is one map per accepted match;
+                    // WI-2b/2c: per-site bindings in span order (v2 evidence).
+                    // `def_bindings` is one map per accepted match;
                     // `follow_skipped` stays hunk-level (no span).
-                    let mut first_map: HashMap<String, String> =
-                        def_bindings.first().cloned().unwrap_or_default();
-                    first_map.extend(follow_bindings);
-                    let mut bindings: Vec<(String, String)> = first_map.into_iter().collect();
-                    bindings.sort_by(|a, b| a.0.cmp(&b.0));
+                    let follow_skipped = follow_bindings.get("follow_skipped").cloned();
                     let mut sites: Vec<crate::SiteReport> = Vec::new();
                     for (i, span) in spans.iter().enumerate() {
                         if let Some(m) = def_bindings.get(i) {
@@ -416,9 +426,8 @@ pub fn apply_with_captures(
                             file: path.clone(),
                             matches: found,
                             spans,
-                            bindings,
-                            bindings_truncated: 0,
                             sites,
+                            follow_skipped,
                         },
                     ));
                     // WI-6b1: one follow-only entry per non-definition file
@@ -435,9 +444,8 @@ pub fn apply_with_captures(
                                 file,
                                 matches,
                                 spans,
-                                bindings: Vec::new(),
-                                bindings_truncated: 0,
                                 sites: Vec::new(),
+                                follow_skipped: None,
                             },
                         ));
                     }
@@ -499,13 +507,11 @@ pub fn apply_with_captures(
         // other overlap pair still fails in `check_overlaps` below.
         let edits = coalesce_deletes(edits);
         check_overlaps(&edits, path)?;
-        // WI-2 untouched-outside-spans evidence (SPEC 24.6): re-derive the
-        // file from the original plus only the recorded edits and
-        // byte-compare. A mismatch is an engine bug — fail loud, never a
-        // warning. (Materialization is a pure function of original+edits,
-        // so this pins "nothing outside the reported spans changed".)
-        let updated = apply_edits(&state.original, edits.clone()).map_err(|e| e.with_file(path))?;
-        check_untouched(&state.original, &updated, &edits, path)?;
+        // WI-2c: materialization is a pure function of original + the
+        // recorded edits (byte-identity outside spans holds by
+        // construction, SPEC 24.6); the trust gates are reparse +
+        // postcondition below, both of which fail loud on real input.
+        let updated = apply_edits(&state.original, edits).map_err(|e| e.with_file(path))?;
         if state.parsed.is_some() {
             syn::parse_str::<syn::File>(&updated).map_err(|e| {
                 StructuredError::new(
@@ -517,6 +523,11 @@ pub fn apply_with_captures(
         }
         files.insert(path.clone(), updated);
     }
+
+    // WI-2c: the semantic leg beyond reparse is the pass-2 sweep change
+    // gate above (fails loud as `RSMPL_MATCH_CONFLICT` on real input,
+    // never true by construction). Byte-identity outside spans holds by
+    // construction (edits are the only mutation, SPEC 24.6).
 
     Ok(report)
 }
@@ -963,9 +974,9 @@ mod tests {
 
     #[test]
     fn report_carries_per_site_bindings_in_span_order() {
-        // WI-2b: `sites` carries one entry per emitted edit with its own
-        // bindings — sites 2..N are no longer evidence-free. First-site
-        // `bindings` stays as compat.
+        // WI-2b/2c: `sites` carries one entry per emitted edit with its own
+        // bindings — sites 2..N are no longer evidence-free. V2 has no
+        // first-site `bindings` compat (removed with `version: 2`).
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,9 @@ rule=r\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
         let src = "fn a() {\n    foo(1);\n}\nfn b() {\n    foo(2);\n}\nfn c() {\n    foo(3);\n}\n";
         let (_, report) = apply_multi_report(patch, vec![("src/lib.rs", src)]).unwrap();
@@ -983,14 +994,11 @@ mod tests {
                 .expect("E binding");
             assert_eq!(e.1, format!("{}", i + 1), "site {i}: {:?}", site);
         }
-        // Compat: first-site `bindings` equals sites[0].
-        let first_e = r.bindings.iter().find(|(k, _)| k == "E").expect("first E");
-        assert_eq!(first_e.1, "1");
         // Rename shapes bind nothing: sites omitted.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n- fn foo\n+ fn bar\n";
         let (_, report) = apply_multi_report(patch, vec![("src/lib.rs", "fn foo() {}\n")]).unwrap();
         assert!(report.rules[0].sites.is_empty());
-        assert!(report.rules[0].bindings.is_empty());
+        assert!(report.rules[0].follow_skipped.is_none());
     }
 
     #[test]
@@ -1101,22 +1109,30 @@ mod tests {
     }
 
     #[test]
-    fn untouched_check_fires_on_tampered_post_image() {
-        // WI-2: `check_untouched` re-derives the file from the original
-        // plus only the recorded edits — a post-image with bytes no edit
-        // produced fails loud (engine-bug signal, never a warning).
-        let original = "fn a() {}\n";
-        let edits = vec![crate::edits::TextEdit::new(0, 0, "use x;\n".to_string())];
-        let good = "use x;\nfn a() {}\n";
-        crate::edits::check_untouched(original, good, &edits, "src/lib.rs").expect("clean");
-        let tampered = "use x;\nfn a() {}\n// sneaked in\n";
+    fn identity_sweep_fails_via_change_gate() {
+        // WI-2c: an identity sweep (`foo -> foo`) changes no bytes —
+        // loud, not an empty lowering with a clean report. (Ranged
+        // fixed-points stay valid matches; only file sweeps owe the
+        // change gate.)
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# expr E\n- foo(E)\n+ foo(E)\n";
         let err =
-            crate::edits::check_untouched(original, tampered, &edits, "src/lib.rs").unwrap_err();
-        let rendered = err.render();
-        assert!(rendered.contains("RSMPL_PARSE_CONFLICT"), "got: {rendered}");
+            apply_multi(patch, vec![("src/lib.rs", "fn a() {\n    foo(1);\n}\n")]).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        assert!(err.contains("postcondition"), "got: {err}");
+    }
+
+    #[test]
+    fn widening_sweep_passes_change_gate() {
+        // WI-2c: a file sweep whose plus reintroduces the minus
+        // (`foo(E)` -> `foo(foo(E))`, like the `24-pat-sweep` widening
+        // `E` -> `E.wrapping_add(1)`) still changes bytes, so the change
+        // gate passes — minus-zero re-matching would wrongly reject it.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# expr E\n- foo(E)\n+ foo(foo(E))\n";
+        let files = apply_multi(patch, vec![("src/lib.rs", "fn a() {\n    foo(1);\n}\n")]).unwrap();
         assert!(
-            rendered.contains("untouched verification"),
-            "got: {rendered}"
+            files["src/lib.rs"].contains("foo(foo(1))"),
+            "got: {}",
+            files["src/lib.rs"]
         );
     }
 
@@ -1171,7 +1187,8 @@ mod tests {
         );
         assert_eq!(extra.matches, 4);
         assert_eq!(extra.spans.len(), 4);
-        assert!(extra.bindings.is_empty());
+        assert!(extra.sites.is_empty());
+        assert!(extra.follow_skipped.is_none());
     }
 
     #[test]
@@ -1211,18 +1228,8 @@ mod tests {
             files["src/b.rs"]
         );
         assert_eq!(report.rules.len(), 1, "report: {:?}", report.rules);
-        let joined: String = report.rules[0]
-            .bindings
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(";");
-        assert!(
-            joined.contains("follow_skipped"),
-            "report: {:?}",
-            report.rules
-        );
-        assert!(joined.contains("src/b.rs"), "report: {:?}", report.rules);
+        let skipped = report.rules[0].follow_skipped.as_deref().unwrap_or("");
+        assert!(skipped.contains("src/b.rs"), "report: {:?}", report.rules);
     }
 
     #[test]
@@ -1299,14 +1306,9 @@ mod tests {
         let joined: String = report
             .rules
             .iter()
-            .flat_map(|r| r.bindings.iter().map(|(k, v)| format!("{k}={v}")))
+            .filter_map(|r| r.follow_skipped.clone())
             .collect::<Vec<_>>()
             .join(";");
-        assert!(
-            joined.contains("follow_skipped"),
-            "report: {:?}",
-            report.rules
-        );
         assert!(joined.contains("src/b.rs"), "report: {:?}", report.rules);
     }
 }

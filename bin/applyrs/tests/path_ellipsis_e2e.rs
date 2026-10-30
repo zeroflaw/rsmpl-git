@@ -72,7 +72,10 @@ fn path_ellipsis_json_check_reports_three_matches() {
         String::from_utf8_lossy(&out.stderr)
     );
     let payload: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
-    assert_eq!(payload["check"], true);
+    assert_eq!(
+        payload["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"})
+    );
     assert_eq!(payload["rules"][0]["matches"], 3);
 }
 

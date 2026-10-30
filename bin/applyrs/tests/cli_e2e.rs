@@ -280,7 +280,7 @@ fn symbol_without_fallback_json_envelope() {
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
     assert_eq!(
         v["error"]["code"],
         serde_json::json!("RSMPL_SYMBOL_CONFLICT"),
@@ -605,8 +605,11 @@ fn json_report_carries_rules_and_diff() {
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
     assert!(v["diff"].as_str().unwrap().contains("diff --git"));
     assert!(!v["diff"].as_str().unwrap().contains("# lang=rust"));
-    assert_eq!(v["check"], serde_json::json!(true));
-    assert_eq!(v["version"], serde_json::json!(1));
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"})
+    );
+    assert_eq!(v["version"], serde_json::json!(2));
     // --check must not modify the file.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
@@ -826,22 +829,30 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
     assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
-    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
     assert_eq!(
         v["files"],
         serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2, "post_sha": "accccd852858f3efbe60dc4eaaf8acc679499125a742f5a24259309e3ebaf1ea"}]),
         "got: {v}"
     );
-    // WI-2: bindings + verified envelope.
+    // WI-2b/2c v2: per-site `sites` evidence + `checked` envelope
+    // (first-site `bindings` and `verified` removed with `version: 2`).
     assert_eq!(
-        v["rules"][0]["bindings"],
-        serde_json::json!({"E": "1"}),
+        v["rules"][0]["sites"],
+        serde_json::json!([
+            {"span": [2, 2], "bindings": {"E": "1"}},
+            {"span": [3, 3], "bindings": {"E": "2"}}
+        ]),
         "got: {v}"
     );
     assert_eq!(
-        v["verified"],
-        serde_json::json!({"reparse": true, "untouched_outside_spans": true}),
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
         "got: {v}"
     );
     // T54: `files_changed` removed (duplicated `files[].path`); the single
@@ -871,9 +882,14 @@ fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
     assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
     assert_eq!(v["files"], serde_json::json!([]), "got: {v}");
-    // T57: no `--check` means `check` is false (boolean, never null).
-    assert_eq!(v["check"], serde_json::json!(false), "got: {v}");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    // T57/v2: apply mode reports the same `checked` object (the flag
+    // chooses check vs apply, never the report shape).
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
 }
 
 #[test]
@@ -927,8 +943,12 @@ fn json_diff_max_lines_truncates_but_stats_stay_exact() {
     assert_eq!(v["diff_truncated"], serde_json::json!(true), "got: {v}");
     // Stats are computed from the full contents, not the truncated string.
     assert_eq!(v["files"], full_v["files"], "got: {v} vs {full_v}");
-    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
 
@@ -1273,8 +1293,12 @@ fn json_lowering_is_zero_context_stats_stay_exact() {
         "got: {v}"
     );
     assert_eq!(v["diff_truncated"], serde_json::json!(false), "got: {v}");
-    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
-    assert_eq!(v["version"], serde_json::json!(1), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
 }
 
 #[test]
@@ -1861,13 +1885,9 @@ fn json_report_shows_extra_span_of_over_broad_patch() {
         serde_json::json!([[2, 2], [3, 3], [6, 6]]),
         "got: {v}"
     );
-    assert_eq!(
-        v["rules"][0]["bindings"],
-        serde_json::json!({"E": "1"}),
-        "got: {v}"
-    );
-    // WI-2b per-site evidence in span order: the extra site is visible
-    // with its own bindings before apply.
+    // WI-2b/2c v2 per-site evidence in span order: the extra site is
+    // visible with its own bindings before apply (first-site `bindings`
+    // removed with `version: 2`).
     assert_eq!(
         v["rules"][0]["sites"],
         serde_json::json!([
@@ -1879,6 +1899,36 @@ fn json_report_shows_extra_span_of_over_broad_patch() {
     );
     // --check applied nothing: the agent decides from the report alone.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
+}
+
+#[test]
+fn identity_sweep_fails_postcondition_loud() {
+    // WI-2c: an identity sweep (`foo(E)` -> `foo(E)`) changes no bytes —
+    // the sweep change gate (SPEC 24.6) fails loud with
+    // `RSMPL_MATCH_CONFLICT` instead of an empty lowering with a clean
+    // report, and the worktree stays untouched.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n}\n",
+    );
+    let sweep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n# allow=many\n# expr E\n- foo(E)\n+ foo(E)\n";
+    let out = run_stdin(dir.path(), sweep, &["--format", "json", "--check"]);
+    assert!(!out.status.success(), "identity sweep must fail");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_MATCH_CONFLICT"),
+        "got: {v}"
+    );
+    assert!(
+        v["error"]["reason"].as_str().unwrap().contains("postcondition"),
+        "got: {v}"
+    );
+    assert_eq!(read(dir.path(), "src/lib.rs"), "fn a() {\n    foo(1);\n}\n");
 }
 
 #[test]
@@ -1903,8 +1953,9 @@ fn verify_unknown_mode_is_usage_error() {
 
 #[test]
 fn json_bindings_truncate_and_omit_empty() {
-    // WI-2 token bounds: values cut at 80 chars (ASCII here, so chars
-    // == bytes), and shapes that bind nothing omit both keys.
+    // WI-2b/2c v2 token bounds: per-site values cut at 80 chars (ASCII
+    // here, so chars == bytes), and shapes that bind nothing omit the
+    // `sites` key (first-site `bindings` removed with `version: 2`).
     let dir = init_repo();
     let long_arg = "a".repeat(100);
     write(
@@ -1921,14 +1972,7 @@ fn json_bindings_truncate_and_omit_empty() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    let bound = v["rules"][0]["bindings"]["E"].as_str().unwrap();
-    assert_eq!(bound.chars().count(), 80, "got: {v}");
-    assert_eq!(
-        v["rules"][0]["bindings_truncated"],
-        serde_json::json!(0),
-        "got: {v}"
-    );
-    // WI-2b: per-site truncation mirrors `bindings`; both sites truncate.
+    // WI-2b: per-site truncation; both sites truncate.
     let sites = v["rules"][0]["sites"].as_array().unwrap();
     assert_eq!(sites.len(), 2, "got: {v}");
     for site in sites {
@@ -1939,7 +1983,7 @@ fn json_bindings_truncate_and_omit_empty() {
         );
     }
 
-    // A definition-only rename binds nothing: bindings + sites keys absent.
+    // A definition-only rename binds nothing: sites key absent.
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
@@ -1951,11 +1995,6 @@ fn json_bindings_truncate_and_omit_empty() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert!(v["rules"][0].get("bindings").is_none(), "got: {v}");
-    assert!(
-        v["rules"][0].get("bindings_truncated").is_none(),
-        "got: {v}"
-    );
     assert!(v["rules"][0].get("sites").is_none(), "got: {v}");
     assert!(v["rules"][0].get("sites_truncated").is_none(), "got: {v}");
 }

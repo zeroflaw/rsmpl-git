@@ -175,7 +175,7 @@ fn impl_pub_method_evolution_applies() {
 
 #[test]
 fn impl_pub_method_evolution_json_check() {
-    // T175 JSON pin: `--check` reports `"check":true` with the rule match.
+    // T175 JSON pin: `--check` reports `"checked"` with the rule match.
     let dir = init_repo();
     write(
         dir.path(),
@@ -190,7 +190,7 @@ fn impl_pub_method_evolution_json_check() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+    assert!(stdout.contains("\"checked\""), "got: {stdout}");
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn impl_async_fn_evolution_json_report() {
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(stdout.contains("\"matches\":1"), "got: {stdout}");
     assert!(stdout.contains("\"spans\":[[4,4],[4,4]]"), "got: {stdout}");
-    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+    assert!(stdout.contains("\"checked\""), "got: {stdout}");
 }
 
 #[test]
@@ -432,5 +432,5 @@ fn impl_typed_self_receiver_rename_json() {
         String::from_utf8_lossy(&out.stdout)
     );
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+    assert!(stdout.contains("\"checked\""), "got: {stdout}");
 }

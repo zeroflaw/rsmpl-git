@@ -26,7 +26,11 @@ fn json_apply_mutates_worktree() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["check"], serde_json::json!(false), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
     let after = read(dir.path(), "src/lib.rs");
     assert_ne!(before, after, "JSON apply must touch the worktree");
@@ -49,7 +53,11 @@ fn json_check_still_applies_nothing() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["check"], serde_json::json!(true), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
     let text = read(dir.path(), "src/lib.rs");
     assert!(
         text.contains("foo(1)"),
@@ -61,7 +69,7 @@ fn json_check_still_applies_nothing() {
 fn json_empty_lowering_without_check_reports_clean() {
     // T151 parity: an empty lowering (optional zero-match) never touches
     // git in any mode — JSON non-check reports clean with empty
-    // `files`/`diff` and `"check": false`.
+    // `files`/`diff` and the v2 `checked` object.
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn foo() {}\n");
     let noop = "diff --git src/lib.rs\n@@ -1,1 @@ rule=noop\n# lang=rust\n# optional\n- fn missing_xyz(...) {\n+ fn renamed_xyz(...) {\n      ...\n  }\n";
@@ -73,7 +81,11 @@ fn json_empty_lowering_without_check_reports_clean() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["check"], serde_json::json!(false), "got: {v}");
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
+        "got: {v}"
+    );
     assert_eq!(v["files"].as_array().unwrap().len(), 0, "got: {v}");
     assert_eq!(v["diff"], serde_json::json!(""), "got: {v}");
     let text = read(dir.path(), "src/lib.rs");

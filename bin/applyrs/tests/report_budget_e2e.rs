@@ -65,15 +65,11 @@ fn json_report_overhead_within_absolute_budget() {
         overhead <= budget,
         "overhead {overhead} B exceeds budget {budget} B (F={f} R={r} S={s}): {v}"
     );
-    // Token bounds still hold per entry.
+    // Token bounds still hold per entry (WI-2c v2: `sites` is the only
+    // bindings evidence; first-site `bindings` removed).
     for e in rules {
-        if let Some(bindings) = e.get("bindings") {
-            let map = bindings.as_object().unwrap();
-            assert!(map.len() <= 8, "got: {v}");
-            for (_, val) in map {
-                assert!(val.as_str().unwrap().chars().count() <= 80, "got: {v}");
-            }
-        }
+        assert!(e.get("bindings").is_none(), "got: {v}");
+        assert!(e.get("bindings_truncated").is_none(), "got: {v}");
         // WI-2b: per-site evidence mirrors spans; per-site bounds hold.
         if let Some(sites) = e.get("sites") {
             let arr = sites.as_array().unwrap();
@@ -89,8 +85,8 @@ fn json_report_overhead_within_absolute_budget() {
         }
     }
     assert_eq!(
-        v["verified"],
-        serde_json::json!({"reparse": true, "untouched_outside_spans": true}),
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"}),
         "got: {v}"
     );
 }

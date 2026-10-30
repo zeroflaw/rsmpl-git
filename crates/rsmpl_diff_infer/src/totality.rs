@@ -598,8 +598,11 @@ pub(crate) fn template_type_holds(
     let Some(pre) = file_old else {
         return true;
     };
+    // WI-2c: the self-rewrite is an identity counting device, not a user
+    // rewrite — `# optional` exempts it from the sweep change gate
+    // (zero-match still yields `Ok(0) != n`, so verdicts are unchanged).
     let probe = format!(
-        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {minus_template}\n+ {minus_template}\n",
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n- {minus_template}\n+ {minus_template}\n",
         crate::git_header(path)
     );
     let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
@@ -719,8 +722,10 @@ pub(crate) fn template_expr_holds(
     let Some(pre) = file_old else {
         return true;
     };
+    // WI-2c: identity counting device — `# optional` exempts the sweep
+    // change gate (verdicts unchanged: zero-match yields `Ok(0) != n`).
     let probe = format!(
-        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {minus_template}\n+ {minus_template}\n",
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n- {minus_template}\n+ {minus_template}\n",
         crate::git_header(path)
     );
     let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
@@ -769,8 +774,10 @@ pub(crate) fn template_fn_holds(
     } else {
         format!("- {minus_header}\n+ {minus_header}\n      ...\n  }}\n")
     };
+    // WI-2c: self-rewrite counting device — `# optional` exempts the
+    // sweep change gate (verdicts unchanged).
     let probe = format!(
-        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n{body}",
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n{body}",
         crate::git_header(path)
     );
     let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {

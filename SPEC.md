@@ -4091,15 +4091,28 @@ Ordinary hunks must satisfy normal Git patch application rules.
 
 ### 24.6 Trust validation (report evidence)
 
-Accept only if:
+Byte-identity outside the reported spans holds by construction: edits
+are the only mutation (materialization is a pure function of original
+plus the recorded edits), so no re-derivation is reported. Accept only
+if:
 
 1. every rewritten file re-parses as Rust (validation item 3,
    Section 24.2; ordinary-only files are trivially true — they carry
-   no Rust parse);
-2. every rewritten file re-derives byte-identical from the original
-   plus only the recorded byte edits (untouched-outside-spans); a
-   mismatch fails with `RSMPL_PARSE_CONFLICT` (`rewritten file failed
-   untouched verification ...`), never a warning.
+   no Rust parse); a failure is `RSMPL_PARSE_CONFLICT`, never a
+   warning;
+2. the sweep change gate holds: every non-`optional` file-scope
+   `# allow=many` hunk that matched has at least one byte-changing
+   definition edit. A sweep claims every site in scope — a sweep that
+   changes nothing (e.g. `foo(E)` -> `foo(E)`) fails loud with
+   `RSMPL_MATCH_CONFLICT` (`postcondition: sweep matched but changed
+   no bytes ...`), never a silent empty lowering with a clean report.
+   Deliberately not a "minus must be zero in the post-image" check:
+   widening rewrites legitimately re-match their own output (`let P: T
+   = E` -> `let P: T = E.wrapping_add(1)` still matches `let P: T = E`
+   on the wrapped init). Ranged singles owe no gate (other sites may
+   legitimately remain; byte-identical fixed-point instantiations per
+   Section 18.6 R4 `P @` stay valid matches), `optional` zero-edit
+   hunks are skipped by design, and insertions/cuts never participate.
 
 ---
 
@@ -5667,16 +5680,15 @@ prints one JSON object to stdout:
 
 ```json
 {
-  "version": 1,
-  "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "bindings": {"E": "old_call"}, "bindings_truncated": 0}],
+  "version": 2,
+  "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "sites": [{"span": [10, 12], "bindings": {"E": "old_call"}}]}],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1, "post_sha": "<sha-256 hex of the post-image>"}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
   "diff_truncated": false,
   "diff_lines": 12,
   "diff_shown": 12,
-  "check": true,
-  "history": "<repo>/.history/{id}.rsmpl",
-  "verified": {"reparse": true, "untouched_outside_spans": true}
+  "checked": {"lowering": true, "semantics": true, "build": "skipped"},
+  "history": "<repo>/.history/{id}.rsmpl"
 }
 ```
 
@@ -5691,37 +5703,31 @@ prints one JSON object to stdout:
   `[L, L]`; an empty match set (optional no-match) reports `[]`.
   A `# follow=uses` hunk additionally carries one span per rewritten use
   site, so `spans.len() >= matches` there (`matches` still counts
-  definitions only). Cross-file uses (Section 14.8) report as extra
+  definitions only).   Cross-file uses (Section 14.8) report as extra
   entries under the same rule name — one per touched file, in sorted
   file order right after the definition entry: the definition entry
   keeps `matches` = definitions, each follow-only entry reports
   `matches` = its file's rewritten use-site count with `spans.len() ==
-  matches` there and empty `bindings`.
-  Each entry also carries `bindings` when the shape binds something:
-  the first accepted match's metavariable → matched source text map,
-  sorted by name (first-site compat; WI-2c removes it with `version: 2`).
-  Renames, insertions, deletions, and use-prefix renames
-  bind nothing and omit both keys (an empty map plus a zero count
-  carries no evidence) — except a `# follow=uses` hunk with skipped
-  sites, which binds `follow_skipped` to the `; `-joined skip notes.
-  Values truncate at 80 chars and entries at 8
-  (sorted order); `bindings_truncated` counts the omitted entries, so
-  the report stays within an absolute byte budget while an over-broad
-  hunk still shows its extra span before apply. Each entry additionally
-  carries `sites` when any site binds (WI-2b, additive, `version` stays
-  1): one `{span: [s, e], bindings: {...}}` per emitted edit in span
-  order (so `sites.len()` equals the number of binding sites, and each
-  `span` repeats the corresponding `spans` entry); shapes that bind
-  nothing omit `sites` like `bindings`. Per-site truncation mirrors
-  `bindings` (8 entries, 80 chars); `sites_truncated` sums omitted
-  entries across sites (absent when zero). Budget (bytes beyond
+  matches` there and no `sites`.
+  Each entry carries `sites` when any site binds: one
+  `{span: [s, e], bindings: {...}}` per emitted edit in span order (so
+  `sites.len()` equals the number of binding sites, and each `span`
+  repeats the corresponding `spans` entry). Renames, insertions,
+  deletions, and use-prefix renames bind nothing and omit the key
+  (an empty map plus a zero count carries no evidence). A
+  `# follow=uses` hunk with skipped sites carries hunk-level (no span)
+  `follow_skipped`: the `; `-joined skip notes (absent when no site
+  was skipped). Values truncate at 80 chars and entries at 8
+  (sorted order) per site; `sites_truncated` sums omitted entries
+  across sites (absent when zero), so the report stays within an
+  absolute byte budget while an over-broad hunk still shows its extra
+  span before apply. Budget (bytes beyond
   the reported `diff` string, `--diff-max-lines 0`): fixed envelope
-  ≈90 B (`verified` + keys) + ≈80 B per `files[]` entry (64-hex
+  ≈90 B (`checked` + keys) + ≈80 B per `files[]` entry (64-hex
   `post_sha` dominates) + ≈110 B per `rules[]` entry (single-span,
   no bindings) + ≈90 B per span (`[s,e]` plus per-site `{span,
   bindings}` evidence — that growth is evidence, not overhead) + at most
-  8×80 B bindings per rule (first-site compat) plus at most 8×80 B per
-  binding site. Operational pin:
+  8×80 B per binding site. Operational pin:
   overhead ≤ `200 + 150·F + 150·R + 90·S` bytes (`F` = files,
   `R` = rules, `S` = total spans). There is deliberately no relative
   % bound: a sub-KB report can exceed any % while staying within
@@ -5743,15 +5749,20 @@ prints one JSON object to stdout:
   changes); `diff_shown` is the line count of the reported `diff` string
   (`0` when omitted or no changes). JSON consumers size the next budget
   as `diff_shown` of `diff_lines` instead of guessing (see D.2.1).
-- `version` is the JSON report schema version (`1` = this contract:
-  boolean `check`, no `files_changed`). Agents pin parsing on it; any
-  future breaking JSON change bumps it (additive keys like `history`,
-  `bindings`, `post_sha`, `verified` do not bump).
-- `verified` is the trust envelope: `{reparse: true,
-  untouched_outside_spans: true}` on every successful run. The engine
-  re-derives each touched file from the original plus only the recorded
-  edits and byte-compares (Section 24.6); a mismatch is an engine bug
-  and fails the run loud, never a warning. Failures never reach this
+- `version` is the JSON report schema version (`2` = this contract:
+  `checked` object, `sites`-only evidence, `follow_skipped` key; `v1`
+  had boolean `check`, first-site `bindings`, and `verified`). Agents
+  pin parsing on it; any future breaking JSON change bumps it
+  (additive keys like `history`, `post_sha`, `sites_truncated` do not
+  bump).
+- `checked` is the trust envelope: `{lowering, semantics, build}` on
+  every successful run, each computed by a check that can fail on real
+  input (never true by construction). `lowering` is the `git apply
+  --check` verdict on the full lowering (empty lowerings skip git and
+  report `true`); `semantics` is the Section 24.6 gate (reparse plus
+  the sweep change gate); `build` is `"pass"` iff `--verify build`
+  ran, else `"skipped"` (a build failure exits 2 with the `{error}`
+  envelope below, never a success payload). Failures never reach this
   payload (exit 2 with the `{error}` envelope below).
 - `--verify build` (opt-in, never by default) additionally runs
   `cargo check --quiet`. Without `--check` it runs in `--repo` after a
@@ -5761,19 +5772,16 @@ prints one JSON object to stdout:
   post-images into a temp copy of `--repo` (tree copied minus `.git`,
   `target`, `.history`; symlinks recreated, never followed) and runs
   `cargo check --quiet` there; the worktree stays byte-identical and
-  failure exits 2 with `"applied": false`. Success adds additive
-  `"build": "pass"` to the JSON payload (omitted when not verified).
+  failure exits 2 with `"applied": false`. Success reports
+  `"build": "pass"` inside `checked`.
   Empty lowerings skip verification. Any other `--verify` value is an
   `RSMPL_IO_CONFLICT` usage error.
 - `history` is the `<repo>/.history/{id}.rsmpl` archive path of the raw
   patch input (`null` when archiving warned), reported alongside the
   stderr `history:` line (Section D.1).
-- `check` is a boolean: `true` when `--check` was passed (the lowering,
-  empty or not, passed `git apply --check`), else `false`. Failures
-  never reach this payload (exit 2 with the `{error}` envelope below),
-  so `false` means "skipped", never "failed". The single-type shape
-  replaces the former `"ok"`/`null` pair, which forced agents to branch
-  on type.
+- The v1 `check` boolean is gone: `--check` vs apply never changes the
+  report shape (the flag chooses check vs land, `checked` reports the
+  gates either way).
 - `rules` follows patch document order (file-section order, then
   hunk order within a section), so a multi-hunk patch reads
   top-to-bottom like the patch itself — including move cut/paste
@@ -5935,15 +5943,15 @@ exactly which bytes land on which stream. The contract, per mode:
 | text apply | empty (quiet by default) | `history: …` + `applied N file(s): …` (kept: one line of human reassurance) |
 | text `--check` | reported diff (empty when omitted/no changes) | `history: …` + budget markers + `check: lowered patch applies cleanly` |
 | JSON apply | report object (incl. `"history"`) | `history: …` + `warning:` lines only (failures live in the stdout envelope, no stderr `error:` line) |
-| JSON `--check` | report object with `"check":true` (incl. `"history"`) | `history: …` + `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
+| JSON `--check` | report object with `"checked"` (incl. `"history"`) | `history: …` + `warning:` lines only (no `check:` line: stdout is the signal; failures likewise stdout-only) |
 
 Rules:
 
 - An empty lowering (no changes) never touches git: `git apply
   --check` is skipped and the run reports clean. Text prints
    `(no changes)` to stdout; JSON returns the report silently
-   (`"diff": ""`, `"diff_truncated": false`, `"files": []`,
-   `"check": true` when `--check` was passed, else `false`).
+   (`"diff": ""`, `"diff_truncated": false`, `"files": []`, v2
+   `"checked"` object).
    `--output` mirrors the current lowering: a non-empty lowering writes
    the full diff, while an empty lowering removes a pre-existing file at
    that path and otherwise creates nothing — the path never holds a stale

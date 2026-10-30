@@ -51,7 +51,7 @@ fn group_member_prefix_rewrites_json() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(stdout.contains("\"matches\":2"), "got: {stdout}");
-    assert!(stdout.contains("\"check\":true"), "got: {stdout}");
+    assert!(stdout.contains("\"checked\""), "got: {stdout}");
 }
 
 #[test]

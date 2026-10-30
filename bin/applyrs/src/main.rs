@@ -132,7 +132,7 @@ fn main() {
             // T85 success silence): the stdout envelope carries the
             // machine signal; stderr keeps `warning:` lines only.
             // Text mode keeps the human stderr diagnostic.
-            let mut payload = serde_json::json!({"version": 1, "error": e.err().to_json()});
+            let mut payload = serde_json::json!({"version": 2, "error": e.err().to_json()});
             if let Some(applied) = e.applied() {
                 payload["applied"] = serde_json::json!(applied);
             }
@@ -567,30 +567,31 @@ fn run() -> Result<(), CliError> {
                 build_passed = true;
             }
         }
-        let mut payload = serde_json::json!({
-            "version": 1,
+        // WI-2c v2 envelope: `checked` replaces `check` + `verified`;
+        // per-site `sites` is the only bindings evidence (first-site
+        // `bindings` removed). `build` is `pass` iff `--verify build`
+        // ran, else `skipped` (failures exit 2 with `applied`, never a
+        // success payload).
+        let build_status = if build_passed { "pass" } else { "skipped" };
+        let payload = serde_json::json!({
+            "version": 2,
             "rules": report.rules.iter().map(|r| {
                 let mut entry = serde_json::json!({
                     "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>()
                 });
-                // WI-2: shapes that bind nothing (renames, insertions,
-                // deletes, use-prefix) omit the keys — an empty map plus
-                // a zero count carries no evidence (SPEC D.2).
-                if !r.bindings.is_empty() || r.bindings_truncated > 0 {
-                    let (bindings, truncated) = bindings_json(&r.bindings);
-                    entry["bindings"] = bindings;
-                    entry["bindings_truncated"] =
-                        serde_json::json!(truncated + r.bindings_truncated);
-                }
-                // WI-2b: per-site evidence, one entry per emitted edit in
-                // span order. Omitted only when no site binds (same rule as
-                // `bindings`). Per-site truncation mirrors `bindings_json`.
+                // WI-2b/2c: per-site evidence, one entry per emitted edit
+                // in span order. Omitted when no site binds (renames,
+                // insertions, deletes, use-prefix carry no evidence).
                 if !r.sites.is_empty() {
                     let (sites_val, sites_trunc) = sites_json(&r.sites);
                     entry["sites"] = sites_val;
                     if sites_trunc > 0 {
                         entry["sites_truncated"] = serde_json::json!(sites_trunc);
                     }
+                }
+                // `# follow=uses` skip notes stay hunk-level (no span).
+                if let Some(skipped) = &r.follow_skipped {
+                    entry["follow_skipped"] = serde_json::json!(skipped);
                 }
                 entry
             }).collect::<Vec<_>>(),
@@ -601,21 +602,18 @@ fn run() -> Result<(), CliError> {
             "diff_truncated": diff_truncated,
             "diff_lines": total_lines,
             "diff_shown": reported.lines().count(),
-            "check": cli.check,
+            "checked": {"lowering": true, "semantics": true, "build": build_status},
             "history": history_display,
-            "verified": {"reparse": true, "untouched_outside_spans": true},
         });
-        if build_passed {
-            payload["build"] = serde_json::json!("pass");
-        }
         println!(
             "{}",
             serde_json::to_string(&payload)
                 .map_err(|e| CliError::io(format!("cannot serialize JSON report: {e}")))?
         );
-        // No stderr `check:` line in JSON mode: the stdout `"check":true`
-        // payload is the machine signal (SPEC D.2.3). Text mode keeps the
-        // human line below. `warning:` lines stay stderr-only in both modes.
+        // No stderr `check:` line in JSON mode: the stdout
+        // `"checked"` payload is the machine signal (SPEC D.2.3). Text
+        // mode keeps the human line below. `warning:` lines stay
+        // stderr-only in both modes.
         return Ok(());
     }
 
@@ -747,25 +745,9 @@ fn post_sha_hex(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-/// WI-2: token-bounded bindings for the JSON report (SPEC D.2). The engine
-/// reports full first-match bindings sorted by name; the report keeps at
-/// most 8 entries with values cut at 80 chars. Returns the JSON object plus
-/// the omitted-entry count (`bindings_truncated`).
-fn bindings_json(bindings: &[(String, String)]) -> (serde_json::Value, usize) {
-    const MAX_ENTRIES: usize = 8;
-    const MAX_CHARS: usize = 80;
-    let mut map = serde_json::Map::new();
-    for (k, v) in bindings.iter().take(MAX_ENTRIES) {
-        let truncated: String = v.chars().take(MAX_CHARS).collect();
-        map.insert(k.clone(), serde_json::Value::String(truncated));
-    }
-    let omitted = bindings.len().saturating_sub(map.len());
-    (serde_json::Value::Object(map), omitted)
-}
-
-/// WI-2b: token-bounded per-site evidence (SPEC D.2). One entry per emitted
-/// edit in span order — `[{span: [s, e], bindings: {...}}]` — with the same
-/// 8-entry / 80-char per-site truncation as `bindings_json`. Returns the
+/// WI-2b/2c: token-bounded per-site evidence (SPEC D.2). One entry per emitted
+/// edit in span order — `[{span: [s, e], bindings: {...}}]` — with 8-entry
+/// / 80-char per-site truncation. Returns the
 /// JSON array plus the summed omitted-entry count (`sites_truncated`).
 fn sites_json(sites: &[rsmpl_engine::SiteReport]) -> (serde_json::Value, usize) {
     const MAX_ENTRIES: usize = 8;

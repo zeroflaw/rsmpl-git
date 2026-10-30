@@ -49,7 +49,10 @@ fn symbol_turbofish_json_spans() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["check"], serde_json::json!(true));
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": true, "build": "skipped"})
+    );
     assert_eq!(v["rules"][0]["matches"], serde_json::json!(1));
     assert_eq!(v["rules"][0]["spans"], serde_json::json!([[2, 2]]));
 }

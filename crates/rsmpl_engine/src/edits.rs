@@ -232,25 +232,6 @@ pub(crate) fn check_overlaps(edits: &[TextEdit], path: &str) -> Result<(), Struc
     Ok(())
 }
 
-/// WI-2 untouched-outside-spans evidence (SPEC 24.6): re-derive
-/// `updated` from `original` plus only `edits` and byte-compare.
-/// A mismatch is an engine bug — fail loud, never a warning.
-pub(crate) fn check_untouched(
-    original: &str,
-    updated: &str,
-    edits: &[TextEdit],
-    path: &str,
-) -> Result<(), StructuredError> {
-    let rederived = apply_edits(original, edits.to_vec()).map_err(|e| e.with_file(path))?;
-    if rederived != updated {
-        return Err(StructuredError::new(
-            ErrorCode::ParseConflict,
-            "rewritten file failed untouched verification (engine bug: materialization is not a pure function of original plus reported spans)",
-        )
-        .with_file(path));
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
