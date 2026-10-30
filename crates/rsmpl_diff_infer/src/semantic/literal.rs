@@ -45,12 +45,39 @@ fn parse_literal_pair(old_line: &str, new_line: &str) -> Option<LiteralClass> {
     if o_last == n_last {
         return None;
     }
+    // Trailing macros stay ordinary: the sweep inlines the literal as
+    // TokenStream-normalized text, which the engine cannot match when a
+    // macro hides inside (see `contains_macro_arg`).
+    if contains_macro_arg(&o_args[o_args.len() - 1])
+        || contains_macro_arg(&n_args[n_args.len() - 1])
+    {
+        return None;
+    }
     Some(LiteralClass {
         cal: o_cal,
         prefix: o_args.len() - 1,
         old_lit: o_last,
         new_lit: n_last,
     })
+}
+/// True when an argument expression holds a macro invocation anywhere
+/// inside: the literal sweep inlines the trailing literal as
+/// TokenStream-normalized text, which the engine cannot match when a
+/// `!` invocation hides inside (`wrap(old_mac ! (1))` matches nothing,
+/// so diffrs would emit a patch that fails `--check` — WI-9b2-delim
+/// probe, paren and bracket alike). Those classes stay ordinary for
+/// the nested macro sweep; boolean `!`/`!=` never contain a macro node
+/// and are unaffected.
+fn contains_macro_arg(e: &syn::Expr) -> bool {
+    struct Finder(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_expr_macro(&mut self, _: &'ast syn::ExprMacro) {
+            self.0 = true;
+        }
+    }
+    let mut f = Finder(false);
+    syn::visit::Visit::visit_expr(&mut f, e);
+    f.0
 }
 
 /// Cross-hunk literal driver for non-whole sections (T449): mirrors
@@ -350,6 +377,13 @@ pub(crate) fn try_call_literal_sweep(
         if new_lit.as_ref().is_some_and(|l| *l != n_last) {
             return None;
         }
+        // Trailing macros stay ordinary (see `contains_macro_arg`):
+        // TokenStream-normalized macro text is unmatchable inlining.
+        if contains_macro_arg(&o_args[o_args.len() - 1])
+            || contains_macro_arg(&n_args[n_args.len() - 1])
+        {
+            return None;
+        }
         cal = Some(o_cal);
         prefix = Some(o_args.len() - 1);
         old_lit = Some(o_last);
@@ -530,6 +564,34 @@ mod tests {
             "@@ -1,3 +1,3 @@\n fn m() {\n-    make_widget(alpha, 1, false);\n+    make_widget(alpha, 1, \"100644\");\n }\n",
         );
         assert!(crate::semantic::infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn call_literal_macro_arg_falls_through_to_nested() {
+        // WI-9b2-delim: a trailing literal hiding a macro invocation is
+        // not a literal — TokenStream-normalized macro text is
+        // unmatchable, so the literal sweep declines and the nested macro
+        // sweep claims the pair (validated_live proves the fall-through
+        // applies cleanly).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = wrap(old_mac!(1));\n-    let second_value = wrap(old_mac!(1));\n+    let first_value = wrap(old_mac!(2));\n+    let second_value = wrap(old_mac!(2));\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_value = wrap(old_mac!(1));\n    let second_value = wrap(old_mac!(1));\n}\n",
+        )]);
+        let out = crate::semantic::infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            !out.contains("calls_wrap_literal"),
+            "literal must not claim, got: {out}"
+        );
+        assert!(
+            out.contains("- old_mac!(1)\n"),
+            "nested must fire, got: {out}"
+        );
+        assert!(out.contains("+ old_mac!(2)\n"), "got: {out}");
     }
 
     #[test]

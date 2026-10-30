@@ -154,6 +154,24 @@ fn macro_path(mac: &syn::ExprMacro) -> Option<String> {
     Some(segs.join("::"))
 }
 
+/// Open delimiter character of a macro invocation (`(` / `[` / `{`).
+fn macro_delim_open(mac: &syn::ExprMacro) -> Option<char> {
+    match mac.mac.delimiter {
+        syn::MacroDelimiter::Paren(_) => Some('('),
+        syn::MacroDelimiter::Bracket(_) => Some('['),
+        syn::MacroDelimiter::Brace(_) => Some('{'),
+    }
+}
+
+/// Close delimiter matching [`macro_delim_open`].
+fn delim_close(open: char) -> char {
+    match open {
+        '[' => ']',
+        '{' => '}',
+        _ => ')',
+    }
+}
+
 /// One N-site (N ≥ 2) same-name concrete macro-interior group: the
 /// token-normalized grouping key, the raw-spelled emission pair, the
 /// member pair indices, and the covered old-side sites. Rules are
@@ -169,9 +187,10 @@ struct InteriorGroup {
 
 /// Same-name concrete macro-interior sweep (WI-9a): N ≥ 2 balanced
 /// whole-line pairs rendering to one identical `(minus, plus)` macro
-/// pair — same rendered path, paren delimiters, body delta, no holes —
+/// pair — same rendered path, same delimiter (paren, bracket, or
+/// brace — WI-9b2-delim), body delta, no holes —
 /// plus WI-9b2b nested groups (sub-line pairs the whole-line parse
-/// declines whose lines differ only inside one paren-delimited
+/// declines whose lines differ only inside one same-delimiter
 /// same-path nested macro; concrete-only, no hetero, no stranded
 /// claims). Cross-hunk driver mirroring the peel section skeleton plus
 /// the verbatim stranded join (exactly-1-minus pure unbalanced hunks
@@ -182,9 +201,9 @@ struct InteriorGroup {
 /// no `# macro` directive); totality is the generic engine-count
 /// `template_expr_holds` on the rendered minus (the engine's own match
 /// domain: macro-body/string twins veto exactly as the engine sees
-/// them). Interior deltas on `![...]`/`!{...}` stay ordinary: the
-/// engine's interior-change splice normalizes to `!(...)` (probed
-/// corrupt), while renames keep their delimiter-exact path splice.
+/// them). Mixed-delimiter pairs stay ordinary (no cross-delimiter
+/// class); same-delimiter interiors splice delimiter-exact, as do
+/// renames via the delimiter-exact path splice.
 /// Runs before verbatim in both section paths (verbatim still vetoes
 /// every macro, so no double-claim); emitted bodies are single-pattern
 /// `@@ -1,1 @@` hunks the later verbatim pass groups at n=1 and
@@ -604,19 +623,21 @@ fn pair_key_matches(old_line: &str, new_line: &str, keys: &[(String, String)]) -
 /// Parse a `-`/`+` line pair as a same-name concrete macro interior:
 /// both sides render (via the rename sweep's `parse_macro_expr` —
 /// whole-line invocations and `let`-init unwraps, `let-else` never) to
-/// one identical path with paren delimiters and a body delta. Returns
-/// the rendered `(minus, plus)` invocation pair (`path!(args)`). `None`
-/// for renames (name delta — the rename sweep owns those), bracket /
-/// brace interiors (the engine's interior-change splice normalizes to
-/// `!(...)`, probed corrupt — renames keep their delimiter-exact path
-/// splice), leading-`::`/generic paths (no engine spelling), and
-/// identical bodies (no change).
+/// one identical path with the same delimiter on both sides (paren,
+/// bracket, or brace — the engine splice emits with the plus pattern's
+/// delimiter, WI-9b2-delim) and a body delta. Returns the rendered
+/// `(minus, plus)` invocation pair (`path!(args)` / `path![args]` /
+/// `path!{args}`). `None` for renames (name delta — the rename sweep
+/// owns those), mixed delimiters (no cross-delimiter class — each side
+/// keeps its own spelling), leading-`::`/generic paths (no engine
+/// spelling), and identical bodies (no change).
 fn parse_macro_interior_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
     let o_mac = parse_macro_expr(old_line)?;
     let n_mac = parse_macro_expr(new_line)?;
-    if !matches!(o_mac.mac.delimiter, syn::MacroDelimiter::Paren(_))
-        || !matches!(n_mac.mac.delimiter, syn::MacroDelimiter::Paren(_))
-    {
+    let (Some(o_open), Some(n_open)) = (macro_delim_open(&o_mac), macro_delim_open(&n_mac)) else {
+        return None;
+    };
+    if o_open != n_open {
         return None;
     }
     let old_path = macro_path(&o_mac)?;
@@ -629,9 +650,10 @@ fn parse_macro_interior_pair(old_line: &str, new_line: &str) -> Option<(String, 
     if old_args == new_args {
         return None;
     }
+    let close = delim_close(o_open);
     Some((
-        format!("{old_path}!({old_args})"),
-        format!("{new_path}!({new_args})"),
+        format!("{old_path}!{o_open}{old_args}{close}"),
+        format!("{new_path}!{n_open}{new_args}{close}"),
     ))
 }
 
@@ -672,16 +694,17 @@ fn line_macros(line: &str) -> Option<Vec<syn::ExprMacro>> {
 /// shape): the whole-line interior parse fails, but both lines parse
 /// as one `Stmt` (fallback `Expr`) holding the same count (≥1) of
 /// expression-position macros, all token-equal except exactly one delta
-/// with the same rendered path, paren delimiters on both sides, and
-/// different tokens. The rendered delta texts must each occur
+/// with the same rendered path, the same delimiter on both sides, and
+/// different tokens (paren, bracket, or brace — WI-9b2-delim). The
+/// rendered delta texts must each occur
 /// byte-exact exactly once in their line, and the plus line must equal
 /// the minus line with exactly that one substring replaced (the rest of
 /// the line is byte-identical). Returns the rendered
 /// `(macro_minus, macro_plus)` pair. `None` for renames (path delta —
 /// the rename sweep owns whole-line renames; nested renames stay
-/// ordinary), bracket/brace deltas (the engine splice normalizes to
-/// `!(...)`, probed corrupt), leading-`::`/generic paths (no engine
-/// spelling), multi-delta lines, and any outside-macro difference.
+/// ordinary), mixed delimiters (no cross-delimiter class), leading-`::`/
+/// generic paths (no engine spelling), multi-delta lines, and any
+/// outside-macro difference.
 fn parse_nested_macro_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
     // Whole-line pairs belong to the whole-line sweep (no double-claim).
     if parse_macro_interior_pair(old_line, new_line).is_some() {
@@ -697,9 +720,10 @@ fn parse_nested_macro_pair(old_line: &str, new_line: &str) -> Option<(String, St
         let (Some(op), Some(np)) = (macro_path(o), macro_path(n)) else {
             return None;
         };
-        let paren = matches!(o.mac.delimiter, syn::MacroDelimiter::Paren(_))
-            && matches!(n.mac.delimiter, syn::MacroDelimiter::Paren(_));
-        if op == np && paren {
+        let (Some(o_open), Some(n_open)) = (macro_delim_open(o), macro_delim_open(n)) else {
+            return None;
+        };
+        if op == np && o_open == n_open {
             if o.mac.tokens.to_string() == n.mac.tokens.to_string() {
                 continue;
             }
@@ -713,8 +737,12 @@ fn parse_nested_macro_pair(old_line: &str, new_line: &str) -> Option<(String, St
     }
     let i = delta?;
     let (o, n) = (&old_macros[i], &new_macros[i]);
-    let minus = format!("{}!({})", macro_path(o)?, o.mac.tokens);
-    let plus = format!("{}!({})", macro_path(n)?, n.mac.tokens);
+    let (Some(o_open), Some(n_open)) = (macro_delim_open(o), macro_delim_open(n)) else {
+        return None;
+    };
+    let close = delim_close(o_open);
+    let minus = format!("{}!{o_open}{}{close}", macro_path(o)?, o.mac.tokens);
+    let plus = format!("{}!{n_open}{}{close}", macro_path(n)?, n.mac.tokens);
     if minus == plus {
         return None;
     }
@@ -851,6 +879,12 @@ fn hetero_pair(minus_evidence: &str, plus_evidence: &str) -> Option<(String, Str
     if o_path != n_path {
         return None;
     }
+    let (Some(o_open), Some(n_open)) = (macro_delim_open(&o_mac), macro_delim_open(&n_mac)) else {
+        return None;
+    };
+    if o_open != n_open {
+        return None;
+    }
     let m_args = macro_raw_args(minus_evidence)?;
     let p_args = macro_raw_args(plus_evidence)?;
     let m_spans = split_top_spans(&m_args)?;
@@ -926,9 +960,10 @@ fn hetero_pair(minus_evidence: &str, plus_evidence: &str) -> Option<(String, Str
     if !holed_any {
         return None;
     }
+    let close = delim_close(o_open);
     Some((
-        format!("{o_path}!({m_rebuilt})"),
-        format!("{n_path}!({p_rebuilt})"),
+        format!("{o_path}!{o_open}{m_rebuilt}{close}"),
+        format!("{n_path}!{n_open}{p_rebuilt}{close}"),
     ))
 }
 
@@ -956,30 +991,43 @@ fn emit_pair(
     if o_path != n_path {
         return fallback();
     }
+    let (Some(o_open), Some(n_open)) = (macro_delim_open(&o_mac), macro_delim_open(&n_mac)) else {
+        return fallback();
+    };
+    if o_open != n_open {
+        return fallback();
+    }
     let (Some(o_args), Some(n_args)) = (
         macro_raw_args(minus_evidence),
         macro_raw_args(plus_evidence),
     ) else {
         return fallback();
     };
+    let close = delim_close(o_open);
     (
-        format!("{o_path}!({o_args})"),
-        format!("{n_path}!({n_args})"),
+        format!("{o_path}!{o_open}{o_args}{close}"),
+        format!("{n_path}!{n_open}{n_args}{close}"),
     )
 }
 
-/// The raw argument text between a line's macro-invocation parens:
-/// everything after the first `(` past `!` up to the final `)` (mod a
-/// trailing `;`). Exact because the line parsed as a complete
-/// invocation — nothing trails the close paren but `;`/whitespace —
-/// so interior `)` inside strings cannot mislead the `rfind`.
+/// The raw argument text between a line's macro-invocation delimiters:
+/// everything after the open delimiter past `!` up to the matching
+/// close (mod a trailing `;`). Exact because the line parsed as a
+/// complete invocation — nothing trails the close delimiter but
+/// `;`/whitespace — so interior closers inside strings cannot mislead
+/// the `strip_suffix`.
 fn macro_raw_args(line: &str) -> Option<String> {
     let bang = line.find('!')?;
-    let after = &line[bang + 1..];
-    let open = after.find('(')?;
-    let mut inner = after[open + 1..].trim_end();
+    let after = line[bang + 1..].trim_start();
+    let (open, close) = match after.chars().next()? {
+        '(' => ('(', ')'),
+        '[' => ('[', ']'),
+        '{' => ('{', '}'),
+        _ => return None,
+    };
+    let mut inner = after[open.len_utf8()..].trim_end();
     inner = inner.strip_suffix(';').unwrap_or(inner).trim_end();
-    Some(inner.strip_suffix(')')?.to_string())
+    Some(inner.strip_suffix(close)?.to_string())
 }
 
 #[cfg(test)]
@@ -1384,12 +1432,47 @@ mod tests {
     }
 
     #[test]
-    fn macro_interior_bracket_stays_passthrough() {
-        // Bracket interiors would normalize to `!(...)` (probed corrupt)
-        // — the paren-only gate keeps them ordinary.
+    fn macro_interior_bracket_fires() {
+        // WI-9b2-delim: same-delimiter bracket interiors compress — the
+        // engine splice emits with the plus pattern's delimiter, so
+        // `![...]` round-trips delimiter-exact (validated_live).
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    my_vec![1, 2];\n-    my_vec![1, 2];\n+    my_vec![1, 3];\n+    my_vec![1, 3];\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    my_vec![1, 2];\n    my_vec![1, 2];\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- my_vec![1, 2]\n"), "got: {out}");
+        assert!(out.contains("+ my_vec![1, 3]\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_interior_brace_fires() {
+        // WI-9b2-delim: brace interiors compress delimiter-exact too.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    my_map!{a: 1};\n-    my_map!{a: 1};\n+    my_map!{a: 2};\n+    my_map!{a: 2};\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    my_map!{a: 1};\n    my_map!{a: 1};\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- my_map!{a: 1}\n"), "got: {out}");
+        assert!(out.contains("+ my_map!{a: 2}\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_interior_mixed_delimiter_stays_passthrough() {
+        // No cross-delimiter class: `!(..)` vs `![..]` stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    my_vec!(1, 2);\n-    my_vec!(1, 2);\n+    my_vec![1, 3];\n+    my_vec![1, 3];\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
     }
@@ -1678,15 +1761,25 @@ mod tests {
     }
 
     #[test]
-    fn macro_nested_bracket_stays_passthrough() {
-        // A bracket-delimited nested delta shares the whole-line gate:
-        // the engine splice normalizes to `!(...)` (probed corrupt), so
-        // the paren-only gate keeps it ordinary.
+    fn macro_nested_bracket_fires() {
+        // WI-9b2-delim: a bracket delta nested in a call arg takes the
+        // nested path (the whole-line parse declines — the `let` init is
+        // a call, not a macro) and splices delimiter-exact. Single-token
+        // bodies only: multi-token TokenStream rendering (`1 , 2`) never
+        // occurs byte-exact in the line, so nested multi-token stays
+        // ordinary (WI-9b2 remainder — raw-span rendering).
         let raw = section(
             "f.rs",
-            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = my_vec![1, 2];\n-    let second_value = my_vec![1, 2];\n+    let first_value = my_vec![1, 3];\n+    let second_value = my_vec![1, 3];\n }\n",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_value = wrap(my_vec![7]);\n-    let second_value = wrap(my_vec![7]);\n+    let first_value = wrap(my_vec![8]);\n+    let second_value = wrap(my_vec![8]);\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let first_value = wrap(my_vec![7]);\n    let second_value = wrap(my_vec![7]);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- my_vec![7]\n"), "got: {out}");
+        assert!(out.contains("+ my_vec![8]\n"), "got: {out}");
     }
 
     #[test]

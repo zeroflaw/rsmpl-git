@@ -177,6 +177,20 @@ fn split_invocation(text: &str) -> Option<(String, String)> {
     Some((name, rest[1..rest.len() - 1].to_string()))
 }
 
+/// Open/close delimiters of a `name!(...)` / `name![...]` / `name!{...}`
+/// invocation. `None` when not macro-shaped. The interior-change splice
+/// emits with the plus pattern's delimiter so `![...]` / `!{...}`
+/// interiors round-trip delimiter-exact instead of normalizing to parens.
+fn invocation_delims(text: &str) -> Option<(char, char)> {
+    let bang = text.find('!')?;
+    match text[bang + 1..].trim_start().chars().next()? {
+        '(' => Some(('(', ')')),
+        '[' => Some(('[', ']')),
+        '{' => Some(('{', '}')),
+        _ => None,
+    }
+}
+
 fn reverse_map_of(compiled: &CompiledPattern) -> HashMap<String, String> {
     // Maps both placeholder spellings (`__RSMPL_M`) and declared spellings
     // (`M`) to declared names, since macro patterns are matched against raw
@@ -371,7 +385,8 @@ pub fn apply_macro_hunk(
                 compiled.table.sigiled,
             );
             let new_args = rsmpl_pattern::unmask_literal_spans(&new_args, &plus_sentinels);
-            format!("{}!({})", resolve_plus(), new_args)
+            let (open, close) = invocation_delims(masked_plus.trim()).unwrap_or(('(', ')'));
+            format!("{}!{open}{new_args}{close}", resolve_plus())
         } else {
             // Plus side is not macro-shaped (e.g. macro -> function call):
             // substitute into the whole plus text.
@@ -734,5 +749,16 @@ mod tests {
             "&[\"--patch\", __RSMPL_ELLIPSIS_0]"
         ));
         assert!(!super::is_bare_ellipsis("__RSMPL_ELLIPSIS"));
+    }
+
+    #[test]
+    fn interior_splice_preserves_brackets() {
+        // WI-9b2-delim: the interior-change splice emits with the plus
+        // pattern's delimiter — `![...]` stays `![...]`, never `!(...)`.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n- my_vec![1, 2]\n+ my_vec![1, 3]\n";
+        let src = "fn m() {\n    my_vec![1, 2];\n    my_vec![1, 2];\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches("my_vec![1, 3];").count(), 2, "got: {out}");
+        assert!(!out.contains("my_vec!("), "got: {out}");
     }
 }

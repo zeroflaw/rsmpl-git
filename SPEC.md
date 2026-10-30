@@ -6192,6 +6192,11 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   inside `let` inits unwrap to their init call (the whole line parses
   as a `Stmt`, declined as `Expr::Let`; the emission stays a bare-call
   pattern and the engine rewrites the call sub-expression in place).
+  A trailing literal hiding a macro invocation anywhere inside stays
+  ordinary (WI-9b2-delim): TokenStream-normalized macro text
+  (`wrap(old_mac ! (1))`) is unmatchable by the engine, so the sweep
+  declines and those pairs fall through to the nested macro sweep (or
+  ordinary). Boolean `!`/`!=` never contain a macro node and keep firing.
   Cross-hunk classes compress non-whole sections (T449: singleton
   `-U0` hunks split by distance or pure additions elsewhere, e.g.
   spaced `let` sites — peel-driver precedent); all-identical classes
@@ -6347,7 +6352,9 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   statements and `let`-init unwraps — the emitted pattern is the bare
   `name!(args)`, never `let`) to one identical same-name pair —
   exact rendered path (bare or qualified, one uniform class per hunk),
-  paren delimiters, body delta, no holes — → one `# allow=many` hunk
+  the same delimiter on both sides (paren, bracket, or brace —
+  WI-9b2-delim; the engine splice emits with the plus pattern's
+  delimiter), body delta, no holes — → one `# allow=many` hunk
   (`- name!(args)` / `+ name!(new_args)`, plain `!` routing, no
   `# macro` directive, first-site raw spacing). Cross-hunk driver with
   the verbatim stranded join (exactly-1-minus pure unbalanced hunks
@@ -6355,9 +6362,9 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   pure-insertion leftover), so sections with a pure addition still
   compress their runs. Totality is the generic engine-count probe on
   the emitted minus (the engine's own match domain). `![...]`/`!{}`
-  interiors stay ordinary (the engine's interior-change splice
-  normalizes to `!(...)`, probed corrupt); renames (name delta),
-  hetero pairs (per-site differing bodies), and macro-body-descent
+  Mixed-delimiter pairs stay ordinary (no cross-delimiter class);
+  renames (name delta), hetero pairs (per-site differing bodies),
+  and macro-body-descent
   edits (changed lines nested inside a macro body the pattern never
   enters) stay ordinary for WI-9b2. WI-9b1 hetero emission: when every
   stable (minus==plus) non-string arg longer than its hole name can hole
@@ -6370,7 +6377,7 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
   `TEXT_*` stay literal deltas); otherwise the concrete probe decides
   and concrete fires. String-literal args never hole (opaque positions);
   numeric/unit args no longer than the hole name stay literal (tighter +
-  shorter); bracket/brace interiors stay ordinary as above. Totality for
+  shorter); mixed delimiters stay ordinary as above. Totality for
   hetero pairs is the real-pair probe (`template_pair_holds`: the emitted
   minus/plus diet pair applied to a scratch pre-image must match exactly
   N — a self-rewrite probe would infer literal uppercase deltas as holes
@@ -6381,7 +6388,7 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    WI-9b2b nested extraction: pairs the whole-line parse declines whose
    lines parse as one `Stmt` (fallback `Expr`) holding the same count
    (≥1) of expression-position macros, all token-equal except exactly one
-   delta with the same rendered path, paren delimiters, and different
+   delta with the same rendered path, the same delimiter, and different
    tokens, with the rendered delta texts each occurring byte-exact once
    per line and the plus line equal to the minus line under that one
    substring replacement — → the same concrete hunk shape spelling just
@@ -6390,6 +6397,10 @@ Operational pin: overhead ≤ `150 + 150·H + 10·T` bytes (`H` = hunks,
    ordinary (`syn::visit` never enters opaque token streams); nested
    renames, multi-delta lines, and any outside-macro difference stay
    ordinary.
+   Nested multi-token bodies stay ordinary for this sweep: the grouping
+   key renders through TokenStream (`1, 2` → `1 , 2`) and never occurs
+   byte-exact in the line, so there is no substring to anchor on
+   (raw-span rendering is WI-9b2 remainder).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed
