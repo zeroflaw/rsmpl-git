@@ -6475,7 +6475,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   run is an earlier detector's class and its verdict (fire or veto)
   stands, never undercut by a narrower re-spelling here. Guards:
   mixed runs decline (a header, expression, or any non-plain-`let`
-  member — v1 does no sub-hunk split); one-sided ascriptions decline
+  member — permanent non-goal, no sub-hunk partition and no header+body
+  joint engine shape (full-history probe: 0/2473 paired hunks over 467
+  commits hold a splittable hetero let window); one-sided ascriptions decline
   (a type-add/removal inside the run is another detector's class);
   K = 1 true singles stay ordinary (Section D.4 N = 1 rule); K > 4
   exceeds the `Sequence` engine arm's exact-K bound; all-identical
@@ -7023,9 +7025,10 @@ bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 `19`, `21`, `22`); heterogeneous sites no template fires on stay
   ordinary (`12` header+let mixed single block — v1 fuses pure let
-  runs only (WI-5d `single_block`), with no sub-hunk split and no
-  header+body joint shape, so the mixed re-diff stays mixed by
-  construction; `14` divergent single-file renames whose
+  runs only (WI-5d `single_block`); mixed runs stay ordinary as a
+  permanent non-goal — no sub-hunk partition and no header+body joint
+  shape, so the mixed re-diff stays mixed by construction (WI-5d-follow
+  probe: 0/2473); `14` divergent single-file renames whose
   deltas never share one intent, `30` trait decl/def pairs as WI-7
   grouping territory); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only

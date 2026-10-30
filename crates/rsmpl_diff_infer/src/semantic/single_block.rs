@@ -27,9 +27,11 @@
 //! byte-win guard in the callers decides emission — a fusion that
 //! costs more than its ordinary lines stays ordinary.
 //!
-//! v1 boundaries (stays ordinary, documented): mixed runs (a header,
-//! expression, or any non-plain-`let` member — no sub-hunk split, so
-//! fixture `12-stmt-rewrite`'s header+lets run declines); family-uniform
+//! Boundaries (stays ordinary, documented non-goals): mixed runs (a header,
+//! expression, or any non-plain-`let` member — permanent non-goal, no
+//! sub-hunk partition (full-history probe: 0/2473 paired hunks over 467
+//! commits hold the splittable shape, so fixture `12-stmt-rewrite`'s
+//! header+lets run stays ordinary); family-uniform
 //! runs (every init the same expression kind and head — earlier
 //! detectors own the verdict, including vetoes); one-sided ascriptions
 //! (a type-add/removal inside the run); K = 1 (true singles stay
