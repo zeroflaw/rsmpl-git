@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=rename_margs
+# scope=file
+# allow=many
+# macro=token_tree
+- old_m!(E, 1)
++ new_m!(E, 1)

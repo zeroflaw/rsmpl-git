@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,4 @@ rule=rename_variant
+# allow=many
+# follow=uses
+  enum E {
+- Old
++ New

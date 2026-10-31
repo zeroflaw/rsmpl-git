@@ -267,6 +267,8 @@ const CYCLE_OK: &[&str] = &[
     "41-single-block-sweep",
     "42-field-follow",
     "43-variant-follow",
+    "87-field-follow-single",
+    "88-variant-follow-single",
     "70-call-wrap",
 ];
 
@@ -474,6 +476,34 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "80-raw-addr-flip",
         "t375: single-site raw-addr rewrite re-infers ordinary",
+    ),
+    (
+        "82-const-block-single",
+        "t375: single-site const-block rewrite re-infers ordinary",
+    ),
+    (
+        "83-infer-single",
+        "t375: single-site infer-wildcard rewrite re-infers ordinary",
+    ),
+    (
+        "84-diet-some-single",
+        "t375: single-site diet some-unwrap rewrite re-infers ordinary",
+    ),
+    (
+        "85-call-wrap-single",
+        "t375: single-site call wrap re-infers ordinary",
+    ),
+    (
+        "86-token-tree-single",
+        "t375: single-site token-tree arg rewrite re-infers ordinary",
+    ),
+    (
+        "89-fn-follow-single",
+        "t375: single-use fn follow re-infers ordinary",
+    ),
+    (
+        "90-macro-rules-nofollow",
+        "t375: single-site macro-rules def-only re-infers ordinary (orphan use stays ordinary)",
     ),
 ];
 

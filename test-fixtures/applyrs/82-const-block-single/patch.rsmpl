@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=const_bump
+# scope=file
+- let v = const { 1 + 2 };
++ let v = const { 1 + 3 };

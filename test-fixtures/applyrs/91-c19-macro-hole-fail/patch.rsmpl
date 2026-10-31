@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=vec_hole
+# scope=file
+# expr E
+- let v = vec![E];
++ let v = vec![0];
