@@ -406,7 +406,9 @@ pub(crate) fn classify(
     // Non-function item renames (`struct Old` -> `struct New`). Checked
     // before fn shapes: `const Old`/`static Old` also satisfy
     // `looks_like_fn`, and every fn shape falls through here as `None`.
-    if let Some(rename) = classify_item_rename(m, p)? {
+    // WI-10b: the fn name-hole list (diet `N` + `# ident` declarations)
+    // applies in item name position too, for attr-only evolution.
+    if let Some(rename) = classify_item_rename(m, p, &table.ident_slot_metas(), hunk)? {
         return Ok(rename);
     }
 
@@ -754,6 +756,8 @@ pub fn trait_header_ident(header: &str) -> Option<String> {
 fn classify_item_rename(
     minus_raw: &str,
     plus_raw: &str,
+    holes: &[String],
+    hunk: &RsmplHunk,
 ) -> Result<Option<PatternKind>, StructuredError> {
     let minus = match crate::item_rename::parse_side(minus_raw) {
         Ok(m) => m,
@@ -776,13 +780,48 @@ fn classify_item_rename(
     match (minus, plus) {
         (Some(mside), Some(pside)) => {
             let mk = mside.kind;
-            let mn = mside.name;
+            let mut mn = mside.name;
             let mattrs = mside.attrs;
             let mprefix = mside.prefix;
             let pk = pside.kind;
-            let pn = pside.name;
+            let mut pn = pside.name;
             let pattrs = pside.attrs;
             let pprefix = pside.prefix;
+            // WI-10b: bare diet/`# ident` names hole-ify in item name
+            // position (fn N-hole precedent, SPEC 15.8). Holes only ever
+            // evolve attributes: both sides hole with an attr delta, or
+            // the hunk fails below. `$`-prefixed spellings keep the
+            // existing rejection in `parse_side`.
+            let minus_hole = holes.contains(&mn);
+            let plus_hole = holes.contains(&pn);
+            if minus_hole {
+                mn = format!("${mn}");
+            }
+            if plus_hole {
+                pn = format!("${pn}");
+            }
+            if minus_hole || plus_hole {
+                if hunk.follows_uses() {
+                    return Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "item name holes cannot be combined with `# follow=uses` in v1 (holes preserve every name; there is nothing to follow)",
+                    )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "attr-hole-follow",
+                        "drop `# follow=uses`, or write concrete names",
+                    )));
+                }
+                if minus_hole != plus_hole {
+                    return Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "item name holes must appear on both sides (`- struct N` / `+ struct N` with an attribute delta); a hole on one side only would rename every item to one name",
+                    )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "attr-hole-rename",
+                        "write the hole on both sides, or write concrete names",
+                    )));
+                }
+            }
             if mk != pk {
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,

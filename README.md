@@ -206,6 +206,7 @@ context would be larger, so these are lower bounds.)
 | 35-general-expr (5 sites, binary-op `E0 + 1` → `E0 + 2`, 1 hunk) | 563 B / 18 ln | 73 B / 5 ln | 87% |
 | 36-log-message (4 sites, log/message `"old-msg"` → `"new-msg"`, 1 hunk) | 422 B / 15 ln | 79 B / 5 ln | 81% |
 | 37-bound-sweep (4 hetero-named fns gain `T: Clone`, `N` hole, 1 hunk) | 577 B / 15 ln | 121 B / 7 ln | 79% |
+| 38-derive-migration (4 hetero structs gain `Clone`, `N` hole, 1 hunk) | 359 B / 15 ln | 116 B / 7 ln | 68% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

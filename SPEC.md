@@ -1621,6 +1621,17 @@ appears in call/method callee positions (Section 18.6 C20); to match a
 literal ident spelled `N`, write the concrete name (call shapes match
 literally there).
 
+Bare-pair item positions share the spelling for attr-only evolution
+(WI-10b): `- struct N` / `+ struct N` with an attribute delta binds
+every site's name and replays it byte-identical (the attr edits carry
+the change; vis/generics/bodies are preserved like renames). Holes
+must appear on both sides — a hole on one side only fails fast (a
+minus-hole with a concrete plus would rename every item to one name),
+as does a hole pair with no attr delta (the rename-usage error) or
+with `# follow=uses` (holes preserve every name; there is nothing to
+follow). `$`-prefixed spellings keep the existing rejection (write
+bare `N`, not `$N`).
+
 ### 14.2 Function slots
 
 A Rust function item is modeled as these slots:
@@ -2096,9 +2107,12 @@ the WI-10a Preserve delta: written lines are the delta — a plus-only
 line adds it, a minus-only line removes it, and same-length differing
 lines replace 1-to-1 in written order above the item line (unwritten
 attached attrs are preserved; already-plus sites skip an add; remove/
-replace require the minus lines present). Differing non-empty lengths
-stay a pattern error, as does any delta under `# attrs=explicit` /
-`# attrs=strip` (mirror the `#[...]` lines, or use `# attrs=strip`).
+replace require the minus lines present). The delta covers `let`
+statements too (WI-10b): attr edits land above the `let` line while the
+body edit shrinks to the `let` keyword, so the ranges stay disjoint.
+Differing non-empty lengths stay a pattern error, as does any delta
+under `# attrs=explicit` / `# attrs=strip` (mirror the `#[...]` lines,
+or use `# attrs=strip`).
 
 To require that no attributes or doc comments are attached, use:
 
@@ -2622,7 +2636,7 @@ Implemented in v0.1 (fail fast on anything else):
 | `block` | block expression or function body (structural) |
 | `macro` | macro path/name |
 | `token_tree` | macro token tree or token sequence |
-| `ident` | WI-5 name hole: a function-header name (binds the site ident, replays it on the plus side; Section 14.1.2) |
+| `ident` | name hole: a function-header name (WI-5; binds the site ident, replays it on the plus side) or a bare-pair item name (WI-10b; binds per site, replays byte-identical for attr-only evolution; Section 14.1.2) |
 
 Rejected in v0.1 with `RSMPL_PATTERN_CONFLICT`: `identifier`, `path`,
 `lifetime`, `field`, `attributes`. These parse as declarations but have
@@ -2977,6 +2991,7 @@ Kind by position:
 |---|---|
 | `- I` alone (single-token minus) | `item` (`# root=` forces `type`/`expr`/`stmt` for that token) |
 | fn-header name `N` (bare, free or method position) | `ident` (the WI-5 name hole: binds the site ident, replays it) |
+| bare-pair item name `N` (bare `struct N` / `enum N` / …) | `ident` (the WI-10b evolution hole: binds per site, replays byte-identical; attr delta required) |
 | fn-header declared `# ident X` in name position | `ident` |
 | fn-header `G` (between name and `(`) | `generic_params` |
 | fn-header `W` (after params/return) | `where_clause` |
@@ -2984,13 +2999,14 @@ Kind by position:
 | two pre-`fn` tokens (`V Q fn`) | first `visibility`, second `qualifier_list` |
 | one pre-`fn` token (`V fn`) | ambiguous (`visibility` vs `qualifier_list`) — declare explicitly |
 | `let P: T = E;` | pattern `pat`, `: T` region `type`, `= E` region `expr` |
-| call/method callee, receiver, method, bare args | `expr` (macro `!` arg names infer only when occurring on both sides — single-side uppercase idents stay literal deltas; macro names never infer; `use`-paths and item-rename names never infer) |
+| call/method callee, receiver, method, bare args | `expr` (macro `!` arg names infer only when occurring on both sides — single-side uppercase idents stay literal deltas; macro names never infer; `use`-paths never infer) |
 | type argument interiors (`Vec<T>`, `Box<[T]>`, `Fn(T)` inputs and `-> T` outputs) | `type` for the inner names only; the leading constructor (`Vec`, `Box`, `Fn`) stays literal, as do one-sided concrete additions (`+ Send`) |
 | otherwise (`# root=type/expr`) | the forced kind; unforced general text follows `try_general` routing (type-parseable → `type`, else `expr`) |
 
 Rules:
 
-- A bare `N` outside the fn-header name position never infers a new
+- A bare `N` outside the fn-header and bare-pair item name positions
+  never infers a new
   kind: in call/method and `let`/general expression positions it stays
   the literal ident `N`, while in type-argument and return positions the
   pre-existing diet type inference still applies (`foo::<N>(E)` binds
@@ -3678,8 +3694,8 @@ case where an ordinary hunk cannot express the edit.
 | C8 | embedded metavariable inside a bound pattern in any pattern position (`let`, match-arm, `for`, closure-param, `let`-expression): anything other than a whole-pattern `# pat P` placeholder, a `P @ sub` shape with a placeholder head and a single-placeholder-or-concrete subpattern, a concrete pattern, a WI-3 structural composite (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`, `(P)`) with holes only in bindable leaf positions, or `P: T` with placeholder parts | `v1 patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, WI-3 structural composites (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`, `(P)`) with holes in bindable leaf positions, or `P: T` with placeholder parts, in `let`, match-arm, `for`, closure, and `let`-expression positions; embedded metavariables elsewhere in a pattern are not supported` |
 | C9 | `# returns=none` on a non-function hunk | `` `# returns=none` requires a function-item pattern `` |
 | C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
-| C11 | `+` side writes attributes the `-` side did not match (outside the WI-10a Preserve add delta: minus empty plus non-empty under `# attrs=preserve` adds) | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
-| C12 | `+` attributes differ from matched `-` attributes (outside the WI-10a Preserve remove/same-length-replace delta under `# attrs=preserve`) | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
+| C11 | `+` side writes attributes the `-` side did not match (outside the Preserve add delta: minus empty plus non-empty under `# attrs=preserve` adds, on fn/item/`let` shapes) | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
+| C12 | `+` attributes differ from matched `-` attributes (outside the Preserve remove/same-length-replace delta under `# attrs=preserve`, on fn/item/`let` shapes) | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
@@ -6921,6 +6937,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    same engine-count check over the `N`-holed minus header (free fns)
    or per-`impl`-block probes (methods) — an untouched same-shape
    header vetoes to ordinary. Detector name `header_evolution`.
+- Attribute-delta sweep: N ≥ 2 pure-attr hunks (bare `+#[...]`
+  insertions, bare `-#[...]` deletions, or balanced attr-line
+  replacements) sharing one uniform attr-line delta over hetero items.
+  Owners come from the pre-image (`syn` walk: the innermost item
+  containing the changed line, or the line after an insertion point);
+  `None` pre-image, method/`impl` owners, mixed attr+code hunks, and
+  multi-line attr spellings decline. Emission is one hunk per class in
+  the WI-10a authored spelling with header tiers for fns (bare
+  `- fn N(...) {`, then `- fn N(...) W {`, then the full
+  `- V Q fn N G (...) W {` wildcard set) and bare pairs for items
+  (`- struct N`); hetero names ride `N`, uniform names stay concrete.
+  Pre-image totality is the scratch-apply byte-compare probe: the
+  emitted hunk must apply to the pre-image with `matches == class
+  size` and reproduce byte-identically the result of applying the
+  claimed ordinary hunks (count equality alone can coincide wrongly).
+  Per-class T375 (each body beats its covered hunks); a losing class
+  declines alone, never vetoing a winning one. Detector name
+  `attr_sweep`.
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated) differing in

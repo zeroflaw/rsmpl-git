@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-#[derive(Debug)]
++#[derive(Debug, Clone)]
+@@ -7 +7 @@ pub struct Request {
+-#[derive(Debug)]
++#[derive(Debug, Clone)]
+@@ -13 +13 @@ pub struct Response {
+-#[derive(Debug)]
++#[derive(Debug, Clone)]
+@@ -19 +19 @@ struct RetryPolicy {
+-#[derive(Debug)]
++#[derive(Debug, Clone)]

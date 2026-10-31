@@ -13,6 +13,11 @@ use syn::visit::Visit;
 
 use crate::edits::TextEdit;
 use crate::lines::LineIndex;
+use crate::matcher_attr_delta::{
+    attr_delta as general_attr_delta, compact_attr, line_indent, norm_pat_list,
+    site_attr_texts as general_site_attrs, subsequence_positions as general_subseq,
+    AttrDelta as GeneralAttrDelta,
+};
 use crate::matcher_fn::delete_lines;
 use crate::matcher_general::{in_scope, match_expr, render, Collector, MatchCx};
 use crate::matcher_general_tails::substitute_general_plus;
@@ -223,7 +228,24 @@ pub fn apply_general_hunk(
             "write a `let` statement pattern, or drop the leading attributes",
         )));
     }
-    if !plus_attrs.is_empty() && minus_attrs.is_empty() {
+    // WI-10b: under `# attrs=preserve` written lines are the delta
+    // (add/remove/same-length replace, shared laws with fn/item);
+    // whole-stmt deletion (empty plus) keeps the gates — no statement
+    // remains to attach a delta to. Differing non-empty lengths stay
+    // ambiguous.
+    let deleting_shape = plus_raw.trim().is_empty();
+    let preserve = hunk.attrs_policy() == AttrsPolicy::Preserve;
+    let minus_norm = norm_pat_list(&minus_attrs);
+    let plus_norm = norm_pat_list(&plus_attrs);
+    let delta = general_attr_delta(&minus_attrs, &plus_attrs);
+    let ambiguous_len = preserve
+        && minus_norm != plus_norm
+        && !minus_attrs.is_empty()
+        && !plus_attrs.is_empty()
+        && minus_attrs.len() != plus_attrs.len();
+    let delta_active =
+        preserve && !deleting_shape && !ambiguous_len && delta != GeneralAttrDelta::Mirror;
+    if !delta_active && !plus_attrs.is_empty() && minus_attrs.is_empty() {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
@@ -239,7 +261,8 @@ pub fn apply_general_hunk(
     // eligibility-ignored (like the fn/item `check_attrs` Strip arm) and
     // the Stmt replacement path drops the envelope. The plus-writes-attrs
     // gate above stays: adding attributes while stripping is ambiguous.
-    if hunk.attrs_policy() != AttrsPolicy::Strip
+    if !delta_active
+        && hunk.attrs_policy() != AttrsPolicy::Strip
         && !minus_attrs.is_empty()
         && norm_ws(&plus_attrs.join("\n")) != norm_ws(&minus_attrs.join("\n"))
     {
@@ -330,10 +353,28 @@ pub fn apply_general_hunk(
                     continue;
                 }
                 // Attribute policy (mirrors fn matching: fail, never guess).
+                // WI-10b: delta hunks use subset semantics (add skips
+                // already-plus sites; remove/replace require the minus
+                // lines present, preserving the rest).
                 let prefix = attr_prefix(original, index, tgt).unwrap_or("");
                 match hunk.attrs_policy() {
                     AttrsPolicy::Preserve => {
-                        if !minus_attrs.is_empty()
+                        if delta_active {
+                            let have = general_site_attrs(&tgt.attrs);
+                            match delta {
+                                GeneralAttrDelta::Add => {
+                                    if general_subseq(&have, &plus_norm).is_some() {
+                                        continue;
+                                    }
+                                }
+                                GeneralAttrDelta::Remove | GeneralAttrDelta::Replace => {
+                                    if general_subseq(&have, &minus_norm).is_none() {
+                                        continue;
+                                    }
+                                }
+                                GeneralAttrDelta::Mirror => {}
+                            }
+                        } else if !minus_attrs.is_empty()
                             && norm_ws(&minus_attrs.join("\n"))
                                 != norm_ws(&target_attrs_rendered(tgt).join("\n"))
                         {
@@ -387,6 +428,90 @@ pub fn apply_general_hunk(
                         node.end_line,
                         &rule,
                     )?);
+                } else if delta_active {
+                    // WI-10b: Preserve attr delta — the body edit shrinks
+                    // to the `let` keyword (attrs excluded) while attr
+                    // edits land above it, disjoint like fn/item. The
+                    // plus body is attr-stripped (`plus_body`); attrs ride
+                    // the separate edits, never the spliced text.
+                    let let_lc = tgt.let_token.span().start();
+                    let let_line = let_lc.line as u32;
+                    let Some(let_start) = index.offset(let_line, let_lc.column) else {
+                        continue;
+                    };
+                    let body = substitute_general_plus(
+                        &plus_body,
+                        &cx.bindings,
+                        &cx.block_tails,
+                        compiled.table.sigiled,
+                    )?;
+                    edits.push(TextEdit::new(let_start, node.end, body));
+                    let have = general_site_attrs(&tgt.attrs);
+                    match delta {
+                        GeneralAttrDelta::Add => {
+                            let indent = line_indent(original, index, let_line);
+                            let mut text = String::new();
+                            for p in &plus_attrs {
+                                text.push_str(&indent);
+                                text.push_str(&compact_attr(p.trim()));
+                                text.push('\n');
+                            }
+                            if let Some(at) = index.line_start(let_line) {
+                                edits.push(TextEdit::new(at, at, text));
+                            }
+                        }
+                        GeneralAttrDelta::Remove => {
+                            if let Some(idxs) = general_subseq(&have, &minus_norm) {
+                                for i in idxs {
+                                    let attr = &tgt.attrs[i];
+                                    let s = attr.span().start().line as u32;
+                                    let e = attr.span().end().line as u32;
+                                    let a = index.line_start(s);
+                                    let b = index.line_start(e + 1).unwrap_or(original.len());
+                                    if let (Some(a), b) = (a, b) {
+                                        if b > a {
+                                            edits.push(TextEdit::new(a, b, String::new()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        GeneralAttrDelta::Replace => {
+                            if let Some(idxs) = general_subseq(&have, &minus_norm) {
+                                for (k, i) in idxs.iter().enumerate() {
+                                    let Some(plus_line) = plus_attrs.get(k) else {
+                                        continue;
+                                    };
+                                    let attr = &tgt.attrs[*i];
+                                    let s = attr.span().start().line as u32;
+                                    let e = attr.span().end().line as u32;
+                                    let (Some(a), b) = (
+                                        index.line_start(s),
+                                        index.line_start(e + 1).unwrap_or(original.len()),
+                                    ) else {
+                                        continue;
+                                    };
+                                    let Some(cur_start) = index.line_start(s) else {
+                                        continue;
+                                    };
+                                    let cur_line = &original[cur_start..];
+                                    let cur_line = cur_line.split('\n').next().unwrap_or("");
+                                    let indent: String = cur_line
+                                        .chars()
+                                        .take_while(|ch| *ch == ' ' || *ch == '\t')
+                                        .collect();
+                                    let mut text = String::new();
+                                    text.push_str(&indent);
+                                    text.push_str(&compact_attr(plus_line.trim()));
+                                    text.push('\n');
+                                    if b > a {
+                                        edits.push(TextEdit::new(a, b, text));
+                                    }
+                                }
+                            }
+                        }
+                        GeneralAttrDelta::Mirror => {}
+                    }
                 } else {
                     // Mirrored attributes (T153): the plus attr lines equal the
                     // target envelope modulo whitespace, so reuse the original

@@ -77,6 +77,15 @@ pub(crate) fn run_pair_chain(
     {
         return Some((header, "header_evolution"));
     }
+    // WI-10b: attribute-delta sweep (uniform attr-line add/remove/replace
+    // over hetero items, N-hole emission) — immediately after its slot
+    // sibling (those own header shapes; this owns pure-attr lines, which
+    // no earlier detector parses).
+    if let Some(attr) =
+        super::try_attr_replace_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some(attr);
+    }
     // WI-4b: trait+impl method rename (mixed `;` decl / `{` def
     // classes the slot and sig-evolution sweeps decline by
     // construction) — immediately after sig-evolution, before the
@@ -668,8 +677,18 @@ pub(crate) fn compress_section(
             rewritten = Some(enclosing);
         }
         let after_mac = rewritten.as_deref().unwrap_or(section);
+        // WI-10b: attribute-delta groups (pure-insertion/deletion/replace
+        // attr hunks) before verbatim (which vetoes bare attr lines, so no
+        // double-claim); claimed hunks rewrite in place, the rest passes
+        // through byte-identical for verbatim + per-hunk below.
+        if let Some(attr) =
+            super::try_attr_sweep_section(after_mac, path, used_rules, file_old, &mut fired)
+        {
+            rewritten = Some(attr);
+        }
+        let after_attr = rewritten.as_deref().unwrap_or(section);
         if let Some(verbatim) =
-            super::verbatim::try_verbatim_sweep(after_mac, path, used_rules, file_old, &mut fired)
+            super::verbatim::try_verbatim_sweep(after_attr, path, used_rules, file_old, &mut fired)
         {
             commit_prov(prov, &verbatim, section, path, &fired, &changed, file_old);
             return Some(verbatim);

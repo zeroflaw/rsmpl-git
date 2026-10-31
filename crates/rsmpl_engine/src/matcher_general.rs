@@ -515,6 +515,69 @@ mod tests {
     }
 
     #[test]
+    fn let_attrs_delta_add_replace_remove_fire() {
+        // WI-10b: Preserve delta over `let` statements — add inserts above
+        // the `let` (existing attrs preserved, already-plus sites skip),
+        // same-length text swaps in place, remove deletes the lines.
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(clippy::x)]\n+ let y = E;\n";
+        let out = apply(add, "fn f() {\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out, "fn f() {\n    #[allow(clippy::x)]\n    let y = 1;\n}\n",
+            "got: {out:?}"
+        );
+        // Unrelated existing attrs survive; the delta lands below them.
+        let out = apply(add, "fn f() {\n    #[keep]\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out, "fn f() {\n    #[keep]\n    #[allow(clippy::x)]\n    let y = 1;\n}\n",
+            "got: {out:?}"
+        );
+        // Already-plus site has nothing to do: no match, not a duplicate.
+        assert!(apply(
+            add,
+            "fn f() {\n    #[allow(clippy::x)]\n    let x = 1;\n}\n"
+        )
+        .is_err());
+        // Replace (same length, differing text).
+        let rep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ #[deny(y)]\n+ let y = E;\n";
+        let out = apply(rep, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out, "fn f() {\n    #[deny(y)]\n    let y = 1;\n}\n",
+            "got: {out:?}"
+        );
+        // Remove (minus N, plus empty) deletes the line, keeps the stmt.
+        let rem = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
+        let out = apply(rem, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
+        assert_eq!(out, "fn f() {\n    let y = 1;\n}\n", "got: {out:?}");
+        // Col-0 `let`: attr insert at the line start shares its point with
+        // the body edit start — boundary-touch, never an overlap.
+        let out = apply(add, "fn f() {\nlet x = 1;\n}\n").unwrap();
+        assert_eq!(
+            out, "fn f() {\n#[allow(clippy::x)]\nlet y = 1;\n}\n",
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn let_attrs_delta_ambiguous_and_policy_vetoes() {
+        // WI-10b: differing non-empty lengths stay C12; deltas under
+        // explicit/strip stay C11; whole-stmt deletion with written attrs
+        // keeps the C12 gate (no statement remains for a delta).
+        let amb = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[a]\n- let x = E;\n+ #[b]\n+ #[c]\n+ let y = E;\n";
+        let err = apply(amb, "fn f() {\n    let x = 1;\n}\n").unwrap_err();
+        assert!(err.contains("C12"), "got: {err}");
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(x)]\n+ let y = E;\n";
+        let explicit = add.replace("# sweep", "# sweep\n# attrs=explicit");
+        let err = apply(&explicit, "fn f() {\n    let x = 1;\n}\n").unwrap_err();
+        assert!(err.contains("C11"), "got: {err}");
+        let strip = add.replace("# sweep", "# sweep\n# attrs=strip");
+        let err = apply(&strip, "fn f() {\n    let x = 1;\n}\n").unwrap_err();
+        assert!(err.contains("C11"), "got: {err}");
+        let del = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n";
+        let err = apply(del, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap_err();
+        assert!(err.contains("C12"), "got: {err}");
+    }
+
+    #[test]
     fn strip_with_mirrored_minus_drops_attrs() {
         // T154: `# attrs=strip` skips the mirror gate — mirrored minus
         // attrs are eligibility-ignored and the envelope is dropped at
@@ -966,17 +1029,21 @@ mod tests {
                 reason: "leading attributes are only supported on `let` statement patterns in v1",
                 suggestion: None,
             },
-            // C11: `+` attributes the `-` side did not match.
+            // C11: WI-10b Preserve add delta (minus empty, plus `#[attr]`)
+            // now fires — the pinned remainder is the delta under
+            // `# attrs=explicit` (written lines are the delta only under
+            // preserve).
             Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- let x = E;\n+ #[attr]\n+ let y = E;\n",
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=explicit\n# stmt S\n# expr E\n- let x = E;\n+ #[attr]\n+ let y = E;\n",
                 file: "fn a() {\n    let x = compute();\n    let _ = x;\n}\n",
                 code: "RSMPL_PATTERN_CONFLICT",
                 reason: "replacement writes attributes the pattern did not match",
                 suggestion: ATTR_SUGGESTION,
             },
-            // C12: mismatched attribute sets.
+            // C12: WI-10b Preserve same-length replace now fires — the
+            // pinned remainder is the ambiguous 1-vs-2 overlap.
             Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- #[a]\n- let x = E;\n+ #[b]\n+ let y = E;\n",
+                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# stmt S\n# expr E\n- #[a]\n- let x = E;\n+ #[b]\n+ #[c]\n+ let y = E;\n",
                 file: "fn a() {\n    let x = compute();\n    let _ = x;\n}\n",
                 code: "RSMPL_PATTERN_CONFLICT",
                 reason: "replacement attributes differ from matched attributes",

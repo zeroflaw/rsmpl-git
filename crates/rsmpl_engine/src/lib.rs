@@ -34,6 +34,7 @@ mod matcher_use;
 mod ordinary;
 mod plan;
 mod postcheck;
+mod postcheck_attr;
 mod postcheck_namehole;
 mod suggest;
 mod use_graph;

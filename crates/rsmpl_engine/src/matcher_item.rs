@@ -405,9 +405,19 @@ pub fn apply_item_rename_hunk(
 
     let old_start = hunk.header.old_start;
     let old_len = hunk.header.old_len;
+    // WI-10b: a `$`-sigiled name is a name hole (the classifier hole-ified
+    // a bare diet/`# ident` name): it binds every site's name and replays
+    // it byte-identical (attr-only evolution; the classifier rejects
+    // hole/concrete mixes, so the plus side is a hole too). `$` never
+    // occurs in concrete item names (`parse_side` rejects it), so the
+    // sigil alone distinguishes holes — no table registration needed.
+    let name_hole = minus_name.starts_with('$');
     let mut matched = 0;
     for c in &candidates {
-        if c.name != minus_name {
+        if name_hole {
+            // Holes bind per site — no name filter (subset attr semantics
+            // below still gate each site).
+        } else if c.name != minus_name {
             continue;
         }
         if !in_scope(c, hunk.scope(), old_start, old_len) {
@@ -444,10 +454,12 @@ pub fn apply_item_rename_hunk(
         // edit so reported spans overlap the ident and the WI-1.4
         // span-local postcondition verifies (WI-5 conforming-site
         // precedent); the attr edits below carry the visible change.
+        // WI-10b: holes replay the bound site name (byte-identical).
         {
             let (a, b) = span_bytes(original, index, c.ident)
                 .ok_or_else(|| range_err(&rule, c.ident.start().line as u32))?;
-            if original.get(a..b) != Some(minus_name.as_str()) {
+            let want_name = if name_hole { &c.name } else { &minus_name };
+            if original.get(a..b) != Some(want_name.as_str()) {
                 return Err(StructuredError::new(
                     ErrorCode::MatchConflict,
                     "item name span mismatch (file changed during matching?)",
@@ -455,7 +467,12 @@ pub fn apply_item_rename_hunk(
                 .with_rule(&rule)
                 .with_repair(StructuredError::internal_repair()));
             }
-            edits.push(TextEdit::new(a, b, plus_name.clone()).with_label("rename"));
+            let replay = if name_hole {
+                c.name.clone()
+            } else {
+                plus_name.clone()
+            };
+            edits.push(TextEdit::new(a, b, replay).with_label("rename"));
         }
         // WI-10a: attr-delta edits (Preserve only). Add inserts above the
         // item line; remove deletes the matched lines; replace swaps each
@@ -598,6 +615,46 @@ mod tests {
         // Wrong doc text still fails instead of silently matching.
         let wrong = patch.replace("- /// Doc.", "- /// Other.");
         assert!(apply(&wrong, "/// Doc.\nstruct Old {\n    x: i32,\n}\n").is_err());
+    }
+
+    #[test]
+    fn item_name_hole_evolves_attrs_across_hetero_names() {
+        // WI-10b: a bare `N` in item name position binds per site and
+        // replays byte-identical (attr-only evolution); vis/generics ride
+        // along preserved like concrete renames.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n- struct N\n+ #[derive(Debug)]\n+ struct N\n";
+        let src = "struct A {\n    x: i32,\n}\npub struct B<T> {\n    y: T,\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(
+            out,
+            "#[derive(Debug)]\nstruct A {\n    x: i32,\n}\n#[derive(Debug)]\npub struct B<T> {\n    y: T,\n}\n",
+            "got: {out:?}"
+        );
+        // Already-plus sites skip (no duplicate attr).
+        assert!(apply(patch, "#[derive(Debug)]\nstruct A {}\n").is_err());
+        // Mixed hole/concrete pairs fail fast (never a mass rename).
+        let mixed = patch.replace("+ #[derive(Debug)]\n+ struct N", "+ struct New");
+        let err = apply(&mixed, src).unwrap_err();
+        assert!(
+            err.contains("holes must appear on both sides"),
+            "got: {err}"
+        );
+        // No-delta holes stay the rename-usage error.
+        let nodelta = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n- struct N\n+ struct N\n";
+        let err = apply(nodelta, src).unwrap_err();
+        assert!(err.contains("identical"), "got: {err}");
+        // Declared `# ident` holes work the same way.
+        let declared = patch.replace("- struct N", "- struct Whatever").replace(
+            "+ #[derive(Debug)]\n+ struct N",
+            "+ #[derive(Debug)]\n+ struct Whatever",
+        );
+        let declared = declared.replace("# sweep", "# sweep\n# ident Whatever");
+        let out = apply(&declared, src).unwrap();
+        assert!(out.contains("#[derive(Debug)]\nstruct A {"), "got: {out:?}");
+        assert!(
+            out.contains("#[derive(Debug)]\npub struct B<T> {"),
+            "got: {out:?}"
+        );
     }
 
     #[test]

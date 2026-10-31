@@ -188,14 +188,58 @@ pub(crate) fn plus_instantiated_parsed(
                     (Some(p), Some(i)) => (p, i),
                     _ => return None,
                 };
-                return crate::postcheck_namehole::verify_fn_plus_slots(
+                // WI-10b: attr-text lift on top of slot verification — a
+                // name hole preserves every name, so the attr delta is the
+                // proof the rewrite landed. Preserve-only: under `strip`
+                // the envelope is deleted by design (no attr text owed).
+                return match crate::postcheck_namehole::verify_fn_plus_slots(
                     rh, compiled, parsed, post_text, index, spans, matches,
-                );
+                ) {
+                    Some(true) => {
+                        let (minus, plus) =
+                            if rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve {
+                                crate::postcheck_attr::hunk_attr_lines(rh)
+                            } else {
+                                (Vec::new(), Vec::new())
+                            };
+                        if !crate::postcheck_attr::has_attr_delta(&minus, &plus) {
+                            Some(true)
+                        } else {
+                            Some(
+                                crate::postcheck_attr::count_spans_named_with_attrs(
+                                    parsed,
+                                    DefKind::Fn,
+                                    None,
+                                    &minus,
+                                    &plus,
+                                    spans,
+                                ) >= matches.max(1),
+                            )
+                        }
+                    }
+                    other => other,
+                };
             }
             match post_parsed {
                 Some(parsed) => {
-                    let defs = collect_def_idents(parsed);
-                    Some(syn_spans_count(&defs, DefKind::Fn, spans, needle) >= matches.max(1))
+                    // WI-10b: the combined counter subsumes the name-only
+                    // check (no delta → attr check trivially true).
+                    // Preserve-only (strip deletes the envelope by design).
+                    let (minus, plus) = if rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve {
+                        crate::postcheck_attr::hunk_attr_lines(rh)
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    Some(
+                        crate::postcheck_attr::count_spans_named_with_attrs(
+                            parsed,
+                            DefKind::Fn,
+                            Some(needle),
+                            &minus,
+                            &plus,
+                            spans,
+                        ) >= matches.max(1),
+                    )
                 }
                 None => {
                     let needle = canonical_inst(&format!("fn{plus_name}"));
@@ -207,12 +251,33 @@ pub(crate) fn plus_instantiated_parsed(
                 }
             }
         }
-        PatternKind::ItemRename { plus_name, .. } => match post_parsed {
+        PatternKind::ItemRename {
+            plus_name,
+            minus_attrs,
+            plus_attrs,
+            ..
+        } => match post_parsed {
             Some(parsed) => {
-                let defs = collect_def_idents(parsed);
+                // WI-10b: `N`-hole evolution preserves every name (any
+                // ident counts); the attr delta carries the proof.
+                // Preserve-only (strip deletes the envelope by design).
+                let preserve = rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve;
+                let hole = plus_name.trim().starts_with('$');
+                let name = if hole { None } else { Some(plus_name.trim()) };
+                let (m, p): (&[String], &[String]) = if preserve {
+                    (minus_attrs, plus_attrs)
+                } else {
+                    (&[], &[])
+                };
                 Some(
-                    syn_spans_count(&defs, DefKind::Item, spans, plus_name.trim())
-                        >= matches.max(1),
+                    crate::postcheck_attr::count_spans_named_with_attrs(
+                        parsed,
+                        DefKind::Item,
+                        name,
+                        m,
+                        p,
+                        spans,
+                    ) >= matches.max(1),
                 )
             }
             None => Some(
@@ -222,19 +287,57 @@ pub(crate) fn plus_instantiated_parsed(
         },
         // WI-9a: member renames carry the same span-local posture as item
         // renames (the new ident must verify at the reported spans).
-        PatternKind::FieldRename { new, .. } => match post_parsed {
+        PatternKind::FieldRename {
+            new,
+            minus_attrs,
+            plus_attrs,
+            ..
+        } => match post_parsed {
             Some(parsed) => {
-                let defs = collect_def_idents(parsed);
-                Some(syn_spans_count(&defs, DefKind::Field, spans, new.trim()) >= matches.max(1))
+                let preserve = rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve;
+                let (m, p): (&[String], &[String]) = if preserve {
+                    (minus_attrs, plus_attrs)
+                } else {
+                    (&[], &[])
+                };
+                Some(
+                    crate::postcheck_attr::count_spans_named_with_attrs(
+                        parsed,
+                        DefKind::Field,
+                        Some(new.trim()),
+                        m,
+                        p,
+                        spans,
+                    ) >= matches.max(1),
+                )
             }
             None => Some(
                 spans_count(post_text, spans, new, |h| post_text.contains(h)) >= matches.max(1),
             ),
         },
-        PatternKind::VariantRename { new, .. } => match post_parsed {
+        PatternKind::VariantRename {
+            new,
+            minus_attrs,
+            plus_attrs,
+            ..
+        } => match post_parsed {
             Some(parsed) => {
-                let defs = collect_def_idents(parsed);
-                Some(syn_spans_count(&defs, DefKind::Variant, spans, new.trim()) >= matches.max(1))
+                let preserve = rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve;
+                let (m, p): (&[String], &[String]) = if preserve {
+                    (minus_attrs, plus_attrs)
+                } else {
+                    (&[], &[])
+                };
+                Some(
+                    crate::postcheck_attr::count_spans_named_with_attrs(
+                        parsed,
+                        DefKind::Variant,
+                        Some(new.trim()),
+                        m,
+                        p,
+                        spans,
+                    ) >= matches.max(1),
+                )
             }
             None => Some(
                 spans_count(post_text, spans, new, |h| post_text.contains(h)) >= matches.max(1),
@@ -577,7 +680,7 @@ fn verify_plus_pattern_at_spans(
 
 /// WI-1.4 definition-ident classes the syn collector distinguishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DefKind {
+pub(crate) enum DefKind {
     /// Free functions and impl/trait methods (`fn` idents).
     Fn,
     /// Item names (struct/enum/trait/union/type/const/static/mod) plus

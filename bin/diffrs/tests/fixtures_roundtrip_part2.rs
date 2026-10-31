@@ -494,5 +494,53 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "102-attr-replace-fires" {
+        // WI-10b: uniform derive migration over hetero structs raises to
+        // one N-holed item hunk and beats native bytes.
+        assert!(
+            semantic.contains("- struct N\n"),
+            "attr replace must raise the N-hole form, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ #[derive(Debug, Clone)]\n"),
+            "plus attr must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "attr replace must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "103-attr-insert-fires" {
+        // WI-10b: uniform `#[inline]` insertions over plain fns raise to
+        // the minimal-tier N-holed fn hunk.
+        assert!(
+            semantic.contains("- fn N(...) {\n"),
+            "attr insert must raise the minimal fn form, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ #[inline]\n"),
+            "plus attr must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "attr insert must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "104-attr-twin-stays-ordinary" {
+        // WI-10b: an untouched same-state twin vetoes the class — the
+        // two migrated sites stay ordinary rather than rewriting the twin.
+        assert!(
+            !semantic.contains("rule="),
+            "twin veto must stay ordinary, got: {semantic}"
+        );
+    } else if name == "105-let-attr-stays-ordinary" {
+        // WI-10b: `let`-statement attr insertions have no raising detector
+        // yet (authoring only) — the diff stays ordinary.
+        assert!(
+            !semantic.contains("rule="),
+            "let-attr insert must stay ordinary, got: {semantic}"
+        );
     }
 }
