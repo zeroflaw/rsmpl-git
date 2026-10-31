@@ -32,6 +32,7 @@ mod generalized;
 pub(crate) mod group;
 pub(crate) mod guard;
 pub(crate) mod header_evolution;
+pub(crate) mod impl_single;
 mod literal;
 mod literal_frame;
 mod macro_enclosing;
@@ -99,6 +100,7 @@ pub(crate) use generalized::{
     try_sig_evolution_sweep, try_type_sweep, try_untyped_let_sweep,
 };
 pub(crate) use header_evolution::try_header_evolution_sweep;
+pub(crate) use impl_single::try_impl_header_single;
 pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
@@ -334,9 +336,11 @@ pub fn infer_semantic_with_provenance(
 }
 
 /// One-ident-delta item rename: exactly one `-`/`+` line pair, same
-/// kind/prefix/suffix, idents differ. Column-0 (top-level) is
-/// enforced: indented lines are methods or block items a bare
-/// pattern cannot match.
+/// kind/prefix/suffix, idents differ. WI-19c: leading whitespace is
+/// tolerated for non-`fn` kinds (mod-nested / block-level items — the
+/// engine matches them via `syn`, the emission keeps the bare
+/// spelling); `fn` stays column-0 (indented `fn` lines are methods,
+/// owned by the slot sweep).
 pub(crate) fn try_item_rename(
     old_line: &str,
     new_line: &str,
@@ -353,6 +357,12 @@ pub(crate) fn try_item_rename(
         return None;
     }
     if old_ident == new_ident {
+        return None;
+    }
+    // WI-19c: indented `fn` lines are methods, never item renames.
+    if old_kind == "fn"
+        && (old.len() != old.trim_start().len() || new.len() != new.trim_start().len())
+    {
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
@@ -440,11 +450,15 @@ pub(crate) fn split_item(line: &str) -> Option<(String, String, String, String)>
         "macro_rules!",
     ];
     let trimmed = line.trim_start();
-    // Column-0 is enforced by the caller; a trimmed start here only
-    // tolerates nothing — require the line itself unindented.
-    if trimmed.len() != line.len() {
-        return None;
-    }
+    // WI-19c: leading whitespace is tolerated for nested-item kinds
+    // (`struct`/`enum`/`union`/`mod` — `mod`-nested and block-level
+    // items the engine matches via `syn`; emission keeps the bare
+    // spelling). All other kinds stay column-0: indented `fn` lines are
+    // methods (slot sweep owns them), indented `type`/`const`/`static`
+    // lines inside trait/impl blocks are assoc definitions (assoc
+    // def-only owns them), and indented `macro_rules!` lines stay with
+    // the macro detector.
+    let indented = trimmed.len() != line.len();
     let (prefix, rest) = if let Some(r) = trimmed.strip_prefix("pub") {
         // `pub`, `pub(…)`, each followed by whitespace.
         if r.is_empty() || r.starts_with([' ', '\t']) {
@@ -468,6 +482,10 @@ pub(crate) fn split_item(line: &str) -> Option<(String, String, String, String)>
     let kind_end = rest.find([' ', '\t'])?;
     let kind = &rest[..kind_end];
     if !KINDS.contains(&kind) {
+        return None;
+    }
+    // WI-19c allowlist: only nested-item kinds tolerate indent.
+    if indented && !matches!(kind, "struct" | "enum" | "union" | "mod") {
         return None;
     }
     let after_kind = rest[kind_end..].trim_start();

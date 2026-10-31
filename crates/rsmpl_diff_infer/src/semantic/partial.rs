@@ -104,12 +104,19 @@ pub(crate) fn try_partial_partition_section(
     // First pass: classify each hunk without reserving rules.
     let mut seen_pats: Vec<String> = Vec::new();
     let mut hunk_claimed: Vec<bool> = Vec::with_capacity(parsed.len());
+    // WI-19c: per-claimed-pair sweep-count flag, aligned with `parsed`
+    // order (item pairs keep the sweep-count totality; impl pairs carry
+    // their own scratch-apply totality and skip it).
+    let mut hunk_impl_flags: Vec<Vec<bool>> = Vec::with_capacity(parsed.len());
     for h in &parsed {
         let mut ok = true;
         let mut pats: Vec<String> = Vec::new();
+        let mut impl_flags: Vec<bool> = Vec::with_capacity(h.minuses.len());
         for (i, (m, p)) in h.minuses.iter().zip(h.pluses.iter()).enumerate() {
             let probe_before = used_rules.len();
-            let body = match super::try_item_rename(
+            // WI-19c: item gate (now indent-tolerant) first, then the
+            // self-ty `impl` single.
+            let (body, is_impl) = match super::try_item_rename(
                 m,
                 p,
                 path,
@@ -118,7 +125,7 @@ pub(crate) fn try_partial_partition_section(
                 used_rules,
             ) {
                 Some(full) => match full.split_once('\n') {
-                    Some((_, b)) => b.to_string(),
+                    Some((_, b)) => (b.to_string(), false),
                     None => {
                         ok = false;
                         used_rules.truncate(probe_before);
@@ -126,9 +133,29 @@ pub(crate) fn try_partial_partition_section(
                     }
                 },
                 None => {
-                    ok = false;
                     used_rules.truncate(probe_before);
-                    break;
+                    match super::try_impl_header_single(
+                        &[*m],
+                        &[*p],
+                        path,
+                        file_old,
+                        &h.sites[i..i + 1],
+                        used_rules,
+                    ) {
+                        Some((full, _)) => match full.split_once('\n') {
+                            Some((_, b)) => (b.to_string(), true),
+                            None => {
+                                ok = false;
+                                used_rules.truncate(probe_before);
+                                break;
+                            }
+                        },
+                        None => {
+                            ok = false;
+                            used_rules.truncate(probe_before);
+                            break;
+                        }
+                    }
                 }
             };
             used_rules.truncate(probe_before);
@@ -154,15 +181,21 @@ pub(crate) fn try_partial_partition_section(
                 ok = false;
                 break;
             }
-            // Pre-image totality per pair (same posture as above).
-            if !crate::totality::template_pair_holds(path, file_old, mp, pp, 1) {
+            // Pre-image totality per item pair (same posture as above).
+            // WI-19c impl pairs skip this (scratch-apply probe already
+            // passed; a same-name self-ty elsewhere is orphan evidence).
+            if !is_impl && !crate::totality::template_pair_holds(path, file_old, mp, pp, 1) {
                 ok = false;
                 break;
             }
             pats.push(mp.to_string());
+            impl_flags.push(is_impl);
         }
         if ok {
             seen_pats.extend(pats);
+            hunk_impl_flags.push(impl_flags);
+        } else {
+            hunk_impl_flags.push(Vec::new());
         }
         hunk_claimed.push(ok);
     }
@@ -191,10 +224,20 @@ pub(crate) fn try_partial_partition_section(
                     used_rules,
                 ) {
                     Some(f) => f,
-                    None => {
-                        used_rules.truncate(checkpoint);
-                        return None;
-                    }
+                    None => match super::try_impl_header_single(
+                        &[*m],
+                        &[*p],
+                        path,
+                        file_old,
+                        &h.sites[i..i + 1],
+                        used_rules,
+                    ) {
+                        Some((f, _)) => f,
+                        None => {
+                            used_rules.truncate(checkpoint);
+                            return None;
+                        }
+                    },
                 };
                 let Some((_, body)) = full.split_once('\n') else {
                     used_rules.truncate(checkpoint);

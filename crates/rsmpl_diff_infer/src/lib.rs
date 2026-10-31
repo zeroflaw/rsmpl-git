@@ -468,11 +468,17 @@ pub(crate) fn compress_balanced_pair_body(
         // permutation under strict T375 (subterm-counted multi-site
         // swaps owe canonical-losslessness). WI-19b extends the
         // precision family past item-rename/definition-evolution to
-        // slot/sig/header + def-only member/macro/assoc singles.
+        // slot/sig/header + def-only member/macro/assoc singles; WI-19c
+        // adds self-ty `impl` header singles (scratch-apply probe).
         semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
             .map(|f| (f, "item_rename"))
             .or_else(|| {
                 semantic::try_precision_definition_single(
+                    minuses, pluses, path, file_old, changed, used_rules,
+                )
+            })
+            .or_else(|| {
+                semantic::try_impl_header_single(
                     minuses, pluses, path, file_old, changed, used_rules,
                 )
             })

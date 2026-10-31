@@ -387,8 +387,15 @@ pub(crate) fn try_partition_section(
     }
     let checkpoint = used_rules.len();
     let mut bodies: Vec<String> = Vec::new();
+    // WI-19c: per-pair gate — `try_item_rename` (now indent-tolerant)
+    // first, then the self-ty `impl` single. Impl pairs carry their own
+    // scratch-apply totality (a same-name self-ty elsewhere is orphan
+    // evidence, never a veto), so they skip the sweep-count check below
+    // that item pairs keep.
+    let mut sweep_check: Vec<bool> = Vec::new();
     for i in 0..minuses.len() {
-        match super::try_item_rename(
+        let probe_before = used_rules.len();
+        if let Some(full) = super::try_item_rename(
             minuses[i],
             pluses[i],
             path,
@@ -396,12 +403,30 @@ pub(crate) fn try_partition_section(
             &changed[i..i + 1],
             used_rules,
         ) {
-            Some(full) => {
+            let Some((_, body)) = full.split_once('\n') else {
+                used_rules.truncate(checkpoint);
+                return None;
+            };
+            bodies.push(body.to_string());
+            sweep_check.push(true);
+            continue;
+        }
+        used_rules.truncate(probe_before);
+        match super::try_impl_header_single(
+            &minuses[i..i + 1],
+            &pluses[i..i + 1],
+            path,
+            file_old,
+            &changed[i..i + 1],
+            used_rules,
+        ) {
+            Some((full, _)) => {
                 let Some((_, body)) = full.split_once('\n') else {
                     used_rules.truncate(checkpoint);
                     return None;
                 };
                 bodies.push(body.to_string());
+                sweep_check.push(false);
             }
             None => {
                 used_rules.truncate(checkpoint);
@@ -441,11 +466,16 @@ pub(crate) fn try_partition_section(
         used_rules.truncate(checkpoint);
         return None;
     }
-    // Pre-image totality per pair (the `slot_holds` posture lifted to
+    // Pre-image totality per item pair (the `slot_holds` posture lifted to
     // single pairs): each minus pattern must match exactly its own site.
     // An untouched twin anywhere in the file vetoes; `None` pre-image
     // keeps the section-visible legacy allow (provenance marks it).
-    for &(minus, plus) in &pats {
+    // WI-19c impl pairs skip this: their scratch-apply probe already
+    // passed, and a same-name self-ty elsewhere is orphan evidence.
+    for (idx, &(minus, plus)) in pats.iter().enumerate() {
+        if !sweep_check[idx] {
+            continue;
+        }
         if !crate::totality::template_pair_holds(path, file_old, minus, plus, 1) {
             used_rules.truncate(checkpoint);
             return None;
@@ -732,6 +762,49 @@ pub(crate) fn compress_section(
                 return Some(prec);
             } else {
                 used_rules.truncate(prec_checkpoint);
+            }
+        }
+        // WI-19c: self-ty `impl` header single under the precision guard
+        // (same posture as the three shapes above; the scratch-apply
+        // probe inside is the totality, orphans at apply are evidence).
+        let impl_checkpoint = used_rules.len();
+        if let Some((imp, detector)) =
+            super::try_impl_header_single(&minuses, &pluses, path, file_old, &changed, used_rules)
+        {
+            debug_assert_eq!(super::guard_for(detector), super::Guard::Precision);
+            if let Some(prelude) = &rename_prelude {
+                if let Some(final_text) = reheader_rename(&imp, prelude) {
+                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
+                        push_section_prov(
+                            prov,
+                            &final_text,
+                            section,
+                            path,
+                            detector,
+                            &changed,
+                            file_old,
+                            impl_checkpoint,
+                            used_rules,
+                        );
+                        return Some(final_text);
+                    }
+                }
+                used_rules.truncate(impl_checkpoint);
+            } else if imp.len() <= section.len() + super::PRECISION_GUARD {
+                push_section_prov(
+                    prov,
+                    &imp,
+                    section,
+                    path,
+                    detector,
+                    &changed,
+                    file_old,
+                    impl_checkpoint,
+                    used_rules,
+                );
+                return Some(imp);
+            } else {
+                used_rules.truncate(impl_checkpoint);
             }
         }
         return compress_section_per_hunk(section, path, file_old, used_rules, prov);

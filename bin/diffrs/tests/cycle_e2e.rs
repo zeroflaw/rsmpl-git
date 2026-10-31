@@ -330,7 +330,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "12-stmt-rewrite",
-        "hetero: header+let mixed single block; v1 fuses pure let runs only (WI-5d), no sub-hunk split or header+body joint shape",
+        "hetero: header+let mixed single block; v1 fuses pure let runs only (WI-5d), no sub-hunk split or header+body joint shape (WI-19c permanent non-goal: hunk atomicity, a single mixed native hunk never splits)",
     ),
     (
         "13-sig-evolution",
@@ -338,7 +338,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "14-item-rename",
-        "partial (WI-19): struct/enum/const/trait re-infer as precision singles; mod+Helper hunk stays atomic-ordinary (nested item unclaimable), impl headers stay ordinary (no single-impl detector, slice 2), double-delta ordinary",
+        "partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)",
     ),
     (
         "18-general-expr",

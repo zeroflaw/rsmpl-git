@@ -7125,24 +7125,37 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
   every pair is a single-pair item rename above (including the plain
-  `fn` arm, whose gates apply per pair). All-or-nothing: one
-  unclaimable pair vetoes the whole section (a mixed hunk stays
+  `fn` arm, whose gates apply per pair) or a single-delta `impl`
+  header rename below (WI-19c: self-ty `impl Old` → `impl New` with no
+  `for`, or trait-side `impl OldTr for SameTy` → `impl NewTr for
+  SameTy` with the self-ty byte-equal; the double-delta line, both
+  sides changed, is never a single). Nested `struct`/`enum`/`union`/
+  `mod` items (mod-nested, block-level) classify like top-level ones
+  (WI-19c: leading whitespace tolerated; the bare spelling is
+  indent-insensitive in the engine); indented `fn` lines are methods
+  (slot sweep owns them) and indented `type`/`const`/`static`/
+  `macro_rules!` lines stay with their own detectors. All-or-nothing:
+  one unclaimable pair vetoes the whole section (a mixed hunk stays
   ordinary whole, never half-semantic), as do duplicate minus lines
   (identical pairs belong to the verbatim sweep). Emission is one file
   section with one hunk per pair (per-pair covering ranges, positional
-  `rN` rules; distinct deltas never group). The section-level byte-win
+  `rN` rules; distinct deltas never group; nested-item ranges may nest
+  inside their enclosing-item ranges — edits are disjoint spans, so
+  nesting is sound under Section 10.6). The section-level byte-win
   guard applies (the combined section must beat the ordinary section);
   a losing partition falls back to the per-hunk path. Detector name
   `item_rename`.
 - Partial partition (WI-19): the all-or-nothing gate above is kept
   per native hunk, not per section. When ≥ 1 hunk is fully claimable
-  (every pair in it a single-pair item rename under the same
-  duplicate/totality gates) and ≥ 1 hunk is not, the section emits the
-  claimed hunks as semantic per-pair hunks and keeps the rest ordinary
-  verbatim in the same file section (hunk ranges are disjoint, so
-  mixing is sound under Section 10.6). A single mixed native hunk
-  never splits — it stays ordinary whole, owned by the per-hunk
-  fallback. Guard is the scaled precision guard (semantic ≤ ordinary
+  (every pair in it a single-pair item rename or WI-19c `impl` single
+  under the same duplicate/totality gates) and ≥ 1 hunk is not, the
+  section emits the claimed hunks as semantic per-pair hunks and keeps
+  the rest ordinary verbatim in the same file section (hunk ranges are
+  disjoint, so mixing is sound under Section 10.6). A single mixed
+  native hunk never splits — it stays ordinary whole, owned by the
+  per-hunk fallback (WI-19c permanent non-goal: no sub-hunk split, so
+  fixture `12`'s header+`let` mixed hunk stays ordinary by decision).
+  Guard is the scaled precision guard (semantic ≤ ordinary
   + 16 × claimed pairs). Detector name `item_rename`.
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
@@ -8341,19 +8354,20 @@ bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 `19`, `21`, `22` — definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
-impl/return-carrying/vis-carrying fn singles and def-only member
-singles still need their slice-2 detectors); heterogeneous sites no template fires on stay
+return-carrying/vis-carrying fn singles still need their slice-2
+detectors); heterogeneous sites no template fires on stay
   ordinary (`12` header+let mixed single block — v1 fuses pure let
   runs only (WI-5d `single_block`); mixed runs stay ordinary as a
   permanent non-goal — no sub-hunk partition and no header+body joint
-  shape, so the mixed re-diff stays mixed by construction (WI-5d-follow
-  probe: 0/2473); `14` divergent single-file renames whose
-  deltas never share one intent — struct/enum/const/trait re-infer as
-  WI-19 precision singles while the `mod`+nested-`Helper` hunk stays
-  atomic-ordinary, `impl` headers stay ordinary (no single-impl
-  detector yet), and the `impl Printable for Old` →
-  `impl Labeled for New` double-delta pair stays ordinary (4 semantic
-  + 5 ordinary under WI-19 partial partition; all-single-delta
+  shape (WI-19c decision: hunk atomicity, a single mixed native hunk
+  never splits), so the mixed re-diff stays mixed by construction
+  (WI-5d-follow probe: 0/2473); `14` divergent single-file renames whose
+  deltas never share one intent — struct/enum/const/mod/nested-`Helper`/
+  self-ty-`impl`/trait/trait-side-`impl` re-infer as WI-19c precision
+  singles (8 semantic + 1 ordinary under partial partition) while the
+  `impl Printable for Old` → `impl Labeled for New` double-delta pair
+  stays ordinary (both sides change: needs a joint trait+self-ty
+  intent, item-intent follow work; all-single-delta
   multi-rename sections compress pair by pair instead (diffrs fixture
   `98-partition-fires`, canonically lossless)), `30` trait-side-only decl/def
   pairs (ordinary by design — no impl side shares the intent; mixed
