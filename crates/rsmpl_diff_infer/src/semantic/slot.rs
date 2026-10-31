@@ -137,8 +137,8 @@ fn is_fn_shaped(trimmed: &str) -> bool {
 }
 
 /// Split `... fn Ident<...>(...)` into (prefix-before-ident, ident,
-/// suffix-after-ident). The `fn` keyword must be word-bounded.
-fn split_fn_ident(text: &str) -> Option<(String, String, String)> {
+//suffix-after-ident). The `fn` keyword must be word-bounded.
+pub(crate) fn split_fn_ident(text: &str) -> Option<(String, String, String)> {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i + 2 <= bytes.len() {

@@ -6458,7 +6458,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
- `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `repeat_fold`, `partial_strip`, `single_block`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+ `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `repeat_fold`, `partial_strip`, `single_block`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -6478,8 +6478,10 @@ delta. `group` is
 the WI-7 cross-file intent label: `""` when ungrouped, else
 `rename_Old_to_New` shared with every hunk of the same single-delta
 intent across files (rename-like detectors only — same-callee,
-template, verbatim, delete, and move hunks never group; single-file
-repeats and divergent deltas never group). Grouped hunks share one
+template, verbatim, delete, and move hunks never group; divergent
+deltas never group; single-file repeats never group except
+`trait_method_rename`, whose trait+impl intent lives in one file and
+groups under the shared name even for a lone section). Grouped hunks share one
 `rule=<group>` name in patch bytes (WI-7b): the re-emission renames
 each grouped hunk from its positional `rN` to the shared
 `rename_Old_to_New` and orders file sections definition-first
@@ -6539,7 +6541,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   minus header must match exactly N fn items in the pre-image
   (macro/string twins never count — the engine never enters them);
   indented classes emit one verbatim-header hunk per enclosing `impl`
-  block, each probed separately. Detector name `sig_evolution`.
+   block, each probed separately. Detector name `sig_evolution`.
+- Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
+  fn header (`;`-terminated trait declarations or `{`-terminated
+  definitions and trait defaults, `syn`-validated) differing in
+  exactly the fn ident (per-site vis/qual/generics/params/return/
+  where byte-equal, heterogeneous across sites, one shared
+  `Old`→`New` delta). Every changed line must sit in a `trait` block
+  or an `impl` block (pre-image totality), with at least one site on
+  each side: pure trait-side classes stay ordinary (no impl side
+  shares the intent) and pure impl-side classes stay with the slot
+  sweep. Uniformly indented sites emit one hunk per enclosing block
+  with the block's verbatim header line from the pre-image
+  (Section 13.4: the engine filter matches only the named block),
+  `;` pairs on trait-declaration groups and `{` pairs elsewhere, all
+  sharing the `rename_Old_to_New` rule name (same-file grouping);
+  each hunk clears its own engine probe (twin headers and untouched
+  twins veto to ordinary). Divergent per-pair suffixes and mixed
+  indent stay passthrough. Detector name `trait_method_rename`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
@@ -7324,8 +7343,9 @@ single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
   permanent non-goal — no sub-hunk partition and no header+body joint
   shape, so the mixed re-diff stays mixed by construction (WI-5d-follow
   probe: 0/2473); `14` divergent single-file renames whose
-  deltas never share one intent, `30` trait decl/def pairs as WI-7
-  grouping territory); zero-edit optional (`05`) re-diffs to empty,
+  deltas never share one intent, `30` trait-side-only decl/def
+  pairs (ordinary by design — no impl side shares the intent; mixed
+  trait+impl classes raise via `trait_method_rename`, WI-4b); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only
 non-tree-canonical cycles; every other corpus case is
 canonically lossless, and one further iteration is a byte-identical

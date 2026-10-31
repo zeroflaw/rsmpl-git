@@ -11,15 +11,17 @@
 //!
 //! Groupable detectors are exactly those emitting one single-delta
 //! pair per hunk: `item_rename`, `fn_slot_sweep`, `sig_evolution`,
-//! `call_sweep`, `call_peel`, `qualified_call`, `turbofish`,
-//! `macro_rename`, `method_to_method`, `method_to_fn`, `use_prefix`.
-//! Same-callee shapes (`call_arg_add`, `call_literal`,
-//! `method_same_literal`, `ref_strip`), template shapes
-//! (`let_type_add`, `type_sweep`), concrete macro interiors
-//! (`macro_interior`, no ident delta), and non-pair shapes (`verbatim`,
-//! `delete`, `move`) never group. A group needs ≥2 hunks spanning ≥2
-//! distinct files; single-file repeats (sweeps) and divergent deltas
-//! stay `""`.
+//! `trait_method_rename`, `call_sweep`, `call_peel`,
+//! `qualified_call`, `turbofish`, `macro_rename`, `method_to_method`,
+//! `method_to_fn`, `use_prefix`. Same-callee shapes
+//! (`call_arg_add`, `call_literal`, `method_same_literal`,
+//! `ref_strip`), template shapes (`let_type_add`, `type_sweep`),
+//! concrete macro interiors (`macro_interior`, no ident delta), and
+//! non-pair shapes (`verbatim`, `delete`, `move`) never group. A
+//! group needs ≥2 hunks spanning ≥2 distinct files — except
+//! `trait_method_rename` (WI-4b), which may group within one file;
+//! single-file repeats of every other detector (sweeps) and divergent
+//! deltas stay `""`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,6 +34,7 @@ fn groupable(detector: &str) -> bool {
         "item_rename"
             | "fn_slot_sweep"
             | "sig_evolution"
+            | "trait_method_rename"
             | "call_sweep"
             | "call_peel"
             | "qualified_call"
@@ -91,11 +94,24 @@ pub(crate) fn assign_groups(prov: &mut [HunkProvenance], patch: &str) {
         }
     }
     for ((old, new), members) in &groups {
-        if members.len() < 2 {
+        // WI-4b: the trait-method intent lives in one file (trait
+        // block + impl blocks), so even a lone section groups under
+        // the shared name; every other detector still needs ≥2
+        // members across ≥2 files (the sweep posture).
+        let same_file_ok = members
+            .iter()
+            .all(|&i| prov[i].detector == "trait_method_rename");
+        if members.len() < 2 && !same_file_ok {
             continue;
         }
         let files: HashSet<&str> = members.iter().map(|&i| prov[i].file.as_str()).collect();
-        if files.len() < 2 {
+        // WI-4b: the trait-method intent lives in one file (trait
+        // block + impl blocks); every other detector still needs ≥2
+        // files to group (the sweep posture).
+        let same_file_ok = members
+            .iter()
+            .all(|&i| prov[i].detector == "trait_method_rename");
+        if files.len() < 2 && !same_file_ok {
             continue;
         }
         let label = format!("rename_{old}_to_{new}");
@@ -307,7 +323,9 @@ fn is_definition_detector(detector: &str) -> bool {
 /// ident, unparseable, or multi-slot evolution without a rename).
 fn hunk_delta(detector: &str, minus: &str, plus: &str) -> Option<(String, String)> {
     match detector {
-        "item_rename" | "fn_slot_sweep" | "sig_evolution" => item_delta(minus, plus),
+        "item_rename" | "fn_slot_sweep" | "sig_evolution" | "trait_method_rename" => {
+            item_delta(minus, plus)
+        }
         "call_sweep" | "call_peel" | "qualified_call" | "turbofish" | "method_to_method"
         | "method_to_fn" => call_delta(minus, plus),
         "macro_rename" => macro_delta(minus, plus),
@@ -596,6 +614,37 @@ mod tests {
     }
 
     #[test]
+    fn trait_method_groups_within_one_file() {
+        // WI-4b: the trait-method intent lives in one file (trait
+        // block + impl blocks), so same-file members group — every
+        // other detector keeps the sweep posture above.
+        let pre = "trait T {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\nstruct S;\nimpl S {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n        0\n    }\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@\n-    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n+    fn new(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n@@ -6 +6 @@\n-    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n+    fn new(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n".to_string();
+        let mut pre_map = HashMap::new();
+        pre_map.insert("f.rs".to_string(), pre.to_string());
+        let mut prov = Vec::new();
+        let out = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&section),
+            &pre_map,
+            &mut prov,
+        )
+        .expect("trait+impl rename must compress");
+        assert!(
+            prov.iter().all(|p| p.detector == "trait_method_rename"),
+            "prov: {prov:?}"
+        );
+        assert!(
+            prov.iter().all(|p| p.group == "rename_old_to_new"),
+            "same-file trait intent groups, prov: {prov:?}"
+        );
+        assert!(
+            out.contains("rule=rename_old_to_new"),
+            "shared rule re-emitted, got:\n{out}"
+        );
+        rsmpl_patch::parse_patch(&out).expect("grouped patch must parse");
+    }
+
+    #[test]
     fn item_pair_extracts_delta() {
         assert_eq!(
             item_delta("struct Old", "struct New"),
@@ -603,6 +652,10 @@ mod tests {
         );
         assert_eq!(
             item_delta("V Q fn Old G (...) W {", "V Q fn New G (...) W {"),
+            Some(("Old".to_string(), "New".to_string()))
+        );
+        assert_eq!(
+            item_delta("V Q fn Old G (...) W ;", "V Q fn New G (...) W ;"),
             Some(("Old".to_string(), "New".to_string()))
         );
         assert_eq!(

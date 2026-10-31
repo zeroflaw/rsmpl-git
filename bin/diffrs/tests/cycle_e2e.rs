@@ -334,7 +334,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "30-trait-sweep",
-        "hetero: decl/def trait shapes stay ordinary",
+        "hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)",
     ),
 ];
 

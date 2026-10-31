@@ -27,7 +27,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 }
 
 /// Ordered pair-sweep chain, tightest first (existing order,
-/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more): slot → sig-evolution → method-to-fn → method-to-method →
+/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more): slot → sig-evolution → trait-method → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
 /// call-literal → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
@@ -56,6 +56,16 @@ pub(crate) fn run_pair_chain(
         super::try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((evo, "sig_evolution"));
+    }
+    // WI-4b: trait+impl method rename (mixed `;` decl / `{` def
+    // classes the slot and sig-evolution sweeps decline by
+    // construction) — immediately after sig-evolution, before the
+    // method sweeps (those own same-name call shapes, never header
+    // pairs).
+    if let Some(tm) =
+        super::try_trait_method_rename(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((tm, "trait_method_rename"));
     }
     if let Some(m2f) =
         super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)

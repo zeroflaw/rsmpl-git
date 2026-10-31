@@ -41,6 +41,7 @@ pub(crate) mod shape;
 mod single_block;
 mod slot;
 pub(crate) mod subline;
+mod trait_methods;
 mod verbatim;
 // WI-3c: covering-span helpers live in `item_span` (this file was over
 // the 1600-line soft cap); re-exported so `super::`/`crate::semantic::`
@@ -50,6 +51,7 @@ mod item_span;
 pub(crate) use item_span::item_emission_header;
 pub(crate) use prefix::try_use_prefix_sweep;
 pub(crate) use slot::try_fn_slot_sweep;
+pub(crate) use trait_methods::try_trait_method_rename;
 
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
 pub(crate) use literal::try_call_literal_sweep;
