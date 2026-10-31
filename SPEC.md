@@ -453,6 +453,8 @@ A hunk is an RSmPL hunk if and only if:
 2. the header carries `rule=`, or immediately after the hunk header there
    is at least one unprefixed directive line beginning with `#`.
 
+A `rule=`-only hunk carries no `#` directives, so an ordinary-shaped text edit tagged with `rule=` is compiled as a pattern and fails with `RSMPL_PATTERN_CONFLICT`; that failure carries the suggestion "remove `rule=` for plain text hunks (or add `#` directives for a semantic pattern)".
+
 The tool is Rust-only, so the language defaults to Rust. A
 `# lang=rust` directive may be included for explicitness but is never
 required; `# lang=<other>` is rejected.

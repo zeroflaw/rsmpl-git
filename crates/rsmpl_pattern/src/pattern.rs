@@ -175,14 +175,31 @@ impl CompiledPattern {
 /// (slot/type/macro sub-compilers) so no failure is prose-only.
 pub fn compile(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     compile_inner(hunk).map_err(|e| {
-        if e.code == ErrorCode::PatternConflict && e.repair.is_none() {
+        let mut e = if e.code == ErrorCode::PatternConflict && e.repair.is_none() {
             e.with_repair(StructuredError::fix_pattern_repair(
                 "pattern",
                 "rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk",
             ))
         } else {
             e
+        };
+        // Hint for `rule=`-only text hunks (SPEC 7.1): a header `rule=`
+        // with no `#` directives reclassifies an ordinary-shaped edit as
+        // semantic, so the pattern parse names the symptom, not the
+        // reclassification. Point at the marker, not the symptom.
+        if e.code == ErrorCode::PatternConflict
+            && hunk.directives.is_empty()
+            && hunk.header.rule.is_some()
+        {
+            const HINT: &str = "remove `rule=` for plain text hunks (or add `#` directives for a semantic pattern)";
+            let next = match e.suggestion.take() {
+                None => HINT.to_string(),
+                Some(s) if s.contains("remove `rule=`") => s,
+                Some(s) => format!("{s} — {HINT}"),
+            };
+            e = e.with_suggestion(next);
         }
+        e
     })
 }
 
