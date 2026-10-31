@@ -1032,6 +1032,22 @@ fn apply_rsmpl_hunk(
                 edits,
             )
         }
+        PatternKind::FieldAddition { .. } => matcher_member_evo::apply_field_addition_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::VariantAddition { .. } => matcher_member_evo::apply_variant_addition_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,

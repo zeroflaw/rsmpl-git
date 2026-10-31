@@ -2516,8 +2516,37 @@ Rules:
 - Variant-payload evolution is `enum E {` context + one of three same-shape pairs with concrete preserved variant name: tuple payloads `Old(A, …)` / `Old(B, …)` (same arity, per-position type templates sharing one binding set under SPEC 15.7), struct payloads `Old { f: A, … }` / `Old { f: B, … }` (same field names in order, per-field type templates), or discriminants `Old = D0` / `Old = D1` (a general-expr template). Payload and discriminant never evolve together (one hunk per region, or an ordinary hunk). A bare `Old` / `New` pair stays a variant rename; call-shaped pairs without the header stay calls.
 - A name-changing "evolution" fails fast: same RHS on both sides points at the bare `<kind> <Name>` rename pair; differing RHS on both sides never combines rename + evolution (write a rename hunk plus an evolution hunk, or an ordinary hunk).
 - Classification is shape-first: sides without `=` (bare `type Old`) fall through to the item-rename classifier untouched; `const { … }` block expressions are never definitions. Member pairs without their container header fall through (field pairs to the member-rename missing-header error; call-shaped and discriminant pairs to the call/general classifiers). Leading `#[...]`/doc lines are the member's own attributes (SPEC 14.6 mirror laws: plus-side additions and differing sets fail fast; matching sites carry them).
-- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict).
+- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Member addition kinds (`FieldAddition`, `VariantAddition`) reject it likewise (an insertion renames nothing). Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict); pure insertions report `reparse-only`.
 - Out of scope in v0.1: generic-param/`where` evolution on aliases and fields, and value conversion at use sites.
+
+Member-addition authoring (WI-12b slice 1) reuses the member-evolution
+header+member spelling with an empty minus member set: the container
+header (`struct S {` / `enum E {`) is context and the single `+`
+member line is the point insertion.
+
+```diff
+@@ -2,0 +3 @@ rule=add_field
+  struct S {
++ b: bool,
+```
+
+```diff
+@@ -2,0 +3 @@ rule=add_variant
+  enum E {
++ C(i32),
+```
+
+Rules: the minus side must be empty (any minus member belongs to
+evolution/rename/ordinary); the plus side must be exactly one
+field/variant line (two-plus lines stay ordinary); the container
+header must be present (member lines without it fall through to the
+same classifiers as evolution pairs). Ranged hunks cite the
+insertion point (`-N,0` inserting after line N, which must lie
+strictly inside the container); `# sweep` inserts before the closing
+brace of every matching container lacking the member (already-present
+members skip the site). An already-present member is 0 matches, never
+an overwrite. Attr lines on the plus member ride alongside (SPEC 14.6
+attach discipline); `# follow=uses` is rejected (C17).
 
 ### 14.9 Use-path prefix renames
 
@@ -3755,7 +3784,7 @@ case where an ordinary hunk cannot express the edit.
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
-| C17 | `# follow=uses` on any shape other than a fn, item, field, or variant rename hunk (WI-6a, WI-9a) | `` `# follow=uses` is only supported on fn, item, field, and variant rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
+| C17 | `# follow=uses` on any shape other than a fn, item, field, or variant rename hunk (WI-6a, WI-9a; evolution and member-addition kinds included) | `` `# follow=uses` is only supported on fn, item, field, and variant rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites or per-argument holes (WI-7a: one hole per top-level comma-separated argument), or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
@@ -7023,9 +7052,30 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   the emitted hunk must apply with `matches == n` and reproduce
   byte-identically the native post lines at the changed sites.
   Guard is the precision guard (semantic ≤ ordinary + 16 bytes);
-  sweep shapes keep strict T375. Field/variant addition with
-  construction follow-through is WI-12b (stays ordinary here).
+  sweep shapes keep strict T375. Field/variant single-insertion
+  addition is `definition_addition` (below); construction
+  follow-through is WI-12c (stays ordinary here).
   Detector name `definition_evolution`.
+- Definition-member addition (WI-12b slice 1): one pure-insertion
+  hunk (`-N,0` with a single `+ member` line) inside a proven
+  container compresses to the WI-12b authored spelling (`struct S {`
+  / `enum E {` context plus the one `+` member line, no minus
+  member). `+ b: Ty` must parse as a field side (`name: Ty`,
+  `syn::Type`-validated); `+ C` / `+ C(..)` / `+ C { .. }` /
+  `+ C = ..` must parse as a variant (`syn::Variant`-validated,
+  bare unit names accepted). The container is recovered from the
+  pre-image (the `struct`/`enum` spanning the insertion point and
+  lacking the member); `None` pre-image, outside-container points,
+  duplicate members, two-plus lines, balanced pairs, and hetero
+  containers decline. Totality is the scratch-apply byte-compare
+  probe: the emitted hunk must apply with `matches == 1` and
+  reproduce byte-identically the native post (insertion after line
+  N, everything else untouched). Guard is the precision guard
+  (semantic ≤ ordinary + 16 bytes). Insertions report
+  `reparse-only` (no structural plus re-match for insertions).
+  Construction follow-through (struct-literal and match-arm sites)
+  is WI-12c and stays ordinary here. Detector name
+  `definition_addition`.
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated) differing in

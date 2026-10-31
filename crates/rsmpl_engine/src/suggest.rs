@@ -33,6 +33,8 @@ pub(crate) fn candidate_preview(
             | PatternKind::ConstEvolution { .. }
             | PatternKind::FieldTypeEvolution { .. }
             | PatternKind::VariantPayloadEvolution { .. }
+            | PatternKind::FieldAddition { .. }
+            | PatternKind::VariantAddition { .. }
             | PatternKind::UseRename { .. }
     );
     if kind_specific {
@@ -77,7 +79,13 @@ pub(crate) fn candidate_preview(
                 PatternKind::FieldTypeEvolution { struct_name, .. } => {
                     Some(("struct ".to_string(), Some(struct_name.clone())))
                 }
+                PatternKind::FieldAddition { struct_name, .. } => {
+                    Some(("struct ".to_string(), Some(struct_name.clone())))
+                }
                 PatternKind::VariantPayloadEvolution { enum_name, .. } => {
+                    Some(("enum ".to_string(), Some(enum_name.clone())))
+                }
+                PatternKind::VariantAddition { enum_name, .. } => {
                     Some(("enum ".to_string(), Some(enum_name.clone())))
                 }
                 PatternKind::ImplContext { .. } => Some(("fn ".to_string(), None)),

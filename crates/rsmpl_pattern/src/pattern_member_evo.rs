@@ -836,3 +836,83 @@ fn split_top_level_eq(text: &str) -> Option<(String, String)> {
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// Member addition (WI-12b slice 1)
+// ---------------------------------------------------------------------------
+
+/// Classify member-context addition: minus member set empty, plus member
+/// set exactly one field/variant line, container header present.
+///
+/// Called before `classify_member_evolution` (which rejects minus-empty
+/// shapes loud). Returns `Ok(None)` for every non-addition shape —
+/// including malformed plus lines inside a member container, which stay
+/// ordinary/`Insertion` rather than erroring here (the evolution
+/// classifier below still owns malformed *pairs*).
+pub(crate) fn classify_member_addition(
+    minus_raw: &str,
+    plus_raw: &str,
+    context_raw: &str,
+    _table: &MetavarTable,
+) -> Result<Option<PatternKind>, StructuredError> {
+    let struct_c = struct_context(context_raw);
+    let enum_c = enum_context(context_raw);
+    if struct_c.is_none() && enum_c.is_none() {
+        return Ok(None);
+    }
+    let minus_stripped = strip_container_headers(minus_raw);
+    let plus_stripped = strip_container_headers(plus_raw);
+    let (minus_attrs, minus_pair) = crate::pattern_general::split_leading_attrs(&minus_stripped);
+    let (plus_attrs, plus_pair) = crate::pattern_general::split_leading_attrs(&plus_stripped);
+    // Addition owns minus-empty shapes only; anything with a minus
+    // member (or minus attrs) belongs to evolution/rename/ordinary.
+    if !minus_attrs.is_empty() || !minus_pair.trim().is_empty() {
+        return Ok(None);
+    }
+    let plus_pair = plus_pair.trim().to_string();
+    if plus_pair.is_empty() || plus_pair.lines().count() != 1 {
+        return Ok(None);
+    }
+    // Struct container: the plus line must parse as a field side.
+    if let Some(container) = struct_c {
+        let Some(side) = parse_field_side(&plus_pair)? else {
+            return Ok(None);
+        };
+        return Ok(Some(PatternKind::FieldAddition {
+            struct_name: container,
+            field: side.name.clone(),
+            plus_raw: plus_pair,
+            minus_attrs: Vec::new(),
+            plus_attrs,
+        }));
+    }
+    // Enum container: the plus line must parse as a variant side.
+    // `parse_variant_side` declines bare unit names (rename-owned in
+    // the evolution classifier) — for addition a bare `C` is the
+    // common case, so accept a validated unit name as fallback.
+    // Anything else it declines (malformed payloads, field lines)
+    // stays unclaimed here.
+    if let Some(container) = enum_c {
+        if let Some(side) = parse_variant_side(&plus_pair) {
+            return Ok(Some(PatternKind::VariantAddition {
+                enum_name: container,
+                variant: side.name.clone(),
+                plus_raw: plus_pair,
+                minus_attrs: Vec::new(),
+                plus_attrs,
+            }));
+        }
+        let bare = plus_pair.trim_end_matches([',', ';']).trim();
+        if !bare.is_empty() && is_member_ident(bare) {
+            return Ok(Some(PatternKind::VariantAddition {
+                enum_name: container,
+                variant: bare.to_string(),
+                plus_raw: plus_pair,
+                minus_attrs: Vec::new(),
+                plus_attrs,
+            }));
+        }
+        return Ok(None);
+    }
+    Ok(None)
+}

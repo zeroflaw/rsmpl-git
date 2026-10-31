@@ -168,6 +168,28 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Struct-field addition (`struct S {` context + `+ b: bool,`):
+    /// a point insertion inside the container. The field name is
+    /// concrete, the type is concrete text (v1: no templates).
+    /// `# follow=uses` is rejected (C17). Reports `reparse-only`.
+    FieldAddition {
+        struct_name: String,
+        field: String,
+        plus_raw: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
+    /// Enum-variant addition (`enum E {` context + `+ C[,…]`):
+    /// a point insertion inside the container. The variant line is
+    /// concrete text (bare/unit/tuple/struct/discriminant).
+    /// `# follow=uses` is rejected (C17). Reports `reparse-only`.
+    VariantAddition {
+        enum_name: String,
+        variant: String,
+        plus_raw: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -496,6 +518,15 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     {
         unbound_plus.clear();
     }
+    // WI-12b: member additions name concrete items (field `b`, variant
+    // `C`) — the plus ident is not a metavariable hole, so the
+    // unbound-plus gate never fires for them (concrete-only v1).
+    if matches!(
+        &kind,
+        PatternKind::FieldAddition { .. } | PatternKind::VariantAddition { .. }
+    ) {
+        unbound_plus.clear();
+    }
 
     // `# returns=none` only meaningful on fn patterns (free functions
     // and impl/trait-context methods share the constraint; T209).
@@ -552,6 +583,8 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::ConstEvolution { .. } => "const/static evolution",
             PatternKind::FieldTypeEvolution { .. } => "field-type evolution",
             PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
+            PatternKind::FieldAddition { .. } => "field addition",
+            PatternKind::VariantAddition { .. } => "variant addition",
             PatternKind::UseRename { .. } => "use-path",
             PatternKind::ItemCapture { .. } => "item-capture",
             PatternKind::Insertion { .. } => "insertion",

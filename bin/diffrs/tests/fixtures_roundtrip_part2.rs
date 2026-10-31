@@ -572,5 +572,35 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.contains("+ old: u64"),
             "field plus must raise, got: {semantic}"
         );
+    } else if name == "108-definition-field-add-fires" {
+        // WI-12b slice 1: single-insertion field addition raises to the
+        // authored spelling (container header + one `+` member line).
+        assert!(
+            semantic.contains("  struct S {"),
+            "field header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ b: bool,"),
+            "field plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1"),
+            "single addition must carry a rule, got: {semantic}"
+        );
+    } else if name == "109-definition-variant-add-fires" {
+        // WI-12b slice 1: single-insertion variant addition raises to
+        // the authored spelling (container header + one `+` member).
+        assert!(
+            semantic.contains("  enum E {"),
+            "variant header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ C,"),
+            "variant plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1"),
+            "single addition must carry a rule, got: {semantic}"
+        );
     }
 }

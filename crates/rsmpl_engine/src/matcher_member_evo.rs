@@ -576,6 +576,309 @@ pub fn apply_variant_payload_hunk(
     Ok((matched, all_bindings))
 }
 
+/// Member-line indent for point insertions (WI-12b slice 1): the
+/// indent of the first non-empty member line inside the container, or
+/// the closing-brace indent plus four spaces when the container is
+/// empty. Keeps inserted lines byte-identical to the file's own
+/// style instead of column 0.
+fn member_indent(original: &str, start: u32, end: u32) -> String {
+    let lines: Vec<&str> = original.lines().collect();
+    let n = lines.len();
+    // `start`/`end` are 1-based syn lines; the span may begin at doc
+    // comments or attributes above the header, so the member region
+    // starts after the opening `{`, not at `start`.
+    let s = (start as usize).saturating_sub(1).min(n);
+    let e = (end as usize).min(n);
+    let mut body_start = e;
+    for (i, line) in lines.iter().enumerate().take(e).skip(s) {
+        if line.contains('{') {
+            body_start = i + 1;
+            break;
+        }
+    }
+    // First non-blank, non-closing line after the brace carries the
+    // member indent (attributes share it).
+    for line in &lines[body_start..e.saturating_sub(1)] {
+        let t = line.trim();
+        if t.is_empty() || t == "}" || t == "}," {
+            continue;
+        }
+        return line.chars().take_while(|c| c.is_whitespace()).collect();
+    }
+    // Empty container: closing-brace indent plus one level.
+    if end >= 1 && (end as usize) <= n {
+        let close = lines[end as usize - 1];
+        let base: String = close.chars().take_while(|c| c.is_whitespace()).collect();
+        return format!("{base}    ");
+    }
+    "    ".to_string()
+}
+
+/// Apply a field-addition hunk (WI-12b slice 1): point-insert one
+/// `name: Ty` line (plus its attr lines) inside `struct S`.
+///
+/// Ranged hunks insert after `header.old_start` (the `-N,0` point);
+/// the point must lie strictly inside the container
+/// (`container_start <= N < container_end`). File-scope hunks
+/// (`# sweep`) insert before the closing brace of every matching
+/// container that lacks the field. An already-present field skips the
+/// site (0 matches); the inserted line gains a trailing comma when the
+/// authored text omits one.
+pub fn apply_field_addition_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    let (struct_name, field, plus_raw, plus_attrs) = match &compiled.kind {
+        PatternKind::FieldAddition {
+            struct_name,
+            field,
+            plus_raw,
+            plus_attrs,
+            ..
+        } => (
+            struct_name.clone(),
+            field.clone(),
+            plus_raw.clone(),
+            plus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected field-addition pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    // All `struct S` containers with their spans + field-name sets.
+    struct StructProbe {
+        start: u32,
+        end: u32,
+        fields: Vec<String>,
+    }
+    struct Probe<'ast> {
+        name: &'ast str,
+        out: Vec<StructProbe>,
+    }
+    impl<'ast> Visit<'ast> for Probe<'ast> {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            if let syn::Item::Struct(s) = it {
+                if s.ident == self.name {
+                    let fields = match &s.fields {
+                        syn::Fields::Named(f) => f
+                            .named
+                            .iter()
+                            .filter_map(|f| f.ident.as_ref().map(|i| i.to_string()))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    self.out.push(StructProbe {
+                        start: s.span().start().line as u32,
+                        end: s.span().end().line as u32,
+                        fields,
+                    });
+                }
+            }
+            visit::visit_item(self, it);
+        }
+    }
+    let mut probe = Probe {
+        name: &struct_name,
+        out: Vec::new(),
+    };
+    for it in &parsed.items {
+        probe.visit_item(it);
+    }
+    let mut member = plus_raw.trim().to_string();
+    if !member.ends_with(',') && !member.ends_with(';') {
+        member.push(',');
+    }
+    let render = |indent: &str| -> String {
+        let mut t = String::new();
+        for a in &plus_attrs {
+            t.push_str(indent);
+            t.push_str(a.trim());
+            t.push('\n');
+        }
+        t.push_str(indent);
+        t.push_str(&member);
+        t.push('\n');
+        t
+    };
+    let mut matched = 0usize;
+    if hunk.scope() == Scope::File {
+        let mut targets: Vec<(u32, u32)> = Vec::new();
+        for c in &probe.out {
+            if c.fields.iter().any(|f| f == &field) {
+                continue;
+            }
+            // Insert before the closing brace line.
+            targets.push((c.start, c.end));
+        }
+        targets.sort_unstable();
+        targets.dedup();
+        for (start, end) in targets {
+            let at = index.line_start(end).ok_or_else(|| range_err(&rule, end))?;
+            let indent = member_indent(original, start, end);
+            edits.push(TextEdit::new(at, at, render(&indent)).with_label("addition"));
+            matched += 1;
+            if hunk.allow() == Allow::One && matched > 1 {
+                break;
+            }
+        }
+    } else {
+        let point = hunk.header.old_start;
+        let mut target: Option<(u32, u32, u32)> = None;
+        for c in &probe.out {
+            if c.fields.iter().any(|f| f == &field) {
+                continue;
+            }
+            if c.start <= point && point < c.end {
+                target = Some((c.start, c.end, point + 1));
+                break;
+            }
+        }
+        let Some((cstart, cend, at_line)) = target else {
+            return Ok((0, Vec::new()));
+        };
+        let at = index
+            .line_start(at_line)
+            .ok_or_else(|| range_err(&rule, at_line))?;
+        let indent = member_indent(original, cstart, cend);
+        edits.push(TextEdit::new(at, at, render(&indent)).with_label("addition"));
+        matched = 1;
+    }
+    let empties = vec![HashMap::new(); matched];
+    Ok((matched, empties))
+}
+
+/// Apply a variant-addition hunk (WI-12b slice 1): point-insert one
+/// variant line (plus its attr lines) inside `enum E`. Same
+/// range/file-scope discipline as field addition.
+pub fn apply_variant_addition_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    let (enum_name, variant, plus_raw, plus_attrs) = match &compiled.kind {
+        PatternKind::VariantAddition {
+            enum_name,
+            variant,
+            plus_raw,
+            plus_attrs,
+            ..
+        } => (
+            enum_name.clone(),
+            variant.clone(),
+            plus_raw.clone(),
+            plus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected variant-addition pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    struct EnumProbe {
+        start: u32,
+        end: u32,
+        variants: Vec<String>,
+    }
+    struct Probe<'ast> {
+        name: &'ast str,
+        out: Vec<EnumProbe>,
+    }
+    impl<'ast> Visit<'ast> for Probe<'ast> {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            if let syn::Item::Enum(e) = it {
+                if e.ident == self.name {
+                    self.out.push(EnumProbe {
+                        start: e.span().start().line as u32,
+                        end: e.span().end().line as u32,
+                        variants: e.variants.iter().map(|v| v.ident.to_string()).collect(),
+                    });
+                }
+            }
+            visit::visit_item(self, it);
+        }
+    }
+    let mut probe = Probe {
+        name: &enum_name,
+        out: Vec::new(),
+    };
+    for it in &parsed.items {
+        probe.visit_item(it);
+    }
+    let mut member = plus_raw.trim().to_string();
+    if !member.ends_with(',') && !member.ends_with(';') {
+        member.push(',');
+    }
+    let render = |indent: &str| -> String {
+        let mut t = String::new();
+        for a in &plus_attrs {
+            t.push_str(indent);
+            t.push_str(a.trim());
+            t.push('\n');
+        }
+        t.push_str(indent);
+        t.push_str(&member);
+        t.push('\n');
+        t
+    };
+    let mut matched = 0usize;
+    if hunk.scope() == Scope::File {
+        let mut targets: Vec<(u32, u32)> = Vec::new();
+        for c in &probe.out {
+            if c.variants.iter().any(|v| v == &variant) {
+                continue;
+            }
+            targets.push((c.start, c.end));
+        }
+        targets.sort_unstable();
+        targets.dedup();
+        for (start, end) in targets {
+            let at = index.line_start(end).ok_or_else(|| range_err(&rule, end))?;
+            let indent = member_indent(original, start, end);
+            edits.push(TextEdit::new(at, at, render(&indent)).with_label("addition"));
+            matched += 1;
+            if hunk.allow() == Allow::One && matched > 1 {
+                break;
+            }
+        }
+    } else {
+        let point = hunk.header.old_start;
+        let mut target: Option<(u32, u32, u32)> = None;
+        for c in &probe.out {
+            if c.variants.iter().any(|v| v == &variant) {
+                continue;
+            }
+            if c.start <= point && point < c.end {
+                target = Some((c.start, c.end, point + 1));
+                break;
+            }
+        }
+        let Some((cstart, cend, at_line)) = target else {
+            return Ok((0, Vec::new()));
+        };
+        let at = index
+            .line_start(at_line)
+            .ok_or_else(|| range_err(&rule, at_line))?;
+        let indent = member_indent(original, cstart, cend);
+        edits.push(TextEdit::new(at, at, render(&indent)).with_label("addition"));
+        matched = 1;
+    }
+    let empties = vec![HashMap::new(); matched];
+    Ok((matched, empties))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -761,5 +1064,122 @@ mod tests {
         let src = "enum E {\n    Keep,\n}\nenum F {\n    Old(Vec<u8>),\n}\n";
         let err = apply(&patch, src).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    // WI-12b slice 1: member-addition authoring matrix.
+
+    fn add_field_patch(plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n{FIELD_CTX}+ {plus}\n"
+        )
+    }
+
+    fn add_variant_patch(plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n{VAR_CTX}+ {plus}\n"
+        )
+    }
+
+    #[test]
+    fn field_addition_fire_reparse_only_indented() {
+        let patch = add_field_patch("b: bool,");
+        let (out, report) = apply_report(&patch, "struct S {\n    a: u32,\n}\n").unwrap();
+        assert!(out.contains("    b: bool,"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::ReparseOnly);
+    }
+
+    #[test]
+    fn field_addition_mid_point_indented() {
+        // Insertion point inside the container (after line 2, before
+        // the last member) still lands indented.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n  struct S {\n+ b: bool,\n";
+        let (out, _) = apply_report(patch, "struct S {\n    a: u32,\n    c: u8,\n}\n").unwrap();
+        assert!(out.contains("    b: bool,"), "got: {out:?}");
+        assert!(out.contains("    a: u32,"), "got: {out:?}");
+        assert!(out.contains("    c: u8,"), "got: {out:?}");
+    }
+
+    #[test]
+    fn variant_addition_bare_fire() {
+        let patch = add_variant_patch("C,");
+        let (out, report) = apply_report(&patch, "enum E {\n    A,\n}\n").unwrap();
+        assert!(out.contains("    C,"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::ReparseOnly);
+    }
+
+    #[test]
+    fn variant_addition_tuple_fire() {
+        let patch = add_variant_patch("C(i32),");
+        let (out, _) = apply_report(&patch, "enum E {\n    A,\n}\n").unwrap();
+        assert!(out.contains("    C(i32),"), "got: {out:?}");
+    }
+
+    #[test]
+    fn variant_addition_struct_fire() {
+        let patch = add_variant_patch("C { f: u32 },");
+        let (out, _) = apply_report(&patch, "enum E {\n    A,\n}\n").unwrap();
+        assert!(out.contains("    C { f: u32 },"), "got: {out:?}");
+    }
+
+    #[test]
+    fn variant_addition_discriminant_fire() {
+        let patch = add_variant_patch("C = 3,");
+        let (out, _) = apply_report(&patch, "enum E {\n    A,\n}\n").unwrap();
+        assert!(out.contains("    C = 3,"), "got: {out:?}");
+    }
+
+    #[test]
+    fn addition_two_plus_lines_veto() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n  struct S {\n+ b: bool,\n+ c: u8,\n";
+        let err = apply(patch, "struct S {\n    a: u32,\n}\n").unwrap_err();
+        assert!(
+            err.contains("RSMPL_PATTERN_CONFLICT") || err.contains("RSMPL_MATCH_CONFLICT"),
+            "two-plus insertion must not claim addition, got: {err}"
+        );
+    }
+
+    #[test]
+    fn addition_missing_container_veto() {
+        // No container header: the plus line falls through to a plain
+        // insertion (not the member-addition shape), so it lands
+        // unindented at the insertion point instead of container-indented.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 +1 @@ rule=add\n+ b: bool,\n";
+        let (out, _) = apply_report(patch, "struct S {\n    a: u32,\n}\n").unwrap();
+        assert!(
+            !out.contains("    b: bool,"),
+            "headerless plus must not take the addition path, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn addition_rejects_follow_uses() {
+        let patch = format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n# follow=uses\n{FIELD_CTX}+ b: bool,\n"
+        );
+        let err = apply(&patch, "struct S {\n    a: u32,\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("C17"), "got: {err}");
+    }
+
+    #[test]
+    fn addition_duplicate_member_zero_matches() {
+        let patch = add_field_patch("a: u32,");
+        let err = apply(&patch, "struct S {\n    a: u32,\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn addition_indent_ignores_attrs_above_container() {
+        // History shape (a734ee0): doc + `#[derive]` lines sit above
+        // the container, and the member indent must come from inside
+        // the braces — not from the 0-indent attribute lines.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -5,0 +6 @@ rule=add\n  enum Scope {\n+ File,\n";
+        let src = "/// Scope modes.\n#[derive(Debug, Clone, Copy)]\npub enum Scope {\n    #[default]\n    Contained,\n    Exact,\n}\n";
+        let (out, _) = apply_report(patch, src).unwrap();
+        assert!(out.contains("    File,"), "got: {out:?}");
+        assert!(
+            out.contains("    Contained,\n    File,\n    Exact,"),
+            "got: {out:?}"
+        );
     }
 }

@@ -986,6 +986,36 @@ fn compress_section_per_hunk(
             out.push_str(&d);
             continue;
         }
+        // WI-12b slice 1: single pure-insertion member addition
+        // (`+ b: bool,` / `+ C` inside a proven container) under the
+        // precision guard. Balanced hunks keep the shared chain below.
+        if minuses.is_empty() && pluses.len() == 1 {
+            let add_before = used_rules.len();
+            if let Some((add, detector)) =
+                super::try_definition_addition(&minuses, &pluses, path, file_old, hunk, used_rules)
+            {
+                let body = add.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+                if body.len() <= hunk.len() + super::PRECISION_GUARD {
+                    push_section_prov(
+                        prov,
+                        body,
+                        hunk,
+                        path,
+                        detector,
+                        &crate::totality::changed_old_lines(hunk),
+                        file_old,
+                        add_before,
+                        used_rules,
+                    );
+                    compressed_any = true;
+                    out.push_str(body);
+                    continue;
+                }
+                used_rules.truncate(add_before);
+            } else {
+                used_rules.truncate(add_before);
+            }
+        }
         // One balanced hunk through the shared detector chain
         // (`compress_balanced_pair_body` — same shapes the verbatim
         // sweep retries leftovers with); ordinary hunks pass through.

@@ -405,6 +405,13 @@ pub(crate) fn classify(
     // "same name, template RHS differs" while renames are "names differ,
     // RHS token-equal". Evolution first: same-type pairs fall through to
     // the rename classifier below (single identical/rename gates there).
+    // Member-context addition (WI-12b slice 1): minus-empty plus-single
+    // under a container header. Before evolution (which rejects
+    // minus-empty shapes loud — those are additions, not malformed
+    // pairs).
+    if let Some(add) = crate::pattern_member_evo::classify_member_addition(m, p, c, table)? {
+        return Ok(add);
+    }
     if let Some(evo) = crate::pattern_member_evo::classify_member_evolution(m, p, c, table)? {
         return Ok(evo);
     }
