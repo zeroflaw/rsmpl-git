@@ -6794,7 +6794,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
-   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `repeat_fold`, `partial_strip`, `single_block`, `macro_interior`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
+   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -7028,10 +7028,28 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `E0.timeout2`, `&E0` → `&mut E0`). No-delta and multi-hole
    classes stay ordinary. One `# allow=many` hunk (tight original
    range, Section D.5) with diet holes, no declarations. Pre-image
-   totality is the real-pair engine-count check
-   (`template_pair_holds`): the emitted pair must match exactly N
-   subterms in the pre-image — an untouched twin vetoes. Detector
-   name `general_expr`.
+  totality is the real-pair engine-count check
+  (`template_pair_holds`): the emitted pair must match exactly N
+  subterms in the pre-image — an untouched twin vetoes. Detector
+  name `general_expr`.
+  - Literal-frame sweep (WI-7): N ≥ 2 `-`/`+` pairs, each parsing as
+  one `syn::Stmt` (expression statements, `let`s, `return`s, `const`/
+  `static` items via `Stmt::Item`; header/attr/control lines fail to
+  parse and stay ordinary) and differing from its partner in exactly
+  one literal token — string, char, number, or bool, same kind on both
+  sides (byte/C/raw-string spellings veto; macro-body deltas contribute
+  no literals and veto) — with a uniform `(old, new)` pair across
+  sites while the surrounding frames stay hetero. One `# allow=many`
+  hunk (tight original range, Section D.5) with the bare literal pair
+  (`- "old"` / `+ "new"`), which the engine matches as literal
+  subterms wherever they sit. Guards: all-identical line classes stay
+  for the tighter verbatim sweep (T422 precedent); the old literal
+  occurs exactly once per minus line (one template application must
+  reproduce the plus line); single-site classes stay ordinary. Pre-image
+  totality is the same real-pair engine-count check
+  (`template_pair_holds`): macro interiors and string-in-string never
+  count (the engine never enters them), an untouched twin vetoes.
+  Detector name `literal_frame`.
  - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
@@ -7549,7 +7567,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `Stmt` shape; multi-line fragments never parse and stay ordinary).
   Macro invocations on either side (SPEC 21), bare-ident/literal minus
   sides (expressions only — a whole-statement `let` pattern is always
-  precise), and `?`-applied calls
+  precise; hetero-frame lone-literal deltas are the `literal_frame`
+  sweep's, above), and `?`-applied calls
   wrapping a closure (minus side), and top-level Unary on either side
   are rejected — each failed loud in-corpus (top-level Unary matches since
   T415: leading `!` skips the macro pre-route and leading `!`/`-` bypasses

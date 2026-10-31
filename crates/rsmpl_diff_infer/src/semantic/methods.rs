@@ -1023,23 +1023,65 @@ mod tests {
     }
 
     #[test]
-    fn method_same_literal_turbofish_stays_passthrough() {
+    fn method_same_literal_turbofish_raises_literal_frame() {
+        // WI-7: the method sweep still declines turbofish (it cannot
+        // spell `::<u8>`), but the lone literal delta is independently
+        // raisable — the turbofish method is unchanged frame, and the
+        // bare-literal hunk real-applies byte-identical (verified).
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    a.foo::<u8>(\"skills/rsmpl-git/SKILL.md\");\n-    b.foo::<u8>(\"skills/rsmpl-git/SKILL.md\");\n+    a.foo::<u8>(\"skills/gitrs/SKILL.md\");\n+    b.foo::<u8>(\"skills/gitrs/SKILL.md\");\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    a.foo::<u8>(\"skills/rsmpl-git/SKILL.md\");\n    b.foo::<u8>(\"skills/rsmpl-git/SKILL.md\");\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("literal_frame must fire");
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- \"skills/rsmpl-git/SKILL.md\"\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("+ \"skills/gitrs/SKILL.md\"\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    a.foo::<u8>(\"skills/gitrs/SKILL.md\");\n    b.foo::<u8>(\"skills/gitrs/SKILL.md\");\n}\n",
+            "real-apply must be byte-identical"
+        );
     }
 
     #[test]
-    fn method_same_literal_ref_receiver_stays_passthrough() {
-        // `&`-led sides route to the general-expr matcher, never the
-        // method-call shape (mirrors the m2m gate).
+    fn method_same_literal_ref_receiver_raises_literal_frame() {
+        // WI-7: `&`-led sides route to the general-expr matcher, never
+        // the method-call shape (mirrors the m2m gate) — but the lone
+        // literal delta is independently raisable as a bare-literal
+        // hunk (verified byte-identical below).
         let raw = section(
             "f.rs",
             "@@ -1,4 +1,4 @@\n fn m() {\n-    &a.foo(\"skills/rsmpl-git/SKILL.md\");\n-    &b.foo(\"skills/rsmpl-git/SKILL.md\");\n+    &a.foo(\"skills/gitrs/SKILL.md\");\n+    &b.foo(\"skills/gitrs/SKILL.md\");\n }\n",
         );
-        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    &a.foo(\"skills/rsmpl-git/SKILL.md\");\n    &b.foo(\"skills/rsmpl-git/SKILL.md\");\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).expect("literal_frame must fire");
+        validated_live(&out, &pre);
+        assert!(
+            out.contains("- \"skills/rsmpl-git/SKILL.md\"\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("+ \"skills/gitrs/SKILL.md\"\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    &a.foo(\"skills/gitrs/SKILL.md\");\n    &b.foo(\"skills/gitrs/SKILL.md\");\n}\n",
+            "real-apply must be byte-identical"
+        );
     }
 
     #[test]

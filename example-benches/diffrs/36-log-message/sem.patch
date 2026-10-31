@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -2,14 @@ rule=r1
+# allow=many
+- "old-msg"
++ "new-msg"

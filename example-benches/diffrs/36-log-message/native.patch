@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2 +2 @@ fn start() {
+-    log::info("old-msg");
++    log::info("new-msg");
+@@ -6 +6 @@ fn stop(code: i32) {
+-    eprintln_code(code, "old-msg");
++    eprintln_code(code, "new-msg");
+@@ -10 +10 @@ fn pause() {
+-    let m = "old-msg";
++    let m = "new-msg";
+@@ -15 +15 @@ fn resume() -> &'static str {
+-    return "old-msg";
++    return "new-msg";

@@ -32,7 +32,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 /// macro-rename → use-prefix → bare call → call-perm →
 /// call-arg-add →
 /// call-literal → call-arg-template → method-arg-template →
-/// general-expr → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
+/// general-expr → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block → literal-frame. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -253,13 +253,23 @@ pub(crate) fn run_pair_chain(
         return Some((strip, "partial_strip"));
     }
     // WI-5d: single-block hetero `let` run (one contiguous K = 2–4
-    // window, within-pair abstraction) — last: every earlier detector
-    // keeps its classes (this owns only runs declined by all of
-    // them), before the verbatim stage in the caller.
+    // window, within-pair abstraction) — every earlier detector keeps
+    // its classes (this owns only runs declined by all of them).
     if let Some(single) =
         super::try_single_block_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((single, "single_block"));
+    }
+    // WI-7: lone-literal sweep (`"old"` → `"new"`, `10` → `20`,
+    // `false` → `true` inside hetero frames) — last: the bare-literal
+    // template is the broadest still-semantic sweep, so tighter
+    // detectors (calls, lets, windows) keep their classes first; the
+    // verbatim stage in the caller owns all-identical lines (T422,
+    // declined inside the detector).
+    if let Some(frame) =
+        super::try_literal_frame_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((frame, "literal_frame"));
     }
     None
 }
