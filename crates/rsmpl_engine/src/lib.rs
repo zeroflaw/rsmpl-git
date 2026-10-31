@@ -113,13 +113,11 @@ pub struct RuleReport {
     /// Per-site evidence (WI-2b, SPEC D.2): one entry per emitted edit in
     /// span order; empty for shapes that bind nothing (omitted from JSON).
     pub sites: Vec<SiteReport>,
-    /// `# fallback=syntax` skip notes from `# follow=uses` hunks (SPEC
-    /// 14.8): `; `-joined, present only when sites were skipped.
-    pub follow_skipped: Option<String>,
     /// WI-2 structured skip evidence (SPEC D.2, 14.8): one entry per
     /// skipped site (`file`, 1-based `line`, `reason` code), sorted by
-    /// file/line and deduped. Additive beside `follow_skipped` (WI-20
-    /// owns the string's removal); empty when nothing was skipped.
+    /// file/line and deduped. v4 owns the only breaking change of this
+    /// round: the `; `-joined `follow_skipped` prose string is removed,
+    /// these triples carry the signal alone. Empty when nothing skipped.
     pub follow_skipped_details: Vec<FollowSkipReport>,
     /// Report-only orphan evidence (WI-7c, SPEC 14.8): same-name uses a
     /// definition-only rename leaves behind. Never fails the run.
@@ -132,9 +130,9 @@ pub struct RuleReport {
     pub symbol: Option<String>,
 }
 
-/// WI-2 structured skip evidence (SPEC D.2, 14.8): the file/line the
-/// `follow_skipped` prose names, plus the machine `reason` code
-/// (`shadowed` | `glob-reexport` | `second-hop` | `macro-hidden` |
+/// WI-2 structured skip evidence (SPEC D.2, 14.8): one assertable
+/// triple per skipped site — the file/line plus the machine `reason`
+/// code (`shadowed` | `glob-reexport` | `second-hop` | `macro-hidden` |
 /// `off-target`). File-level skips (unparseable files) report `line: 1`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FollowSkipReport {

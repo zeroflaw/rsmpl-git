@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=rename_old_api
+# sweep
+# follow=uses
+- pub fn old_api
++ pub fn new_api

@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=resweep_calls
+# sweep
+- foo(E)
++ bar(E)

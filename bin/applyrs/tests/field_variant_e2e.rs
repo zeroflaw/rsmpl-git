@@ -97,8 +97,10 @@ fn field_sibling_definition_becomes_shadowed_evidence() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v = json_of(&out);
-    let skipped = v["rules"][0]["follow_skipped"].as_str().unwrap();
-    assert!(skipped.contains("t"), "got: {v}");
+    assert!(
+        v["rules"][0].get("follow_skipped").is_none(),
+        "v4 removed the prose string, got: {v}"
+    );
     let details = v["rules"][0]["follow_skipped_details"].as_array().unwrap();
     assert!(
         details.iter().any(|d| d["reason"] == "shadowed"),
@@ -188,8 +190,10 @@ fn variant_bare_spelling_is_opaque_under_follow() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v = json_of(&out);
-    let skipped = v["rules"][0]["follow_skipped"].as_str().unwrap();
-    assert!(skipped.contains("bare"), "got: {v}");
+    assert!(
+        v["rules"][0].get("follow_skipped").is_none(),
+        "v4 removed the prose string, got: {v}"
+    );
     let details = v["rules"][0]["follow_skipped_details"].as_array().unwrap();
     assert!(
         details.iter().any(|d| d["reason"] == "second-hop"),

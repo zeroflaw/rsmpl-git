@@ -364,7 +364,7 @@ fn json_envelope_shape() {
     let out = run(dir.path(), &["--format", "json"]);
     assert_eq!(out.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(v["version"], serde_json::json!(2));
+    assert_eq!(v["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
     assert_eq!(
         v["files"],
         serde_json::json!([{"path": "src/lib.rs"}]),
@@ -408,7 +408,11 @@ fn rev_range_resolves_pre_image_proven() {
     let out = run(dir.path(), &["HEAD~1..HEAD", "--format", "json"]);
     assert_eq!(out.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
     let hunks = v["hunks"].as_array().unwrap();
     assert!(!hunks.is_empty(), "got: {v}");
     assert!(
@@ -429,7 +433,7 @@ fn error_envelope_carries_applyrs_key_set() {
     let out = run(Path::new("/nonexistent-diffrs-repo"), &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(v["version"], serde_json::json!(2));
+    assert_eq!(v["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
     let err = &v["error"];
     for key in [
         "code",

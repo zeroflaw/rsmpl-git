@@ -88,10 +88,10 @@ fn second_hop_reexport_skips_with_fallback_and_reports() {
     // while every use site (incl. the re-exports) is listed untouched.
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    let skipped = v["rules"][0]["follow_skipped"]
-        .as_str()
-        .expect("follow_skipped present");
-    assert!(skipped.contains("src/c.rs"), "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"]
+        .as_array()
+        .expect("follow_skipped_details present");
+    assert!(details.iter().any(|d| d["file"] == "src/c.rs"), "got: {v}");
     assert_eq!(read(dir.path(), "src/b.rs"), before_b);
     assert_eq!(read(dir.path(), "src/c.rs"), before_c);
 }

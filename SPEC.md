@@ -6,6 +6,35 @@
 **File extension suggestion:** `.rsmpl` 
 **Canonical document name:** `specification.md`
 
+## Agent contract (one screen)
+
+Five invariants; everything below is their spelling:
+
+1. **Original coordinates** (10, D.3): every `-old,len` range cites the
+   pre-patch file. Read the file, cite spans, author the patch, `--check`
+   it. Stale ranges either re-anchor with `drift` evidence or fail loud
+   (10.8) — never silently re-based.
+2. **Diet-canonical form** (7.1, 9.3, 15.8, D.4, D.5): terse spellings
+   (`- fn foo`, `# sweep`, inferred `E T P V Q G W I N`) are canonical;
+   long forms parse but canonicalise away. `diffrs` emits the cheapest
+   *trustworthy* view, never merely the cheapest bytes (D3 precision
+   guards).
+3. **Fail-loud** (2.6, 18.6, 25): unprovable sites stay ordinary or fail
+   with a machine `repair` — never a guess. Every patch-input failure
+   carries a verbatim-appliable `repair` (25.9, D.2); `null` only on
+   environmental IO.
+4. **Evidence fields** (D.2, 24.6): every success reports `version`
+   (one `rsmpl_patch::REPORT_VERSION` number across all binaries),
+   `checked: {lowering, semantics, build}`, per-rule `semantics`
+   (`instantiated|postcondition|reparse-only|not-applicable`) computed
+   by a check that can fail at the reported `spans`, assertable
+   `sites`/`binding_meta`/`span_edits`/`follow_skipped_details`/
+   `orphans`. No success field is true by construction (D2).
+5. **Cycle equalities** (D.5): semantic → native → semantic and native
+   → semantic → native round-trip under stated equalities
+   (`S″ == S′` canonical fixed point, tree-lossless natives); every
+   remaining divergence is named, owned, and pinned — never silent.
+
 ---
 
 ## Table of Contents
@@ -76,7 +105,6 @@ diff --git src/lib.rs
 - fn foo
 + fn bar
 ```
-```
 
 A normal Git hunk remains normal:
 
@@ -86,6 +114,7 @@ A normal Git hunk remains normal:
 +mod new;
 
  fn main() {}
+ }
 ```
 
 An RSmPL-aware engine applies both kinds of hunks and can emit a final ordinary Git diff.
@@ -213,6 +242,7 @@ Example:
 +mod new;
 
  fn main() {}
+ }
 ```
 
 ### 3.2 Semantic hunks
@@ -295,6 +325,7 @@ and followed by file metadata such as:
 
 A range-based edit beginning with:
 
+<!-- rsmpl:invalid RSMPL_PARSE_CONFLICT -->
 ```diff
 @@ -old_start,old_len +new_start,new_len @@
 ```
@@ -404,6 +435,9 @@ index 1111111..2222222 100644
 @@ -1,4 +1,5 @@
  mod old;
 +mod new;
+
+ fn main() {}
+ }
 ```
 
 The file contains:
@@ -498,6 +532,9 @@ Example:
 @@ -1,4 +1,5 @@
  mod old;
 +mod new;
+
+ fn main() {}
+ }
 ```
 
 This is an ordinary Git hunk.
@@ -517,6 +554,7 @@ Valid:
 
 Invalid:
 
+<!-- rsmpl:invalid RSMPL_PATTERN_CONFLICT -->
 ```diff
 @@ -40,8 @@ rule=rename_calls
 - foo(E)
@@ -588,10 +626,12 @@ Therefore directives are unambiguous.
 An RSmPL hunk uses a standard-looking unified-diff hunk header, with
 the new-side range optionally elided:
 
+<!-- rsmpl:invalid RSMPL_PARSE_CONFLICT -->
 ```diff
 @@ -old_start,old_len +new_start,new_len @@ rule=name
 ```
 
+<!-- rsmpl:invalid RSMPL_PARSE_CONFLICT -->
 ```diff
 @@ -old_start,old_len @@ rule=name
 ```
@@ -617,6 +657,8 @@ Example:
 
 ```diff
 @@ -10,7 @@ rule=rename_foo
+- fn foo
++ fn bar
 ```
 
 ### 8.1 Header fields
@@ -643,6 +685,8 @@ Example:
 
 ```diff
 @@ -80,20 @@ rule=rename_calls
+- foo(E)
++ bar(E)
 ```
 
 The rule name is used for diagnostics, captures, dependency tracking, and review display. It is RECOMMENDED for multi-hunk patches but OPTIONAL for single-hunk patches; a hunk without `rule=` is valid and diagnostics show `<unnamed>` for it. Names are per-hunk labels and need not be unique: reports list one entry per hunk in document order, so same-named hunks are distinguished by file and range.
@@ -688,10 +732,13 @@ Preferred:
 @@ -40,8 @@ rule=rename_calls
 # allow=many
 # expr E
+- foo(E)
++ bar(E)
 ```
 
-Not preferred:
+Rejected (unknown header tags fail fast, Section 8.3):
 
+<!-- rsmpl:invalid RSMPL_PATTERN_CONFLICT -->
 ```diff
 @@ -40,8 +40,8 @@ rule=rename_calls lang=rust allow=many expr=E
 ```
@@ -1057,6 +1104,8 @@ The range is determined by the hunk header:
 
 ```diff
 @@ -40,8 @@ rule=rename_calls
+- foo(E)
++ bar(E)
 ```
 
 This gives the old-side semantic search range:
@@ -1102,6 +1151,8 @@ Example:
 
 ```diff
 @@ -40,8 @@ rule=rename_calls
+- foo(E)
++ bar(E)
 ```
 
 means the engine may search only original old lines:
@@ -2349,7 +2400,7 @@ workspace-wide. The common rename — one `Old`, used in N files — just
 works. A second same-named definition anywhere makes every use ambiguous:
 without `# fallback=syntax` the hunk vetoes with `RSMPL_SYMBOL_CONFLICT`
 naming the first shadow (`path:line`); with it all use rewriting is
-skipped and each shadow is listed in `follow_skipped`. Same-file
+skipped and each shadow is listed in `follow_skipped_details`. Same-file
 shadowing (a local binding, an enum variant) and opaque sites
 (macro/attribute interiors, `qself` paths, glob imports paired with a
 same-name use) veto or skip exactly as before, now reported
@@ -2369,7 +2420,7 @@ definition (one hop each, single target) all fire. Anything else is
 opaque: a re-export routed through another re-exporter is a second hop,
 and any other prefix is off-target (it may name a foreign item) — both
 veto with `RSMPL_SYMBOL_CONFLICT` naming the re-export (`path:line`),
-or skip all use rewriting with per-site `follow_skipped` notes under
+or skip all use rewriting with per-site `follow_skipped_details` triples under
 `# fallback=syntax` while the definition rename still applies. A
 `pub use …::*` glob pointing away from the definition is likewise opaque,
 but only when another file spells `Old` through that module (bare
@@ -2393,7 +2444,7 @@ and text mode prints one `orphans:` stderr line with each entry as
 `file:line [reason]: text`. With `--verify build`
 the first diagnostic names the first orphan `file:line` alongside the
 `applied` flag. A `# follow=uses` hunk never carries `orphans` (its
-uses rewrite; `follow_skipped` owns that signal).
+uses rewrite; `follow_skipped_details` owns that signal).
 
 Skip and orphan reason vocabulary (WI-2): every structured skip and
 every orphan carries a machine `reason`, one of `shadowed` (another
@@ -2404,8 +2455,9 @@ re-export chain passes through a second re-exporter), `macro-hidden`
 an unsearchable workspace file), `off-target` (names `old` but sits
 outside any rewritten hunk: a re-export that does not point at our
 definition, or a use left behind by a definition-only rename). JSON
-`follow_skipped_details: [{file, line, reason}]` sits additive beside
-the historical `follow_skipped` prose string (WI-20 owns the string's
+`follow_skipped_details: [{file, line, reason}]` carries the skip signal alone:
+the historical `; `-joined `follow_skipped` prose string was removed in
+report schema `version: 4` (WI-20 owns the string's
 removal); text mode prints one `follow-skipped: {file}:{line}:{reason}`
 stderr line per skip. Whole-file skips (unparseable workspace files)
 report `line: 0` — every real line is 1-based, so 0 unambiguously means
@@ -2414,7 +2466,7 @@ whole-file.
 Out of scope in v0.1: non-`.rs` files are never searched; symlinked
 files/dirs are skipped; a workspace `.rs` file that does not parse trips a
 fail-loud tripwire when its text names the ident outside strings/comments
-(`RSMPL_SYMBOL_CONFLICT` naming the file, or a `follow_skipped` note with
+(`RSMPL_SYMBOL_CONFLICT` naming the file, or a `follow_skipped_details` triple with
 `# fallback=syntax`); multi-definition workspaces never attribute uses by
 module path (WI-7b owns only re-export prefix matching, never use
  attribution); `diffrs` raises item intents as `item_intent` (SPEC D.4:
@@ -2431,7 +2483,7 @@ local binding or enum variant, or a macro/attribute mention the resolver
 cannot attribute vetoes the whole hunk with `RSMPL_SYMBOL_CONFLICT`
 naming the site — unless the hunk also carries `# fallback=syntax`, in
 which case unprovable sites are left untouched and listed in the WI-2
-`follow_skipped` binding while provable sites still rewrite (a shadowed
+`follow_skipped_details` triple while provable sites still rewrite (a shadowed
 definition or an ambiguous re-export hop skips *all* use rewriting, since
 every use is then ambiguous;
 a glob skips only that file's uses).
@@ -2467,7 +2519,7 @@ Rules:
 
 - Fields: literal-path sites are proven by the path — struct-literal labels (`S { old: v }`) and struct-pattern labels (`S { old: p }`) whose path names `S` (last segment equality, plus `Self`-spelled paths inside an `impl` of `S`). Shorthand labels expand keeping the local binding: `S { old }` rewrites to `S { new: old }`. `.old` accesses are proven only by a receiver anchor: fn-signature params (`fn f(a: A)` proves `a.old`), `let x: A` annotations, `let x = S { … }` struct-literal inits, and `self` inside `impl S` (all flow-ordered per fn body; a later `let x: B` re-anchors). `-> A` returns never anchor; call/literal bases (`make_a().old`) never claim. Unproven accesses are `shadowed` (another container defines the name) or `off-target` evidence — never a run failure. Method idents named `old` and tuple `.0` accesses never match and never veto (different namespaces).
 - Variants: expression/pattern paths spelling `E::Old` (any leading prefix, plus `Self::Old` inside an `impl` of `E`) and `use …::E::Old` import segments are proven (literal-path). Bare `Old` rewrites only with a `use …::E::*` glob anchor naming `E` in the same file; otherwise it is `second-hop` evidence (never a veto). `qself` paths and macro interiors mentioning the member name are opaque like scalar renames (veto without fallback, skip + report with it).
-- Orphan evidence mirrors scalar renames: a definition-only member rename lists anchored use lines as `orphans` (`off-target` for proven, `shadowed`/`second-hop` for unproven, `macro-hidden` for interiors) while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped` owns that signal, each with its WI-2 `reason` in `follow_skipped_details`).
+- Orphan evidence mirrors scalar renames: a definition-only member rename lists anchored use lines as `orphans` (`off-target` for proven, `shadowed`/`second-hop` for unproven, `macro-hidden` for interiors) while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped_details` owns that signal, each with its WI-2 `reason`).
 
 Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename` per section and cross-file def+uses intents via the `member_rename` whole-patch pre-pass, SPEC D.4; everything else stays ordinary).
 
@@ -4326,6 +4378,8 @@ diff --git src/new.rs
 @@ -1,3 +1,4 @@
  use crate::common;
 +use crate::old_dependency;
+ use crate::other;
+ fn main() {}
 ```
 
 ---
@@ -5532,7 +5586,7 @@ Input:
 Output after lowering might be:
 
 ```diff
-@@ -10,7 +10,7 @@
+@@ -10,3 +10,3 @@
 -fn foo(x: i32) -> i32 {
 +fn bar(x: i32) -> i32 {
      x + 1
@@ -5640,6 +5694,8 @@ Good:
 @@ -1,3 +1,4 @@
  mod a;
 +mod b;
+ fn main() {}
+ }
 ```
 
 Do not use RSmPL for trivial additions unless semantic placement is important.
@@ -5677,6 +5733,8 @@ Better (tight range):
 
 ```diff
 @@ -80,15 @@ rule=rename_one_block
+- old_api(E)
++ new_api(E)
 ```
 
 Worse (whole-file range: forces the author to count the file length, and
@@ -5684,6 +5742,8 @@ the range goes stale on every edit):
 
 ```diff
 @@ -1,500 @@ rule=rename_whole_file
+- old_api(E)
++ new_api(E)
 ```
 
 ### 28.4 Declare multiple matches explicitly
@@ -6269,6 +6329,7 @@ The process of applying RSmPL semantic transformations and emitting a concrete o
 
 The canonical RSmPL hunk shape is the diet minimal from Section 6:
 
+<!-- rsmpl:invalid RSMPL_PARSE_CONFLICT -->
 ```diff
 diff --git src/lib.rs
 @@ -old_start,old_len @@ rule=name
@@ -6293,6 +6354,7 @@ and stays untagged.
 
 The canonical ordinary hunk shape remains:
 
+<!-- rsmpl:invalid RSMPL_PARSE_CONFLICT -->
 ```diff
 @@ -old_start,old_len +new_start,new_len @@
  context
@@ -6439,7 +6501,7 @@ prints one JSON object to stdout:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "semantics": "instantiated", "sites": [{"span": [10, 12], "bindings": {"E": "old_call"}}]}],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1, "post_sha": "<sha-256 hex of the post-image>"}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
@@ -6477,10 +6539,9 @@ prints one JSON object to stdout:
   deletions, and use-prefix renames bind nothing and omit the key
   (an empty map plus a zero count carries no evidence). A
   `# follow=uses` hunk with skipped sites carries hunk-level (no span)
-  `follow_skipped`: the `; `-joined skip notes (absent when no site
-  was skipped), plus WI-2 `follow_skipped_details: [{file, line,
-  reason}]` beside it (the string's removal rides the WI-20 version
-  bump; text mode prints one `follow-skipped: {file}:{line}:{reason}`
+  `follow_skipped_details: [{file, line, reason}]` (the v3 `; `-joined
+  `follow_skipped` prose string was removed in schema `version: 4`;
+  text mode prints one `follow-skipped: {file}:{line}:{reason}`
   line per skip). Values truncate at 80 chars (a cut value carries a
   trailing `…` so a truncated binding is never mistaken for a complete
   one) and entries at 8 (sorted order) per site; `sites_truncated` sums
@@ -6500,7 +6561,7 @@ prints one JSON object to stdout:
    distinguishable). Symbol hunks gain `symbol` (`"resolved"` when the
    Section 19.3 hook verified the seeds, `"syntax"` when
    `# fallback=syntax` carried the match; absent on non-symbol hunks),
-   additive within `version: 3`, so an agent can require `"resolved"`
+   additive within `version: 3`, carried unchanged into `version: 4`, so an agent can require `"resolved"`
    for API renames, so
    the report stays within an absolute byte budget while an over-broad
   hunk still shows its extra span before apply. Budget (bytes beyond
@@ -6545,7 +6606,7 @@ prints one JSON object to stdout:
   shape), absent when no hunk drifted. Text mode prints one
   `drift: {rule} {file} cited [s,e] -> actual [a,b]` stderr line per
   entry (both `--check` and apply); JSON mode carries the evidence in
-  the payload only. Additive within `version: 3`.
+  the payload only. Carried unchanged from `version: 3` into `version: 4`.
 - Per-rule `orphans` reports definition-only rename fallout
   (Section 14.8): `[{file, line, reason, text}]` (`reason` is the WI-2
   vocabulary: `off-target` for uses left behind, `macro-hidden` for
@@ -6554,17 +6615,23 @@ prints one JSON object to stdout:
   80 chars with a trailing `…` when cut; `--bindings full` lifts the cut
   here too) plus `orphans_truncated_chars`
   counting cut texts (absent when zero); absent when no use names the
-   old ident. Additive within `version: 3` (like the other per-rule
+   old ident. Carried unchanged from `version: 3` into `version: 4` (like the other per-rule
   evidence keys; `version: 2` added them within v2).
-- `version` is the JSON report schema version (`3` = this contract:
+- `version` is the JSON report schema version (`4` = this contract:
   `checked.semantics` word (`verified`|`partial`), per-rule `semantics`
-  words; `v2` had boolean `semantics`, `v1` had boolean `check`,
-  first-site `bindings`, and `verified`). Agents
+  words; `v3` added the `semantics` words and evidence keys over the v2
+  boolean `semantics`; `v2` added them over `v1`'s boolean `check`,
+  first-site `bindings`, and `verified`; `v4` removes the `follow_skipped`
+  prose string and unifies `diffrs` on the same number). Agents
   pin parsing on it; any future breaking JSON change bumps it
   (additive keys like `history`, `post_sha`, `sites_truncated`,
   `bindings_truncated_chars`, `follow_files`, `follow_source`,
   `orphans`, `orphans_truncated`, `orphans_truncated_chars`
-  do not bump).
+  do not bump). All three binaries (`applyrs`, `diffrs`, `gitrs`
+  dispatcher errors) take the number from the single
+  `rsmpl_patch::REPORT_VERSION` constant — never per-binary literals —
+  so the `gitrs` sibling version-skew handshake transitively pins
+  schema parity.
 - `checked` is the trust envelope: `{lowering, semantics, build}` on
   every successful run, each computed by a check that can fail on real
   input (never true by construction). `lowering` is the `git apply
@@ -6634,7 +6701,10 @@ prints one JSON object to stdout:
 - Sibling handshake: `gitrs` reads each sibling's `--version` before
   re-exec and fails with `RSMPL_IO_CONFLICT` naming both versions on
   mismatch (same stdout-only JSON envelope with `--format json`);
-  `GITRS_*_BIN` overrides (test doubles) skip the check.
+  `GITRS_*_BIN` overrides (test doubles) skip the check. All three
+  binaries report the same `rsmpl_patch::REPORT_VERSION` schema number,
+  so the handshake transitively pins schema parity: skewed siblings
+  cannot silently disagree on the report shape.
 - Failure envelope: with `--format json`, every patch/IO failure prints
   one JSON envelope to stdout and exits 2, so an agent can repair without
   parsing stderr prose. The failure is stdout-only: no stderr `error:`
@@ -6643,7 +6713,7 @@ prints one JSON object to stdout:
   the stderr diagnostic.
 
 ```json
-{"version": 1, "error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
+{"version": 4, "error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
 
 ```
 
@@ -7026,7 +7096,7 @@ emissions rebuild only the `diff --git` header and would silently
 drop the mode flip, while the per-hunk prelude keeps the mode lines
 (T401).
 
-`diffrs --format json` (default `text`) prints `{"version": 2, "files":
+`diffrs --format json` (default `text`) prints `{"version": 4, "files":
 [{path}], "patch": "<RSmPL-Git patch>", "hunks": [...]}` to stdout
 (text mode prints only the patch). Failures carry the same error
 object as `applyrs` (`code/rule/file/range/reason/suggestion/repair`
@@ -7072,9 +7142,10 @@ each grouped hunk from its positional `rN` to the shared
 ungrouped sections never move). Per-group T375 re-basis: the shared
 name must cost strictly less than the group's `saved_bytes` sum, else
 that group falls back to positional `rN` names while keeping the
-`group` label. `version` is `2`
-(error object shared with `applyrs` via `StructuredError`; `v1`
-carried the same success keys with a hand-built error payload).
+`group` label. `version` is `4` — unified with `applyrs` via the
+single `rsmpl_patch::REPORT_VERSION` constant (WI-20; `v2`/`v3`
+carried the same success keys with their own number while sharing the
+error object, `v1` with a hand-built error payload).
 Budget (bytes beyond `patch`):
 ≈100 B fixed + ≈165 B per `hunks[]` entry + ≈5 B per covered site
 (`sites` arrays grow with matches — evidence, not overhead).

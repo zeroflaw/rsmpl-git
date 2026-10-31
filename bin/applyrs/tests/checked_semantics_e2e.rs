@@ -30,7 +30,11 @@ fn ranged_rename_reports_instantiated_and_verified() {
         "src/lib.rs",
         "fn foo() {}\n",
     );
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
     assert_eq!(
         v["rules"][0]["semantics"],
         serde_json::json!("instantiated"),

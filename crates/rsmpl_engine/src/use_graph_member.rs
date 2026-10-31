@@ -14,7 +14,7 @@
 //! (`S { … }` labels, `E::Old` tails), signature (`fn f(a: A)` params),
 //! annotation (`let x: A`, `let x = S { … }`, `self` in `impl S`, all
 //! flow-ordered with rebinding). Proven sites rewrite; everything else
-//! same-name is `follow_skipped` evidence (`shadowed` when another
+//! same-name is `follow_skipped_details` evidence (`shadowed` when another
 //! container defines the name, else `off-target`) — never a run failure.
 //! Bare `Old` needs a `use …::E::*` glob anchor, else it is `second-hop`
 //! evidence. Truly opaque sites (macro interiors, `qself` paths) still

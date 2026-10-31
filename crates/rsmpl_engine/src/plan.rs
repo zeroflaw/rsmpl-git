@@ -360,7 +360,6 @@ fn apply_inner(
                         spans: vec![(sl, el)],
                         span_labels: Vec::new(),
                         sites: Vec::new(),
-                        follow_skipped: None,
                         follow_skipped_details: Vec::new(),
                         orphans: Vec::new(),
                         semantics: RuleSemantics::ReparseOnly,
@@ -492,7 +491,7 @@ fn apply_inner(
                     // WI-6b1 workspace follow before spans: def-file spans
                     // cover definition + same-file uses (SPEC 14.8), and
                     // other files' uses land in their own edit lists.
-                    let (follow_bindings, extra_reports, follow_details) = if rh.follows_uses() {
+                    let (extra_reports, follow_details) = if rh.follows_uses() {
                         follow_uses_workspace(
                             rh,
                             &compiled,
@@ -504,7 +503,7 @@ fn apply_inner(
                             found,
                         )?
                     } else {
-                        (HashMap::new(), Vec::new(), Vec::new())
+                        (Vec::new(), Vec::new())
                     };
                     let (spans, span_labels) = {
                         let state = states.get(path).expect("file state");
@@ -572,9 +571,7 @@ fn apply_inner(
                         ZeroMatchHint { wide, preview },
                     )?;
                     // WI-2b/2c: per-site bindings in span order (v2 evidence).
-                    // `def_bindings` is one map per accepted match;
-                    // `follow_skipped` stays hunk-level (no span).
-                    let follow_skipped = follow_bindings.get("follow_skipped").cloned();
+                    // `def_bindings` is one map per accepted match.
                     let mut sites: Vec<crate::SiteReport> = Vec::new();
                     for (i, span) in spans.iter().enumerate() {
                         if let Some(m) = def_bindings.get(i) {
@@ -739,7 +736,6 @@ fn apply_inner(
                             spans,
                             span_labels,
                             sites,
-                            follow_skipped,
                             follow_skipped_details: follow_details,
                             orphans,
                             semantics: provisional,
@@ -767,7 +763,6 @@ fn apply_inner(
                                 spans,
                                 span_labels,
                                 sites: Vec::new(),
-                                follow_skipped: None,
                                 follow_skipped_details: Vec::new(),
                                 orphans: Vec::new(),
                                 semantics: RuleSemantics::ReparseOnly,
@@ -1550,7 +1545,7 @@ mod tests {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n- fn foo\n+ fn bar\n";
         let (_, report) = apply_multi_report(patch, vec![("src/lib.rs", "fn foo() {}\n")]).unwrap();
         assert!(report.rules[0].sites.is_empty());
-        assert!(report.rules[0].follow_skipped.is_none());
+        assert!(report.rules[0].follow_skipped_details.is_empty());
     }
 
     #[test]
@@ -1744,7 +1739,7 @@ mod tests {
         assert_eq!(extra.matches, 4);
         assert_eq!(extra.spans.len(), 4);
         assert!(extra.sites.is_empty());
-        assert!(extra.follow_skipped.is_none());
+        assert!(extra.follow_skipped_details.is_empty());
     }
 
     #[test]
@@ -1784,8 +1779,12 @@ mod tests {
             files["src/b.rs"]
         );
         assert_eq!(report.rules.len(), 1, "report: {:?}", report.rules);
-        let skipped = report.rules[0].follow_skipped.as_deref().unwrap_or("");
-        assert!(skipped.contains("src/b.rs"), "report: {:?}", report.rules);
+        let details = &report.rules[0].follow_skipped_details;
+        assert!(
+            details.iter().any(|s| s.file == "src/b.rs"),
+            "report: {:?}",
+            report.rules
+        );
     }
 
     #[test]
@@ -1859,13 +1858,12 @@ mod tests {
             "got: {}",
             files["src/c.rs"]
         );
-        let joined: String = report
+        let listed: Vec<&str> = report
             .rules
             .iter()
-            .filter_map(|r| r.follow_skipped.clone())
-            .collect::<Vec<_>>()
-            .join(";");
-        assert!(joined.contains("src/b.rs"), "report: {:?}", report.rules);
+            .flat_map(|r| r.follow_skipped_details.iter().map(|s| s.file.as_str()))
+            .collect();
+        assert!(listed.contains(&"src/b.rs"), "report: {:?}", report.rules);
     }
 
     // WI-7c: plain renames report the uses they leave behind.
@@ -1891,7 +1889,7 @@ mod tests {
         let orphans = &report.rules[0].orphans;
         assert_eq!(orphans.len(), 3, "orphans: {orphans:?}");
         assert!(orphans.iter().all(|o| o.file == "src/b.rs"));
-        assert!(report.rules[0].follow_skipped.is_none());
+        assert!(report.rules[0].follow_skipped_details.is_empty());
     }
 
     #[test]

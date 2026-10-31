@@ -39,7 +39,13 @@ fn signature_param_proves_receiver() {
         "struct A {\n    timeout: u32,\n}\nfn f(a: A) -> u32 {\n    a.timeout\n}\n",
     );
     let v = check_json(dir.path());
-    assert!(v["rules"][0]["follow_skipped"].is_null(), "got: {v}");
+    assert!(v["rules"][0].get("follow_skipped").is_none(), "got: {v}");
+    assert!(
+        v["rules"][0]
+            .get("follow_skipped_details")
+            .is_none_or(|d| d.as_array().is_some_and(|a| a.is_empty())),
+        "no skips: key absent or empty, got: {v}"
+    );
     let out = run_stdin(dir.path(), PATCH, &[]);
     assert!(out.status.success());
     assert!(read(dir.path(), "src/lib.rs").contains("a.latency"));
@@ -81,7 +87,13 @@ fn struct_literal_init_proves_receiver() {
         "struct A {\n    timeout: u32,\n    keep: bool,\n}\nfn f() -> u32 {\n    let lit = A { timeout: 1, keep: true };\n    lit.timeout\n}\n",
     );
     let v = check_json(dir.path());
-    assert!(v["rules"][0]["follow_skipped"].is_null(), "got: {v}");
+    assert!(v["rules"][0].get("follow_skipped").is_none(), "got: {v}");
+    assert!(
+        v["rules"][0]
+            .get("follow_skipped_details")
+            .is_none_or(|d| d.as_array().is_some_and(|a| a.is_empty())),
+        "no skips: key absent or empty, got: {v}"
+    );
     let out = run_stdin(dir.path(), PATCH, &[]);
     assert!(out.status.success());
     assert!(read(dir.path(), "src/lib.rs").contains("lit.latency"));
@@ -110,7 +122,13 @@ fn self_in_impl_proves_receiver() {
         "struct A {\n    timeout: u32,\n}\nimpl A {\n    fn get(&self) -> u32 {\n        self.timeout\n    }\n}\n",
     );
     let v = check_json(dir.path());
-    assert!(v["rules"][0]["follow_skipped"].is_null(), "got: {v}");
+    assert!(v["rules"][0].get("follow_skipped").is_none(), "got: {v}");
+    assert!(
+        v["rules"][0]
+            .get("follow_skipped_details")
+            .is_none_or(|d| d.as_array().is_some_and(|a| a.is_empty())),
+        "no skips: key absent or empty, got: {v}"
+    );
     let out = run_stdin(dir.path(), PATCH, &[]);
     assert!(out.status.success());
     assert!(read(dir.path(), "src/lib.rs").contains("self.latency"));
@@ -127,5 +145,11 @@ fn return_type_never_anchors() {
     );
     let v = check_json(dir.path());
     // No field accesses at all: no skips, no follows.
-    assert!(v["rules"][0]["follow_skipped"].is_null(), "got: {v}");
+    assert!(v["rules"][0].get("follow_skipped").is_none(), "got: {v}");
+    assert!(
+        v["rules"][0]
+            .get("follow_skipped_details")
+            .is_none_or(|d| d.as_array().is_some_and(|a| a.is_empty())),
+        "no skips: key absent or empty, got: {v}"
+    );
 }

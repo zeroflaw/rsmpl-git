@@ -126,7 +126,7 @@ SPEC D.2/D.2.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 
-`example-benches/applyrs/` (25 benches) compares the agent-authored `patch.rsmpl`
+`example-benches/applyrs/` (32 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
 same result, RSmPL input vs full Git spelling. Re-measure any time with
 `./example-benches/run.sh`. (A hand-written native patch with conventional
@@ -164,6 +164,8 @@ context would be larger, so these are lower bounds.)
 | 28-macro-let-sweep (1 hunk rewrites a verbatim-macro `let` over 4 sites) | 114 B / 5 ln | 379 B / 15 ln | 70% |
 | 29-vis-sweep (1 hunk adds `pub` to 4 hetero-named fns, `N` hole) | 95 B / 7 ln | 755 B / 15 ln | 87% |
 | 30-anchored-field-rename (1 hunk renames `A::timeout`→`latency` with anchored follow, sibling `B::timeout` untouched) | 127 B / 6 ln | 387 B / 11 ln | 67% |
+| 43-scale-follow-wide (`# sweep` + follow over a 500-file workspace, 500 sites) | 109 B / 6 ln | 68292 B / 3000 ln | 100% |
+| 44-scale-postcheck-deep (10k-line file, 99-site sweep with span-local re-verification) | 78 B / 5 ln | 4985 B / 300 ln | 98% |
 
 `example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):

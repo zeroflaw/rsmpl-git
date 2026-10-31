@@ -152,7 +152,7 @@ fn main() {
             // T85 success silence): the stdout envelope carries the
             // machine signal; stderr keeps `warning:` lines only.
             // Text mode keeps the human stderr diagnostic.
-            let mut payload = serde_json::json!({"version": 3, "error": e.err().to_json()});
+            let mut payload = serde_json::json!({"version": rsmpl_patch::REPORT_VERSION, "error": e.err().to_json()});
             if let Some(applied) = e.applied() {
                 payload["applied"] = serde_json::json!(applied);
             }
@@ -713,7 +713,7 @@ fn run() -> Result<(), CliError> {
         let build_status = if build_passed { "pass" } else { "skipped" };
         let global_semantics = global_semantics(&report);
         let mut payload = serde_json::json!({
-            "version": 3,
+            "version": rsmpl_patch::REPORT_VERSION,
             "rules": report.rules.iter().map(|r| {
                 let mut entry = serde_json::json!({
                     "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>(),
@@ -754,12 +754,9 @@ fn run() -> Result<(), CliError> {
                             .unwrap_or(serde_json::Value::Null))
                         .collect::<Vec<_>>());
                 }
-                // `# follow=uses` skip notes stay hunk-level (no span).
-                if let Some(skipped) = &r.follow_skipped {
-                    entry["follow_skipped"] = serde_json::json!(skipped);
-                }
-                // WI-2 structured skips, additive beside the string (WI-20
-                // owns the string's removal).
+                // WI-20 v4: the `follow_skipped` prose string is
+                // removed; structured skips live in
+                // `follow_skipped_details` alone (SPEC D.2).
                 if !r.follow_skipped_details.is_empty() {
                     entry["follow_skipped_details"] = serde_json::json!(r
                         .follow_skipped_details

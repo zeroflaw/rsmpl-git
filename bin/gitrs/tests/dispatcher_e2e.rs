@@ -92,12 +92,79 @@ fn unknown_subcommand_json_is_envelope() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
     assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
     assert_eq!(
         v["error"]["suggestion"],
         serde_json::json!("run `gitrs --help` for usage")
     );
     assert!(v["error"]["rule"].is_null());
+}
+
+// WI-20: one contract — `applyrs`, `diffrs`, and the `gitrs`
+// dispatcher take the report schema number from the single
+// `rsmpl_patch::REPORT_VERSION` constant, and the sibling
+// version-skew handshake transitively pins schema parity.
+#[test]
+fn tri_way_envelope_reports_unified_schema_v4() {
+    assert!(
+        sibling_applyrs().exists() && sibling_diffrs().exists(),
+        "siblings missing next to the dispatcher"
+    );
+    let dir = init_repo();
+    // applyrs error envelope (empty patch is an authoring typo).
+    let out_applyrs = Command::new(sibling_applyrs())
+        .args(["--patch", "", "--format", "json"])
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out_applyrs.status.code(), Some(2));
+    // diffrs error envelope (unresolvable revision).
+    let out_diffrs = Command::new(sibling_diffrs())
+        .args(["nosuchrev12345", "--format", "json"])
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out_diffrs.status.code(), Some(2));
+    // gitrs dispatcher error envelope.
+    let out_gitrs = Command::new(dispatcher())
+        .args(["--format", "json", "frobnicate"])
+        .output()
+        .unwrap();
+    assert_eq!(out_gitrs.status.code(), Some(2));
+    let parse = |out: &std::process::Output| -> serde_json::Value {
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap()
+    };
+    let (a, d, g) = (parse(&out_applyrs), parse(&out_diffrs), parse(&out_gitrs));
+    assert_eq!(a["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
+    assert_eq!(d["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
+    assert_eq!(g["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
+    // The handshake compares `--version` last tokens; skewed siblings
+    // cannot silently disagree on the schema they report.
+    let token = |out: &std::process::Output| {
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .to_string()
+    };
+    let v_gitrs = Command::new(dispatcher())
+        .arg("--version")
+        .output()
+        .unwrap();
+    let v_applyrs = Command::new(sibling_applyrs())
+        .arg("--version")
+        .output()
+        .unwrap();
+    let v_diffrs = Command::new(sibling_diffrs())
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(v_gitrs.status.success() && v_applyrs.status.success() && v_diffrs.status.success());
+    assert_eq!(token(&v_gitrs), token(&v_applyrs));
+    assert_eq!(token(&v_gitrs), token(&v_diffrs));
 }
 
 #[test]

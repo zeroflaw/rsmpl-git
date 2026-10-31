@@ -11,7 +11,7 @@
 //! or a macro/attribute mention the resolver cannot attribute makes the
 //! whole hunk fail with a follow veto — unless the hunk also carries
 //! `# fallback=syntax`, in which case the unprovable sites are skipped and
-//! listed for the WI-2 `follow_skipped` binding. Field accesses, method
+//! listed as WI-2 `follow_skipped_details` triples. Field accesses, method
 //! idents, and `qself` paths are never rewritten (different namespaces /
 //! declined, WI-3 scope note); they never veto either, except a `qself`
 //! path naming `old`, which is opaque.
@@ -204,7 +204,7 @@ pub fn resolve(
 /// re-exporter rewrite like any other use. Anything else vetoes loud
 /// without fallback (a chain through another re-exporter is a second hop;
 /// any other prefix is off-target and may name a foreign item), or clears
-/// all use rewriting with per-site `follow_skipped` notes under fallback.
+/// all use rewriting with per-site `follow_skipped_details` triples under fallback.
 /// A `pub use …::*` glob pointing away from the definition is opaque only
 /// when another file spells `Old` through that module; globs forwarding
 /// the definition module itself stay benign.
@@ -1002,14 +1002,10 @@ pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>)>;
 /// Resolved follow edits per file: (path, [(start, end, replacement)]).
 type ResolvedUses = Vec<(String, Vec<(usize, usize, String)>)>;
 
-/// WI-2 follow-workspace outcome: extra bindings (`follow_skipped` when
-/// `# fallback=syntax` left sites untouched), the follow-only entries,
-/// and the structured skip details (SPEC D.2).
-pub(crate) type FollowWorkspaceOutcome = (
-    HashMap<String, String>,
-    FollowExtras,
-    Vec<crate::FollowSkipReport>,
-);
+/// WI-2 follow-workspace outcome: the follow-only entries and the
+/// structured skip details (SPEC D.2). v4: the compat `follow_skipped`
+/// prose binding is gone — `details` carry the signal alone.
+pub(crate) type FollowWorkspaceOutcome = (FollowExtras, Vec<crate::FollowSkipReport>);
 
 /// WI-6b1 `# follow=uses` workspace step (SPEC 14.8): after the definition
 /// rewrite, resolve use sites across every loaded `.rs` file (unique-
@@ -1031,10 +1027,9 @@ pub(crate) fn follow_uses_workspace(
     edits_before: usize,
     found: usize,
 ) -> Result<FollowWorkspaceOutcome, StructuredError> {
-    let mut bindings = HashMap::new();
     let no_follow: FollowExtras = Vec::new();
     if found == 0 {
-        return Ok((bindings, no_follow, Vec::new()));
+        return Ok((no_follow, Vec::new()));
     }
     // WI-9a: member renames follow through the member collector (which
     // claims only `E::Old`-spelled paths / `.old` + `S`-anchored labels);
@@ -1154,7 +1149,7 @@ pub(crate) fn follow_uses_workspace(
             .with_rule(rh.rule_name())
             .with_file(def_path)
             .with_suggestion(
-                "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped`) instead of failing",
+                "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped_details`) instead of failing",
             )
             .with_repair(StructuredError::add_directive_repair("# fallback=syntax"))
     };
@@ -1301,7 +1296,7 @@ pub(crate) fn follow_uses_workspace(
         .with_rule(rh.rule_name())
         .with_file(def_path)
         .with_suggestion(
-            "add `# fallback=syntax` to skip unsearchable files (listed in `follow_skipped`) instead of failing",
+            "add `# fallback=syntax` to skip unsearchable files (listed in `follow_skipped_details`) instead of failing",
         )
         .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
     }
@@ -1339,14 +1334,8 @@ pub(crate) fn follow_uses_workspace(
             skip_reason::MACRO_HIDDEN,
         ));
     }
-    if !skipped.is_empty() {
-        bindings.insert(
-            "follow_skipped".to_string(),
-            FollowSkip::notes(&skipped).join("; "),
-        );
-    }
     let details = FollowSkip::details(&skipped, def_path);
-    Ok((bindings, extras, details))
+    Ok((extras, details))
 }
 #[cfg(test)]
 mod tests {

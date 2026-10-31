@@ -280,7 +280,11 @@ fn symbol_without_fallback_json_envelope() {
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
     assert_eq!(
         v["error"]["code"],
         serde_json::json!("RSMPL_SYMBOL_CONFLICT"),
@@ -609,7 +613,7 @@ fn json_report_carries_rules_and_diff() {
         v["checked"],
         serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"})
     );
-    assert_eq!(v["version"], serde_json::json!(3));
+    assert_eq!(v["version"], serde_json::json!(rsmpl_patch::REPORT_VERSION));
     // --check must not modify the file.
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
@@ -843,7 +847,11 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
         serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
     assert_eq!(
         v["files"],
         serde_json::json!([{"path": "src/lib.rs", "added": 2, "removed": 2, "post_sha": "accccd852858f3efbe60dc4eaaf8acc679499125a742f5a24259309e3ebaf1ea"}]),
@@ -899,7 +907,11 @@ fn json_diff_max_lines_zero_no_changes_is_not_truncated() {
         serde_json::json!({"lowering": true, "semantics": "partial", "build": "skipped"}),
         "got: {v}"
     );
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
 }
 
 #[test]
@@ -958,7 +970,11 @@ fn json_diff_max_lines_truncates_but_stats_stay_exact() {
         serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
     assert!(read(dir.path(), "src/lib.rs").contains("foo(1);"));
 }
 
@@ -1308,7 +1324,11 @@ fn json_lowering_is_zero_context_stats_stay_exact() {
         serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
 }
 
 #[test]

@@ -77,9 +77,9 @@ fn main() {
             CliError::Structured(s) => {
                 if wants_json() {
                     // Stdout-only JSON envelope, same error object as
-                    // `applyrs` via `StructuredError` (SPEC D.2, v2);
+                    // `applyrs` via `StructuredError` (SPEC D.2, v4);
                     // text mode keeps stderr.
-                    let payload = serde_json::json!({"version": 2, "error": s.to_json()});
+                    let payload = serde_json::json!({"version": rsmpl_patch::REPORT_VERSION, "error": s.to_json()});
                     println!("{payload}");
                 } else {
                     eprintln!("{}", s.render());
@@ -155,7 +155,7 @@ fn run() -> Result<(), CliError> {
 
     if cli.format == Format::Json {
         let payload = serde_json::json!({
-            "version": 2,
+            "version": rsmpl_patch::REPORT_VERSION,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
             "hunks": patch.hunks.iter().map(|h| serde_json::json!({

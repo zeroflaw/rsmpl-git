@@ -63,11 +63,6 @@ impl FollowSkip {
         }
     }
 
-    /// Prose notes for the compat `follow_skipped` string (unchanged order).
-    pub fn notes(skips: &[FollowSkip]) -> Vec<String> {
-        skips.iter().map(|s| s.note.clone()).collect()
-    }
-
     /// Report triples, sorted by (file, line) and deduped.
     pub fn details(skips: &[FollowSkip], def_file: &str) -> Vec<crate::FollowSkipReport> {
         let mut out: Vec<crate::FollowSkipReport> = skips

@@ -2,9 +2,9 @@
 //!
 //! Every binding an agent might act on is either complete or accompanied
 //! by its length + SHA-256; follow skips and orphans carry machine reason
-//! codes; identical multi-edit spans are distinguishable. All keys are
-//! additive under report `version: 3` (WI-20 owns the `follow_skipped`
-//! string removal).
+//! codes; identical multi-edit spans are distinguishable. WI-20 v4 owns
+//! the one breaking change: the `follow_skipped` prose string is removed,
+//! `follow_skipped_details` carry the signal alone.
 
 mod common;
 use common::*;
@@ -165,15 +165,9 @@ fn follow_skip_shadowed_carries_structured_reason() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v = json_of(&out);
-    // Compat string is unchanged prose.
-    assert!(
-        v["rules"][0]["follow_skipped"]
-            .as_str()
-            .unwrap()
-            .contains("shadowed definition"),
-        "got: {v}"
-    );
-    // Structured triple sits beside it.
+    // WI-20 v4: the compat prose string is removed; the structured
+    // triple carries the skip alone.
+    assert!(v["rules"][0].get("follow_skipped").is_none(), "got: {v}");
     assert_eq!(
         v["rules"][0]["follow_skipped_details"],
         serde_json::json!([{"file": "src/lib.rs", "line": 2, "reason": "shadowed"}]),

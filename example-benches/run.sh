@@ -56,3 +56,30 @@ for d in example-benches/diffrs/*/; do
     printf '| %s | %s B / %s ln | %s B / %s ln | %s |\n' "$name" "$nb" "$nl" "$sb" "$sl" "$pct"
     rm -rf "$tmp"
 done
+
+# WI-20 scale gates (review artifacts, not CI assertions — wall-clock
+# varies by machine, so overruns warn but never fail). Budgets recorded
+# from the landing machine (debug build): 43-scale-follow-wide ≤ 2s
+# (500-file `# sweep` + follow workspace scan), 44-scale-postcheck-deep
+# ≤ 5s (10k-line file, 99-site sweep with WI-1 span-local re-verification).
+# Tighten deliberately, never loosen silently.
+printf '\n| scale bench | seconds | budget | note |\n'
+printf '|---|---|---|---|\n'
+for d in example-benches/applyrs/43-scale-follow-wide/ example-benches/applyrs/44-scale-postcheck-deep/; do
+    name=$(basename "$d")
+    case "$name" in
+        43-scale-follow-wide) budget=2 ;;
+        44-scale-postcheck-deep) budget=5 ;;
+    esac
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r "$d/repo/." "$tmp/"
+    git -C "$tmp" init -q
+    start=$(date +%s%N)
+    "./$BIN" --file "$d/patch.rsmpl" --repo "$tmp" --output "$tmp/scale.patch" >/dev/null 2>/dev/null
+    end=$(date +%s%N)
+    secs=$(python3 -c "print(f'{($end - $start) / 1e9:.2f}')")
+    over=$(python3 -c "print('OVER BUDGET (review)' if ($end - $start) / 1e9 > $budget else 'within budget')")
+    printf '| %s | %s | %ss | %s |\n' "$name" "$secs" "$budget" "$over"
+    rm -rf "$tmp"
+done

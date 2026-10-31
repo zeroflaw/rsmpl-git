@@ -365,7 +365,11 @@ fn identity_sweep_fails_postcondition_loud() {
     assert!(!out.status.success(), "identity sweep must fail");
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["version"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        v["version"],
+        serde_json::json!(rsmpl_patch::REPORT_VERSION),
+        "got: {v}"
+    );
     assert_eq!(
         v["error"]["code"],
         serde_json::json!("RSMPL_MATCH_CONFLICT"),

@@ -1,0 +1,3000 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-pub fn old_api(x: i32) -> i32 {
++pub fn new_api(x: i32) -> i32 {
+diff --git a/src/u000.rs b/src/u000.rs
+--- a/src/u000.rs
++++ b/src/u000.rs
+@@ -2 +2 @@
+-    crate::old_api(0)
++    crate::new_api(0)
+diff --git a/src/u001.rs b/src/u001.rs
+--- a/src/u001.rs
++++ b/src/u001.rs
+@@ -2 +2 @@
+-    crate::old_api(1)
++    crate::new_api(1)
+diff --git a/src/u002.rs b/src/u002.rs
+--- a/src/u002.rs
++++ b/src/u002.rs
+@@ -2 +2 @@
+-    crate::old_api(2)
++    crate::new_api(2)
+diff --git a/src/u003.rs b/src/u003.rs
+--- a/src/u003.rs
++++ b/src/u003.rs
+@@ -2 +2 @@
+-    crate::old_api(3)
++    crate::new_api(3)
+diff --git a/src/u004.rs b/src/u004.rs
+--- a/src/u004.rs
++++ b/src/u004.rs
+@@ -2 +2 @@
+-    crate::old_api(4)
++    crate::new_api(4)
+diff --git a/src/u005.rs b/src/u005.rs
+--- a/src/u005.rs
++++ b/src/u005.rs
+@@ -2 +2 @@
+-    crate::old_api(5)
++    crate::new_api(5)
+diff --git a/src/u006.rs b/src/u006.rs
+--- a/src/u006.rs
++++ b/src/u006.rs
+@@ -2 +2 @@
+-    crate::old_api(6)
++    crate::new_api(6)
+diff --git a/src/u007.rs b/src/u007.rs
+--- a/src/u007.rs
++++ b/src/u007.rs
+@@ -2 +2 @@
+-    crate::old_api(7)
++    crate::new_api(7)
+diff --git a/src/u008.rs b/src/u008.rs
+--- a/src/u008.rs
++++ b/src/u008.rs
+@@ -2 +2 @@
+-    crate::old_api(8)
++    crate::new_api(8)
+diff --git a/src/u009.rs b/src/u009.rs
+--- a/src/u009.rs
++++ b/src/u009.rs
+@@ -2 +2 @@
+-    crate::old_api(9)
++    crate::new_api(9)
+diff --git a/src/u010.rs b/src/u010.rs
+--- a/src/u010.rs
++++ b/src/u010.rs
+@@ -2 +2 @@
+-    crate::old_api(10)
++    crate::new_api(10)
+diff --git a/src/u011.rs b/src/u011.rs
+--- a/src/u011.rs
++++ b/src/u011.rs
+@@ -2 +2 @@
+-    crate::old_api(11)
++    crate::new_api(11)
+diff --git a/src/u012.rs b/src/u012.rs
+--- a/src/u012.rs
++++ b/src/u012.rs
+@@ -2 +2 @@
+-    crate::old_api(12)
++    crate::new_api(12)
+diff --git a/src/u013.rs b/src/u013.rs
+--- a/src/u013.rs
++++ b/src/u013.rs
+@@ -2 +2 @@
+-    crate::old_api(13)
++    crate::new_api(13)
+diff --git a/src/u014.rs b/src/u014.rs
+--- a/src/u014.rs
++++ b/src/u014.rs
+@@ -2 +2 @@
+-    crate::old_api(14)
++    crate::new_api(14)
+diff --git a/src/u015.rs b/src/u015.rs
+--- a/src/u015.rs
++++ b/src/u015.rs
+@@ -2 +2 @@
+-    crate::old_api(15)
++    crate::new_api(15)
+diff --git a/src/u016.rs b/src/u016.rs
+--- a/src/u016.rs
++++ b/src/u016.rs
+@@ -2 +2 @@
+-    crate::old_api(16)
++    crate::new_api(16)
+diff --git a/src/u017.rs b/src/u017.rs
+--- a/src/u017.rs
++++ b/src/u017.rs
+@@ -2 +2 @@
+-    crate::old_api(17)
++    crate::new_api(17)
+diff --git a/src/u018.rs b/src/u018.rs
+--- a/src/u018.rs
++++ b/src/u018.rs
+@@ -2 +2 @@
+-    crate::old_api(18)
++    crate::new_api(18)
+diff --git a/src/u019.rs b/src/u019.rs
+--- a/src/u019.rs
++++ b/src/u019.rs
+@@ -2 +2 @@
+-    crate::old_api(19)
++    crate::new_api(19)
+diff --git a/src/u020.rs b/src/u020.rs
+--- a/src/u020.rs
++++ b/src/u020.rs
+@@ -2 +2 @@
+-    crate::old_api(20)
++    crate::new_api(20)
+diff --git a/src/u021.rs b/src/u021.rs
+--- a/src/u021.rs
++++ b/src/u021.rs
+@@ -2 +2 @@
+-    crate::old_api(21)
++    crate::new_api(21)
+diff --git a/src/u022.rs b/src/u022.rs
+--- a/src/u022.rs
++++ b/src/u022.rs
+@@ -2 +2 @@
+-    crate::old_api(22)
++    crate::new_api(22)
+diff --git a/src/u023.rs b/src/u023.rs
+--- a/src/u023.rs
++++ b/src/u023.rs
+@@ -2 +2 @@
+-    crate::old_api(23)
++    crate::new_api(23)
+diff --git a/src/u024.rs b/src/u024.rs
+--- a/src/u024.rs
++++ b/src/u024.rs
+@@ -2 +2 @@
+-    crate::old_api(24)
++    crate::new_api(24)
+diff --git a/src/u025.rs b/src/u025.rs
+--- a/src/u025.rs
++++ b/src/u025.rs
+@@ -2 +2 @@
+-    crate::old_api(25)
++    crate::new_api(25)
+diff --git a/src/u026.rs b/src/u026.rs
+--- a/src/u026.rs
++++ b/src/u026.rs
+@@ -2 +2 @@
+-    crate::old_api(26)
++    crate::new_api(26)
+diff --git a/src/u027.rs b/src/u027.rs
+--- a/src/u027.rs
++++ b/src/u027.rs
+@@ -2 +2 @@
+-    crate::old_api(27)
++    crate::new_api(27)
+diff --git a/src/u028.rs b/src/u028.rs
+--- a/src/u028.rs
++++ b/src/u028.rs
+@@ -2 +2 @@
+-    crate::old_api(28)
++    crate::new_api(28)
+diff --git a/src/u029.rs b/src/u029.rs
+--- a/src/u029.rs
++++ b/src/u029.rs
+@@ -2 +2 @@
+-    crate::old_api(29)
++    crate::new_api(29)
+diff --git a/src/u030.rs b/src/u030.rs
+--- a/src/u030.rs
++++ b/src/u030.rs
+@@ -2 +2 @@
+-    crate::old_api(30)
++    crate::new_api(30)
+diff --git a/src/u031.rs b/src/u031.rs
+--- a/src/u031.rs
++++ b/src/u031.rs
+@@ -2 +2 @@
+-    crate::old_api(31)
++    crate::new_api(31)
+diff --git a/src/u032.rs b/src/u032.rs
+--- a/src/u032.rs
++++ b/src/u032.rs
+@@ -2 +2 @@
+-    crate::old_api(32)
++    crate::new_api(32)
+diff --git a/src/u033.rs b/src/u033.rs
+--- a/src/u033.rs
++++ b/src/u033.rs
+@@ -2 +2 @@
+-    crate::old_api(33)
++    crate::new_api(33)
+diff --git a/src/u034.rs b/src/u034.rs
+--- a/src/u034.rs
++++ b/src/u034.rs
+@@ -2 +2 @@
+-    crate::old_api(34)
++    crate::new_api(34)
+diff --git a/src/u035.rs b/src/u035.rs
+--- a/src/u035.rs
++++ b/src/u035.rs
+@@ -2 +2 @@
+-    crate::old_api(35)
++    crate::new_api(35)
+diff --git a/src/u036.rs b/src/u036.rs
+--- a/src/u036.rs
++++ b/src/u036.rs
+@@ -2 +2 @@
+-    crate::old_api(36)
++    crate::new_api(36)
+diff --git a/src/u037.rs b/src/u037.rs
+--- a/src/u037.rs
++++ b/src/u037.rs
+@@ -2 +2 @@
+-    crate::old_api(37)
++    crate::new_api(37)
+diff --git a/src/u038.rs b/src/u038.rs
+--- a/src/u038.rs
++++ b/src/u038.rs
+@@ -2 +2 @@
+-    crate::old_api(38)
++    crate::new_api(38)
+diff --git a/src/u039.rs b/src/u039.rs
+--- a/src/u039.rs
++++ b/src/u039.rs
+@@ -2 +2 @@
+-    crate::old_api(39)
++    crate::new_api(39)
+diff --git a/src/u040.rs b/src/u040.rs
+--- a/src/u040.rs
++++ b/src/u040.rs
+@@ -2 +2 @@
+-    crate::old_api(40)
++    crate::new_api(40)
+diff --git a/src/u041.rs b/src/u041.rs
+--- a/src/u041.rs
++++ b/src/u041.rs
+@@ -2 +2 @@
+-    crate::old_api(41)
++    crate::new_api(41)
+diff --git a/src/u042.rs b/src/u042.rs
+--- a/src/u042.rs
++++ b/src/u042.rs
+@@ -2 +2 @@
+-    crate::old_api(42)
++    crate::new_api(42)
+diff --git a/src/u043.rs b/src/u043.rs
+--- a/src/u043.rs
++++ b/src/u043.rs
+@@ -2 +2 @@
+-    crate::old_api(43)
++    crate::new_api(43)
+diff --git a/src/u044.rs b/src/u044.rs
+--- a/src/u044.rs
++++ b/src/u044.rs
+@@ -2 +2 @@
+-    crate::old_api(44)
++    crate::new_api(44)
+diff --git a/src/u045.rs b/src/u045.rs
+--- a/src/u045.rs
++++ b/src/u045.rs
+@@ -2 +2 @@
+-    crate::old_api(45)
++    crate::new_api(45)
+diff --git a/src/u046.rs b/src/u046.rs
+--- a/src/u046.rs
++++ b/src/u046.rs
+@@ -2 +2 @@
+-    crate::old_api(46)
++    crate::new_api(46)
+diff --git a/src/u047.rs b/src/u047.rs
+--- a/src/u047.rs
++++ b/src/u047.rs
+@@ -2 +2 @@
+-    crate::old_api(47)
++    crate::new_api(47)
+diff --git a/src/u048.rs b/src/u048.rs
+--- a/src/u048.rs
++++ b/src/u048.rs
+@@ -2 +2 @@
+-    crate::old_api(48)
++    crate::new_api(48)
+diff --git a/src/u049.rs b/src/u049.rs
+--- a/src/u049.rs
++++ b/src/u049.rs
+@@ -2 +2 @@
+-    crate::old_api(49)
++    crate::new_api(49)
+diff --git a/src/u050.rs b/src/u050.rs
+--- a/src/u050.rs
++++ b/src/u050.rs
+@@ -2 +2 @@
+-    crate::old_api(50)
++    crate::new_api(50)
+diff --git a/src/u051.rs b/src/u051.rs
+--- a/src/u051.rs
++++ b/src/u051.rs
+@@ -2 +2 @@
+-    crate::old_api(51)
++    crate::new_api(51)
+diff --git a/src/u052.rs b/src/u052.rs
+--- a/src/u052.rs
++++ b/src/u052.rs
+@@ -2 +2 @@
+-    crate::old_api(52)
++    crate::new_api(52)
+diff --git a/src/u053.rs b/src/u053.rs
+--- a/src/u053.rs
++++ b/src/u053.rs
+@@ -2 +2 @@
+-    crate::old_api(53)
++    crate::new_api(53)
+diff --git a/src/u054.rs b/src/u054.rs
+--- a/src/u054.rs
++++ b/src/u054.rs
+@@ -2 +2 @@
+-    crate::old_api(54)
++    crate::new_api(54)
+diff --git a/src/u055.rs b/src/u055.rs
+--- a/src/u055.rs
++++ b/src/u055.rs
+@@ -2 +2 @@
+-    crate::old_api(55)
++    crate::new_api(55)
+diff --git a/src/u056.rs b/src/u056.rs
+--- a/src/u056.rs
++++ b/src/u056.rs
+@@ -2 +2 @@
+-    crate::old_api(56)
++    crate::new_api(56)
+diff --git a/src/u057.rs b/src/u057.rs
+--- a/src/u057.rs
++++ b/src/u057.rs
+@@ -2 +2 @@
+-    crate::old_api(57)
++    crate::new_api(57)
+diff --git a/src/u058.rs b/src/u058.rs
+--- a/src/u058.rs
++++ b/src/u058.rs
+@@ -2 +2 @@
+-    crate::old_api(58)
++    crate::new_api(58)
+diff --git a/src/u059.rs b/src/u059.rs
+--- a/src/u059.rs
++++ b/src/u059.rs
+@@ -2 +2 @@
+-    crate::old_api(59)
++    crate::new_api(59)
+diff --git a/src/u060.rs b/src/u060.rs
+--- a/src/u060.rs
++++ b/src/u060.rs
+@@ -2 +2 @@
+-    crate::old_api(60)
++    crate::new_api(60)
+diff --git a/src/u061.rs b/src/u061.rs
+--- a/src/u061.rs
++++ b/src/u061.rs
+@@ -2 +2 @@
+-    crate::old_api(61)
++    crate::new_api(61)
+diff --git a/src/u062.rs b/src/u062.rs
+--- a/src/u062.rs
++++ b/src/u062.rs
+@@ -2 +2 @@
+-    crate::old_api(62)
++    crate::new_api(62)
+diff --git a/src/u063.rs b/src/u063.rs
+--- a/src/u063.rs
++++ b/src/u063.rs
+@@ -2 +2 @@
+-    crate::old_api(63)
++    crate::new_api(63)
+diff --git a/src/u064.rs b/src/u064.rs
+--- a/src/u064.rs
++++ b/src/u064.rs
+@@ -2 +2 @@
+-    crate::old_api(64)
++    crate::new_api(64)
+diff --git a/src/u065.rs b/src/u065.rs
+--- a/src/u065.rs
++++ b/src/u065.rs
+@@ -2 +2 @@
+-    crate::old_api(65)
++    crate::new_api(65)
+diff --git a/src/u066.rs b/src/u066.rs
+--- a/src/u066.rs
++++ b/src/u066.rs
+@@ -2 +2 @@
+-    crate::old_api(66)
++    crate::new_api(66)
+diff --git a/src/u067.rs b/src/u067.rs
+--- a/src/u067.rs
++++ b/src/u067.rs
+@@ -2 +2 @@
+-    crate::old_api(67)
++    crate::new_api(67)
+diff --git a/src/u068.rs b/src/u068.rs
+--- a/src/u068.rs
++++ b/src/u068.rs
+@@ -2 +2 @@
+-    crate::old_api(68)
++    crate::new_api(68)
+diff --git a/src/u069.rs b/src/u069.rs
+--- a/src/u069.rs
++++ b/src/u069.rs
+@@ -2 +2 @@
+-    crate::old_api(69)
++    crate::new_api(69)
+diff --git a/src/u070.rs b/src/u070.rs
+--- a/src/u070.rs
++++ b/src/u070.rs
+@@ -2 +2 @@
+-    crate::old_api(70)
++    crate::new_api(70)
+diff --git a/src/u071.rs b/src/u071.rs
+--- a/src/u071.rs
++++ b/src/u071.rs
+@@ -2 +2 @@
+-    crate::old_api(71)
++    crate::new_api(71)
+diff --git a/src/u072.rs b/src/u072.rs
+--- a/src/u072.rs
++++ b/src/u072.rs
+@@ -2 +2 @@
+-    crate::old_api(72)
++    crate::new_api(72)
+diff --git a/src/u073.rs b/src/u073.rs
+--- a/src/u073.rs
++++ b/src/u073.rs
+@@ -2 +2 @@
+-    crate::old_api(73)
++    crate::new_api(73)
+diff --git a/src/u074.rs b/src/u074.rs
+--- a/src/u074.rs
++++ b/src/u074.rs
+@@ -2 +2 @@
+-    crate::old_api(74)
++    crate::new_api(74)
+diff --git a/src/u075.rs b/src/u075.rs
+--- a/src/u075.rs
++++ b/src/u075.rs
+@@ -2 +2 @@
+-    crate::old_api(75)
++    crate::new_api(75)
+diff --git a/src/u076.rs b/src/u076.rs
+--- a/src/u076.rs
++++ b/src/u076.rs
+@@ -2 +2 @@
+-    crate::old_api(76)
++    crate::new_api(76)
+diff --git a/src/u077.rs b/src/u077.rs
+--- a/src/u077.rs
++++ b/src/u077.rs
+@@ -2 +2 @@
+-    crate::old_api(77)
++    crate::new_api(77)
+diff --git a/src/u078.rs b/src/u078.rs
+--- a/src/u078.rs
++++ b/src/u078.rs
+@@ -2 +2 @@
+-    crate::old_api(78)
++    crate::new_api(78)
+diff --git a/src/u079.rs b/src/u079.rs
+--- a/src/u079.rs
++++ b/src/u079.rs
+@@ -2 +2 @@
+-    crate::old_api(79)
++    crate::new_api(79)
+diff --git a/src/u080.rs b/src/u080.rs
+--- a/src/u080.rs
++++ b/src/u080.rs
+@@ -2 +2 @@
+-    crate::old_api(80)
++    crate::new_api(80)
+diff --git a/src/u081.rs b/src/u081.rs
+--- a/src/u081.rs
++++ b/src/u081.rs
+@@ -2 +2 @@
+-    crate::old_api(81)
++    crate::new_api(81)
+diff --git a/src/u082.rs b/src/u082.rs
+--- a/src/u082.rs
++++ b/src/u082.rs
+@@ -2 +2 @@
+-    crate::old_api(82)
++    crate::new_api(82)
+diff --git a/src/u083.rs b/src/u083.rs
+--- a/src/u083.rs
++++ b/src/u083.rs
+@@ -2 +2 @@
+-    crate::old_api(83)
++    crate::new_api(83)
+diff --git a/src/u084.rs b/src/u084.rs
+--- a/src/u084.rs
++++ b/src/u084.rs
+@@ -2 +2 @@
+-    crate::old_api(84)
++    crate::new_api(84)
+diff --git a/src/u085.rs b/src/u085.rs
+--- a/src/u085.rs
++++ b/src/u085.rs
+@@ -2 +2 @@
+-    crate::old_api(85)
++    crate::new_api(85)
+diff --git a/src/u086.rs b/src/u086.rs
+--- a/src/u086.rs
++++ b/src/u086.rs
+@@ -2 +2 @@
+-    crate::old_api(86)
++    crate::new_api(86)
+diff --git a/src/u087.rs b/src/u087.rs
+--- a/src/u087.rs
++++ b/src/u087.rs
+@@ -2 +2 @@
+-    crate::old_api(87)
++    crate::new_api(87)
+diff --git a/src/u088.rs b/src/u088.rs
+--- a/src/u088.rs
++++ b/src/u088.rs
+@@ -2 +2 @@
+-    crate::old_api(88)
++    crate::new_api(88)
+diff --git a/src/u089.rs b/src/u089.rs
+--- a/src/u089.rs
++++ b/src/u089.rs
+@@ -2 +2 @@
+-    crate::old_api(89)
++    crate::new_api(89)
+diff --git a/src/u090.rs b/src/u090.rs
+--- a/src/u090.rs
++++ b/src/u090.rs
+@@ -2 +2 @@
+-    crate::old_api(90)
++    crate::new_api(90)
+diff --git a/src/u091.rs b/src/u091.rs
+--- a/src/u091.rs
++++ b/src/u091.rs
+@@ -2 +2 @@
+-    crate::old_api(91)
++    crate::new_api(91)
+diff --git a/src/u092.rs b/src/u092.rs
+--- a/src/u092.rs
++++ b/src/u092.rs
+@@ -2 +2 @@
+-    crate::old_api(92)
++    crate::new_api(92)
+diff --git a/src/u093.rs b/src/u093.rs
+--- a/src/u093.rs
++++ b/src/u093.rs
+@@ -2 +2 @@
+-    crate::old_api(93)
++    crate::new_api(93)
+diff --git a/src/u094.rs b/src/u094.rs
+--- a/src/u094.rs
++++ b/src/u094.rs
+@@ -2 +2 @@
+-    crate::old_api(94)
++    crate::new_api(94)
+diff --git a/src/u095.rs b/src/u095.rs
+--- a/src/u095.rs
++++ b/src/u095.rs
+@@ -2 +2 @@
+-    crate::old_api(95)
++    crate::new_api(95)
+diff --git a/src/u096.rs b/src/u096.rs
+--- a/src/u096.rs
++++ b/src/u096.rs
+@@ -2 +2 @@
+-    crate::old_api(96)
++    crate::new_api(96)
+diff --git a/src/u097.rs b/src/u097.rs
+--- a/src/u097.rs
++++ b/src/u097.rs
+@@ -2 +2 @@
+-    crate::old_api(97)
++    crate::new_api(97)
+diff --git a/src/u098.rs b/src/u098.rs
+--- a/src/u098.rs
++++ b/src/u098.rs
+@@ -2 +2 @@
+-    crate::old_api(98)
++    crate::new_api(98)
+diff --git a/src/u099.rs b/src/u099.rs
+--- a/src/u099.rs
++++ b/src/u099.rs
+@@ -2 +2 @@
+-    crate::old_api(99)
++    crate::new_api(99)
+diff --git a/src/u100.rs b/src/u100.rs
+--- a/src/u100.rs
++++ b/src/u100.rs
+@@ -2 +2 @@
+-    crate::old_api(100)
++    crate::new_api(100)
+diff --git a/src/u101.rs b/src/u101.rs
+--- a/src/u101.rs
++++ b/src/u101.rs
+@@ -2 +2 @@
+-    crate::old_api(101)
++    crate::new_api(101)
+diff --git a/src/u102.rs b/src/u102.rs
+--- a/src/u102.rs
++++ b/src/u102.rs
+@@ -2 +2 @@
+-    crate::old_api(102)
++    crate::new_api(102)
+diff --git a/src/u103.rs b/src/u103.rs
+--- a/src/u103.rs
++++ b/src/u103.rs
+@@ -2 +2 @@
+-    crate::old_api(103)
++    crate::new_api(103)
+diff --git a/src/u104.rs b/src/u104.rs
+--- a/src/u104.rs
++++ b/src/u104.rs
+@@ -2 +2 @@
+-    crate::old_api(104)
++    crate::new_api(104)
+diff --git a/src/u105.rs b/src/u105.rs
+--- a/src/u105.rs
++++ b/src/u105.rs
+@@ -2 +2 @@
+-    crate::old_api(105)
++    crate::new_api(105)
+diff --git a/src/u106.rs b/src/u106.rs
+--- a/src/u106.rs
++++ b/src/u106.rs
+@@ -2 +2 @@
+-    crate::old_api(106)
++    crate::new_api(106)
+diff --git a/src/u107.rs b/src/u107.rs
+--- a/src/u107.rs
++++ b/src/u107.rs
+@@ -2 +2 @@
+-    crate::old_api(107)
++    crate::new_api(107)
+diff --git a/src/u108.rs b/src/u108.rs
+--- a/src/u108.rs
++++ b/src/u108.rs
+@@ -2 +2 @@
+-    crate::old_api(108)
++    crate::new_api(108)
+diff --git a/src/u109.rs b/src/u109.rs
+--- a/src/u109.rs
++++ b/src/u109.rs
+@@ -2 +2 @@
+-    crate::old_api(109)
++    crate::new_api(109)
+diff --git a/src/u110.rs b/src/u110.rs
+--- a/src/u110.rs
++++ b/src/u110.rs
+@@ -2 +2 @@
+-    crate::old_api(110)
++    crate::new_api(110)
+diff --git a/src/u111.rs b/src/u111.rs
+--- a/src/u111.rs
++++ b/src/u111.rs
+@@ -2 +2 @@
+-    crate::old_api(111)
++    crate::new_api(111)
+diff --git a/src/u112.rs b/src/u112.rs
+--- a/src/u112.rs
++++ b/src/u112.rs
+@@ -2 +2 @@
+-    crate::old_api(112)
++    crate::new_api(112)
+diff --git a/src/u113.rs b/src/u113.rs
+--- a/src/u113.rs
++++ b/src/u113.rs
+@@ -2 +2 @@
+-    crate::old_api(113)
++    crate::new_api(113)
+diff --git a/src/u114.rs b/src/u114.rs
+--- a/src/u114.rs
++++ b/src/u114.rs
+@@ -2 +2 @@
+-    crate::old_api(114)
++    crate::new_api(114)
+diff --git a/src/u115.rs b/src/u115.rs
+--- a/src/u115.rs
++++ b/src/u115.rs
+@@ -2 +2 @@
+-    crate::old_api(115)
++    crate::new_api(115)
+diff --git a/src/u116.rs b/src/u116.rs
+--- a/src/u116.rs
++++ b/src/u116.rs
+@@ -2 +2 @@
+-    crate::old_api(116)
++    crate::new_api(116)
+diff --git a/src/u117.rs b/src/u117.rs
+--- a/src/u117.rs
++++ b/src/u117.rs
+@@ -2 +2 @@
+-    crate::old_api(117)
++    crate::new_api(117)
+diff --git a/src/u118.rs b/src/u118.rs
+--- a/src/u118.rs
++++ b/src/u118.rs
+@@ -2 +2 @@
+-    crate::old_api(118)
++    crate::new_api(118)
+diff --git a/src/u119.rs b/src/u119.rs
+--- a/src/u119.rs
++++ b/src/u119.rs
+@@ -2 +2 @@
+-    crate::old_api(119)
++    crate::new_api(119)
+diff --git a/src/u120.rs b/src/u120.rs
+--- a/src/u120.rs
++++ b/src/u120.rs
+@@ -2 +2 @@
+-    crate::old_api(120)
++    crate::new_api(120)
+diff --git a/src/u121.rs b/src/u121.rs
+--- a/src/u121.rs
++++ b/src/u121.rs
+@@ -2 +2 @@
+-    crate::old_api(121)
++    crate::new_api(121)
+diff --git a/src/u122.rs b/src/u122.rs
+--- a/src/u122.rs
++++ b/src/u122.rs
+@@ -2 +2 @@
+-    crate::old_api(122)
++    crate::new_api(122)
+diff --git a/src/u123.rs b/src/u123.rs
+--- a/src/u123.rs
++++ b/src/u123.rs
+@@ -2 +2 @@
+-    crate::old_api(123)
++    crate::new_api(123)
+diff --git a/src/u124.rs b/src/u124.rs
+--- a/src/u124.rs
++++ b/src/u124.rs
+@@ -2 +2 @@
+-    crate::old_api(124)
++    crate::new_api(124)
+diff --git a/src/u125.rs b/src/u125.rs
+--- a/src/u125.rs
++++ b/src/u125.rs
+@@ -2 +2 @@
+-    crate::old_api(125)
++    crate::new_api(125)
+diff --git a/src/u126.rs b/src/u126.rs
+--- a/src/u126.rs
++++ b/src/u126.rs
+@@ -2 +2 @@
+-    crate::old_api(126)
++    crate::new_api(126)
+diff --git a/src/u127.rs b/src/u127.rs
+--- a/src/u127.rs
++++ b/src/u127.rs
+@@ -2 +2 @@
+-    crate::old_api(127)
++    crate::new_api(127)
+diff --git a/src/u128.rs b/src/u128.rs
+--- a/src/u128.rs
++++ b/src/u128.rs
+@@ -2 +2 @@
+-    crate::old_api(128)
++    crate::new_api(128)
+diff --git a/src/u129.rs b/src/u129.rs
+--- a/src/u129.rs
++++ b/src/u129.rs
+@@ -2 +2 @@
+-    crate::old_api(129)
++    crate::new_api(129)
+diff --git a/src/u130.rs b/src/u130.rs
+--- a/src/u130.rs
++++ b/src/u130.rs
+@@ -2 +2 @@
+-    crate::old_api(130)
++    crate::new_api(130)
+diff --git a/src/u131.rs b/src/u131.rs
+--- a/src/u131.rs
++++ b/src/u131.rs
+@@ -2 +2 @@
+-    crate::old_api(131)
++    crate::new_api(131)
+diff --git a/src/u132.rs b/src/u132.rs
+--- a/src/u132.rs
++++ b/src/u132.rs
+@@ -2 +2 @@
+-    crate::old_api(132)
++    crate::new_api(132)
+diff --git a/src/u133.rs b/src/u133.rs
+--- a/src/u133.rs
++++ b/src/u133.rs
+@@ -2 +2 @@
+-    crate::old_api(133)
++    crate::new_api(133)
+diff --git a/src/u134.rs b/src/u134.rs
+--- a/src/u134.rs
++++ b/src/u134.rs
+@@ -2 +2 @@
+-    crate::old_api(134)
++    crate::new_api(134)
+diff --git a/src/u135.rs b/src/u135.rs
+--- a/src/u135.rs
++++ b/src/u135.rs
+@@ -2 +2 @@
+-    crate::old_api(135)
++    crate::new_api(135)
+diff --git a/src/u136.rs b/src/u136.rs
+--- a/src/u136.rs
++++ b/src/u136.rs
+@@ -2 +2 @@
+-    crate::old_api(136)
++    crate::new_api(136)
+diff --git a/src/u137.rs b/src/u137.rs
+--- a/src/u137.rs
++++ b/src/u137.rs
+@@ -2 +2 @@
+-    crate::old_api(137)
++    crate::new_api(137)
+diff --git a/src/u138.rs b/src/u138.rs
+--- a/src/u138.rs
++++ b/src/u138.rs
+@@ -2 +2 @@
+-    crate::old_api(138)
++    crate::new_api(138)
+diff --git a/src/u139.rs b/src/u139.rs
+--- a/src/u139.rs
++++ b/src/u139.rs
+@@ -2 +2 @@
+-    crate::old_api(139)
++    crate::new_api(139)
+diff --git a/src/u140.rs b/src/u140.rs
+--- a/src/u140.rs
++++ b/src/u140.rs
+@@ -2 +2 @@
+-    crate::old_api(140)
++    crate::new_api(140)
+diff --git a/src/u141.rs b/src/u141.rs
+--- a/src/u141.rs
++++ b/src/u141.rs
+@@ -2 +2 @@
+-    crate::old_api(141)
++    crate::new_api(141)
+diff --git a/src/u142.rs b/src/u142.rs
+--- a/src/u142.rs
++++ b/src/u142.rs
+@@ -2 +2 @@
+-    crate::old_api(142)
++    crate::new_api(142)
+diff --git a/src/u143.rs b/src/u143.rs
+--- a/src/u143.rs
++++ b/src/u143.rs
+@@ -2 +2 @@
+-    crate::old_api(143)
++    crate::new_api(143)
+diff --git a/src/u144.rs b/src/u144.rs
+--- a/src/u144.rs
++++ b/src/u144.rs
+@@ -2 +2 @@
+-    crate::old_api(144)
++    crate::new_api(144)
+diff --git a/src/u145.rs b/src/u145.rs
+--- a/src/u145.rs
++++ b/src/u145.rs
+@@ -2 +2 @@
+-    crate::old_api(145)
++    crate::new_api(145)
+diff --git a/src/u146.rs b/src/u146.rs
+--- a/src/u146.rs
++++ b/src/u146.rs
+@@ -2 +2 @@
+-    crate::old_api(146)
++    crate::new_api(146)
+diff --git a/src/u147.rs b/src/u147.rs
+--- a/src/u147.rs
++++ b/src/u147.rs
+@@ -2 +2 @@
+-    crate::old_api(147)
++    crate::new_api(147)
+diff --git a/src/u148.rs b/src/u148.rs
+--- a/src/u148.rs
++++ b/src/u148.rs
+@@ -2 +2 @@
+-    crate::old_api(148)
++    crate::new_api(148)
+diff --git a/src/u149.rs b/src/u149.rs
+--- a/src/u149.rs
++++ b/src/u149.rs
+@@ -2 +2 @@
+-    crate::old_api(149)
++    crate::new_api(149)
+diff --git a/src/u150.rs b/src/u150.rs
+--- a/src/u150.rs
++++ b/src/u150.rs
+@@ -2 +2 @@
+-    crate::old_api(150)
++    crate::new_api(150)
+diff --git a/src/u151.rs b/src/u151.rs
+--- a/src/u151.rs
++++ b/src/u151.rs
+@@ -2 +2 @@
+-    crate::old_api(151)
++    crate::new_api(151)
+diff --git a/src/u152.rs b/src/u152.rs
+--- a/src/u152.rs
++++ b/src/u152.rs
+@@ -2 +2 @@
+-    crate::old_api(152)
++    crate::new_api(152)
+diff --git a/src/u153.rs b/src/u153.rs
+--- a/src/u153.rs
++++ b/src/u153.rs
+@@ -2 +2 @@
+-    crate::old_api(153)
++    crate::new_api(153)
+diff --git a/src/u154.rs b/src/u154.rs
+--- a/src/u154.rs
++++ b/src/u154.rs
+@@ -2 +2 @@
+-    crate::old_api(154)
++    crate::new_api(154)
+diff --git a/src/u155.rs b/src/u155.rs
+--- a/src/u155.rs
++++ b/src/u155.rs
+@@ -2 +2 @@
+-    crate::old_api(155)
++    crate::new_api(155)
+diff --git a/src/u156.rs b/src/u156.rs
+--- a/src/u156.rs
++++ b/src/u156.rs
+@@ -2 +2 @@
+-    crate::old_api(156)
++    crate::new_api(156)
+diff --git a/src/u157.rs b/src/u157.rs
+--- a/src/u157.rs
++++ b/src/u157.rs
+@@ -2 +2 @@
+-    crate::old_api(157)
++    crate::new_api(157)
+diff --git a/src/u158.rs b/src/u158.rs
+--- a/src/u158.rs
++++ b/src/u158.rs
+@@ -2 +2 @@
+-    crate::old_api(158)
++    crate::new_api(158)
+diff --git a/src/u159.rs b/src/u159.rs
+--- a/src/u159.rs
++++ b/src/u159.rs
+@@ -2 +2 @@
+-    crate::old_api(159)
++    crate::new_api(159)
+diff --git a/src/u160.rs b/src/u160.rs
+--- a/src/u160.rs
++++ b/src/u160.rs
+@@ -2 +2 @@
+-    crate::old_api(160)
++    crate::new_api(160)
+diff --git a/src/u161.rs b/src/u161.rs
+--- a/src/u161.rs
++++ b/src/u161.rs
+@@ -2 +2 @@
+-    crate::old_api(161)
++    crate::new_api(161)
+diff --git a/src/u162.rs b/src/u162.rs
+--- a/src/u162.rs
++++ b/src/u162.rs
+@@ -2 +2 @@
+-    crate::old_api(162)
++    crate::new_api(162)
+diff --git a/src/u163.rs b/src/u163.rs
+--- a/src/u163.rs
++++ b/src/u163.rs
+@@ -2 +2 @@
+-    crate::old_api(163)
++    crate::new_api(163)
+diff --git a/src/u164.rs b/src/u164.rs
+--- a/src/u164.rs
++++ b/src/u164.rs
+@@ -2 +2 @@
+-    crate::old_api(164)
++    crate::new_api(164)
+diff --git a/src/u165.rs b/src/u165.rs
+--- a/src/u165.rs
++++ b/src/u165.rs
+@@ -2 +2 @@
+-    crate::old_api(165)
++    crate::new_api(165)
+diff --git a/src/u166.rs b/src/u166.rs
+--- a/src/u166.rs
++++ b/src/u166.rs
+@@ -2 +2 @@
+-    crate::old_api(166)
++    crate::new_api(166)
+diff --git a/src/u167.rs b/src/u167.rs
+--- a/src/u167.rs
++++ b/src/u167.rs
+@@ -2 +2 @@
+-    crate::old_api(167)
++    crate::new_api(167)
+diff --git a/src/u168.rs b/src/u168.rs
+--- a/src/u168.rs
++++ b/src/u168.rs
+@@ -2 +2 @@
+-    crate::old_api(168)
++    crate::new_api(168)
+diff --git a/src/u169.rs b/src/u169.rs
+--- a/src/u169.rs
++++ b/src/u169.rs
+@@ -2 +2 @@
+-    crate::old_api(169)
++    crate::new_api(169)
+diff --git a/src/u170.rs b/src/u170.rs
+--- a/src/u170.rs
++++ b/src/u170.rs
+@@ -2 +2 @@
+-    crate::old_api(170)
++    crate::new_api(170)
+diff --git a/src/u171.rs b/src/u171.rs
+--- a/src/u171.rs
++++ b/src/u171.rs
+@@ -2 +2 @@
+-    crate::old_api(171)
++    crate::new_api(171)
+diff --git a/src/u172.rs b/src/u172.rs
+--- a/src/u172.rs
++++ b/src/u172.rs
+@@ -2 +2 @@
+-    crate::old_api(172)
++    crate::new_api(172)
+diff --git a/src/u173.rs b/src/u173.rs
+--- a/src/u173.rs
++++ b/src/u173.rs
+@@ -2 +2 @@
+-    crate::old_api(173)
++    crate::new_api(173)
+diff --git a/src/u174.rs b/src/u174.rs
+--- a/src/u174.rs
++++ b/src/u174.rs
+@@ -2 +2 @@
+-    crate::old_api(174)
++    crate::new_api(174)
+diff --git a/src/u175.rs b/src/u175.rs
+--- a/src/u175.rs
++++ b/src/u175.rs
+@@ -2 +2 @@
+-    crate::old_api(175)
++    crate::new_api(175)
+diff --git a/src/u176.rs b/src/u176.rs
+--- a/src/u176.rs
++++ b/src/u176.rs
+@@ -2 +2 @@
+-    crate::old_api(176)
++    crate::new_api(176)
+diff --git a/src/u177.rs b/src/u177.rs
+--- a/src/u177.rs
++++ b/src/u177.rs
+@@ -2 +2 @@
+-    crate::old_api(177)
++    crate::new_api(177)
+diff --git a/src/u178.rs b/src/u178.rs
+--- a/src/u178.rs
++++ b/src/u178.rs
+@@ -2 +2 @@
+-    crate::old_api(178)
++    crate::new_api(178)
+diff --git a/src/u179.rs b/src/u179.rs
+--- a/src/u179.rs
++++ b/src/u179.rs
+@@ -2 +2 @@
+-    crate::old_api(179)
++    crate::new_api(179)
+diff --git a/src/u180.rs b/src/u180.rs
+--- a/src/u180.rs
++++ b/src/u180.rs
+@@ -2 +2 @@
+-    crate::old_api(180)
++    crate::new_api(180)
+diff --git a/src/u181.rs b/src/u181.rs
+--- a/src/u181.rs
++++ b/src/u181.rs
+@@ -2 +2 @@
+-    crate::old_api(181)
++    crate::new_api(181)
+diff --git a/src/u182.rs b/src/u182.rs
+--- a/src/u182.rs
++++ b/src/u182.rs
+@@ -2 +2 @@
+-    crate::old_api(182)
++    crate::new_api(182)
+diff --git a/src/u183.rs b/src/u183.rs
+--- a/src/u183.rs
++++ b/src/u183.rs
+@@ -2 +2 @@
+-    crate::old_api(183)
++    crate::new_api(183)
+diff --git a/src/u184.rs b/src/u184.rs
+--- a/src/u184.rs
++++ b/src/u184.rs
+@@ -2 +2 @@
+-    crate::old_api(184)
++    crate::new_api(184)
+diff --git a/src/u185.rs b/src/u185.rs
+--- a/src/u185.rs
++++ b/src/u185.rs
+@@ -2 +2 @@
+-    crate::old_api(185)
++    crate::new_api(185)
+diff --git a/src/u186.rs b/src/u186.rs
+--- a/src/u186.rs
++++ b/src/u186.rs
+@@ -2 +2 @@
+-    crate::old_api(186)
++    crate::new_api(186)
+diff --git a/src/u187.rs b/src/u187.rs
+--- a/src/u187.rs
++++ b/src/u187.rs
+@@ -2 +2 @@
+-    crate::old_api(187)
++    crate::new_api(187)
+diff --git a/src/u188.rs b/src/u188.rs
+--- a/src/u188.rs
++++ b/src/u188.rs
+@@ -2 +2 @@
+-    crate::old_api(188)
++    crate::new_api(188)
+diff --git a/src/u189.rs b/src/u189.rs
+--- a/src/u189.rs
++++ b/src/u189.rs
+@@ -2 +2 @@
+-    crate::old_api(189)
++    crate::new_api(189)
+diff --git a/src/u190.rs b/src/u190.rs
+--- a/src/u190.rs
++++ b/src/u190.rs
+@@ -2 +2 @@
+-    crate::old_api(190)
++    crate::new_api(190)
+diff --git a/src/u191.rs b/src/u191.rs
+--- a/src/u191.rs
++++ b/src/u191.rs
+@@ -2 +2 @@
+-    crate::old_api(191)
++    crate::new_api(191)
+diff --git a/src/u192.rs b/src/u192.rs
+--- a/src/u192.rs
++++ b/src/u192.rs
+@@ -2 +2 @@
+-    crate::old_api(192)
++    crate::new_api(192)
+diff --git a/src/u193.rs b/src/u193.rs
+--- a/src/u193.rs
++++ b/src/u193.rs
+@@ -2 +2 @@
+-    crate::old_api(193)
++    crate::new_api(193)
+diff --git a/src/u194.rs b/src/u194.rs
+--- a/src/u194.rs
++++ b/src/u194.rs
+@@ -2 +2 @@
+-    crate::old_api(194)
++    crate::new_api(194)
+diff --git a/src/u195.rs b/src/u195.rs
+--- a/src/u195.rs
++++ b/src/u195.rs
+@@ -2 +2 @@
+-    crate::old_api(195)
++    crate::new_api(195)
+diff --git a/src/u196.rs b/src/u196.rs
+--- a/src/u196.rs
++++ b/src/u196.rs
+@@ -2 +2 @@
+-    crate::old_api(196)
++    crate::new_api(196)
+diff --git a/src/u197.rs b/src/u197.rs
+--- a/src/u197.rs
++++ b/src/u197.rs
+@@ -2 +2 @@
+-    crate::old_api(197)
++    crate::new_api(197)
+diff --git a/src/u198.rs b/src/u198.rs
+--- a/src/u198.rs
++++ b/src/u198.rs
+@@ -2 +2 @@
+-    crate::old_api(198)
++    crate::new_api(198)
+diff --git a/src/u199.rs b/src/u199.rs
+--- a/src/u199.rs
++++ b/src/u199.rs
+@@ -2 +2 @@
+-    crate::old_api(199)
++    crate::new_api(199)
+diff --git a/src/u200.rs b/src/u200.rs
+--- a/src/u200.rs
++++ b/src/u200.rs
+@@ -2 +2 @@
+-    crate::old_api(200)
++    crate::new_api(200)
+diff --git a/src/u201.rs b/src/u201.rs
+--- a/src/u201.rs
++++ b/src/u201.rs
+@@ -2 +2 @@
+-    crate::old_api(201)
++    crate::new_api(201)
+diff --git a/src/u202.rs b/src/u202.rs
+--- a/src/u202.rs
++++ b/src/u202.rs
+@@ -2 +2 @@
+-    crate::old_api(202)
++    crate::new_api(202)
+diff --git a/src/u203.rs b/src/u203.rs
+--- a/src/u203.rs
++++ b/src/u203.rs
+@@ -2 +2 @@
+-    crate::old_api(203)
++    crate::new_api(203)
+diff --git a/src/u204.rs b/src/u204.rs
+--- a/src/u204.rs
++++ b/src/u204.rs
+@@ -2 +2 @@
+-    crate::old_api(204)
++    crate::new_api(204)
+diff --git a/src/u205.rs b/src/u205.rs
+--- a/src/u205.rs
++++ b/src/u205.rs
+@@ -2 +2 @@
+-    crate::old_api(205)
++    crate::new_api(205)
+diff --git a/src/u206.rs b/src/u206.rs
+--- a/src/u206.rs
++++ b/src/u206.rs
+@@ -2 +2 @@
+-    crate::old_api(206)
++    crate::new_api(206)
+diff --git a/src/u207.rs b/src/u207.rs
+--- a/src/u207.rs
++++ b/src/u207.rs
+@@ -2 +2 @@
+-    crate::old_api(207)
++    crate::new_api(207)
+diff --git a/src/u208.rs b/src/u208.rs
+--- a/src/u208.rs
++++ b/src/u208.rs
+@@ -2 +2 @@
+-    crate::old_api(208)
++    crate::new_api(208)
+diff --git a/src/u209.rs b/src/u209.rs
+--- a/src/u209.rs
++++ b/src/u209.rs
+@@ -2 +2 @@
+-    crate::old_api(209)
++    crate::new_api(209)
+diff --git a/src/u210.rs b/src/u210.rs
+--- a/src/u210.rs
++++ b/src/u210.rs
+@@ -2 +2 @@
+-    crate::old_api(210)
++    crate::new_api(210)
+diff --git a/src/u211.rs b/src/u211.rs
+--- a/src/u211.rs
++++ b/src/u211.rs
+@@ -2 +2 @@
+-    crate::old_api(211)
++    crate::new_api(211)
+diff --git a/src/u212.rs b/src/u212.rs
+--- a/src/u212.rs
++++ b/src/u212.rs
+@@ -2 +2 @@
+-    crate::old_api(212)
++    crate::new_api(212)
+diff --git a/src/u213.rs b/src/u213.rs
+--- a/src/u213.rs
++++ b/src/u213.rs
+@@ -2 +2 @@
+-    crate::old_api(213)
++    crate::new_api(213)
+diff --git a/src/u214.rs b/src/u214.rs
+--- a/src/u214.rs
++++ b/src/u214.rs
+@@ -2 +2 @@
+-    crate::old_api(214)
++    crate::new_api(214)
+diff --git a/src/u215.rs b/src/u215.rs
+--- a/src/u215.rs
++++ b/src/u215.rs
+@@ -2 +2 @@
+-    crate::old_api(215)
++    crate::new_api(215)
+diff --git a/src/u216.rs b/src/u216.rs
+--- a/src/u216.rs
++++ b/src/u216.rs
+@@ -2 +2 @@
+-    crate::old_api(216)
++    crate::new_api(216)
+diff --git a/src/u217.rs b/src/u217.rs
+--- a/src/u217.rs
++++ b/src/u217.rs
+@@ -2 +2 @@
+-    crate::old_api(217)
++    crate::new_api(217)
+diff --git a/src/u218.rs b/src/u218.rs
+--- a/src/u218.rs
++++ b/src/u218.rs
+@@ -2 +2 @@
+-    crate::old_api(218)
++    crate::new_api(218)
+diff --git a/src/u219.rs b/src/u219.rs
+--- a/src/u219.rs
++++ b/src/u219.rs
+@@ -2 +2 @@
+-    crate::old_api(219)
++    crate::new_api(219)
+diff --git a/src/u220.rs b/src/u220.rs
+--- a/src/u220.rs
++++ b/src/u220.rs
+@@ -2 +2 @@
+-    crate::old_api(220)
++    crate::new_api(220)
+diff --git a/src/u221.rs b/src/u221.rs
+--- a/src/u221.rs
++++ b/src/u221.rs
+@@ -2 +2 @@
+-    crate::old_api(221)
++    crate::new_api(221)
+diff --git a/src/u222.rs b/src/u222.rs
+--- a/src/u222.rs
++++ b/src/u222.rs
+@@ -2 +2 @@
+-    crate::old_api(222)
++    crate::new_api(222)
+diff --git a/src/u223.rs b/src/u223.rs
+--- a/src/u223.rs
++++ b/src/u223.rs
+@@ -2 +2 @@
+-    crate::old_api(223)
++    crate::new_api(223)
+diff --git a/src/u224.rs b/src/u224.rs
+--- a/src/u224.rs
++++ b/src/u224.rs
+@@ -2 +2 @@
+-    crate::old_api(224)
++    crate::new_api(224)
+diff --git a/src/u225.rs b/src/u225.rs
+--- a/src/u225.rs
++++ b/src/u225.rs
+@@ -2 +2 @@
+-    crate::old_api(225)
++    crate::new_api(225)
+diff --git a/src/u226.rs b/src/u226.rs
+--- a/src/u226.rs
++++ b/src/u226.rs
+@@ -2 +2 @@
+-    crate::old_api(226)
++    crate::new_api(226)
+diff --git a/src/u227.rs b/src/u227.rs
+--- a/src/u227.rs
++++ b/src/u227.rs
+@@ -2 +2 @@
+-    crate::old_api(227)
++    crate::new_api(227)
+diff --git a/src/u228.rs b/src/u228.rs
+--- a/src/u228.rs
++++ b/src/u228.rs
+@@ -2 +2 @@
+-    crate::old_api(228)
++    crate::new_api(228)
+diff --git a/src/u229.rs b/src/u229.rs
+--- a/src/u229.rs
++++ b/src/u229.rs
+@@ -2 +2 @@
+-    crate::old_api(229)
++    crate::new_api(229)
+diff --git a/src/u230.rs b/src/u230.rs
+--- a/src/u230.rs
++++ b/src/u230.rs
+@@ -2 +2 @@
+-    crate::old_api(230)
++    crate::new_api(230)
+diff --git a/src/u231.rs b/src/u231.rs
+--- a/src/u231.rs
++++ b/src/u231.rs
+@@ -2 +2 @@
+-    crate::old_api(231)
++    crate::new_api(231)
+diff --git a/src/u232.rs b/src/u232.rs
+--- a/src/u232.rs
++++ b/src/u232.rs
+@@ -2 +2 @@
+-    crate::old_api(232)
++    crate::new_api(232)
+diff --git a/src/u233.rs b/src/u233.rs
+--- a/src/u233.rs
++++ b/src/u233.rs
+@@ -2 +2 @@
+-    crate::old_api(233)
++    crate::new_api(233)
+diff --git a/src/u234.rs b/src/u234.rs
+--- a/src/u234.rs
++++ b/src/u234.rs
+@@ -2 +2 @@
+-    crate::old_api(234)
++    crate::new_api(234)
+diff --git a/src/u235.rs b/src/u235.rs
+--- a/src/u235.rs
++++ b/src/u235.rs
+@@ -2 +2 @@
+-    crate::old_api(235)
++    crate::new_api(235)
+diff --git a/src/u236.rs b/src/u236.rs
+--- a/src/u236.rs
++++ b/src/u236.rs
+@@ -2 +2 @@
+-    crate::old_api(236)
++    crate::new_api(236)
+diff --git a/src/u237.rs b/src/u237.rs
+--- a/src/u237.rs
++++ b/src/u237.rs
+@@ -2 +2 @@
+-    crate::old_api(237)
++    crate::new_api(237)
+diff --git a/src/u238.rs b/src/u238.rs
+--- a/src/u238.rs
++++ b/src/u238.rs
+@@ -2 +2 @@
+-    crate::old_api(238)
++    crate::new_api(238)
+diff --git a/src/u239.rs b/src/u239.rs
+--- a/src/u239.rs
++++ b/src/u239.rs
+@@ -2 +2 @@
+-    crate::old_api(239)
++    crate::new_api(239)
+diff --git a/src/u240.rs b/src/u240.rs
+--- a/src/u240.rs
++++ b/src/u240.rs
+@@ -2 +2 @@
+-    crate::old_api(240)
++    crate::new_api(240)
+diff --git a/src/u241.rs b/src/u241.rs
+--- a/src/u241.rs
++++ b/src/u241.rs
+@@ -2 +2 @@
+-    crate::old_api(241)
++    crate::new_api(241)
+diff --git a/src/u242.rs b/src/u242.rs
+--- a/src/u242.rs
++++ b/src/u242.rs
+@@ -2 +2 @@
+-    crate::old_api(242)
++    crate::new_api(242)
+diff --git a/src/u243.rs b/src/u243.rs
+--- a/src/u243.rs
++++ b/src/u243.rs
+@@ -2 +2 @@
+-    crate::old_api(243)
++    crate::new_api(243)
+diff --git a/src/u244.rs b/src/u244.rs
+--- a/src/u244.rs
++++ b/src/u244.rs
+@@ -2 +2 @@
+-    crate::old_api(244)
++    crate::new_api(244)
+diff --git a/src/u245.rs b/src/u245.rs
+--- a/src/u245.rs
++++ b/src/u245.rs
+@@ -2 +2 @@
+-    crate::old_api(245)
++    crate::new_api(245)
+diff --git a/src/u246.rs b/src/u246.rs
+--- a/src/u246.rs
++++ b/src/u246.rs
+@@ -2 +2 @@
+-    crate::old_api(246)
++    crate::new_api(246)
+diff --git a/src/u247.rs b/src/u247.rs
+--- a/src/u247.rs
++++ b/src/u247.rs
+@@ -2 +2 @@
+-    crate::old_api(247)
++    crate::new_api(247)
+diff --git a/src/u248.rs b/src/u248.rs
+--- a/src/u248.rs
++++ b/src/u248.rs
+@@ -2 +2 @@
+-    crate::old_api(248)
++    crate::new_api(248)
+diff --git a/src/u249.rs b/src/u249.rs
+--- a/src/u249.rs
++++ b/src/u249.rs
+@@ -2 +2 @@
+-    crate::old_api(249)
++    crate::new_api(249)
+diff --git a/src/u250.rs b/src/u250.rs
+--- a/src/u250.rs
++++ b/src/u250.rs
+@@ -2 +2 @@
+-    crate::old_api(250)
++    crate::new_api(250)
+diff --git a/src/u251.rs b/src/u251.rs
+--- a/src/u251.rs
++++ b/src/u251.rs
+@@ -2 +2 @@
+-    crate::old_api(251)
++    crate::new_api(251)
+diff --git a/src/u252.rs b/src/u252.rs
+--- a/src/u252.rs
++++ b/src/u252.rs
+@@ -2 +2 @@
+-    crate::old_api(252)
++    crate::new_api(252)
+diff --git a/src/u253.rs b/src/u253.rs
+--- a/src/u253.rs
++++ b/src/u253.rs
+@@ -2 +2 @@
+-    crate::old_api(253)
++    crate::new_api(253)
+diff --git a/src/u254.rs b/src/u254.rs
+--- a/src/u254.rs
++++ b/src/u254.rs
+@@ -2 +2 @@
+-    crate::old_api(254)
++    crate::new_api(254)
+diff --git a/src/u255.rs b/src/u255.rs
+--- a/src/u255.rs
++++ b/src/u255.rs
+@@ -2 +2 @@
+-    crate::old_api(255)
++    crate::new_api(255)
+diff --git a/src/u256.rs b/src/u256.rs
+--- a/src/u256.rs
++++ b/src/u256.rs
+@@ -2 +2 @@
+-    crate::old_api(256)
++    crate::new_api(256)
+diff --git a/src/u257.rs b/src/u257.rs
+--- a/src/u257.rs
++++ b/src/u257.rs
+@@ -2 +2 @@
+-    crate::old_api(257)
++    crate::new_api(257)
+diff --git a/src/u258.rs b/src/u258.rs
+--- a/src/u258.rs
++++ b/src/u258.rs
+@@ -2 +2 @@
+-    crate::old_api(258)
++    crate::new_api(258)
+diff --git a/src/u259.rs b/src/u259.rs
+--- a/src/u259.rs
++++ b/src/u259.rs
+@@ -2 +2 @@
+-    crate::old_api(259)
++    crate::new_api(259)
+diff --git a/src/u260.rs b/src/u260.rs
+--- a/src/u260.rs
++++ b/src/u260.rs
+@@ -2 +2 @@
+-    crate::old_api(260)
++    crate::new_api(260)
+diff --git a/src/u261.rs b/src/u261.rs
+--- a/src/u261.rs
++++ b/src/u261.rs
+@@ -2 +2 @@
+-    crate::old_api(261)
++    crate::new_api(261)
+diff --git a/src/u262.rs b/src/u262.rs
+--- a/src/u262.rs
++++ b/src/u262.rs
+@@ -2 +2 @@
+-    crate::old_api(262)
++    crate::new_api(262)
+diff --git a/src/u263.rs b/src/u263.rs
+--- a/src/u263.rs
++++ b/src/u263.rs
+@@ -2 +2 @@
+-    crate::old_api(263)
++    crate::new_api(263)
+diff --git a/src/u264.rs b/src/u264.rs
+--- a/src/u264.rs
++++ b/src/u264.rs
+@@ -2 +2 @@
+-    crate::old_api(264)
++    crate::new_api(264)
+diff --git a/src/u265.rs b/src/u265.rs
+--- a/src/u265.rs
++++ b/src/u265.rs
+@@ -2 +2 @@
+-    crate::old_api(265)
++    crate::new_api(265)
+diff --git a/src/u266.rs b/src/u266.rs
+--- a/src/u266.rs
++++ b/src/u266.rs
+@@ -2 +2 @@
+-    crate::old_api(266)
++    crate::new_api(266)
+diff --git a/src/u267.rs b/src/u267.rs
+--- a/src/u267.rs
++++ b/src/u267.rs
+@@ -2 +2 @@
+-    crate::old_api(267)
++    crate::new_api(267)
+diff --git a/src/u268.rs b/src/u268.rs
+--- a/src/u268.rs
++++ b/src/u268.rs
+@@ -2 +2 @@
+-    crate::old_api(268)
++    crate::new_api(268)
+diff --git a/src/u269.rs b/src/u269.rs
+--- a/src/u269.rs
++++ b/src/u269.rs
+@@ -2 +2 @@
+-    crate::old_api(269)
++    crate::new_api(269)
+diff --git a/src/u270.rs b/src/u270.rs
+--- a/src/u270.rs
++++ b/src/u270.rs
+@@ -2 +2 @@
+-    crate::old_api(270)
++    crate::new_api(270)
+diff --git a/src/u271.rs b/src/u271.rs
+--- a/src/u271.rs
++++ b/src/u271.rs
+@@ -2 +2 @@
+-    crate::old_api(271)
++    crate::new_api(271)
+diff --git a/src/u272.rs b/src/u272.rs
+--- a/src/u272.rs
++++ b/src/u272.rs
+@@ -2 +2 @@
+-    crate::old_api(272)
++    crate::new_api(272)
+diff --git a/src/u273.rs b/src/u273.rs
+--- a/src/u273.rs
++++ b/src/u273.rs
+@@ -2 +2 @@
+-    crate::old_api(273)
++    crate::new_api(273)
+diff --git a/src/u274.rs b/src/u274.rs
+--- a/src/u274.rs
++++ b/src/u274.rs
+@@ -2 +2 @@
+-    crate::old_api(274)
++    crate::new_api(274)
+diff --git a/src/u275.rs b/src/u275.rs
+--- a/src/u275.rs
++++ b/src/u275.rs
+@@ -2 +2 @@
+-    crate::old_api(275)
++    crate::new_api(275)
+diff --git a/src/u276.rs b/src/u276.rs
+--- a/src/u276.rs
++++ b/src/u276.rs
+@@ -2 +2 @@
+-    crate::old_api(276)
++    crate::new_api(276)
+diff --git a/src/u277.rs b/src/u277.rs
+--- a/src/u277.rs
++++ b/src/u277.rs
+@@ -2 +2 @@
+-    crate::old_api(277)
++    crate::new_api(277)
+diff --git a/src/u278.rs b/src/u278.rs
+--- a/src/u278.rs
++++ b/src/u278.rs
+@@ -2 +2 @@
+-    crate::old_api(278)
++    crate::new_api(278)
+diff --git a/src/u279.rs b/src/u279.rs
+--- a/src/u279.rs
++++ b/src/u279.rs
+@@ -2 +2 @@
+-    crate::old_api(279)
++    crate::new_api(279)
+diff --git a/src/u280.rs b/src/u280.rs
+--- a/src/u280.rs
++++ b/src/u280.rs
+@@ -2 +2 @@
+-    crate::old_api(280)
++    crate::new_api(280)
+diff --git a/src/u281.rs b/src/u281.rs
+--- a/src/u281.rs
++++ b/src/u281.rs
+@@ -2 +2 @@
+-    crate::old_api(281)
++    crate::new_api(281)
+diff --git a/src/u282.rs b/src/u282.rs
+--- a/src/u282.rs
++++ b/src/u282.rs
+@@ -2 +2 @@
+-    crate::old_api(282)
++    crate::new_api(282)
+diff --git a/src/u283.rs b/src/u283.rs
+--- a/src/u283.rs
++++ b/src/u283.rs
+@@ -2 +2 @@
+-    crate::old_api(283)
++    crate::new_api(283)
+diff --git a/src/u284.rs b/src/u284.rs
+--- a/src/u284.rs
++++ b/src/u284.rs
+@@ -2 +2 @@
+-    crate::old_api(284)
++    crate::new_api(284)
+diff --git a/src/u285.rs b/src/u285.rs
+--- a/src/u285.rs
++++ b/src/u285.rs
+@@ -2 +2 @@
+-    crate::old_api(285)
++    crate::new_api(285)
+diff --git a/src/u286.rs b/src/u286.rs
+--- a/src/u286.rs
++++ b/src/u286.rs
+@@ -2 +2 @@
+-    crate::old_api(286)
++    crate::new_api(286)
+diff --git a/src/u287.rs b/src/u287.rs
+--- a/src/u287.rs
++++ b/src/u287.rs
+@@ -2 +2 @@
+-    crate::old_api(287)
++    crate::new_api(287)
+diff --git a/src/u288.rs b/src/u288.rs
+--- a/src/u288.rs
++++ b/src/u288.rs
+@@ -2 +2 @@
+-    crate::old_api(288)
++    crate::new_api(288)
+diff --git a/src/u289.rs b/src/u289.rs
+--- a/src/u289.rs
++++ b/src/u289.rs
+@@ -2 +2 @@
+-    crate::old_api(289)
++    crate::new_api(289)
+diff --git a/src/u290.rs b/src/u290.rs
+--- a/src/u290.rs
++++ b/src/u290.rs
+@@ -2 +2 @@
+-    crate::old_api(290)
++    crate::new_api(290)
+diff --git a/src/u291.rs b/src/u291.rs
+--- a/src/u291.rs
++++ b/src/u291.rs
+@@ -2 +2 @@
+-    crate::old_api(291)
++    crate::new_api(291)
+diff --git a/src/u292.rs b/src/u292.rs
+--- a/src/u292.rs
++++ b/src/u292.rs
+@@ -2 +2 @@
+-    crate::old_api(292)
++    crate::new_api(292)
+diff --git a/src/u293.rs b/src/u293.rs
+--- a/src/u293.rs
++++ b/src/u293.rs
+@@ -2 +2 @@
+-    crate::old_api(293)
++    crate::new_api(293)
+diff --git a/src/u294.rs b/src/u294.rs
+--- a/src/u294.rs
++++ b/src/u294.rs
+@@ -2 +2 @@
+-    crate::old_api(294)
++    crate::new_api(294)
+diff --git a/src/u295.rs b/src/u295.rs
+--- a/src/u295.rs
++++ b/src/u295.rs
+@@ -2 +2 @@
+-    crate::old_api(295)
++    crate::new_api(295)
+diff --git a/src/u296.rs b/src/u296.rs
+--- a/src/u296.rs
++++ b/src/u296.rs
+@@ -2 +2 @@
+-    crate::old_api(296)
++    crate::new_api(296)
+diff --git a/src/u297.rs b/src/u297.rs
+--- a/src/u297.rs
++++ b/src/u297.rs
+@@ -2 +2 @@
+-    crate::old_api(297)
++    crate::new_api(297)
+diff --git a/src/u298.rs b/src/u298.rs
+--- a/src/u298.rs
++++ b/src/u298.rs
+@@ -2 +2 @@
+-    crate::old_api(298)
++    crate::new_api(298)
+diff --git a/src/u299.rs b/src/u299.rs
+--- a/src/u299.rs
++++ b/src/u299.rs
+@@ -2 +2 @@
+-    crate::old_api(299)
++    crate::new_api(299)
+diff --git a/src/u300.rs b/src/u300.rs
+--- a/src/u300.rs
++++ b/src/u300.rs
+@@ -2 +2 @@
+-    crate::old_api(300)
++    crate::new_api(300)
+diff --git a/src/u301.rs b/src/u301.rs
+--- a/src/u301.rs
++++ b/src/u301.rs
+@@ -2 +2 @@
+-    crate::old_api(301)
++    crate::new_api(301)
+diff --git a/src/u302.rs b/src/u302.rs
+--- a/src/u302.rs
++++ b/src/u302.rs
+@@ -2 +2 @@
+-    crate::old_api(302)
++    crate::new_api(302)
+diff --git a/src/u303.rs b/src/u303.rs
+--- a/src/u303.rs
++++ b/src/u303.rs
+@@ -2 +2 @@
+-    crate::old_api(303)
++    crate::new_api(303)
+diff --git a/src/u304.rs b/src/u304.rs
+--- a/src/u304.rs
++++ b/src/u304.rs
+@@ -2 +2 @@
+-    crate::old_api(304)
++    crate::new_api(304)
+diff --git a/src/u305.rs b/src/u305.rs
+--- a/src/u305.rs
++++ b/src/u305.rs
+@@ -2 +2 @@
+-    crate::old_api(305)
++    crate::new_api(305)
+diff --git a/src/u306.rs b/src/u306.rs
+--- a/src/u306.rs
++++ b/src/u306.rs
+@@ -2 +2 @@
+-    crate::old_api(306)
++    crate::new_api(306)
+diff --git a/src/u307.rs b/src/u307.rs
+--- a/src/u307.rs
++++ b/src/u307.rs
+@@ -2 +2 @@
+-    crate::old_api(307)
++    crate::new_api(307)
+diff --git a/src/u308.rs b/src/u308.rs
+--- a/src/u308.rs
++++ b/src/u308.rs
+@@ -2 +2 @@
+-    crate::old_api(308)
++    crate::new_api(308)
+diff --git a/src/u309.rs b/src/u309.rs
+--- a/src/u309.rs
++++ b/src/u309.rs
+@@ -2 +2 @@
+-    crate::old_api(309)
++    crate::new_api(309)
+diff --git a/src/u310.rs b/src/u310.rs
+--- a/src/u310.rs
++++ b/src/u310.rs
+@@ -2 +2 @@
+-    crate::old_api(310)
++    crate::new_api(310)
+diff --git a/src/u311.rs b/src/u311.rs
+--- a/src/u311.rs
++++ b/src/u311.rs
+@@ -2 +2 @@
+-    crate::old_api(311)
++    crate::new_api(311)
+diff --git a/src/u312.rs b/src/u312.rs
+--- a/src/u312.rs
++++ b/src/u312.rs
+@@ -2 +2 @@
+-    crate::old_api(312)
++    crate::new_api(312)
+diff --git a/src/u313.rs b/src/u313.rs
+--- a/src/u313.rs
++++ b/src/u313.rs
+@@ -2 +2 @@
+-    crate::old_api(313)
++    crate::new_api(313)
+diff --git a/src/u314.rs b/src/u314.rs
+--- a/src/u314.rs
++++ b/src/u314.rs
+@@ -2 +2 @@
+-    crate::old_api(314)
++    crate::new_api(314)
+diff --git a/src/u315.rs b/src/u315.rs
+--- a/src/u315.rs
++++ b/src/u315.rs
+@@ -2 +2 @@
+-    crate::old_api(315)
++    crate::new_api(315)
+diff --git a/src/u316.rs b/src/u316.rs
+--- a/src/u316.rs
++++ b/src/u316.rs
+@@ -2 +2 @@
+-    crate::old_api(316)
++    crate::new_api(316)
+diff --git a/src/u317.rs b/src/u317.rs
+--- a/src/u317.rs
++++ b/src/u317.rs
+@@ -2 +2 @@
+-    crate::old_api(317)
++    crate::new_api(317)
+diff --git a/src/u318.rs b/src/u318.rs
+--- a/src/u318.rs
++++ b/src/u318.rs
+@@ -2 +2 @@
+-    crate::old_api(318)
++    crate::new_api(318)
+diff --git a/src/u319.rs b/src/u319.rs
+--- a/src/u319.rs
++++ b/src/u319.rs
+@@ -2 +2 @@
+-    crate::old_api(319)
++    crate::new_api(319)
+diff --git a/src/u320.rs b/src/u320.rs
+--- a/src/u320.rs
++++ b/src/u320.rs
+@@ -2 +2 @@
+-    crate::old_api(320)
++    crate::new_api(320)
+diff --git a/src/u321.rs b/src/u321.rs
+--- a/src/u321.rs
++++ b/src/u321.rs
+@@ -2 +2 @@
+-    crate::old_api(321)
++    crate::new_api(321)
+diff --git a/src/u322.rs b/src/u322.rs
+--- a/src/u322.rs
++++ b/src/u322.rs
+@@ -2 +2 @@
+-    crate::old_api(322)
++    crate::new_api(322)
+diff --git a/src/u323.rs b/src/u323.rs
+--- a/src/u323.rs
++++ b/src/u323.rs
+@@ -2 +2 @@
+-    crate::old_api(323)
++    crate::new_api(323)
+diff --git a/src/u324.rs b/src/u324.rs
+--- a/src/u324.rs
++++ b/src/u324.rs
+@@ -2 +2 @@
+-    crate::old_api(324)
++    crate::new_api(324)
+diff --git a/src/u325.rs b/src/u325.rs
+--- a/src/u325.rs
++++ b/src/u325.rs
+@@ -2 +2 @@
+-    crate::old_api(325)
++    crate::new_api(325)
+diff --git a/src/u326.rs b/src/u326.rs
+--- a/src/u326.rs
++++ b/src/u326.rs
+@@ -2 +2 @@
+-    crate::old_api(326)
++    crate::new_api(326)
+diff --git a/src/u327.rs b/src/u327.rs
+--- a/src/u327.rs
++++ b/src/u327.rs
+@@ -2 +2 @@
+-    crate::old_api(327)
++    crate::new_api(327)
+diff --git a/src/u328.rs b/src/u328.rs
+--- a/src/u328.rs
++++ b/src/u328.rs
+@@ -2 +2 @@
+-    crate::old_api(328)
++    crate::new_api(328)
+diff --git a/src/u329.rs b/src/u329.rs
+--- a/src/u329.rs
++++ b/src/u329.rs
+@@ -2 +2 @@
+-    crate::old_api(329)
++    crate::new_api(329)
+diff --git a/src/u330.rs b/src/u330.rs
+--- a/src/u330.rs
++++ b/src/u330.rs
+@@ -2 +2 @@
+-    crate::old_api(330)
++    crate::new_api(330)
+diff --git a/src/u331.rs b/src/u331.rs
+--- a/src/u331.rs
++++ b/src/u331.rs
+@@ -2 +2 @@
+-    crate::old_api(331)
++    crate::new_api(331)
+diff --git a/src/u332.rs b/src/u332.rs
+--- a/src/u332.rs
++++ b/src/u332.rs
+@@ -2 +2 @@
+-    crate::old_api(332)
++    crate::new_api(332)
+diff --git a/src/u333.rs b/src/u333.rs
+--- a/src/u333.rs
++++ b/src/u333.rs
+@@ -2 +2 @@
+-    crate::old_api(333)
++    crate::new_api(333)
+diff --git a/src/u334.rs b/src/u334.rs
+--- a/src/u334.rs
++++ b/src/u334.rs
+@@ -2 +2 @@
+-    crate::old_api(334)
++    crate::new_api(334)
+diff --git a/src/u335.rs b/src/u335.rs
+--- a/src/u335.rs
++++ b/src/u335.rs
+@@ -2 +2 @@
+-    crate::old_api(335)
++    crate::new_api(335)
+diff --git a/src/u336.rs b/src/u336.rs
+--- a/src/u336.rs
++++ b/src/u336.rs
+@@ -2 +2 @@
+-    crate::old_api(336)
++    crate::new_api(336)
+diff --git a/src/u337.rs b/src/u337.rs
+--- a/src/u337.rs
++++ b/src/u337.rs
+@@ -2 +2 @@
+-    crate::old_api(337)
++    crate::new_api(337)
+diff --git a/src/u338.rs b/src/u338.rs
+--- a/src/u338.rs
++++ b/src/u338.rs
+@@ -2 +2 @@
+-    crate::old_api(338)
++    crate::new_api(338)
+diff --git a/src/u339.rs b/src/u339.rs
+--- a/src/u339.rs
++++ b/src/u339.rs
+@@ -2 +2 @@
+-    crate::old_api(339)
++    crate::new_api(339)
+diff --git a/src/u340.rs b/src/u340.rs
+--- a/src/u340.rs
++++ b/src/u340.rs
+@@ -2 +2 @@
+-    crate::old_api(340)
++    crate::new_api(340)
+diff --git a/src/u341.rs b/src/u341.rs
+--- a/src/u341.rs
++++ b/src/u341.rs
+@@ -2 +2 @@
+-    crate::old_api(341)
++    crate::new_api(341)
+diff --git a/src/u342.rs b/src/u342.rs
+--- a/src/u342.rs
++++ b/src/u342.rs
+@@ -2 +2 @@
+-    crate::old_api(342)
++    crate::new_api(342)
+diff --git a/src/u343.rs b/src/u343.rs
+--- a/src/u343.rs
++++ b/src/u343.rs
+@@ -2 +2 @@
+-    crate::old_api(343)
++    crate::new_api(343)
+diff --git a/src/u344.rs b/src/u344.rs
+--- a/src/u344.rs
++++ b/src/u344.rs
+@@ -2 +2 @@
+-    crate::old_api(344)
++    crate::new_api(344)
+diff --git a/src/u345.rs b/src/u345.rs
+--- a/src/u345.rs
++++ b/src/u345.rs
+@@ -2 +2 @@
+-    crate::old_api(345)
++    crate::new_api(345)
+diff --git a/src/u346.rs b/src/u346.rs
+--- a/src/u346.rs
++++ b/src/u346.rs
+@@ -2 +2 @@
+-    crate::old_api(346)
++    crate::new_api(346)
+diff --git a/src/u347.rs b/src/u347.rs
+--- a/src/u347.rs
++++ b/src/u347.rs
+@@ -2 +2 @@
+-    crate::old_api(347)
++    crate::new_api(347)
+diff --git a/src/u348.rs b/src/u348.rs
+--- a/src/u348.rs
++++ b/src/u348.rs
+@@ -2 +2 @@
+-    crate::old_api(348)
++    crate::new_api(348)
+diff --git a/src/u349.rs b/src/u349.rs
+--- a/src/u349.rs
++++ b/src/u349.rs
+@@ -2 +2 @@
+-    crate::old_api(349)
++    crate::new_api(349)
+diff --git a/src/u350.rs b/src/u350.rs
+--- a/src/u350.rs
++++ b/src/u350.rs
+@@ -2 +2 @@
+-    crate::old_api(350)
++    crate::new_api(350)
+diff --git a/src/u351.rs b/src/u351.rs
+--- a/src/u351.rs
++++ b/src/u351.rs
+@@ -2 +2 @@
+-    crate::old_api(351)
++    crate::new_api(351)
+diff --git a/src/u352.rs b/src/u352.rs
+--- a/src/u352.rs
++++ b/src/u352.rs
+@@ -2 +2 @@
+-    crate::old_api(352)
++    crate::new_api(352)
+diff --git a/src/u353.rs b/src/u353.rs
+--- a/src/u353.rs
++++ b/src/u353.rs
+@@ -2 +2 @@
+-    crate::old_api(353)
++    crate::new_api(353)
+diff --git a/src/u354.rs b/src/u354.rs
+--- a/src/u354.rs
++++ b/src/u354.rs
+@@ -2 +2 @@
+-    crate::old_api(354)
++    crate::new_api(354)
+diff --git a/src/u355.rs b/src/u355.rs
+--- a/src/u355.rs
++++ b/src/u355.rs
+@@ -2 +2 @@
+-    crate::old_api(355)
++    crate::new_api(355)
+diff --git a/src/u356.rs b/src/u356.rs
+--- a/src/u356.rs
++++ b/src/u356.rs
+@@ -2 +2 @@
+-    crate::old_api(356)
++    crate::new_api(356)
+diff --git a/src/u357.rs b/src/u357.rs
+--- a/src/u357.rs
++++ b/src/u357.rs
+@@ -2 +2 @@
+-    crate::old_api(357)
++    crate::new_api(357)
+diff --git a/src/u358.rs b/src/u358.rs
+--- a/src/u358.rs
++++ b/src/u358.rs
+@@ -2 +2 @@
+-    crate::old_api(358)
++    crate::new_api(358)
+diff --git a/src/u359.rs b/src/u359.rs
+--- a/src/u359.rs
++++ b/src/u359.rs
+@@ -2 +2 @@
+-    crate::old_api(359)
++    crate::new_api(359)
+diff --git a/src/u360.rs b/src/u360.rs
+--- a/src/u360.rs
++++ b/src/u360.rs
+@@ -2 +2 @@
+-    crate::old_api(360)
++    crate::new_api(360)
+diff --git a/src/u361.rs b/src/u361.rs
+--- a/src/u361.rs
++++ b/src/u361.rs
+@@ -2 +2 @@
+-    crate::old_api(361)
++    crate::new_api(361)
+diff --git a/src/u362.rs b/src/u362.rs
+--- a/src/u362.rs
++++ b/src/u362.rs
+@@ -2 +2 @@
+-    crate::old_api(362)
++    crate::new_api(362)
+diff --git a/src/u363.rs b/src/u363.rs
+--- a/src/u363.rs
++++ b/src/u363.rs
+@@ -2 +2 @@
+-    crate::old_api(363)
++    crate::new_api(363)
+diff --git a/src/u364.rs b/src/u364.rs
+--- a/src/u364.rs
++++ b/src/u364.rs
+@@ -2 +2 @@
+-    crate::old_api(364)
++    crate::new_api(364)
+diff --git a/src/u365.rs b/src/u365.rs
+--- a/src/u365.rs
++++ b/src/u365.rs
+@@ -2 +2 @@
+-    crate::old_api(365)
++    crate::new_api(365)
+diff --git a/src/u366.rs b/src/u366.rs
+--- a/src/u366.rs
++++ b/src/u366.rs
+@@ -2 +2 @@
+-    crate::old_api(366)
++    crate::new_api(366)
+diff --git a/src/u367.rs b/src/u367.rs
+--- a/src/u367.rs
++++ b/src/u367.rs
+@@ -2 +2 @@
+-    crate::old_api(367)
++    crate::new_api(367)
+diff --git a/src/u368.rs b/src/u368.rs
+--- a/src/u368.rs
++++ b/src/u368.rs
+@@ -2 +2 @@
+-    crate::old_api(368)
++    crate::new_api(368)
+diff --git a/src/u369.rs b/src/u369.rs
+--- a/src/u369.rs
++++ b/src/u369.rs
+@@ -2 +2 @@
+-    crate::old_api(369)
++    crate::new_api(369)
+diff --git a/src/u370.rs b/src/u370.rs
+--- a/src/u370.rs
++++ b/src/u370.rs
+@@ -2 +2 @@
+-    crate::old_api(370)
++    crate::new_api(370)
+diff --git a/src/u371.rs b/src/u371.rs
+--- a/src/u371.rs
++++ b/src/u371.rs
+@@ -2 +2 @@
+-    crate::old_api(371)
++    crate::new_api(371)
+diff --git a/src/u372.rs b/src/u372.rs
+--- a/src/u372.rs
++++ b/src/u372.rs
+@@ -2 +2 @@
+-    crate::old_api(372)
++    crate::new_api(372)
+diff --git a/src/u373.rs b/src/u373.rs
+--- a/src/u373.rs
++++ b/src/u373.rs
+@@ -2 +2 @@
+-    crate::old_api(373)
++    crate::new_api(373)
+diff --git a/src/u374.rs b/src/u374.rs
+--- a/src/u374.rs
++++ b/src/u374.rs
+@@ -2 +2 @@
+-    crate::old_api(374)
++    crate::new_api(374)
+diff --git a/src/u375.rs b/src/u375.rs
+--- a/src/u375.rs
++++ b/src/u375.rs
+@@ -2 +2 @@
+-    crate::old_api(375)
++    crate::new_api(375)
+diff --git a/src/u376.rs b/src/u376.rs
+--- a/src/u376.rs
++++ b/src/u376.rs
+@@ -2 +2 @@
+-    crate::old_api(376)
++    crate::new_api(376)
+diff --git a/src/u377.rs b/src/u377.rs
+--- a/src/u377.rs
++++ b/src/u377.rs
+@@ -2 +2 @@
+-    crate::old_api(377)
++    crate::new_api(377)
+diff --git a/src/u378.rs b/src/u378.rs
+--- a/src/u378.rs
++++ b/src/u378.rs
+@@ -2 +2 @@
+-    crate::old_api(378)
++    crate::new_api(378)
+diff --git a/src/u379.rs b/src/u379.rs
+--- a/src/u379.rs
++++ b/src/u379.rs
+@@ -2 +2 @@
+-    crate::old_api(379)
++    crate::new_api(379)
+diff --git a/src/u380.rs b/src/u380.rs
+--- a/src/u380.rs
++++ b/src/u380.rs
+@@ -2 +2 @@
+-    crate::old_api(380)
++    crate::new_api(380)
+diff --git a/src/u381.rs b/src/u381.rs
+--- a/src/u381.rs
++++ b/src/u381.rs
+@@ -2 +2 @@
+-    crate::old_api(381)
++    crate::new_api(381)
+diff --git a/src/u382.rs b/src/u382.rs
+--- a/src/u382.rs
++++ b/src/u382.rs
+@@ -2 +2 @@
+-    crate::old_api(382)
++    crate::new_api(382)
+diff --git a/src/u383.rs b/src/u383.rs
+--- a/src/u383.rs
++++ b/src/u383.rs
+@@ -2 +2 @@
+-    crate::old_api(383)
++    crate::new_api(383)
+diff --git a/src/u384.rs b/src/u384.rs
+--- a/src/u384.rs
++++ b/src/u384.rs
+@@ -2 +2 @@
+-    crate::old_api(384)
++    crate::new_api(384)
+diff --git a/src/u385.rs b/src/u385.rs
+--- a/src/u385.rs
++++ b/src/u385.rs
+@@ -2 +2 @@
+-    crate::old_api(385)
++    crate::new_api(385)
+diff --git a/src/u386.rs b/src/u386.rs
+--- a/src/u386.rs
++++ b/src/u386.rs
+@@ -2 +2 @@
+-    crate::old_api(386)
++    crate::new_api(386)
+diff --git a/src/u387.rs b/src/u387.rs
+--- a/src/u387.rs
++++ b/src/u387.rs
+@@ -2 +2 @@
+-    crate::old_api(387)
++    crate::new_api(387)
+diff --git a/src/u388.rs b/src/u388.rs
+--- a/src/u388.rs
++++ b/src/u388.rs
+@@ -2 +2 @@
+-    crate::old_api(388)
++    crate::new_api(388)
+diff --git a/src/u389.rs b/src/u389.rs
+--- a/src/u389.rs
++++ b/src/u389.rs
+@@ -2 +2 @@
+-    crate::old_api(389)
++    crate::new_api(389)
+diff --git a/src/u390.rs b/src/u390.rs
+--- a/src/u390.rs
++++ b/src/u390.rs
+@@ -2 +2 @@
+-    crate::old_api(390)
++    crate::new_api(390)
+diff --git a/src/u391.rs b/src/u391.rs
+--- a/src/u391.rs
++++ b/src/u391.rs
+@@ -2 +2 @@
+-    crate::old_api(391)
++    crate::new_api(391)
+diff --git a/src/u392.rs b/src/u392.rs
+--- a/src/u392.rs
++++ b/src/u392.rs
+@@ -2 +2 @@
+-    crate::old_api(392)
++    crate::new_api(392)
+diff --git a/src/u393.rs b/src/u393.rs
+--- a/src/u393.rs
++++ b/src/u393.rs
+@@ -2 +2 @@
+-    crate::old_api(393)
++    crate::new_api(393)
+diff --git a/src/u394.rs b/src/u394.rs
+--- a/src/u394.rs
++++ b/src/u394.rs
+@@ -2 +2 @@
+-    crate::old_api(394)
++    crate::new_api(394)
+diff --git a/src/u395.rs b/src/u395.rs
+--- a/src/u395.rs
++++ b/src/u395.rs
+@@ -2 +2 @@
+-    crate::old_api(395)
++    crate::new_api(395)
+diff --git a/src/u396.rs b/src/u396.rs
+--- a/src/u396.rs
++++ b/src/u396.rs
+@@ -2 +2 @@
+-    crate::old_api(396)
++    crate::new_api(396)
+diff --git a/src/u397.rs b/src/u397.rs
+--- a/src/u397.rs
++++ b/src/u397.rs
+@@ -2 +2 @@
+-    crate::old_api(397)
++    crate::new_api(397)
+diff --git a/src/u398.rs b/src/u398.rs
+--- a/src/u398.rs
++++ b/src/u398.rs
+@@ -2 +2 @@
+-    crate::old_api(398)
++    crate::new_api(398)
+diff --git a/src/u399.rs b/src/u399.rs
+--- a/src/u399.rs
++++ b/src/u399.rs
+@@ -2 +2 @@
+-    crate::old_api(399)
++    crate::new_api(399)
+diff --git a/src/u400.rs b/src/u400.rs
+--- a/src/u400.rs
++++ b/src/u400.rs
+@@ -2 +2 @@
+-    crate::old_api(400)
++    crate::new_api(400)
+diff --git a/src/u401.rs b/src/u401.rs
+--- a/src/u401.rs
++++ b/src/u401.rs
+@@ -2 +2 @@
+-    crate::old_api(401)
++    crate::new_api(401)
+diff --git a/src/u402.rs b/src/u402.rs
+--- a/src/u402.rs
++++ b/src/u402.rs
+@@ -2 +2 @@
+-    crate::old_api(402)
++    crate::new_api(402)
+diff --git a/src/u403.rs b/src/u403.rs
+--- a/src/u403.rs
++++ b/src/u403.rs
+@@ -2 +2 @@
+-    crate::old_api(403)
++    crate::new_api(403)
+diff --git a/src/u404.rs b/src/u404.rs
+--- a/src/u404.rs
++++ b/src/u404.rs
+@@ -2 +2 @@
+-    crate::old_api(404)
++    crate::new_api(404)
+diff --git a/src/u405.rs b/src/u405.rs
+--- a/src/u405.rs
++++ b/src/u405.rs
+@@ -2 +2 @@
+-    crate::old_api(405)
++    crate::new_api(405)
+diff --git a/src/u406.rs b/src/u406.rs
+--- a/src/u406.rs
++++ b/src/u406.rs
+@@ -2 +2 @@
+-    crate::old_api(406)
++    crate::new_api(406)
+diff --git a/src/u407.rs b/src/u407.rs
+--- a/src/u407.rs
++++ b/src/u407.rs
+@@ -2 +2 @@
+-    crate::old_api(407)
++    crate::new_api(407)
+diff --git a/src/u408.rs b/src/u408.rs
+--- a/src/u408.rs
++++ b/src/u408.rs
+@@ -2 +2 @@
+-    crate::old_api(408)
++    crate::new_api(408)
+diff --git a/src/u409.rs b/src/u409.rs
+--- a/src/u409.rs
++++ b/src/u409.rs
+@@ -2 +2 @@
+-    crate::old_api(409)
++    crate::new_api(409)
+diff --git a/src/u410.rs b/src/u410.rs
+--- a/src/u410.rs
++++ b/src/u410.rs
+@@ -2 +2 @@
+-    crate::old_api(410)
++    crate::new_api(410)
+diff --git a/src/u411.rs b/src/u411.rs
+--- a/src/u411.rs
++++ b/src/u411.rs
+@@ -2 +2 @@
+-    crate::old_api(411)
++    crate::new_api(411)
+diff --git a/src/u412.rs b/src/u412.rs
+--- a/src/u412.rs
++++ b/src/u412.rs
+@@ -2 +2 @@
+-    crate::old_api(412)
++    crate::new_api(412)
+diff --git a/src/u413.rs b/src/u413.rs
+--- a/src/u413.rs
++++ b/src/u413.rs
+@@ -2 +2 @@
+-    crate::old_api(413)
++    crate::new_api(413)
+diff --git a/src/u414.rs b/src/u414.rs
+--- a/src/u414.rs
++++ b/src/u414.rs
+@@ -2 +2 @@
+-    crate::old_api(414)
++    crate::new_api(414)
+diff --git a/src/u415.rs b/src/u415.rs
+--- a/src/u415.rs
++++ b/src/u415.rs
+@@ -2 +2 @@
+-    crate::old_api(415)
++    crate::new_api(415)
+diff --git a/src/u416.rs b/src/u416.rs
+--- a/src/u416.rs
++++ b/src/u416.rs
+@@ -2 +2 @@
+-    crate::old_api(416)
++    crate::new_api(416)
+diff --git a/src/u417.rs b/src/u417.rs
+--- a/src/u417.rs
++++ b/src/u417.rs
+@@ -2 +2 @@
+-    crate::old_api(417)
++    crate::new_api(417)
+diff --git a/src/u418.rs b/src/u418.rs
+--- a/src/u418.rs
++++ b/src/u418.rs
+@@ -2 +2 @@
+-    crate::old_api(418)
++    crate::new_api(418)
+diff --git a/src/u419.rs b/src/u419.rs
+--- a/src/u419.rs
++++ b/src/u419.rs
+@@ -2 +2 @@
+-    crate::old_api(419)
++    crate::new_api(419)
+diff --git a/src/u420.rs b/src/u420.rs
+--- a/src/u420.rs
++++ b/src/u420.rs
+@@ -2 +2 @@
+-    crate::old_api(420)
++    crate::new_api(420)
+diff --git a/src/u421.rs b/src/u421.rs
+--- a/src/u421.rs
++++ b/src/u421.rs
+@@ -2 +2 @@
+-    crate::old_api(421)
++    crate::new_api(421)
+diff --git a/src/u422.rs b/src/u422.rs
+--- a/src/u422.rs
++++ b/src/u422.rs
+@@ -2 +2 @@
+-    crate::old_api(422)
++    crate::new_api(422)
+diff --git a/src/u423.rs b/src/u423.rs
+--- a/src/u423.rs
++++ b/src/u423.rs
+@@ -2 +2 @@
+-    crate::old_api(423)
++    crate::new_api(423)
+diff --git a/src/u424.rs b/src/u424.rs
+--- a/src/u424.rs
++++ b/src/u424.rs
+@@ -2 +2 @@
+-    crate::old_api(424)
++    crate::new_api(424)
+diff --git a/src/u425.rs b/src/u425.rs
+--- a/src/u425.rs
++++ b/src/u425.rs
+@@ -2 +2 @@
+-    crate::old_api(425)
++    crate::new_api(425)
+diff --git a/src/u426.rs b/src/u426.rs
+--- a/src/u426.rs
++++ b/src/u426.rs
+@@ -2 +2 @@
+-    crate::old_api(426)
++    crate::new_api(426)
+diff --git a/src/u427.rs b/src/u427.rs
+--- a/src/u427.rs
++++ b/src/u427.rs
+@@ -2 +2 @@
+-    crate::old_api(427)
++    crate::new_api(427)
+diff --git a/src/u428.rs b/src/u428.rs
+--- a/src/u428.rs
++++ b/src/u428.rs
+@@ -2 +2 @@
+-    crate::old_api(428)
++    crate::new_api(428)
+diff --git a/src/u429.rs b/src/u429.rs
+--- a/src/u429.rs
++++ b/src/u429.rs
+@@ -2 +2 @@
+-    crate::old_api(429)
++    crate::new_api(429)
+diff --git a/src/u430.rs b/src/u430.rs
+--- a/src/u430.rs
++++ b/src/u430.rs
+@@ -2 +2 @@
+-    crate::old_api(430)
++    crate::new_api(430)
+diff --git a/src/u431.rs b/src/u431.rs
+--- a/src/u431.rs
++++ b/src/u431.rs
+@@ -2 +2 @@
+-    crate::old_api(431)
++    crate::new_api(431)
+diff --git a/src/u432.rs b/src/u432.rs
+--- a/src/u432.rs
++++ b/src/u432.rs
+@@ -2 +2 @@
+-    crate::old_api(432)
++    crate::new_api(432)
+diff --git a/src/u433.rs b/src/u433.rs
+--- a/src/u433.rs
++++ b/src/u433.rs
+@@ -2 +2 @@
+-    crate::old_api(433)
++    crate::new_api(433)
+diff --git a/src/u434.rs b/src/u434.rs
+--- a/src/u434.rs
++++ b/src/u434.rs
+@@ -2 +2 @@
+-    crate::old_api(434)
++    crate::new_api(434)
+diff --git a/src/u435.rs b/src/u435.rs
+--- a/src/u435.rs
++++ b/src/u435.rs
+@@ -2 +2 @@
+-    crate::old_api(435)
++    crate::new_api(435)
+diff --git a/src/u436.rs b/src/u436.rs
+--- a/src/u436.rs
++++ b/src/u436.rs
+@@ -2 +2 @@
+-    crate::old_api(436)
++    crate::new_api(436)
+diff --git a/src/u437.rs b/src/u437.rs
+--- a/src/u437.rs
++++ b/src/u437.rs
+@@ -2 +2 @@
+-    crate::old_api(437)
++    crate::new_api(437)
+diff --git a/src/u438.rs b/src/u438.rs
+--- a/src/u438.rs
++++ b/src/u438.rs
+@@ -2 +2 @@
+-    crate::old_api(438)
++    crate::new_api(438)
+diff --git a/src/u439.rs b/src/u439.rs
+--- a/src/u439.rs
++++ b/src/u439.rs
+@@ -2 +2 @@
+-    crate::old_api(439)
++    crate::new_api(439)
+diff --git a/src/u440.rs b/src/u440.rs
+--- a/src/u440.rs
++++ b/src/u440.rs
+@@ -2 +2 @@
+-    crate::old_api(440)
++    crate::new_api(440)
+diff --git a/src/u441.rs b/src/u441.rs
+--- a/src/u441.rs
++++ b/src/u441.rs
+@@ -2 +2 @@
+-    crate::old_api(441)
++    crate::new_api(441)
+diff --git a/src/u442.rs b/src/u442.rs
+--- a/src/u442.rs
++++ b/src/u442.rs
+@@ -2 +2 @@
+-    crate::old_api(442)
++    crate::new_api(442)
+diff --git a/src/u443.rs b/src/u443.rs
+--- a/src/u443.rs
++++ b/src/u443.rs
+@@ -2 +2 @@
+-    crate::old_api(443)
++    crate::new_api(443)
+diff --git a/src/u444.rs b/src/u444.rs
+--- a/src/u444.rs
++++ b/src/u444.rs
+@@ -2 +2 @@
+-    crate::old_api(444)
++    crate::new_api(444)
+diff --git a/src/u445.rs b/src/u445.rs
+--- a/src/u445.rs
++++ b/src/u445.rs
+@@ -2 +2 @@
+-    crate::old_api(445)
++    crate::new_api(445)
+diff --git a/src/u446.rs b/src/u446.rs
+--- a/src/u446.rs
++++ b/src/u446.rs
+@@ -2 +2 @@
+-    crate::old_api(446)
++    crate::new_api(446)
+diff --git a/src/u447.rs b/src/u447.rs
+--- a/src/u447.rs
++++ b/src/u447.rs
+@@ -2 +2 @@
+-    crate::old_api(447)
++    crate::new_api(447)
+diff --git a/src/u448.rs b/src/u448.rs
+--- a/src/u448.rs
++++ b/src/u448.rs
+@@ -2 +2 @@
+-    crate::old_api(448)
++    crate::new_api(448)
+diff --git a/src/u449.rs b/src/u449.rs
+--- a/src/u449.rs
++++ b/src/u449.rs
+@@ -2 +2 @@
+-    crate::old_api(449)
++    crate::new_api(449)
+diff --git a/src/u450.rs b/src/u450.rs
+--- a/src/u450.rs
++++ b/src/u450.rs
+@@ -2 +2 @@
+-    crate::old_api(450)
++    crate::new_api(450)
+diff --git a/src/u451.rs b/src/u451.rs
+--- a/src/u451.rs
++++ b/src/u451.rs
+@@ -2 +2 @@
+-    crate::old_api(451)
++    crate::new_api(451)
+diff --git a/src/u452.rs b/src/u452.rs
+--- a/src/u452.rs
++++ b/src/u452.rs
+@@ -2 +2 @@
+-    crate::old_api(452)
++    crate::new_api(452)
+diff --git a/src/u453.rs b/src/u453.rs
+--- a/src/u453.rs
++++ b/src/u453.rs
+@@ -2 +2 @@
+-    crate::old_api(453)
++    crate::new_api(453)
+diff --git a/src/u454.rs b/src/u454.rs
+--- a/src/u454.rs
++++ b/src/u454.rs
+@@ -2 +2 @@
+-    crate::old_api(454)
++    crate::new_api(454)
+diff --git a/src/u455.rs b/src/u455.rs
+--- a/src/u455.rs
++++ b/src/u455.rs
+@@ -2 +2 @@
+-    crate::old_api(455)
++    crate::new_api(455)
+diff --git a/src/u456.rs b/src/u456.rs
+--- a/src/u456.rs
++++ b/src/u456.rs
+@@ -2 +2 @@
+-    crate::old_api(456)
++    crate::new_api(456)
+diff --git a/src/u457.rs b/src/u457.rs
+--- a/src/u457.rs
++++ b/src/u457.rs
+@@ -2 +2 @@
+-    crate::old_api(457)
++    crate::new_api(457)
+diff --git a/src/u458.rs b/src/u458.rs
+--- a/src/u458.rs
++++ b/src/u458.rs
+@@ -2 +2 @@
+-    crate::old_api(458)
++    crate::new_api(458)
+diff --git a/src/u459.rs b/src/u459.rs
+--- a/src/u459.rs
++++ b/src/u459.rs
+@@ -2 +2 @@
+-    crate::old_api(459)
++    crate::new_api(459)
+diff --git a/src/u460.rs b/src/u460.rs
+--- a/src/u460.rs
++++ b/src/u460.rs
+@@ -2 +2 @@
+-    crate::old_api(460)
++    crate::new_api(460)
+diff --git a/src/u461.rs b/src/u461.rs
+--- a/src/u461.rs
++++ b/src/u461.rs
+@@ -2 +2 @@
+-    crate::old_api(461)
++    crate::new_api(461)
+diff --git a/src/u462.rs b/src/u462.rs
+--- a/src/u462.rs
++++ b/src/u462.rs
+@@ -2 +2 @@
+-    crate::old_api(462)
++    crate::new_api(462)
+diff --git a/src/u463.rs b/src/u463.rs
+--- a/src/u463.rs
++++ b/src/u463.rs
+@@ -2 +2 @@
+-    crate::old_api(463)
++    crate::new_api(463)
+diff --git a/src/u464.rs b/src/u464.rs
+--- a/src/u464.rs
++++ b/src/u464.rs
+@@ -2 +2 @@
+-    crate::old_api(464)
++    crate::new_api(464)
+diff --git a/src/u465.rs b/src/u465.rs
+--- a/src/u465.rs
++++ b/src/u465.rs
+@@ -2 +2 @@
+-    crate::old_api(465)
++    crate::new_api(465)
+diff --git a/src/u466.rs b/src/u466.rs
+--- a/src/u466.rs
++++ b/src/u466.rs
+@@ -2 +2 @@
+-    crate::old_api(466)
++    crate::new_api(466)
+diff --git a/src/u467.rs b/src/u467.rs
+--- a/src/u467.rs
++++ b/src/u467.rs
+@@ -2 +2 @@
+-    crate::old_api(467)
++    crate::new_api(467)
+diff --git a/src/u468.rs b/src/u468.rs
+--- a/src/u468.rs
++++ b/src/u468.rs
+@@ -2 +2 @@
+-    crate::old_api(468)
++    crate::new_api(468)
+diff --git a/src/u469.rs b/src/u469.rs
+--- a/src/u469.rs
++++ b/src/u469.rs
+@@ -2 +2 @@
+-    crate::old_api(469)
++    crate::new_api(469)
+diff --git a/src/u470.rs b/src/u470.rs
+--- a/src/u470.rs
++++ b/src/u470.rs
+@@ -2 +2 @@
+-    crate::old_api(470)
++    crate::new_api(470)
+diff --git a/src/u471.rs b/src/u471.rs
+--- a/src/u471.rs
++++ b/src/u471.rs
+@@ -2 +2 @@
+-    crate::old_api(471)
++    crate::new_api(471)
+diff --git a/src/u472.rs b/src/u472.rs
+--- a/src/u472.rs
++++ b/src/u472.rs
+@@ -2 +2 @@
+-    crate::old_api(472)
++    crate::new_api(472)
+diff --git a/src/u473.rs b/src/u473.rs
+--- a/src/u473.rs
++++ b/src/u473.rs
+@@ -2 +2 @@
+-    crate::old_api(473)
++    crate::new_api(473)
+diff --git a/src/u474.rs b/src/u474.rs
+--- a/src/u474.rs
++++ b/src/u474.rs
+@@ -2 +2 @@
+-    crate::old_api(474)
++    crate::new_api(474)
+diff --git a/src/u475.rs b/src/u475.rs
+--- a/src/u475.rs
++++ b/src/u475.rs
+@@ -2 +2 @@
+-    crate::old_api(475)
++    crate::new_api(475)
+diff --git a/src/u476.rs b/src/u476.rs
+--- a/src/u476.rs
++++ b/src/u476.rs
+@@ -2 +2 @@
+-    crate::old_api(476)
++    crate::new_api(476)
+diff --git a/src/u477.rs b/src/u477.rs
+--- a/src/u477.rs
++++ b/src/u477.rs
+@@ -2 +2 @@
+-    crate::old_api(477)
++    crate::new_api(477)
+diff --git a/src/u478.rs b/src/u478.rs
+--- a/src/u478.rs
++++ b/src/u478.rs
+@@ -2 +2 @@
+-    crate::old_api(478)
++    crate::new_api(478)
+diff --git a/src/u479.rs b/src/u479.rs
+--- a/src/u479.rs
++++ b/src/u479.rs
+@@ -2 +2 @@
+-    crate::old_api(479)
++    crate::new_api(479)
+diff --git a/src/u480.rs b/src/u480.rs
+--- a/src/u480.rs
++++ b/src/u480.rs
+@@ -2 +2 @@
+-    crate::old_api(480)
++    crate::new_api(480)
+diff --git a/src/u481.rs b/src/u481.rs
+--- a/src/u481.rs
++++ b/src/u481.rs
+@@ -2 +2 @@
+-    crate::old_api(481)
++    crate::new_api(481)
+diff --git a/src/u482.rs b/src/u482.rs
+--- a/src/u482.rs
++++ b/src/u482.rs
+@@ -2 +2 @@
+-    crate::old_api(482)
++    crate::new_api(482)
+diff --git a/src/u483.rs b/src/u483.rs
+--- a/src/u483.rs
++++ b/src/u483.rs
+@@ -2 +2 @@
+-    crate::old_api(483)
++    crate::new_api(483)
+diff --git a/src/u484.rs b/src/u484.rs
+--- a/src/u484.rs
++++ b/src/u484.rs
+@@ -2 +2 @@
+-    crate::old_api(484)
++    crate::new_api(484)
+diff --git a/src/u485.rs b/src/u485.rs
+--- a/src/u485.rs
++++ b/src/u485.rs
+@@ -2 +2 @@
+-    crate::old_api(485)
++    crate::new_api(485)
+diff --git a/src/u486.rs b/src/u486.rs
+--- a/src/u486.rs
++++ b/src/u486.rs
+@@ -2 +2 @@
+-    crate::old_api(486)
++    crate::new_api(486)
+diff --git a/src/u487.rs b/src/u487.rs
+--- a/src/u487.rs
++++ b/src/u487.rs
+@@ -2 +2 @@
+-    crate::old_api(487)
++    crate::new_api(487)
+diff --git a/src/u488.rs b/src/u488.rs
+--- a/src/u488.rs
++++ b/src/u488.rs
+@@ -2 +2 @@
+-    crate::old_api(488)
++    crate::new_api(488)
+diff --git a/src/u489.rs b/src/u489.rs
+--- a/src/u489.rs
++++ b/src/u489.rs
+@@ -2 +2 @@
+-    crate::old_api(489)
++    crate::new_api(489)
+diff --git a/src/u490.rs b/src/u490.rs
+--- a/src/u490.rs
++++ b/src/u490.rs
+@@ -2 +2 @@
+-    crate::old_api(490)
++    crate::new_api(490)
+diff --git a/src/u491.rs b/src/u491.rs
+--- a/src/u491.rs
++++ b/src/u491.rs
+@@ -2 +2 @@
+-    crate::old_api(491)
++    crate::new_api(491)
+diff --git a/src/u492.rs b/src/u492.rs
+--- a/src/u492.rs
++++ b/src/u492.rs
+@@ -2 +2 @@
+-    crate::old_api(492)
++    crate::new_api(492)
+diff --git a/src/u493.rs b/src/u493.rs
+--- a/src/u493.rs
++++ b/src/u493.rs
+@@ -2 +2 @@
+-    crate::old_api(493)
++    crate::new_api(493)
+diff --git a/src/u494.rs b/src/u494.rs
+--- a/src/u494.rs
++++ b/src/u494.rs
+@@ -2 +2 @@
+-    crate::old_api(494)
++    crate::new_api(494)
+diff --git a/src/u495.rs b/src/u495.rs
+--- a/src/u495.rs
++++ b/src/u495.rs
+@@ -2 +2 @@
+-    crate::old_api(495)
++    crate::new_api(495)
+diff --git a/src/u496.rs b/src/u496.rs
+--- a/src/u496.rs
++++ b/src/u496.rs
+@@ -2 +2 @@
+-    crate::old_api(496)
++    crate::new_api(496)
+diff --git a/src/u497.rs b/src/u497.rs
+--- a/src/u497.rs
++++ b/src/u497.rs
+@@ -2 +2 @@
+-    crate::old_api(497)
++    crate::new_api(497)
+diff --git a/src/u498.rs b/src/u498.rs
+--- a/src/u498.rs
++++ b/src/u498.rs
+@@ -2 +2 @@
+-    crate::old_api(498)
++    crate::new_api(498)
