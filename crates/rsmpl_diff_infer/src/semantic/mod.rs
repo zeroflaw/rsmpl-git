@@ -34,6 +34,7 @@ mod methods;
 mod move_collection;
 mod move_evolve;
 mod move_evolve_sig;
+mod move_evolve_tail;
 mod move_pair_evolve;
 mod move_parts;
 mod moves;
