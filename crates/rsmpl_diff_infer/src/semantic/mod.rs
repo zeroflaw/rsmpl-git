@@ -37,6 +37,7 @@ mod move_evolve_sig;
 mod move_evolve_tail;
 mod move_pair_evolve;
 mod move_parts;
+mod move_scan;
 mod moves;
 mod pat_template;
 mod paths;
