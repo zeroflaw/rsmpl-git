@@ -105,7 +105,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 ## Loop (SPEC D.3)
 
 ```sh
-# read the target file first — note the 1-based spans to rewrite
+cargo build -p applyrs -p diffrs -p gitrs # gitrs re-execs target/debug siblings: rebuild first, else probes test a stale engine; then read target (1-based spans)
 gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
 gitrs apply --file change.rsmpl --output full.patch   # full diff while preview stays small
 gitrs apply --file change.rsmpl                       # apply for real

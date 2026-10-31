@@ -124,6 +124,7 @@ searches the whole file (SPEC 17.3).
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
+cargo build -p applyrs -p diffrs -p gitrs # gitrs re-execs target/debug siblings: rebuild first, else probes test a stale engine
 cat change.rsmpl | gitrs apply --check
 gitrs apply --file change.rsmpl --check
 gitrs apply --patch "$(cat change.rsmpl)" --check  # inline, no temp file
