@@ -2588,19 +2588,32 @@ spelling family):
 + const LIMIT: i32 = 10;
 ```
 
-Rules: names differ, everything else token-equal (generics, bounds,
-default types, ascribed types, values — preserved, never evolved;
-evolution lands in WI-26). Only the member name ident span is
-replaced. Classification is shape-first, context-second (checked
-before the method-context router: `const …` lines satisfy the fn
-lookahead, and a `const fn` method header explicitly falls through to
-methods). A pair without a `trait T {` / `impl … {` context line falls
+Rules (rename): names differ, everything else token-equal (generics,
+bounds, default types, ascribed types, values — preserved). Only the
+member name ident span is replaced. Classification is shape-first,
+context-second (checked before the method-context router: `const …`
+lines satisfy the fn lookahead, and a `const fn` method header
+explicitly falls through to methods; evolution is checked before
+rename — same-name RHS deltas route to evolution, name deltas to
+rename). A pair without a `trait T {` / `impl … {` context line falls
 through untouched (free `type`/`const` pairs stay item renames /
-definition evolutions). `# follow=uses` is rejected (C17, definition
-only in v1; follow lands in WI-27). Verification is span-local ident
-equality at the reported spans (`instantiated` verdict). Out of scope
-in v1: assoc evolution, `Self::`/`S::`/`<S as Tr>::` follow, raising,
-and inherent-`impl` domain distinctions beyond header equality.
+definition evolutions). `# follow=uses` is rejected on renames (C17,
+definition only in v1; follow lands in WI-27). Rename verification is
+span-local ident equality at the reported spans (`instantiated`).
+
+Associated-item evolution (WI-26) keeps the name and rewrites only
+the RHS/default span under the same header: `type Item = Vec<T>;` →
+`type Item = Box<[T]>;` (RHS is a type template, `T` holes ride diet
+inference; generics/bounds preserved token-equal) and
+`const MAX: i32 = E;` → `const MAX: i32 = E + 1;` (ascribed type
+preserved token-equal, value a general-expr template). Both sides
+must carry an RHS/default (a bare decl carries nothing to evolve);
+one-sided defaults and preserved-region mismatches fail loud.
+`# follow=uses` is rejected (C17, definition only). Verification is
+structural plus re-match at the reported spans (`instantiated`).
+Out of scope in v1: `Self::`/`S::`/`<S as Tr>::` follow (WI-27),
+raising (WI-28), and inherent-`impl` domain distinctions beyond
+header equality.
 
 ### 14.9 Use-path prefix renames
 

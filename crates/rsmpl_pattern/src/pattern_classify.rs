@@ -385,6 +385,15 @@ pub(crate) fn classify(
         });
     }
 
+    // Associated-item evolution (`trait Tr {` / `impl S {` context +
+    // `type Item = Vec<T>;` -> `type Item = Box<[T]>;`). Same-name
+    // template evolution; checked before renames so the
+    // identical-names gate does not swallow it (disjoint: renames own
+    // name deltas, evolution owns same-name RHS deltas).
+    if let Some(evo) = crate::pattern_assoc::classify_assoc_evolution(m, p, c, table, hunk)? {
+        return Ok(evo);
+    }
+
     // Associated-item renames (`trait Tr {` / `impl S {` context +
     // `type Item;` -> `type Output;`, `const MAX: ...` -> `const LIMIT:
     // ...`). Shape-first like member renames; checked before the

@@ -30,6 +30,7 @@ pub(crate) fn candidate_preview(
             | PatternKind::FieldRename { .. }
             | PatternKind::VariantRename { .. }
             | PatternKind::AssocRename { .. }
+            | PatternKind::AssocEvolution { .. }
             | PatternKind::TypeAliasEvolution { .. }
             | PatternKind::ConstEvolution { .. }
             | PatternKind::FieldTypeEvolution { .. }
@@ -89,6 +90,14 @@ pub(crate) fn candidate_preview(
                         "const ".to_string()
                     },
                     Some(minus_name.clone()),
+                )),
+                PatternKind::AssocEvolution { is_type, name, .. } => Some((
+                    if *is_type {
+                        "type ".to_string()
+                    } else {
+                        "const ".to_string()
+                    },
+                    Some(name.clone()),
                 )),
                 PatternKind::FieldTypeEvolution { struct_name, .. } => {
                     Some(("struct ".to_string(), Some(struct_name.clone())))
@@ -176,7 +185,8 @@ fn head_token(kind: &PatternKind) -> Option<String> {
         },
         PatternKind::Macro { minus_raw, .. } => longest_concrete_ident(minus_raw),
         PatternKind::TypeAliasEvolution { minus_sub, .. }
-        | PatternKind::ConstEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
+        | PatternKind::ConstEvolution { minus_sub, .. }
+        | PatternKind::AssocEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
         PatternKind::FieldTypeEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
         PatternKind::VariantPayloadEvolution { payload, .. } => match payload {
             rsmpl_pattern::VariantPayload::Tuple { minus_subs, .. } => minus_subs

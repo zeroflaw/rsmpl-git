@@ -37,6 +37,7 @@ mod matcher_value;
 mod ordinary;
 mod plan;
 mod postcheck;
+mod postcheck_assoc;
 mod postcheck_attr;
 mod postcheck_namehole;
 mod suggest;

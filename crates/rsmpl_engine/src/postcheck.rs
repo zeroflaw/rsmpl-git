@@ -343,35 +343,26 @@ pub(crate) fn plus_instantiated_parsed(
                 spans_count(post_text, spans, new, |h| post_text.contains(h)) >= matches.max(1),
             ),
         },
-        PatternKind::AssocRename {
-            plus_name,
-            minus_attrs,
-            plus_attrs,
-            ..
-        } => match post_parsed {
-            Some(parsed) => {
-                let preserve = rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve;
-                let (m, p): (&[String], &[String]) = if preserve {
-                    (minus_attrs, plus_attrs)
-                } else {
-                    (&[], &[])
-                };
-                Some(
-                    crate::postcheck_attr::count_spans_named_with_attrs(
-                        parsed,
-                        DefKind::Item,
-                        Some(plus_name.trim()),
-                        m,
-                        p,
-                        spans,
-                    ) >= matches.max(1),
-                )
-            }
-            None => Some(
-                spans_count(post_text, spans, plus_name, |h| post_text.contains(h))
-                    >= matches.max(1),
-            ),
-        },
+        PatternKind::AssocRename { .. } => crate::postcheck_assoc::verify_assoc_rename(
+            &compiled.kind,
+            rh,
+            post_text,
+            post_parsed,
+            spans,
+            matches,
+        )
+        .flatten(),
+        PatternKind::AssocEvolution { .. } => crate::postcheck_assoc::verify_assoc_evolution(
+            &compiled.kind,
+            rh,
+            bindings_list,
+            post_text,
+            post_parsed,
+            post_index,
+            spans,
+            matches,
+        )
+        .flatten(),
         PatternKind::UseRename { plus_path, .. } => {
             // Grouped tails (`crate::{new::Deep}`) never contain the full
             // `crate::new` prefix as a substring; the final segment is the
@@ -730,16 +721,21 @@ fn plus_pattern_hunk_with_context(
     }
 }
 
-/// True when the line opens a `struct`/`enum` container header (the
-/// WI-11b member-evolution context). Same parse discipline as the
-/// classifier: complete with `}` and accept real `syn` items only.
+/// True when the line opens a `struct`/`enum`/`trait`/`impl` container
+/// header (the WI-11b member-evolution and WI-26 assoc-evolution
+/// contexts). Same parse discipline as the classifier: complete with
+/// `}` and accept real `syn` items only.
 fn is_member_container_header(line: &str) -> bool {
     let t = line.trim();
     if !t.ends_with('{') {
         return false;
     }
-    syn::parse_str::<syn::Item>(&format!("{t}}}"))
-        .is_ok_and(|it| matches!(it, syn::Item::Struct(_) | syn::Item::Enum(_)))
+    syn::parse_str::<syn::Item>(&format!("{t}}}")).is_ok_and(|it| {
+        matches!(
+            it,
+            syn::Item::Struct(_) | syn::Item::Enum(_) | syn::Item::Trait(_) | syn::Item::Impl(_)
+        )
+    })
 }
 
 /// Line-range intersection (1-based inclusive on both sides).
@@ -803,7 +799,7 @@ fn plus_bindings_equal(
 type SpanBinding<'a> = ((u32, u32), &'a HashMap<String, String>);
 
 #[allow(clippy::too_many_arguments)]
-fn verify_plus_pattern_at_spans(
+pub(crate) fn verify_plus_pattern_at_spans(
     rh: &rsmpl_patch::RsmplHunk,
     plus_lines: &[String],
     bindings_list: &[HashMap<String, String>],
@@ -892,6 +888,15 @@ fn verify_plus_pattern_at_spans(
             )
             .ok()?
         }
+        PatternKind::AssocEvolution { .. } => crate::matcher_assoc::apply_assoc_evolution_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
         _ => return None,
     };
     if spans.is_empty() {
@@ -944,6 +949,7 @@ fn verify_plus_pattern_at_spans(
 /// WI-1.4 definition-ident classes the syn collector distinguishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DefKind {
+    #[allow(dead_code)]
     /// Free functions and impl/trait methods (`fn` idents).
     Fn,
     /// Item names (struct/enum/trait/union/type/const/static/mod) plus
@@ -1184,7 +1190,7 @@ fn normalize_ws(s: &str) -> String {
 /// WI-1.1 span-local check: count of reported spans whose post-image lines
 /// contain `needle`. Empty spans fall back to the whole-file `global`
 /// closure (callers without spans keep the old posture, never a new veto).
-fn spans_count(
+pub(crate) fn spans_count(
     post_text: &str,
     spans: &[(u32, u32)],
     needle: &str,

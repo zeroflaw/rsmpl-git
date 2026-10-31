@@ -611,6 +611,7 @@ fn apply_inner(
                                 old,
                             ),
                             PatternKind::AssocRename { .. } => Vec::new(),
+                            PatternKind::AssocEvolution { .. } => Vec::new(),
                             PatternKind::ItemRename {
                                 minus_name, kind, ..
                             } => {
@@ -1007,6 +1008,14 @@ fn apply_rsmpl_hunk(
             edits,
         )
         .map(|n| (n, vec![empty(); n])),
+        PatternKind::AssocEvolution { .. } => matcher_assoc::apply_assoc_evolution_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
         PatternKind::TypeAliasEvolution { .. } => matcher_value::apply_type_alias_hunk(
             parsed,
             &state.original,

@@ -222,6 +222,27 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Associated-item evolution (`trait Tr {` / `impl S {` context +
+    /// `type Item = Vec<T>;` → `type Item = Box<[T]>;`,
+    /// `const MAX: i32 = E;` → `const MAX: i32 = E + 1;`): the member
+    /// name is concrete and preserved, the RHS/default is a template
+    /// (type template for `type`, general-expr template for `const`).
+    /// Generics, bounds, and ascribed types are preserved token-equal.
+    /// `# follow=uses` is rejected (C17). Reports `postcondition`.
+    AssocEvolution {
+        impl_header: String,
+        want_trait: bool,
+        is_type: bool,
+        name: String,
+        /// Normalized ascribed type for `const` (`""` for `type`).
+        ty: String,
+        minus_sub: String,
+        plus_raw: String,
+        /// Placeholder idents per metavariable, for substitution checks.
+        placeholders: Vec<(String, String)>,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -615,6 +636,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::FieldRename { .. } => "field-rename",
             PatternKind::VariantRename { .. } => "variant-rename",
             PatternKind::AssocRename { .. } => "assoc-rename",
+            PatternKind::AssocEvolution { .. } => "assoc-evolution",
             PatternKind::TypeAliasEvolution { .. } => "type-alias evolution",
             PatternKind::ConstEvolution { .. } => "const/static evolution",
             PatternKind::FieldTypeEvolution { .. } => "field-type evolution",
