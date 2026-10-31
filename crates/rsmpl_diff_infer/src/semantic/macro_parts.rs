@@ -407,3 +407,175 @@ pub(crate) fn macro_raw_args(line: &str) -> Option<String> {
     inner = inner.strip_suffix(';').unwrap_or(inner).trim_end();
     Some(inner.strip_suffix(close)?.to_string())
 }
+
+/// WI-17b: textual macro invocations of one (possibly non-parsing) line
+/// in source order: `(path, open, full_text)`.
+///
+/// Unlike [`line_macros`] (which needs a `Stmt`/`Expr` parse and never
+/// sees `macro_rules!` arm lines), this scans the raw text with the
+/// engine's rule-body discipline: ident-shaped `path!(args)` /
+/// `path![args]` / `path!{args}`, string- and comment-aware, balanced
+/// delimiters. Both outer and nested inners are reported in scan order
+/// (a line like `outer!(inner!(1))` yields two entries — the caller
+/// vetoes multi-delta lines as depth-2, mirroring the engine which
+/// mints both candidates).
+pub(crate) fn scan_line_macros(line: &str) -> Vec<(String, char, String)> {
+    let mut out = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment: u32 = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_block_comment > 0 {
+            if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                in_block_comment += 1;
+                i += 2;
+                continue;
+            }
+            if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                in_block_comment -= 1;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            in_block_comment = 1;
+            i += 2;
+            continue;
+        }
+        if b != b'!' {
+            i += 1;
+            continue;
+        }
+        let mut pe = i;
+        while pe > 0 && bytes[pe - 1].is_ascii_whitespace() {
+            pe -= 1;
+        }
+        let mut ps = pe;
+        loop {
+            let mut q = ps;
+            while q > 0 && (bytes[q - 1] == b'_' || bytes[q - 1].is_ascii_alphanumeric()) {
+                q -= 1;
+            }
+            if q == ps {
+                break;
+            }
+            if super::ident_len(&line[q..ps]).is_none_or(|n| n != ps - q) {
+                break;
+            }
+            ps = q;
+            if ps >= 2 && bytes[ps - 1] == b':' && bytes[ps - 2] == b':' {
+                if ps - 2 == 0 || bytes[ps - 3] == b'_' || bytes[ps - 3].is_ascii_alphanumeric() {
+                    // Only continue past `::` when directly attached
+                    // (`a :: b` is not path syntax).
+                    let r = ps - 2;
+                    ps = r;
+                    continue;
+                }
+                break;
+            }
+            break;
+        }
+        let path_text = line.get(ps..pe).unwrap_or("").trim().to_string();
+        let valid = !path_text.is_empty()
+            && path_text
+                .split("::")
+                .all(|s| !s.is_empty() && super::ident_len(s).is_some_and(|n| n == s.len()));
+        if !valid {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let (open, close) = match bytes.get(j) {
+            Some(b'(') => ('(', ')'),
+            Some(b'[') => ('[', ']'),
+            Some(b'{') => ('{', '}'),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let mut depth: i32 = 0;
+        let mut k = j;
+        let mut s_str = false;
+        let mut s_esc = false;
+        let mut close_at: Option<usize> = None;
+        while k < bytes.len() {
+            let c = bytes[k];
+            if s_str {
+                if s_esc {
+                    s_esc = false;
+                } else if c == b'\\' {
+                    s_esc = true;
+                } else if c == b'"' {
+                    s_str = false;
+                }
+                k += 1;
+                continue;
+            }
+            if c == b'"' {
+                s_str = true;
+                k += 1;
+                continue;
+            }
+            if c as char == open {
+                depth += 1;
+            } else if c as char == close {
+                depth -= 1;
+                if depth == 0 {
+                    close_at = Some(k);
+                    break;
+                }
+            }
+            k += 1;
+        }
+        let Some(ca) = close_at else {
+            i += 1;
+            continue;
+        };
+        let full = line.get(ps..ca + 1).unwrap_or("").to_string();
+        // Skip a bare `macro_rules!` self-match when scanning a
+        // definition header line (rule bodies never spell it).
+        if path_text != "macro_rules" {
+            out.push((path_text, open, full));
+        }
+        i += 1;
+    }
+    out
+}

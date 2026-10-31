@@ -728,11 +728,28 @@ pub(crate) fn compress_section(
         {
             rewritten = Some(interior);
         }
+        // WI-17b: rule-body interiors (inner delta inside
+        // `macro_rules!` arms) over the interior output: already
+        // semantic (`rule=`) hunks are never re-harvested, so claimed
+        // pairs cannot double-fire.
+        let after_rule_body = if let Some(rule_body) =
+            super::macro_rule_body::try_macro_rule_body_section(
+                rewritten.as_deref().unwrap_or(section),
+                path,
+                used_rules,
+                file_old,
+                &mut fired,
+            ) {
+            rewritten = Some(rule_body);
+            rewritten.as_deref().unwrap_or(section)
+        } else {
+            rewritten.as_deref().unwrap_or(section)
+        };
         // WI-7a: enclosing-macro interiors (changed lines inside one
         // shared macro invocation) over the interior output: already
         // semantic (`rule=`) hunks are never re-harvested, so claimed
         // pairs cannot double-fire.
-        let after_interior = rewritten.as_deref().unwrap_or(section);
+        let after_interior = after_rule_body;
         if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
             after_interior,
             path,
@@ -857,10 +874,19 @@ pub(crate) fn compress_section(
     if let Some(interior) =
         super::try_macro_interior_section(section, path, used_rules, file_old, &mut verb_fired)
     {
-        // WI-7a: enclosing-macro interiors over the interior output
-        // (already-semantic hunks are never re-harvested).
-        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
+        // WI-17b: rule-body interiors over the interior output, then
+        // WI-7a enclosing over the rule-body output (already-semantic
+        // hunks are never re-harvested).
+        let after_rule = super::macro_rule_body::try_macro_rule_body_section(
             &interior,
+            path,
+            used_rules,
+            file_old,
+            &mut verb_fired,
+        )
+        .unwrap_or_else(|| interior.clone());
+        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
+            &after_rule,
             path,
             used_rules,
             file_old,
@@ -879,14 +905,53 @@ pub(crate) fn compress_section(
         }
         commit_prov(
             prov,
-            &interior,
+            &after_rule,
             section,
             path,
             &verb_fired,
             &changed,
             file_old,
         );
-        return Some(interior);
+        return Some(after_rule);
+    }
+    // WI-17b: the interior sweep declined the section whole — the
+    // rule-body sweep still sees the original ordinary hunks.
+    if let Some(rule_body) = super::macro_rule_body::try_macro_rule_body_section(
+        section,
+        path,
+        used_rules,
+        file_old,
+        &mut verb_fired,
+    ) {
+        // WI-7a enclosing over the rule-body output.
+        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
+            &rule_body,
+            path,
+            used_rules,
+            file_old,
+            &mut verb_fired,
+        ) {
+            commit_prov(
+                prov,
+                &enclosing,
+                section,
+                path,
+                &verb_fired,
+                &changed,
+                file_old,
+            );
+            return Some(enclosing);
+        }
+        commit_prov(
+            prov,
+            &rule_body,
+            section,
+            path,
+            &verb_fired,
+            &changed,
+            file_old,
+        );
+        return Some(rule_body);
     }
     // WI-7a: the interior sweep declined the section whole — the
     // enclosing sweep still sees the original ordinary hunks.

@@ -36,6 +36,7 @@ mod literal_frame;
 mod macro_enclosing;
 mod macro_hetero;
 mod macro_parts;
+mod macro_rule_body;
 mod macro_rules;
 mod macros;
 mod member;

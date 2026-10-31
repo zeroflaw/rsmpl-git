@@ -94,6 +94,250 @@ impl<'ast, 'b> Visit<'ast> for MacroCollector<'b> {
     }
 }
 
+/// WI-17b: inner invocations inside `macro_rules!` bodies.
+///
+/// `syn::visit` never enters a `macro_rules!` token stream, so rule-body
+/// sites (`inner!(1)` on an arm line) are invisible to the normal
+/// collector. This textual scan mints the same `MacroCandidate`s from
+/// the definition slice byte range: `path!(args)` / `path![args]` /
+/// `path!{args}` with ident-shaped segments, string/comment-aware
+/// balanced delimiters, and `split_macro_args` bodies. The outer
+/// `macro_rules!` self-match is skipped. Nested-inside-nested inners
+/// are also minted (they exist in the text); the rule-body detector
+/// declines to emit them (depth-2 veto), while authored outer-concrete
+/// hunks keep exact-match semantics.
+fn collect_rule_body_macros(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    out: &mut Vec<MacroCandidate>,
+) {
+    for item in &parsed.items {
+        let syn::Item::Macro(m) = item else { continue };
+        let is_rules = m.mac.path.leading_colon.is_none()
+            && m.mac.path.segments.len() == 1
+            && m.mac.path.segments[0].ident == "macro_rules"
+            && matches!(m.mac.path.segments[0].arguments, syn::PathArguments::None);
+        if !is_rules {
+            continue;
+        }
+        let span = m.mac.span();
+        let (Some(start), Some(end)) = (
+            index.offset(span.start().line as u32, span.start().column),
+            index.offset(span.end().line as u32, span.end().column),
+        ) else {
+            continue;
+        };
+        let Some(slice) = original.get(start..end) else {
+            continue;
+        };
+        scan_inner_macros(slice, start, index, out);
+    }
+}
+
+fn rule_body_ident_len(s: &str) -> Option<usize> {
+    let mut chars = s.char_indices();
+    let (i, c) = chars.next()?;
+    if c != '_' && !c.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut len = i + c.len_utf8();
+    for (i, c) in chars {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            len = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Some(len)
+}
+
+/// Scan one `macro_rules!` definition slice for inner invocations.
+/// `base` is the absolute byte offset of `slice[0]` in the file.
+fn scan_inner_macros(slice: &str, base: usize, index: &LineIndex, out: &mut Vec<MacroCandidate>) {
+    let bytes = slice.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment: u32 = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_block_comment > 0 {
+            if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                in_block_comment += 1;
+                i += 2;
+                continue;
+            }
+            if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                in_block_comment -= 1;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            in_block_comment = 1;
+            i += 2;
+            continue;
+        }
+        if b != b'!' {
+            i += 1;
+            continue;
+        }
+        // Walk backwards over whitespace to the path end, then over
+        // `ident(::ident)*` to the path start.
+        let mut pe = i;
+        while pe > 0 && bytes[pe - 1].is_ascii_whitespace() {
+            pe -= 1;
+        }
+        let mut ps = pe;
+        loop {
+            let mut q = ps;
+            while q > 0 && (bytes[q - 1] == b'_' || bytes[q - 1].is_ascii_alphanumeric()) {
+                q -= 1;
+            }
+            if q == ps {
+                break;
+            }
+            if rule_body_ident_len(&slice[q..ps]).is_none_or(|n| n != ps - q) {
+                break;
+            }
+            ps = q;
+            // Optional `::` separator.
+            if ps >= 2 && bytes[ps - 1] == b':' && bytes[ps - 2] == b':' {
+                // `::` needs an ident on its left to continue.
+                let mut r = ps - 2;
+                while r > 0 && bytes[r - 1].is_ascii_whitespace() {
+                    r -= 1;
+                }
+                // Only continue when another ident directly precedes
+                // (whitespace inside `::` is not valid path syntax).
+                if r == ps - 2 {
+                    ps = r;
+                    continue;
+                }
+                break;
+            }
+            break;
+        }
+        let path_text = slice.get(ps..pe).unwrap_or("").trim().to_string();
+        let valid_path = !path_text.is_empty()
+            && path_text != "macro_rules"
+            && path_text
+                .split("::")
+                .all(|s| !s.is_empty() && rule_body_ident_len(s).is_some_and(|n| n == s.len()));
+        if !valid_path {
+            i += 1;
+            continue;
+        }
+        // Forward: optional whitespace, then the open delimiter.
+        let mut j = i + 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let (open, close) = match bytes.get(j) {
+            Some(b'(') => (b'(', b')'),
+            Some(b'[') => (b'[', b']'),
+            Some(b'{') => (b'{', b'}'),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        // Balanced close, string-aware (char literals deliberately
+        // ignored — T419 precedent: unbalanced `'` bails the scan).
+        let mut depth: i32 = 0;
+        let mut k = j;
+        let mut s_str = false;
+        let mut s_esc = false;
+        let mut close_at: Option<usize> = None;
+        while k < bytes.len() {
+            let c = bytes[k];
+            if s_str {
+                if s_esc {
+                    s_esc = false;
+                } else if c == b'\\' {
+                    s_esc = true;
+                } else if c == b'"' {
+                    s_str = false;
+                }
+                k += 1;
+                continue;
+            }
+            if c == b'"' {
+                s_str = true;
+                k += 1;
+                continue;
+            }
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    close_at = Some(k);
+                    break;
+                }
+            }
+            k += 1;
+        }
+        let Some(ca) = close_at else {
+            i += 1;
+            continue;
+        };
+        let body_text = slice.get(j + 1..ca).unwrap_or("").to_string();
+        let start = base + ps;
+        let end = base + ca + 1;
+        if start >= end || end > base + slice.len() {
+            i += 1;
+            continue;
+        }
+        out.push(MacroCandidate {
+            start,
+            end,
+            start_line: index.line_of(start),
+            end_line: index.line_of(end.saturating_sub(1)),
+            path_text,
+            body_text: body_text.clone(),
+            body_args: split_macro_args(&body_text),
+        });
+        // Step past the `!` so nested inners inside this body are also
+        // visited (the detector vetoes depth-2 emission; the engine
+        // keeps exact-match semantics for authored outer forms).
+        let _ = open;
+        i += 1;
+    }
+}
+
 /// Split macro body text into top-level comma-separated token groups.
 fn split_macro_args(body: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -320,6 +564,9 @@ pub fn apply_macro_hunk(
         out: Vec::new(),
     };
     collector.visit_file(parsed);
+    let mut extra = Vec::new();
+    collect_rule_body_macros(parsed, original, index, &mut extra);
+    collector.out.extend(extra);
     let mut cands = collector.out;
     cands.sort_by_key(|c| (c.start, c.end));
 

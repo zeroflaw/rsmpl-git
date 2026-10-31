@@ -4406,6 +4406,13 @@ argument is rejected, not deferred). `macro_rules!` definitions are
 items (Section 14.8), never token-tree invocation patterns: a
 `- macro_rules! Old` / `+ macro_rules! New` pair renames the definition
 ident, while `- Old!(...)` / `+ New!(...)` renames invocations.
+Since WI-17b the engine additionally mints invocation candidates one
+textual level inside `macro_rules!` bodies (`syn::visit` never enters
+the token stream, so a string/comment-aware scan over the definition
+slice provides them): `- inner!(1)` / `+ inner!(2)` matches the two
+arm-body sites structurally, with the same per-argument semantics as
+above. Nested-inside-nested inners are minted but never emitted
+(depth-2 stays ordinary).
 
 Engine-verbatim shape rejections (both exit 2; both carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit nulls):
 
@@ -7035,7 +7042,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
    `call_literal`, `call_peel`, `call_peel_section`,
-   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `item_intent`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
+   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `item_intent`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -7882,6 +7889,20 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    atomicity, same section-global T375 (no stranded joins in v1; tiny
    templates lose to ordinary hunks by design). `macro_rules!`
    definitions never enclose (WI-7b owns that kind).
+- Rule-body interior sweep (WI-17b): N >= 2 arm-line pairs whose
+  textual macro sets match in count (>= 1) with every position sharing
+  path + delimiter and exactly one position differing in full text
+  (each delta text occurring exactly once per line, plus line equals
+  minus with that one substring replaced) group by identical rendered
+  inner pairs (`- inner!(1)` / `+ inner!(2)`, concrete-only, no
+  hetero, no stranded claims) with the same real-pair totality
+  (`template_pair_holds`, now proving via the rule-body engine half),
+  hunk atomicity, and section-global T375 as the interior sweep.
+  Whole-line macro pairs never key here (the interior sweep owns them
+  -- disjoint by construction); multi-delta lines (e.g.
+  `outer!(inner!(1))` to `outer!(inner!(2))`, where outer and inner
+  both differ) veto as depth-2 and stay ordinary. Detector name
+  `macro_rule_body`.
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

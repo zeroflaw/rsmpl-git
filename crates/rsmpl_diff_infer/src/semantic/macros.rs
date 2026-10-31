@@ -1134,24 +1134,22 @@ mod tests {
     }
 
     #[test]
-    fn macro_rule_body_interior_stays_ordinary() {
-        // WI-17b split pin: edits inside `macro_rules!` bodies have no
-        // engine shape (`syn::visit` never enters the token stream), so
-        // two identical in-rule-body pairs stay ordinary. The engine
-        // half + arm-frame emission belong to WI-17b.
+    fn macro_rule_body_interior_fires() {
+        // WI-17b: the engine now mints rule-body candidates and the
+        // rule-body detector raises the inner pair.
         let raw = section(
             "f.rs",
-            "@@ -2,2 +2,2 @@\n macro_rules! foo {\n-    ($x:expr) => { inner!(1); };\n-    ($y:expr) => { inner!(1); };\n+    ($x:expr) => { inner!(2); };\n+    ($y:expr) => { inner!(2); };\n }\n",
+            "@@ -1,4 +1,4 @@\n macro_rules! foo {\n-    ($x:expr) => { inner!(1); };\n-    ($y:expr) => { inner!(1); };\n+    ($x:expr) => { inner!(2); };\n+    ($y:expr) => { inner!(2); };\n }\n",
         );
         let pre = pre_map(&[(
             "f.rs",
             "macro_rules! foo {\n    ($x:expr) => { inner!(1); };\n    ($y:expr) => { inner!(1); };\n}\n",
         )]);
-        assert!(
-            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none(),
-            "rule-body interiors stay ordinary pending WI-17b"
-        );
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("rule-body interiors must fire post WI-17b");
+        validated_live(&out, &pre);
+        assert!(out.contains("- inner!(1)\n"), "got: {out}");
+        assert!(out.contains("+ inner!(2)\n"), "got: {out}");
     }
 
     #[test]
