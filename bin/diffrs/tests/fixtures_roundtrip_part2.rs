@@ -435,5 +435,64 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic == normalized,
             "[{name}] ordinary passthrough must equal normalized native"
         );
+    } else if name == "100-field-rename-fires" {
+        // WI-9b: 1 field definition + 5 use lines compress to the
+        // definition hunk with `# follow=uses`; the harness checks the
+        // tree legs (--check + lowered git apply).
+        assert!(
+            semantic.contains("# follow=uses"),
+            "member rename must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("  struct ConnectionConfig {"),
+            "field header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- request_timeout_milliseconds: u32"),
+            "def minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ response_deadline_milliseconds: u32"),
+            "def plus must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-    cfg.request_timeout_milliseconds"),
+            "use lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "member rename must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "101-variant-rename-fires" {
+        // WI-9b: 1 variant definition + 4 use lines compress to the
+        // definition hunk with `# follow=uses`.
+        assert!(
+            semantic.contains("# follow=uses"),
+            "member rename must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("  enum ConnectionState {"),
+            "variant header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- EstablishedConnection\n"),
+            "def minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ ActiveSession\n"),
+            "def plus must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-    let first = ConnectionState::EstablishedConnection(1);"),
+            "use lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "member rename must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     }
 }

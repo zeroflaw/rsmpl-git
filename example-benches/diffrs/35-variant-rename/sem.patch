@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,4 @@ rule=r1
+# allow=many
+# follow=uses
+  enum ConnectionState {
+- EstablishedConnection
++ ActiveSession

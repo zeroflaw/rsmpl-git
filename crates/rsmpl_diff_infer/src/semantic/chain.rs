@@ -75,6 +75,16 @@ pub(crate) fn run_pair_chain(
     {
         return Some((tm, "trait_method_rename"));
     }
+    // WI-9b: field/variant member rename (one definition pair plus
+    // use-site lines sharing the ident delta, follow emission with a
+    // scratch-apply line-equality probe). Disjoint from the trait
+    // detector (those own `;`/`{` fn headers; this owns `:`/bare-ident
+    // pairs) — immediately after it, before the method sweeps.
+    if let Some(member) =
+        super::try_member_rename(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((member, "member_rename"));
+    }
     if let Some(m2f) =
         super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {

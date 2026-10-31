@@ -2362,7 +2362,7 @@ Rules:
 - Variants: expression/pattern paths spelling `E::Old` (any leading prefix, plus `Self::Old` inside an `impl` of `E`) and `use …::E::Old` import segments. Bare `Old` (possibly import-spelled via `use E::Old` or a glob) never rewrites: it is opaque — veto without fallback, skip + report with it. `qself` paths and macro interiors mentioning the member name are opaque like scalar renames (veto/skip, never guessed).
 - Orphan evidence mirrors scalar renames: a definition-only member rename lists every provable use line (plus bare-`Old` spellings and macro mentions for variants) as `orphans` while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped` owns that signal).
 
-Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, and any use attribution beyond the syntactic shapes above (`diffrs` emits no member renames; raising is WI-9b).
+Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, cross-file definition+uses intents (each raised section is one file), multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename`, SPEC D.4; everything else stays ordinary).
 
 ### 14.9 Use-path prefix renames
 
@@ -6567,7 +6567,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `static`, vis echoed) compress to bare `- kind Old` /
   `+ kind New` pairs. Single indented (method/block-level) and
   single generic-fn lines are excluded (no token win as a slot hunk).
-- Field/variant member rename (authored only, WI-9a; no detector yet — raising is WI-9b): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New`). The plus-instantiation postcondition carries the same contains-posture as item renames (the new ident must appear in the post-image).
+- Field/variant member rename (WI-9a authored, WI-9b raised, single-file): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same contains-posture as item renames (the new ident must appear in the post-image). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). Shadowed definitions (a second same-named member anywhere), bare-`Old` spellings, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary; cross-file definition+uses intents stay ordinary (future work).
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
   every pair is a single-pair item rename above (including the plain
