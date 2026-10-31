@@ -17,6 +17,7 @@
 pub(crate) mod antiunify;
 pub(crate) mod antiunify_types;
 mod arg_template;
+pub(crate) mod assoc;
 pub(crate) mod attr_sweep;
 mod block_headers;
 mod calls;
@@ -81,6 +82,7 @@ pub(crate) use methods::{
 };
 pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
+pub(crate) use assoc::try_assoc_rename;
 pub(crate) use attr_sweep::{try_attr_replace_sweep, try_attr_sweep_section};
 pub(crate) use control_template::try_control_template_sweep;
 pub(crate) use definition_addition::{try_definition_addition, try_definition_addition_follow};

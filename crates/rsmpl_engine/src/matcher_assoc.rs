@@ -831,6 +831,43 @@ mod tests {
     }
 
     #[test]
+    fn sibling_follow_suppresses_def_only_orphans() {
+        // WI-28: a two-hunk intent (trait decl + follow, impl decl
+        // definition-only, shared rule) reports no orphans — the
+        // follow hunk owns the file-wide use set.
+        let src = "trait Tr {\n    type Item;\n    fn make() -> Self::Item;\n}\nstruct S;\nimpl Tr for S {\n    type Item = u8;\n    fn make() -> Self::Item {\n        1\n    }\n}\n";
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# follow=uses\n  trait Tr {\n- type Item;\n+ type Output;\n@@ -6,6 +6,6 @@ rule=r\n  impl Tr for S {\n- type Item = u8;\n+ type Output = u8;\n";
+        let (files, report) = apply_files(p, &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("type Output;"), "got: {out}");
+        assert!(out.contains("type Output = u8;"), "got: {out}");
+        assert!(out.contains("Self::Output"), "got: {out}");
+        assert!(
+            report.rules.iter().all(|r| r.orphans.is_empty()),
+            "got: {:?}",
+            report.rules.iter().map(|r| &r.orphans).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn def_only_hunk_without_follow_sibling_reports_orphans() {
+        // The suppression above is sibling-scoped: a lone
+        // definition-only hunk still names what it leaves behind.
+        let src = "trait Tr {\n    type Item;\n}\nfn f() -> Tr::Item {\n    1\n}\n";
+        let p = patch("trait Tr {", "type Item;", "type Output;");
+        let (files, report) = apply_files(&p, &[("src/lib.rs", src)]).unwrap();
+        assert!(files["src/lib.rs"].contains("type Output;"));
+        assert!(
+            report.rules[0]
+                .orphans
+                .iter()
+                .any(|o| o.text.contains("Tr::Item")),
+            "got: {:?}",
+            report.rules[0].orphans
+        );
+    }
+
+    #[test]
     fn sweep_fires_across_blocks() {
         let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# sweep\n# allow=many\n  trait Tr {\n- type Item;\n+ type Output;\n";
         let src = "trait Tr {\n    type Item;\n}\ntrait Tr2 {\n    type Item;\n}\n";

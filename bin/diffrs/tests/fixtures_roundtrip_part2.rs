@@ -719,6 +719,49 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.contains("+ E::C => 30,"),
             "second hetero body stays per-site, got: {semantic}"
         );
+    } else if name == "116-assoc-rename-fires" {
+        // WI-28: trait decl + 2 impl decls + `::Item` use tails sharing
+        // one delta compress to one hunk per block with follow on the
+        // first; the re-apply is byte-identical (harness asserts).
+        assert!(
+            semantic.contains("  trait Tr {"),
+            "trait header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- type Item;"),
+            "trait decl pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- type Item = u8;"),
+            "impl decl pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# follow=uses"),
+            "intent must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1"),
+            "shared rule must carry, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "assoc intent must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "117-assoc-rename-bare-use-stays-ordinary" {
+        // WI-28 boundary: a bare `Item` use (no `::` tail) is opaque
+        // to the engine follow, so the section declines and stays
+        // ordinary (normalized passthrough, never half-semantic).
+        assert!(
+            !semantic.contains("rule="),
+            "bare-use class must stay ordinary, got: {semantic}"
+        );
+        let normalized = normalize_native(native_input);
+        assert!(
+            semantic == normalized,
+            "[{name}] ordinary passthrough must equal normalized native"
+        );
     } else if name == "115-variant-add-unanchored-bare-ordinary" {
         // WI-12d boundary: a bare arm with no `use E::*` glob in scope
         // declines the group — the definition still fires alone and the

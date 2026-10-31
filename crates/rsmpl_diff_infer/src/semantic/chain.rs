@@ -106,6 +106,18 @@ pub(crate) fn run_pair_chain(
     {
         return Some((member, "member_rename"));
     }
+    // WI-13 remainder 3: associated-item rename (trait/impl `type`/
+    // `const` defs plus `::Old` use tails, one hunk per block with
+    // `# follow=uses` on the first). Disjoint from the member
+    // detector (those own field/variant lines outside trait/impl
+    // blocks or without a `type`/`const` head; this requires both)
+    // and from definition evolution (those own same-name RHS
+    // deltas; this requires a name delta).
+    if let Some(assoc) =
+        super::try_assoc_rename(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((assoc, "assoc_rename"));
+    }
     // WI-12 slice 1: definition-value evolution (alias/const/field/
     // payload/discriminant, uniform delta) — immediately after the
     // member rename (those own ident deltas; this owns same-identity

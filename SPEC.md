@@ -2632,8 +2632,23 @@ must carry an RHS/default (a bare decl carries nothing to evolve);
 one-sided defaults and preserved-region mismatches fail loud.
 `# follow=uses` is rejected (C17, definition only). Verification is
 structural plus re-match at the reported spans (`instantiated`).
-Out of scope in v1: raising (WI-28), and inherent-`impl` domain
-distinctions beyond header equality.
+
+Raising (detector `assoc_rename`, WI-28, single-file): K ≥ 1
+definition pairs in `trait`/`impl` blocks (one per block, same kind
+and ident delta, per-pair suffixes preserved) plus use-site lines
+sharing the delta through a `::Old` tail compress to one hunk per
+enclosing block (verbatim headers from the pre-image, shared rule)
+with `# follow=uses` on the first hunk; the scratch-apply
+line-equality probe is the totality (the authored emission applied
+to the pre-image must reproduce exactly the native plus lines at
+the changed sites with every other line byte-identical). Bare-`Old`
+uses (no `::` tail), two-trait same-name classes (two intents, never
+grouped), hetero kinds, and multi-def blocks decline to ordinary. A
+definition-only hunk whose intent sibling (same rule, any file)
+carries the follow reports no orphans of its own (the follow hunk
+owns the use set). Cross-file intents stay ordinary (WI-15).
+Out of scope in v1: inherent-`impl` domain distinctions beyond header
+equality.
 
 ### 14.9 Use-path prefix renames
 
@@ -7037,6 +7052,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `+ kind New` pairs. Single indented (method/block-level) and
   single generic-fn lines are excluded (no token win as a slot hunk).
 - Field/variant member rename (WI-9a authored, WI-9b raised, single-file): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). Shadowed definitions (a second same-named member anywhere), bare-`Old` spellings, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary; cross-file definition+uses intents stay ordinary (future work).
+- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). Emission is one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges) with `# follow=uses` on the first hunk; the scratch-apply line-equality probe is the totality. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline to ordinary; cross-file intents stay ordinary (future work). Detector name `assoc_rename`.
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
   every pair is a single-pair item rename above (including the plain

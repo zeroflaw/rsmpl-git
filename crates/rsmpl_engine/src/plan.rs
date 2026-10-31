@@ -563,7 +563,19 @@ fn apply_inner(
                     }
                     // WI-7c: plain renames report the uses they leave behind.
                     // Follow hunks never carry orphans (uses rewrite there).
-                    let orphans = if !rh.follows_uses() && found > 0 {
+                    // WI-28: a definition-only assoc hunk whose intent
+                    // sibling (same rule, any file) carries the follow
+                    // reports no orphans of its own — the follow hunk
+                    // owns the file-wide use set, and per-hunk orphans
+                    // would duplicate sites it already rewrote.
+                    let sibling_follow = matches!(&compiled.kind, PatternKind::AssocRename { .. })
+                        && patch.files.iter().any(|sec| {
+                            sec.hunks.iter().any(|h| match h {
+                                Hunk::Rsmpl(srh) => srh.rule_name() == rule && srh.follows_uses(),
+                                _ => false,
+                            })
+                        });
+                    let orphans = if !rh.follows_uses() && !sibling_follow && found > 0 {
                         match &compiled.kind {
                             PatternKind::Fn { minus_name, .. } => {
                                 let renamed: Vec<(usize, usize)> = file_edits

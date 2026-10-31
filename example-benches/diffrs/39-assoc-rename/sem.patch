@@ -1,0 +1,19 @@
+diff --git src/lib.rs
+@@ -1,4 @@ rule=r1
+# allow=many
+# follow=uses
+  trait Tr {
+- type Item;
++ type Output;
+diff --git src/lib.rs
+@@ -8,6 @@ rule=r1
+# allow=many
+  impl Tr for S {
+- type Item = u8;
++ type Output = u8;
+diff --git src/lib.rs
+@@ -17,6 @@ rule=r1
+# allow=many
+  impl Tr for T {
+- type Item = u16;
++ type Output = u16;

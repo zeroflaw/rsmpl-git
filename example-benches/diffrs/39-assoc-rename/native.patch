@@ -1,0 +1,30 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,2 +2,2 @@ trait Tr {
+-    type Item;
+-    fn make() -> Self::Item;
++    type Output;
++    fn make() -> Self::Output;
+@@ -9,3 +9,3 @@ impl Tr for S {
+-    type Item = u8;
+-    fn make() -> Self::Item {
+-        Self::Item::default()
++    type Output = u8;
++    fn make() -> Self::Output {
++        Self::Output::default()
+@@ -18,3 +18,3 @@ impl Tr for T {
+-    type Item = u16;
+-    fn make() -> S::Item {
+-        S::Item::default()
++    type Output = u16;
++    fn make() -> S::Output {
++        S::Output::default()
+@@ -24,2 +24,2 @@ impl Tr for T {
+-fn first() -> Tr::Item {
+-    S::Item::default()
++fn first() -> Tr::Output {
++    S::Output::default()
+@@ -28 +28 @@ fn first() -> Tr::Item {
+-fn second(s: S::Item) -> Tr::Item {
++fn second(s: S::Output) -> Tr::Output {
