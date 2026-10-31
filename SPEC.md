@@ -2417,12 +2417,14 @@ fail-loud tripwire when its text names the ident outside strings/comments
 (`RSMPL_SYMBOL_CONFLICT` naming the file, or a `follow_skipped` note with
 `# fallback=syntax`); multi-definition workspaces never attribute uses by
 module path (WI-7b owns only re-export prefix matching, never use
-attribution); `diffrs` raises item intents as `item_intent` (SPEC D.4:
-one definition hunk with `# follow=uses` when the cross-file
-scratch-apply probe proves the group's changed lines, else
-definition-only per-file hunks with uses ordinary — never an unproven
-follow). WI-7 grouping owns the shared-intent spelling for all other
-same-delta hunks.
+ attribution); `diffrs` raises item intents as `item_intent` (SPEC D.4:
+ one definition hunk with `# follow=uses` when the cross-file
+ scratch-apply probe proves the group's changed lines, else
+ definition-only per-file hunks with uses ordinary — never an unproven
+ follow), member intents as `member_rename`, and `mod` + file-rename
+ intents as `mod_rename` (same probe posture, file/section-pure
+ partial). WI-7 grouping owns the shared-intent spelling for all other
+ same-delta hunks.
 
 Fail loud (Section 2.6): a second same-named definition, a shadowing
 local binding or enum variant, or a macro/attribute mention the resolver
@@ -7005,8 +7007,8 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_arg_template`, `call_arg_template`, `general_expr`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
-`call_literal`, `call_peel`, `call_peel_section`,
-   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
+   `call_literal`, `call_peel`, `call_peel_section`,
+   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `item_intent`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -7057,8 +7059,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   single generic-fn lines are excluded (no token win as a slot hunk).
 - Item-intent raising (WI-15a, detector `item_intent`): exactly one
   `split_item` definition pair (`struct`/`enum`/`trait`/`type`/`const`/
-  `static`/terse-`fn`; `macro_rules!` and `mod` decline to their own
-  detectors) joined with N-1 same-delta use lines (`impl Old`, `s: Old`,
+  `static`/terse-`fn`; `macro_rules!` declines to its own detector and
+  `mod` joins its file move via `mod_rename` below) joined with N-1 same-delta use lines (`impl Old`, `s: Old`,
   `-> Old`, `Old { … }`, …) across one or more files compresses to the
   single definition hunk with `# sweep` + `# follow=uses`. The
   cross-file scratch-apply probe is the totality (the emission applied
@@ -7067,6 +7069,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   twin definitions, missing pre-images, and unbalanced sections
   decline). The byte-win guard compares the one hunk against the
   replaced native sections.
+- Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
+  `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
+  decline — there is no file to join) joined with N-1 same-delta
+  `old::` path-use lines (`use crate::old::…`, bare `old::…` uses and
+  expression paths) across one or more files compresses to the single
+  definition hunk with `# sweep` + `# follow=uses`. An accompanying
+  headers-only `rename from/to` section (flat `old.rs`→`new.rs` or
+  `old/mod.rs`→`new/mod.rs` layouts, dirs otherwise equal) is preserved
+  verbatim as the native file-move prelude — it carries no pairs and
+  never counts toward the byte-win guard. Totality is the cross-file
+  scratch-apply probe (def proven plus ≥1 use proven, every other line
+  byte-identical); twin `mod` definitions, missing pre-images,
+  unbalanced sections, basename-mismatched or multiple renames, and
+  mixed proven/unproven sections decline. File/section-pure partial:
+  proven files collapse to the one hunk, unproven files stay ordinary
+  (call-callee and macro-head uses belong to their own detectors and
+  veto the join; the per-section `use_prefix` chain may still compress
+  the unclaimed remainder, each hunk independently totality-checked).
 - Field/variant member rename (WI-9a authored, WI-9b raised single-file, WI-15b raised cross-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary. Single-section shapes raise per section; multi-section / cross-file shapes raise via the whole-patch `member_rename` pre-pass (one def pair joined with same-delta use lines across files, file/section-pure partial: proven files collapse to the one hunk, unproven files stay ordinary, mixed sections veto the intent).
 - Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). Emission is one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges) with `# follow=uses` on the first hunk; the scratch-apply line-equality probe is the totality. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline to ordinary; cross-file intents stay ordinary (future work). Detector name `assoc_rename`.
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose

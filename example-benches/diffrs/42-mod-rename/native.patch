@@ -1,0 +1,20 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+-mod old;
+-use crate::old::connection_handler;
++mod new;
++use crate::new::connection_handler;
+@@ -4 +4 @@ fn dispatch() {
+-    crate::old::connection_handler();
++    crate::new::connection_handler();
+diff --git a/src/other.rs b/src/other.rs
+--- a/src/other.rs
++++ b/src/other.rs
+@@ -1 +1 @@
+-use crate::old::connection_handler;
++use crate::new::connection_handler;
+@@ -3 +3 @@ fn serve() {
+-    crate::old::connection_handler();
++    crate::new::connection_handler();
