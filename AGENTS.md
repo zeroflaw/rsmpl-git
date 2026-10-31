@@ -159,7 +159,7 @@ is always 0-context, `--context N` renders reported/`--output` for vanilla `git 
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ best-match-candidate preview in `reason`) — read the file, then fix range/pattern or add `# optional`; if the suggestion says exactly one match exists elsewhere, retry with `# scope=file` + `@@ -1,1 @@`; stale range + body context (` `) lines retries once file-scoped with `drift` evidence (exactly-one anchored candidate applies, else original conflict stands, SPEC 10.8); too many matches — add `# allow=many`; if the preview shows mixed `let-else`/macro-type, use an ordinary hunk (SPEC 18.6 R1/R2/R4/R5; fn-body `use` — SPEC 14.9); matcher partial overlap (`partially overlapping matches cannot be merged`, MATCH, rule+file, no suggestion, SPEC 17.6/25.4) vs plan-stage overlap (`overlapping edits cannot be merged`, GIT, file-only + suggestion, SPEC 10.6/25.7) |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without matching `# bind=Name` anywhere in the patch (paste may precede cut, SPEC 20.3) — fix names |
-| `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context |
+| `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context (blank file lines are empty context: ` ` or empty line in-body; blank-mismatch hints the prefix) |
 | `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file or bad flags (`--format json` → stdout envelope, else clap text) — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
 
 With `--format json`, failures print `{version, error: {code, rule, file, range,

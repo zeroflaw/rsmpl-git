@@ -373,37 +373,40 @@ fn parse_body_lines(
         if l.starts_with("diff --git ") || l.starts_with("@@ ") || l.starts_with("@@-") {
             break;
         }
-        if l.is_empty() {
-            // An empty line is ambiguous: git represents an empty context
+        if l.is_empty() || l.trim().is_empty() {
+            // A blank line is ambiguous: git represents an empty context
             // line as "" (zero-length) or " " — while a truly blank line
-            // separates hunks. Look ahead: if the next line is a body line,
-            // treat "" as an empty context line; otherwise end the hunk.
+            // separates hunks. Look ahead past the whole consecutive
+            // blank run: if the first non-blank after the run is a body
+            // line, the entire run counts as empty context lines;
+            // otherwise the run is a separator and the hunk ends here.
             // The lookahead alone decides, even for the first body line:
             // a hunk header is always followed by body lines, so a leading
-            // blank followed by body lines belongs to the hunk (T212).
-            let next_is_body = idx + 1 < lines.len() && is_body_start(lines[idx + 1]);
-            if next_is_body {
-                out.push(BodyLine {
-                    prefix: ' ',
-                    text: String::new(),
-                });
-                idx += 1;
-                continue;
+            // blank run followed by body lines belongs to the hunk (T212).
+            // Run-aware: a single-blank check (immediate next line only)
+            // splits hunks holding ≥2 consecutive blank file lines.
+            let mut j = idx;
+            while j < lines.len() && (lines[j].is_empty() || lines[j].trim().is_empty()) {
+                j += 1;
             }
-            break;
-        }
-        if l.trim().is_empty() {
-            // Whitespace-only line: same lookahead rule (T212).
-            let next_is_body = idx + 1 < lines.len() && is_body_start(lines[idx + 1]);
+            let next_is_body = j < lines.len() && is_body_start(lines[j]);
             if next_is_body {
-                // T388: preserve content byte-exact. A leading `' '`
-                // is the context prefix (git emits `" " + content`,
-                // so `"    "` is a 3-space file line, not an empty
-                // one). Any other leading whitespace has no
-                // diff-prefix meaning; keep the T212 empty reading.
-                let text = l.strip_prefix(' ').unwrap_or_default().to_string();
-                out.push(BodyLine { prefix: ' ', text });
-                idx += 1;
+                while idx < j {
+                    let bl = lines[idx];
+                    // T388: preserve content byte-exact. A leading `' '`
+                    // is the context prefix (git emits `" " + content`,
+                    // so `"    "` is a 3-space file line, not an empty
+                    // one). Any other leading whitespace (including the
+                    // empty line) has no diff-prefix meaning; the empty
+                    // line reads as empty context.
+                    let text = if bl.is_empty() {
+                        String::new()
+                    } else {
+                        bl.strip_prefix(' ').unwrap_or_default().to_string()
+                    };
+                    out.push(BodyLine { prefix: ' ', text });
+                    idx += 1;
+                }
                 continue;
             }
             break;
@@ -841,6 +844,29 @@ mod tests {
                 assert_eq!(oh.lines.len(), 3);
             }
             _ => panic!("expected ordinary"),
+        }
+    }
+
+    #[test]
+    fn consecutive_blank_lines_are_empty_context() {
+        // Tooling: a run of bare empties between body lines is a run of
+        // empty contexts (git parity), not a hunk separator. The old
+        // immediate-next lookahead split `a\n\n\nb` into a 1-line hunk.
+        for (b1, b2) in [("", ""), (" ", ""), ("", " "), (" ", " ")] {
+            let text = format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@\n a\n{b1}\n{b2}\n b\n"
+            );
+            let p = parse_patch(&text).unwrap();
+            match &p.files[0].hunks[0] {
+                Hunk::Ordinary(oh) => {
+                    assert_eq!(oh.lines.len(), 4, "blanks={b1:?}/{b2:?}");
+                    assert_eq!(oh.lines[1].prefix, ' ');
+                    assert_eq!(oh.lines[1].text, "");
+                    assert_eq!(oh.lines[2].prefix, ' ');
+                    assert_eq!(oh.lines[2].text, "");
+                }
+                _ => panic!("expected ordinary"),
+            }
         }
     }
 

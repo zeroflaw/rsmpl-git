@@ -78,7 +78,7 @@ pub fn ordinary_hunk_edits(
                 }
                 let actual = lines[(cur_line - 1) as usize];
                 if actual != bl.text {
-                    return Err(fail(format!(
+                    let mut err = fail(format!(
                         "context mismatch at line {cur_line}: expected `{}`",
                         bl.text
                     ))
@@ -87,7 +87,11 @@ pub fn ordinary_hunk_edits(
                         "line": cur_line,
                         "expected": bl.text,
                         "actual": actual
-                    })));
+                    }));
+                    if bl.text.trim().is_empty() || actual.trim().is_empty() {
+                        err = err.with_suggestion("blank file lines are empty context: write them as ` ` (single space) or an empty line inside the hunk body");
+                    }
+                    return Err(err);
                 }
                 cur_line += 1;
             }
@@ -105,7 +109,7 @@ pub fn ordinary_hunk_edits(
                 }
                 let actual = lines[(cur_line - 1) as usize];
                 if actual != bl.text {
-                    return Err(fail(format!(
+                    let mut err = fail(format!(
                         "removal mismatch at line {cur_line}: expected `{}`",
                         bl.text
                     ))
@@ -114,7 +118,11 @@ pub fn ordinary_hunk_edits(
                         "line": cur_line,
                         "expected": bl.text,
                         "actual": actual
-                    })));
+                    }));
+                    if bl.text.trim().is_empty() || actual.trim().is_empty() {
+                        err = err.with_suggestion("blank file lines are empty context: write them as ` ` (single space) or an empty line inside the hunk body");
+                    }
+                    return Err(err);
                 }
                 let ls = index
                     .line_start(cur_line)
@@ -233,6 +241,21 @@ mod tests {
         assert_eq!(repair["line"], serde_json::json!(2));
         assert_eq!(repair["expected"], serde_json::json!("WRONG"));
         assert_eq!(repair["actual"], serde_json::json!("fn b() {}"));
+    }
+
+    #[test]
+    fn blank_mismatch_hints_empty_context_prefix() {
+        // Tooling: blank-line mismatches name the prefix requirement so a
+        // hand-written `x` vs blank confusion self-corrects.
+        let src = "a\nx\nb\n";
+        let h = ordinary_of(
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n a\n \n b\n",
+        );
+        let idx = LineIndex::new(src);
+        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        assert_eq!(err.code, ErrorCode::GitHunkConflict);
+        let s = err.suggestion.expect("blank mismatch must hint prefix");
+        assert!(s.contains("empty context"), "got: {s}");
     }
 
     #[test]
