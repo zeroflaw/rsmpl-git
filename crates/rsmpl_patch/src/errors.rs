@@ -123,6 +123,70 @@ impl StructuredError {
         })
     }
 
+    /// WI-3: defensive-backstop `fix_pattern` payload (SPEC 25.9).
+    ///
+    /// Span guards and edit-bounds checks fire only on engine
+    /// inconsistency (inputs are immutable during matching); if one
+    /// ever fires, the agent still gets the patch-side exit first and
+    /// the honesty caveat second. One constructor so the wording
+    /// cannot drift per site.
+    pub fn internal_repair() -> serde_json::Value {
+        Self::fix_pattern_repair(
+            "internal",
+            "restrict the hunk to a smaller range and retry; if the failure persists it is an engine bug, not a patch bug",
+        )
+    }
+
+    /// WI-3: range-past-EOF `fix_range` repair payload (SPEC D.2).
+    ///
+    /// `write_instead` is the largest in-file `@@ -start,len @@` range
+    /// starting at the cited start (or the last line when the cited
+    /// start itself is past EOF); the agent pastes it verbatim.
+    pub fn fix_range_repair(file: &str, file_lines: u32, write_instead: &str) -> serde_json::Value {
+        serde_json::json!({
+            "action": "fix_range",
+            "file": file,
+            "file_lines": file_lines,
+            "write_instead": write_instead,
+        })
+    }
+
+    /// WI-3: `fix_range` with the clamped header computed from the cited
+    /// range and the file length (single clamping rule shared by the
+    /// range validator and the ordinary-hunk applier — no second copy).
+    pub fn fix_range_for(file: &str, start: u32, len: u32, file_lines: u32) -> serde_json::Value {
+        let write_instead = if len == 0 {
+            format!("@@ -{},0 @@", file_lines + 1)
+        } else if file_lines == 0 {
+            "@@ -1,0 @@".to_string()
+        } else if start == 0 || start > file_lines {
+            format!("@@ -{file_lines},1 @@")
+        } else {
+            format!("@@ -{start},{} @@", file_lines - start + 1)
+        };
+        Self::fix_range_repair(file, file_lines, &write_instead)
+    }
+
+    /// WI-3: unknown-directive `fix_directive` repair payload (SPEC D.2).
+    ///
+    /// `found` is the offending spelling, `did_you_mean` the closest
+    /// known spelling within edit distance 2 (`None` serializes as
+    /// `null` — honest when nothing is close), and `write_instead` the
+    /// full corrected directive line the agent pastes verbatim. Never
+    /// echoes the English reason.
+    pub fn fix_directive_repair(
+        found: &str,
+        did_you_mean: Option<&str>,
+        write_instead: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "action": "fix_directive",
+            "found": found,
+            "did_you_mean": did_you_mean,
+            "write_instead": write_instead,
+        })
+    }
+
     /// Machine-readable form for `--format json` failure envelopes (SPEC D.2):
     /// `{"code","rule","file","range","reason","suggestion","repair"}`.
     /// Absent optionals serialize as `null` so agents see a stable key set.
@@ -228,6 +292,26 @@ mod tests {
         assert_eq!(fn_["action"], serde_json::json!("fix_name"));
         assert_eq!(fn_["name"], serde_json::json!("Helper"));
         assert_eq!(fn_["available"], serde_json::json!(["Bound", "Other"]));
+    }
+
+    #[test]
+    fn wi3_repair_shapes_pin() {
+        let fr = StructuredError::fix_range_repair("src/lib.rs", 10, "@@ -10,1 @@");
+        assert_eq!(fr["action"], serde_json::json!("fix_range"));
+        assert_eq!(fr["file"], serde_json::json!("src/lib.rs"));
+        assert_eq!(fr["file_lines"], serde_json::json!(10));
+        assert_eq!(fr["write_instead"], serde_json::json!("@@ -10,1 @@"));
+        let fd = StructuredError::fix_directive_repair(
+            "# alow=many",
+            Some("# allow=many"),
+            "# allow=many",
+        );
+        assert_eq!(fd["action"], serde_json::json!("fix_directive"));
+        assert_eq!(fd["found"], serde_json::json!("# alow=many"));
+        assert_eq!(fd["did_you_mean"], serde_json::json!("# allow=many"));
+        assert_eq!(fd["write_instead"], serde_json::json!("# allow=many"));
+        let far = StructuredError::fix_directive_repair("# zzzzzz=1", None, "check SPEC 9.3");
+        assert!(far["did_you_mean"].is_null(), "got: {far}");
     }
 
     #[test]

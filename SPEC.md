@@ -3334,7 +3334,7 @@ The engine must:
 3. accept the first candidate that matches and does not overlap an already accepted match;
 4. skip all descendants of an accepted match for that hunk;
 5. reject the hunk if two accepted candidates would partially overlap without one fully containing the other.
- Engine-verbatim (exit 2; `RSMPL_MATCH_CONFLICT`, `rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null):
+ Engine-verbatim (exit 2; `RSMPL_MATCH_CONFLICT`, `rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null, but the failure carries an `overlap`-template `fix_pattern` repair — narrow the range or split the hunks):
  ```text
  RSMPL_MATCH_CONFLICT
  rule: r
@@ -4532,7 +4532,10 @@ The `old_range` is `start..start+len` (so `@@ -40,8 @@` reports
 count `N`. The JSON envelope carries the same reason with explicit
 `range` (null fields are omitted from text output). The `suggestion`
 names the file to read (repo-relative path) so an agent repairs without
-guessing flags.
+guessing flags. The failure also carries a `fix_range` repair
+(`file`/`file_lines`/`write_instead`, SPEC D.2): the largest in-file
+range starting at the cited start, or the last line when the start is
+past EOF — paste the header verbatim and retry.
 
 ### 25.2 Parse conflict
 
@@ -4578,14 +4581,17 @@ suggestion: write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add a `#` directive li
 ```
 
 Text omits the null `rule:`/`file:`/`range:` lines (JSON explicit
-nulls); the reason echoes the offending header line.
+nulls); the reason echoes the offending header line. It also carries a
+`fix_header` repair whose `expected_header` mirrors the old side (drop
+it in verbatim and recount — counts are verified at apply).
 
 Second, the malformed-header family (Section 8 documents the same
 fences): `invalid hunk header (missing closing @@): {line}`,
 `invalid hunk header ranges: {line}`, `invalid hunk range: {range}` —
 each carries `old_range: line N` (the hunk-header line number) with null
 `rule:`/`file:`/`suggestion:` lines omitted from text (explicit nulls
-in JSON):
+in JSON), plus a header-template `fix_pattern` repair
+(`write the header as ...`, SPEC D.2):
 
 ```text
 RSMPL_PARSE_CONFLICT
@@ -4627,9 +4633,9 @@ RSMPL_PARSE_CONFLICT
 reason: unexpected line outside file section: hello
 ```
 
-All three carry the bare reason only (null `rule:`/`file:`/`range:`/
-`suggestion:` — omitted from text, explicit nulls in JSON);
-`{line}` echoes the offending line verbatim.
+All three carry a section-template `fix_pattern` repair beside the
+reason (null `rule:`/`file:`/`range:`/`suggestion:` — omitted from text,
+explicit nulls in JSON); `{line}` echoes the offending line verbatim.
 
 Fourth, an empty patch (zero file sections):
 
@@ -4659,7 +4665,9 @@ suggestion: fix the header counts to match the body lines (old-side = ` ` + `-` 
 ```
 
 Both carry file + header-line range + suggestion (no `rule:` line
-unless the hunk header carries one; JSON explicit throughout).
+unless the hunk header carries one; JSON explicit throughout), plus
+the machine repair: the whitespace arm a header-template `fix_pattern`,
+the count arm the `fix_header` drop-in header (SPEC D.2).
 
 ```text
 RSMPL_PARSE_CONFLICT
@@ -4668,8 +4676,10 @@ suggestion: provide at least one `diff --git a/.. b/..` file section with a hunk
 ```
 
 Bare-plus-suggestion (null `rule:`/`file:`/`range:` omitted from text,
-explicit nulls in JSON) — the same envelope as the Section 7.3
-misplaced-directive fence; the prose contract lives in Section 6.
+explicit nulls in JSON) plus an empty-template `fix_pattern` repair —
+the same envelope as the Section 7.3
+misplaced-directive fence (which likewise carries a `fix_pattern`
+repair naming the move); the prose contract lives in Section 6.
 
 ### 25.3 Pattern conflict
 
@@ -4724,7 +4734,7 @@ RSMPL_PATTERN_CONFLICT
 reason: unknown directive `#foo=bar`: # foo=bar
 suggestion: check SPEC 9.3 for the supported directive list
 ```
-The fence above is the canonical `k=v` spelling; Section 9.6 carries the other two engine-verbatim variants (the typo near-miss with its `use ...` suggestion and the bare first-token-echo form) plus the defensive-only `invalid directive:` note.
+The fence above is the canonical `k=v` spelling; Section 9.6 carries the other two engine-verbatim variants (the typo near-miss with its `use ...` suggestion and the bare first-token-echo form) plus the defensive-only `invalid directive:` note. Every unknown-directive shape carries a `fix_directive` repair (SPEC D.2): the near-miss names the corrected line (`# alow=many` → `# allow=many`), the far miss above repairs with `did_you_mean: null`.
 
 Any `# mode=tokens` hunk that is not a macro token-tree pattern is
 rejected (only that shape supports token matching in v0.1), as is any
@@ -4770,7 +4780,7 @@ reason: unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/uni
 An RSmPL hunk whose directive block is followed by zero body lines is
 the empty-body rejection (exit 2; `rule:` + `reason:` only — text omits
 the null `file:`/`range:`/`suggestion:` lines, JSON carries `rule` set
-with the rest null):
+with the rest null), plus a body-template `fix_pattern` repair:
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -4781,7 +4791,8 @@ reason: RSmPL hunk has no pattern body lines
 A `#` directive line after body lines started is the
 misplaced-directive rejection (exit 2; reason + set suggestion — text
 omits the null `rule:`/`file:`/`range:` lines, JSON carries explicit
-nulls; Section 7.3 documents the same fence):
+nulls; Section 7.3 documents the same fence), plus a `fix_pattern`
+repair naming the same move:
 
 ```text
 RSMPL_PATTERN_CONFLICT
@@ -4791,14 +4802,21 @@ suggestion: move the `#` line above the first `-`/`+`/` ` line
 Directive-parse failures are not uniform (all exit 2). A bare unknown
 directive (`# foo=bar`) carries no `rule:`/`file:`/`range:` lines (null
 fields are omitted from text output; the JSON envelope carries explicit
-`rule: null`/`file: null`/`range: null`), while an unknown header tag
+`rule: null`/`file: null`/`range: null`) plus its `fix_directive`
+repair, while an unknown header tag
 carries `old_range: line 2` — the hunk-header line number, not a
-`start..start+len` range — with null rule/file (verbatim in Section 8.3).
+`start..start+len` range — with null rule/file (verbatim in Section 8.3)
+plus its `fix_directive` repair (`rule` itself when close, else a
+removal).
 Later-stage pattern failures
 (item shapes, prefixes, `# root=` — verbatim in Section 13.4, `# repeat`)
 include `rule:`/`file:`
 with a specific reason — the body list above enumerates the categories,
-and no generic `invalid item pattern` string is ever emitted.
+and no generic `invalid item pattern` string is ever emitted. Unknown
+`# root=` values carry `fix_directive` (`# root=exrp` →
+`# root=expr`); every other gate in the body list carries the `fix_pattern`
+template its fence names, and the engine boundary backstops any bare
+conflict with a keyed concrete template (WI-2b hygiene, SPEC D.2).
 
 ### 25.4 Match conflict
 
@@ -4917,13 +4935,14 @@ The same holds when the preview shows a `use` nested inside a function body:
 only file- and inline-`mod`-level `use` items match (Section 14.9), so a
 fn-body `use` is ordinary-hunk territory too.
 
-A matcher-stage partial overlap is a different `RSMPL_MATCH_CONFLICT` shape from the zero/too-many fences above (which carry `old_range:` plus a set suggestion): two accepted candidates that partially overlap without nesting fail with `reason: partially overlapping matches cannot be merged` (`rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null). The canonical fence lives in Section 17.6, which also contrasts it with the plan-stage `overlapping edits cannot be merged` (`GIT_HUNK_CONFLICT`, Section 25.7).
+A matcher-stage partial overlap is a different `RSMPL_MATCH_CONFLICT` shape from the zero/too-many fences above (which carry `old_range:` plus a set suggestion): two accepted candidates that partially overlap without nesting fail with `reason: partially overlapping matches cannot be merged` (`rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null) plus an `overlap`-template `fix_pattern` repair (narrow the range or split the hunks). The canonical fence lives in Section 17.6, which also contrasts it with the plan-stage `overlapping edits cannot be merged` (`GIT_HUNK_CONFLICT`, Section 25.7).
 
 The `# repeat` nesting backstop shares the rule+file shape (but sets
 `suggestion:`, unlike the suggestion-null partial-overlap fence above):
 `reason: repeat nesting exceeds 64 levels (pathological nesting?)` with
 `suggestion: remove `# repeat` or simplify the nesting` — canonical
-fence in Section 17.8.
+fence in Section 17.8 — plus a `repeat`-template `fix_pattern` repair
+naming the same exit.
 
 ### 25.5 Symbol conflict
 
@@ -5033,8 +5052,9 @@ The two mismatch shapes also carry machine repair (text `repair:` line +
 JSON `repair` object): `{"action":"fix_context","line":N,"expected":"...",
 "actual":"..."}` — `N` is the 1-based original-file line, `expected` the
 hunk's line text, `actual` the file's line text (full single-line texts,
-never truncated). The two EOF shapes carry no repair: there is no actual
-line to show.
+never truncated). The two EOF shapes carry `fix_range` instead (SPEC
+D.2): there is no actual line to show, but the clamped header tells the
+agent where the file ends — paste it and retry.
 
 Three further engine arms never surface via the CLI, so they carry no fence
 here (defensive backstops for library callers, documented but not pinnable):
@@ -5067,6 +5087,10 @@ carries explicit `rule: null` / `range: null` with `file` set and the same
 | ordinary-hunk content mismatch | `""` (empty line in text) | present (`start..start+len` / JSON `range`) | null (no line in text) |
 | overlap (`overlapping edits ...`) | absent in text / `null` in JSON | absent in text / `null` in JSON | present (repair pointer) |
 
+The overlap shape carries a `fix_pattern` repair beside the suggestion
+(`apply the overlapping rewrites in separate runs, or make the ranges
+disjoint` — applicable by splitting the patch, retrying per piece).
+
 Disjoint edits in one patch merge normally (Section 10.6 option 1).
 
 A git-spawn failure is a third `GIT_HUNK_CONFLICT` shape: the lowered
@@ -5085,11 +5109,16 @@ reason: failed to run `git apply` (is git installed?): No such file or directory
 The trailing `<os error>` is platform-dependent (Linux reports
 `No such file or directory (os error 2)`); pins assert the verbatim
 `` failed to run `git apply` (is git installed?):  `` prefix. Text
-carries only the bare `reason:` line (no `rule:`/`file:`/
+carries the `reason:` line plus the `repair:` line (no `rule:`/`file:`/
 `old_range:`/`suggestion:` lines; JSON carries explicit `rule: null` /
 `file: null` / `range: null` / `suggestion: null` with the same
-`reason` string). Unlike the overlap shape above, the spawn shape
-carries no `file:`. Full fences live in Section 31.7; the two sibling
+`reason` string and a non-null `repair`). Unlike the overlap shape above,
+the spawn shape carries no `file:`. The repair is `fix_pattern` with an
+environment template for spawn/send/wait faults (`ensure git is
+installed ...`) and a stale-range template for a rejected lowering
+(`re-read the target files and retry ...`; a persistent failure there
+is an engine lowering bug, not a patch bug). Full fences live in
+Section 31.7; the two sibling
 send/wait arms (`failed to feed patch to git: <os error>`,
 `` failed waiting for `git apply`: <os error> ``) share this
 context-less envelope by construction but never surface via the CLI
@@ -5109,9 +5138,10 @@ clap's stderr text.
 RSMPL_IO_CONFLICT
 file: change.rsmpl
 reason: cannot read patch file change.rsmpl: No such file or directory (os error 2)
+suggestion: check that `change.rsmpl` exists and is readable, then retry
 ```
 
- Null fields are omitted from text output (no `rule:`/`range:`/`suggestion:` lines above); the JSON envelope carries explicit `rule: null` / `range: null` / `suggestion: null`.
+ Null fields are omitted from text output (no `rule:`/`range:` lines above); the JSON envelope carries explicit `rule: null` / `range: null`. The unreadable patch file is the WI-3 allow-list entry: the failure stays repair-null (environmental — no patch spelling fixes it) while the `suggestion` names the path instead.
 
 A repo-file read failure reports `reason: cannot read <abs repo-joined>: <os error>` with `file:`
 echoing the repo-relative target (exit 2; text omits null `rule:`/`range:`/`suggestion:` lines, JSON
@@ -5127,10 +5157,50 @@ documented, not pinned (T287/T290/T291 precedent).
 An unwritable `--output` target reports `reason: cannot write <path>: <os error>` with `file:` echoing the `--output` path, and aborts before checking or applying (`--output` is written before `--check` runs, Section D.2.3). Its empty-lowering twin — a pre-existing file the mirror removal cannot delete — reports `reason: cannot remove stale <path> (empty lowering): <os error>` with the same envelope (exit 2; `file:` set to the `--output` path; text omits null `rule:`/`range:`/`suggestion:` lines, JSON explicit nulls; full fence in Section D.2.3).
 
 Patch `target_path` values that are absolute or escape the worktree
-root fail here too (Section 27.6 lists both engine-verbatim reasons) — before any file is read. Differing
+root fail here too (Section 27.6 lists both engine-verbatim reasons) — before any file is read. The code stays `RSMPL_IO_CONFLICT` (T94 pin) but the failure carries a `paths`-template `fix_pattern` repair (use a repo-relative `diff --git` target). Differing
 `diff --git a/old b/new` paths (a file rename, Section 6) fail as a
 parse conflict (25.2), not an I/O conflict: the paths are well-formed,
 the operation is unsupported.
+
+### 25.9 Repair completeness (WI-3)
+
+Every error class reachable from patch input carries a machine `repair`
+(SPEC D.2 shapes); the `wi3_repair_complete_e2e.rs` enumeration pins one
+failing patch per row and fails CI if any producer loses its repair.
+Paste `write_instead` verbatim (or follow the named next action) and
+retry — never parse the English `reason` to recover.
+
+| code | class | repair action | notes |
+|---|---|---|---|
+| `RSMPL_RANGE_CONFLICT` | range past EOF | `fix_range` | largest in-file range; insertion anchors clamp to EOF (25.1) |
+| `RSMPL_RANGE_CONFLICT` | span guards / internal edit out of bounds | `fix_pattern` (`internal`) | defensive-only; persistent failure is an engine bug (25.7) |
+| `RSMPL_PARSE_CONFLICT` | malformed header / range / elided ordinary range | `fix_pattern` (`header`) / `fix_header` | drop-in header (25.2) |
+| `RSMPL_PARSE_CONFLICT` | outside-section line / empty patch / no body / misplaced directive / bad quote / bad name | `fix_pattern` (section/body/directive/quote/name template) | concrete spelling to write (25.2/25.3) |
+| `RSMPL_PARSE_CONFLICT` | target file missing / unparsable / rewritten file unparsable | `fix_pattern` (`paths` / `syntax`) | fix paths, or fix the syntax first (ordinary hunks bypass the parse) |
+| `RSMPL_PATTERN_CONFLICT` | unknown directive / header tag / `# root=` | `fix_directive` | gated suggestions, `null` when far (25.3, D.2) |
+| `RSMPL_PATTERN_CONFLICT` | invalid directive value | `fix_directive` | corrected line, or the full legal set when far (25.3, D.2) |
+| `RSMPL_PATTERN_CONFLICT` | all other compile gates | `fix_pattern` (C-code or gate-name template) | engine boundary backstops bare conflicts as `pattern` (D.2) |
+| `RSMPL_MATCH_CONFLICT` | zero / too many / postcondition | `widen_scope` / `read_file` / `add_directive` | (25.4, D.2) |
+| `RSMPL_MATCH_CONFLICT` | partial overlap | `fix_pattern` (`overlap`) | defensive backstop — narrow the range or split the hunks (25.4) |
+| `RSMPL_MATCH_CONFLICT` | attribute policy mismatch at match time | `fix_pattern` (`attrs`) / `add_directive` (`# attrs=preserve`) | drop the `attrs` directive to the ignoring default, or write the attributes into the pattern |
+| `RSMPL_MATCH_CONFLICT` | repeat-depth backstop / wrong field-type annotation | `fix_pattern` (`repeat` / `type`) | remove `# repeat`, or write the field's real type (25.4) |
+| `RSMPL_MATCH_CONFLICT` | name-span guards | `fix_pattern` (`internal`) | defensive-only; persistent failure is an engine bug |
+| `RSMPL_SYMBOL_CONFLICT` | unresolved / vetoed follow | `add_directive` (`# fallback=syntax`) | (25.5, D.2) |
+| `RSMPL_CAPTURE_CONFLICT` | unbound / duplicate capture | `fix_name` | rename or add `# bind=` (25.6, D.2) |
+| `RSMPL_CAPTURE_CONFLICT` | self-cycle / kind-misuse | `fix_pattern` | split the hunks (25.6) |
+| `GIT_HUNK_CONFLICT` | ordinary mismatch / EOF | `fix_context` / `fix_range` | paste actual, or paste clamped header (25.7) |
+| `GIT_HUNK_CONFLICT` | overlap | `fix_pattern` (`overlap`) | split into separate runs (25.7) |
+| `GIT_HUNK_CONFLICT` | git spawn / feed / wait / rejected lowering | `fix_pattern` (`environment` / `stale`) | install git, or re-read and retry (25.7, 31.7) |
+| `RSMPL_IO_CONFLICT` | unreadable patch file | none (`null`, allow-list) | environmental; `suggestion` names the path (25.8) |
+| `RSMPL_IO_CONFLICT` | unreadable repo/output file | none (`null`) | environmental; `file` + `reason` name the path (25.8) |
+| `RSMPL_IO_CONFLICT` | absolute / escaping target | `fix_pattern` (`paths`) | code stays IO (T94 pin); fix the target spelling (25.8) |
+| `RSMPL_IO_CONFLICT` | bad flags | none (`null`) | not patch-input reachable; suggestion names the fix (D.2) |
+
+The IO rows above are the only classes that may carry a null
+`repair`: environment failures have no patch spelling to correct
+(partial overlap is a defensive backstop, but even it carries the
+`overlap` next action). Everything else is machine-applicable by
+construction.
 
 ---
 
@@ -6286,7 +6356,14 @@ prints one JSON object to stdout:
   or output files, stdin failures, and flag-usage errors.
 - `repair` is the machine-readable self-correction payload (WI-10 direction,
 - additive under the `version` rule above: text mode prints it as a trailing
-- `repair: {...}` line only when present). Seven producers populate it.
+- `repair: {...}` line only when present). Completeness rule (WI-3): every
+- error class reachable from patch input carries a `repair`, so no patch
+- failure is prose-only; the single allow-list entry is the unreadable
+- patch file (`RSMPL_IO_CONFLICT` with null `repair` — environmental, the
+- `suggestion` names the path instead; 25.8). A new null-`repair` error
+- fails the `wi3_repair_complete_e2e.rs` enumeration. CLI argv errors
+- (bad flags) are outside the enumeration — not patch-input reachable —
+- and keep their suggestion-only envelope.
 - Zero-match with exactly one whole-file match (25.4): `{"action":"widen_scope",
 - "directive":"# scope=file","range":"@@ -1,1 @@"}` — apply the directive +
 - range verbatim and retry (mechanical first-retry, no prose parsing).
@@ -6294,6 +6371,22 @@ prints one JSON object to stdout:
 - with `"candidate":T67-excerpt` when a nearest candidate exists (verbatim
 - string in v0.1; a structured `{line,text}` split is WI-3c).
 - Too-many (25.4): `{"action":"add_directive","directive":"# allow=many"}`.
+- Range past EOF (25.1; ordinary-hunk EOF shapes, 25.7): `{"action":"fix_range",
+- "file":F,"file_lines":N,"write_instead":"@@ -s,l @@"}` — the largest
+- in-file `@@` range starting at the cited start (insertion anchors clamp
+- to the end anchor `@@ -N+1,0 @@`; the cited start past EOF clamps to the
+- last line). Paste the header verbatim and retry. One shared clamping
+- rule feeds both the range validator and the ordinary-hunk applier.
+- Unknown directive / header tag / `# root=` value (25.2/25.3):
+- `{"action":"fix_directive","found":F,"did_you_mean":D,"write_instead":W}` —
+- `found` echoes the offending spelling, `did_you_mean` the closest known
+- spelling or `null` (honest when nothing is close), `write_instead` the
+- full corrected directive line (or a removal naming the legal options)
+- to paste verbatim and retry. Key suggestions gate on the same first
+- character plus edit distance ≤ 2 (`# alow=many` → `# allow=many`;
+- `# foo=bar` suggests nothing although `foo` is distance 2 from `root`).
+- Value suggestions over the closed sets are ungated (`# scope=files` →
+- `# scope=file`); a far miss lists every legal spelling instead.
 - Pattern-shape (18.6 C-table): `{"action":"fix_pattern","code":"C1"-"C18",
 - "write_instead":"<SPEC 18.6 text>"}` — `code` is the C-table row, `write_instead`
 - the exact diagnostic telling the agent what to write instead (mechanical:

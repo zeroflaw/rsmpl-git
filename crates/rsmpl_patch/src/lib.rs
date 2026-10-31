@@ -18,6 +18,7 @@ mod validate;
 pub use canonical::{
     canonicalize, canonicalize_with_spans, canonicalize_with_spans_parsed, TIGHT_RANGE_MAX_LINES,
 };
+pub use directives::{closest_within, edit_distance, suggest_directive_key, suggest_value};
 pub use errors::{ErrorCode, StructuredError};
 pub use model::*;
 pub use parser::{

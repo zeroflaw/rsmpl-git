@@ -31,6 +31,11 @@ fn parse_directive(line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid directive: {line}"),
             )
+            .with_repair(StructuredError::fix_directive_repair(
+                line,
+                None,
+                "start the directive line with `#` (e.g. `# allow=many`)",
+            ))
         })?
         .trim();
     if body.is_empty() {
@@ -38,6 +43,11 @@ fn parse_directive(line: &str) -> Result<Directive> {
             ErrorCode::PatternConflict,
             format!("empty directive: {line}"),
         )
+        .with_repair(StructuredError::fix_directive_repair(
+            line,
+            None,
+            "remove the empty `#` line or write a directive (e.g. `# allow=many`)",
+        ))
         .into());
     }
     // `key=value` form first.
@@ -52,6 +62,11 @@ fn parse_directive(line: &str) -> Result<Directive> {
             ErrorCode::PatternConflict,
             format!("empty directive: {line}"),
         )
+        .with_repair(StructuredError::fix_directive_repair(
+            line,
+            None,
+            "remove the empty `#` line or write a directive (e.g. `# allow=many`)",
+        ))
         .into()),
         ["optional"] => Ok(Directive::Optional(true)),
         ["repeat"] => Ok(Directive::Repeat),
@@ -63,15 +78,21 @@ fn parse_directive(line: &str) -> Result<Directive> {
                     ErrorCode::PatternConflict,
                     format!("metavariable directive missing name: {line}"),
                 )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "name",
+                    format!("add the metavariable name (e.g. `# {single} E`)").as_str(),
+                ))
                 .into());
             }
             // T113: unknown bare directives fail fast (SPEC 2.6) — no
-            // forward-compat silent ignore.
+            // forward-compat silent ignore. WI-3: machine repair.
+            let corrected = suggest_bare(single);
             Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!("unknown directive `#{single}`: {line}"),
             )
             .with_suggestion("check SPEC 9.3 for the supported directive list".to_string())
+            .with_repair(directive_repair(line, corrected))
             .into())
         }
         [kind, rest @ ..] => {
@@ -84,6 +105,11 @@ fn parse_directive(line: &str) -> Result<Directive> {
                             ErrorCode::PatternConflict,
                             format!("invalid symbol directive (want `# symbol Name=path`): {line}"),
                         )
+                        .with_repair(StructuredError::fix_directive_repair(
+                            line,
+                            None,
+                            "write `# symbol Name=path` (replace Name/path with the capture name and crate path)",
+                        ))
                         .into());
                     }
                     let (n, p) = rest[0].split_once('=').ok_or_else(|| {
@@ -91,6 +117,11 @@ fn parse_directive(line: &str) -> Result<Directive> {
                             ErrorCode::PatternConflict,
                             format!("invalid symbol directive (want `# symbol Name=path`): {line}"),
                         )
+                        .with_repair(StructuredError::fix_directive_repair(
+                            line,
+                            None,
+                            "write `# symbol Name=path` (replace Name/path with the capture name and crate path)",
+                        ))
                     })?;
                     validate_metavar_name(n)?;
                     if p.is_empty() {
@@ -98,6 +129,11 @@ fn parse_directive(line: &str) -> Result<Directive> {
                             ErrorCode::PatternConflict,
                             format!("symbol path must not be empty: {line}"),
                         )
+                        .with_repair(StructuredError::fix_directive_repair(
+                            line,
+                            None,
+                            "write `# symbol Name=path` (replace Name/path with the capture name and crate path)",
+                        ))
                         .into());
                     }
                     return Ok(Directive::Symbol {
@@ -121,6 +157,10 @@ fn parse_directive(line: &str) -> Result<Directive> {
                             ErrorCode::PatternConflict,
                             format!("invalid metavariable name `{n}` in: {line}"),
                         )
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "name",
+                            "rename the metavariable to a single identifier (e.g. `E`)",
+                        ))
                         .into());
                     }
                     validate_metavar_name(n)?;
@@ -131,16 +171,23 @@ fn parse_directive(line: &str) -> Result<Directive> {
                         ErrorCode::PatternConflict,
                         format!("metavariable directive missing name: {line}"),
                     )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "name",
+                        format!("add the metavariable name (e.g. `# {kind} E`)").as_str(),
+                    ))
                     .into());
                 }
                 return Ok(Directive::MetaVar { kind: mk, names });
             }
             // T113: unknown multi-token directives fail fast (SPEC 2.6).
+            // WI-3: machine repair.
+            let corrected = suggest_bare(tokens[0]);
             Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!("unknown directive `#{}`: {line}", tokens[0]),
             )
             .with_suggestion("check SPEC 9.3 for the supported directive list".to_string())
+            .with_repair(directive_repair(line, corrected))
             .into())
         }
     }
@@ -164,41 +211,168 @@ fn split_kv(body: &str) -> Option<(&str, &str)> {
 }
 
 /// Known `key=value` directive keys (SPEC 9.3). Unknown keys are rejected
-/// with `RSMPL_PATTERN_CONFLICT` (T113 fail-fast, SPEC 2.6); only
-/// edit-distance-1 near-misses get the did-you-mean suggestion, every other
-/// unknown key gets the SPEC 9.3 pointer.
+/// with `RSMPL_PATTERN_CONFLICT` (T113 fail-fast, SPEC 2.6); near-misses
+/// within edit distance 2 get the did-you-mean suggestion, every other
+/// unknown key gets the SPEC 9.3 pointer. WI-3: this table is the single
+/// spelling list — engine/pattern reuse `suggest_directive_key` /
+/// `suggest_value` instead of a second table.
 const KNOWN_KV_KEYS: &[&str] = &[
     "lang", "allow", "optional", "scope", "bind", "use", "attrs", "mode", "macro", "format",
     "returns", "root", "fallback", "metavars", "symbol", "follow",
 ];
 
-fn edit_distance_one(a: &str, b: &str) -> bool {
-    if a == b {
-        return false;
-    }
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() == b.len() {
-        return a.iter().zip(b.iter()).filter(|(x, y)| x != y).count() == 1;
-    }
-    if a.len() + 1 == b.len() || b.len() + 1 == a.len() {
-        let (short, long) = if a.len() < b.len() { (a, b) } else { (b, a) };
-        let mut i = 0;
-        let mut j = 0;
-        let mut skipped = false;
-        while i < short.len() && j < long.len() {
-            if short[i] == long[j] {
-                i += 1;
-                j += 1;
-            } else if !skipped {
-                skipped = true;
-                j += 1;
-            } else {
-                return false;
-            }
+/// Levenshtein edit distance over chars (directive keys/values are tiny;
+/// quadratic DP is fine and has no dependency).
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for i in 1..=a.len() {
+        let mut cur = vec![i; b.len() + 1];
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
         }
-        return true;
+        prev = cur;
     }
-    false
+    prev[b.len()]
+}
+
+/// Closest candidate within edit distance 2 (`None` when nothing is
+/// close — the WI-3 honesty gate). Ties break toward the earlier table
+/// entry so suggestions are deterministic.
+pub fn closest_within<'a>(needle: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let mut best: Option<(&'a str, usize)> = None;
+    for c in candidates {
+        let d = edit_distance(needle, c);
+        match best {
+            Some((_, bd)) if d >= bd => {}
+            _ => best = Some((c, d)),
+        }
+    }
+    match best {
+        Some((c, d)) if d <= 2 => Some(c),
+        _ => None,
+    }
+}
+
+/// Closest candidate with the same first character and within edit
+/// distance 2 (`None` otherwise).
+///
+/// The first-character gate keeps far misses honest (`# foo=bar`
+/// suggests nothing — `foo` is distance 2 from `root` but shares no
+/// prefix intent, and a wrong `did_you_mean` costs the agent a retry
+/// round). Typo'd words overwhelmingly keep their first letter, so the
+/// `# alow=many` → `# allow=many` class still fires. Values stay
+/// ungated (`closest_within`): their closed sets are tiny and the far
+/// miss lists every legal option.
+fn closest_gated<'a>(needle: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let first = needle.chars().next()?;
+    let mut best: Option<(&'a str, usize)> = None;
+    for c in candidates {
+        if !c.starts_with(first) {
+            continue;
+        }
+        let d = edit_distance(needle, c);
+        match best {
+            Some((_, bd)) if d >= bd => {}
+            _ => best = Some((c, d)),
+        }
+    }
+    match best {
+        Some((c, d)) if d <= 2 => Some(c),
+        _ => None,
+    }
+}
+
+/// Closest known `key=value` directive key: same first character and
+/// within edit distance 2 (`None` otherwise).
+pub fn suggest_directive_key(k: &str) -> Option<&'static str> {
+    // The table entries are `&'static str`; re-match the gated hit
+    // against the same table to recover the static lifetime.
+    let hit = closest_gated(k, KNOWN_KV_KEYS)?;
+    KNOWN_KV_KEYS.iter().find(|c| **c == hit).copied()
+}
+
+/// Bare (valueless) directive flags (SPEC 9.3).
+const BARE_FLAGS: &[&str] = &["optional", "repeat", "sweep"];
+
+/// Closest bare-word directive spelling (bare flag or `k=v` key),
+/// rendered as the corrected line: flags replay verbatim, `lang`
+/// replays its only spelling, other keys name the value slot.
+fn suggest_bare(word: &str) -> Option<String> {
+    // Gated over flags + keys; the display mapping is the only second
+    // list, and it renders rather than re-spells.
+    const ALL: &[&str] = &[
+        "optional", "repeat", "sweep", "lang", "allow", "scope", "bind", "use", "attrs", "mode",
+        "macro", "format", "returns", "root", "fallback", "metavars", "symbol", "follow",
+    ];
+    debug_assert!(ALL.len() == BARE_FLAGS.len() + KNOWN_KV_KEYS.len() - 1);
+    match closest_gated(word, ALL) {
+        Some("lang") => Some("# lang=rust".to_string()),
+        Some(c) if BARE_FLAGS.contains(&c) => Some(format!("#{c}")),
+        Some(c) => Some(format!("#{c}=... (see SPEC 9.3 for the value)")),
+        None => None,
+    }
+}
+
+/// Closest allowed value within distance 2 (for closed value sets).
+pub fn suggest_value<'a>(v: &str, allowed: &[&'a str]) -> Option<&'a str> {
+    closest_within(v, allowed)
+}
+
+/// WI-3 `fix_directive` repair for one offending directive line.
+///
+/// `corrected` is the full corrected `# ...` line when a close spelling
+/// exists; when `None`, `write_instead` names the removal (the only
+/// machine-applicable exit for a far miss).
+fn directive_repair(found_line: &str, corrected: Option<String>) -> serde_json::Value {
+    match corrected {
+        Some(line) => {
+            StructuredError::fix_directive_repair(found_line, Some(line.as_str()), line.as_str())
+        }
+        None => StructuredError::fix_directive_repair(
+            found_line,
+            None,
+            format!("remove `{found_line}` (see SPEC 9.3 for the supported directive list)")
+                .as_str(),
+        ),
+    }
+}
+
+/// Corrected full line for an unknown key carrying the authored value
+/// (canonical `# key=value` spacing — the diet form agents write).
+fn corrected_kv_line(best_key: &str, v: &str) -> String {
+    format!("# {best_key}={v}")
+}
+
+/// WI-3 repair for an invalid value of a known key with a closed set
+/// (canonical `# key=value` spacing throughout).
+///
+/// A near-miss (within distance 2) repairs to the full corrected line;
+/// a far miss repairs to a removal naming every legal spelling, so the
+/// agent never has to guess the value domain.
+fn bad_value_repair(key: &str, v: &str, allowed: &[&str]) -> serde_json::Value {
+    let found = format!("# {key}={v}");
+    match suggest_value(v, allowed) {
+        Some(best) => {
+            let corrected = format!("# {key}={best}");
+            StructuredError::fix_directive_repair(
+                &found,
+                Some(corrected.as_str()),
+                corrected.as_str(),
+            )
+        }
+        None => {
+            let options = allowed
+                .iter()
+                .map(|a| format!("# {key}={a}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let write_instead = format!("remove `{found}` or use one of: {options}");
+            StructuredError::fix_directive_repair(&found, None, write_instead.as_str())
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -212,6 +386,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                     ErrorCode::PatternConflict,
                     format!("unsupported language `{v}` (only `rust` supported): {line}"),
                 )
+                .with_repair(bad_value_repair("lang", v, &["rust"]))
                 .into())
             }
         }
@@ -222,6 +397,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid allow value `{v}` (want one|many): {line}"),
             )
+            .with_repair(bad_value_repair("allow", v, &["one", "many"]))
             .into()),
         },
         "optional" => match v {
@@ -231,6 +407,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid optional value `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair("optional", v, &["true", "false"]))
             .into()),
         },
         "repeat" => Err(StructuredError::new(
@@ -238,6 +415,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
             format!("invalid repeat value `{v}` (write bare `# repeat`): {line}"),
         )
         .with_suggestion("write bare `# repeat` with no value".to_string())
+        .with_repair(StructuredError::fix_directive_repair(
+            line,
+            Some("# repeat"),
+            "# repeat",
+        ))
         .into()),
         "sweep" => crate::sweep::reject_value(v, line),
         "scope" => match v {
@@ -250,6 +432,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid scope `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair(
+                "scope",
+                v,
+                &["contained", "anchor", "overlap", "exact", "file"],
+            ))
             .into()),
         },
         "bind" => {
@@ -269,6 +456,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid attrs value `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair(
+                "attrs",
+                v,
+                &["preserve", "absent", "explicit", "strip"],
+            ))
             .into()),
         },
         "mode" => match v {
@@ -278,6 +470,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid mode `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair("mode", v, &["ast", "tokens"]))
             .into()),
         },
         "macro" => match v {
@@ -291,6 +484,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                     ErrorCode::PatternConflict,
                     format!("invalid macro mode `{v}`: {line}"),
                 )
+                .with_repair(bad_value_repair(
+                    "macro",
+                    v,
+                    &["invocation", "token_tree", "expanded"],
+                ))
                 .into())
             }
         },
@@ -302,6 +500,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid format `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair(
+                "format",
+                v,
+                &["preserve", "rustfmt", "canonical"],
+            ))
             .into()),
         },
         "format_scope" => Err(StructuredError::new(
@@ -311,6 +514,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
         .with_suggestion(
             "remove the directive — only `# format=preserve` is supported".to_string(),
         )
+        .with_repair(StructuredError::fix_directive_repair(
+            line,
+            None,
+            format!("remove `{line}` — only `# format=preserve` is supported").as_str(),
+        ))
         .into()),
         "returns" => match v {
             "none" => Ok(Directive::ReturnsNone(true)),
@@ -318,6 +526,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid returns `{v}` (only `none` supported): {line}"),
             )
+            .with_repair(bad_value_repair("returns", v, &["none"]))
             .into()),
         },
         "root" => Ok(Directive::Root(v.to_string())),
@@ -327,6 +536,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid fallback `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair("fallback", v, &["syntax"]))
             .into()),
         },
         "metavars" => match v {
@@ -336,6 +546,7 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid metavars `{v}`: {line}"),
             )
+            .with_repair(bad_value_repair("metavars", v, &["sigiled", "bare"]))
             .into()),
         },
         "edition" => Err(StructuredError::new(
@@ -345,6 +556,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
         .with_suggestion(
             "remove the directive — edition is the toolchain default in v0.1".to_string(),
         )
+        .with_repair(StructuredError::fix_directive_repair(
+            line,
+            None,
+            format!("remove `{line}` — edition is the toolchain default in v0.1").as_str(),
+        ))
         .into()),
         "symbol" => {
             // `# symbol=...` without name — invalid; canonical is `# symbol N=P`.
@@ -352,6 +568,11 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 ErrorCode::PatternConflict,
                 format!("invalid symbol directive (want `# symbol Name=path`): {line}"),
             )
+            .with_repair(StructuredError::fix_directive_repair(
+                line,
+                None,
+                "write `# symbol Name=path` (replace Name/path with the capture name and crate path)",
+            ))
             .into())
         }
         // WI-6a: `# follow=uses` (SPEC 9.3/14.8) — same-file use-site
@@ -363,28 +584,26 @@ fn parse_kv_directive(k: &str, v: &str, line: &str) -> Result<Directive> {
                 format!("invalid follow value `{v}` (only `uses` is supported in v0.1): {line}"),
             )
             .with_suggestion("write `# follow=uses`".to_string())
+            .with_repair(bad_value_repair("follow", v, &["uses"]))
             .into()),
         },
         _ => {
-            for known in KNOWN_KV_KEYS {
-                if edit_distance_one(k, known) {
-                    return Err(StructuredError::new(
-                        ErrorCode::PatternConflict,
-                        format!(
-                            "unknown directive `#{k}={v}` (did you mean `#{known}=...`?): {line}"
-                        ),
-                    )
-                    .with_suggestion(format!("use `#{known}=...`"))
-                    .into());
-                }
-            }
-            // T113: unknown `k=v` directives fail fast (SPEC 2.6).
-            Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                format!("unknown directive `#{k}={v}`: {line}"),
-            )
-            .with_suggestion("check SPEC 9.3 for the supported directive list".to_string())
-            .into())
+            // WI-3: machine repair over the shared table (distance ≤ 2).
+            let corrected = suggest_directive_key(k).map(|best| corrected_kv_line(best, v));
+            let suggestion = match suggest_directive_key(k) {
+                Some(best) => format!("use `#{best}=...`"),
+                None => "check SPEC 9.3 for the supported directive list".to_string(),
+            };
+            let message = match suggest_directive_key(k) {
+                Some(best) => format!(
+                    "unknown directive `#{k}={v}` (did you mean `#{best}=...`?): {line}"
+                ),
+                None => format!("unknown directive `#{k}={v}`: {line}"),
+            };
+            Err(StructuredError::new(ErrorCode::PatternConflict, message)
+                .with_suggestion(suggestion)
+                .with_repair(directive_repair(line, corrected))
+                .into())
         }
     }
 }
@@ -395,6 +614,10 @@ fn validate_metavar_name(n: &str) -> Result<()> {
             ErrorCode::PatternConflict,
             "empty metavariable/capture name".to_string(),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "name",
+            "name the metavariable with a single letter (e.g. `# expr E`)",
+        ))
         .into());
     }
     let mut chars = n.chars();
@@ -404,6 +627,10 @@ fn validate_metavar_name(n: &str) -> Result<()> {
             ErrorCode::PatternConflict,
             format!("invalid name `{n}` (must start with letter or _)"),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "name",
+            "rename the metavariable to start with a letter or `_` (e.g. `E`)",
+        ))
         .into());
     }
     if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -411,6 +638,10 @@ fn validate_metavar_name(n: &str) -> Result<()> {
             ErrorCode::PatternConflict,
             format!("invalid name `{n}` (only alphanumeric + _ allowed)"),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "name",
+            "rename the metavariable to alphanumeric + `_` only (e.g. `E`)",
+        ))
         .into());
     }
     // WI-5b-follow: `ELLIPSIS*` is reserved for `...` markers — a declared
@@ -424,6 +655,10 @@ fn validate_metavar_name(n: &str) -> Result<()> {
             format!("reserved name `{n}` (`ELLIPSIS*` names the `...` marker; rename the metavariable, e.g. `E`)"),
         )
         .with_suggestion("rename the metavariable (e.g. `E`); quote the literal with backticks (e.g. `` `ELLIPSIS_FOO` ``)".to_string())
+        .with_repair(StructuredError::fix_pattern_repair(
+            "name",
+            "rename the metavariable (e.g. `E`); quote the literal with backticks (e.g. `` `ELLIPSIS_FOO` ``)",
+        ))
         .into());
     }
     Ok(())

@@ -220,15 +220,31 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // silent no-op against SPEC 2.6 (same class as T113).
     if let Some(r) = root.as_deref() {
         if !matches!(r, "item" | "expr" | "stmt" | "type") {
+            // WI-3: `fix_directive` over the shared distance-2 table (no
+            // second spelling list); far misses repair to a removal.
+            let close = rsmpl_patch::suggest_value(r, &["item", "expr", "stmt", "type"]);
+            let found = format!("root={r}");
+            let (did_you_mean, write_instead) = match close {
+                Some(best) => {
+                    let line = format!("# root={best}");
+                    (Some(line.clone()), line)
+                }
+                None => (
+                    None,
+                    "remove the directive or use `# root=item|expr|stmt|type` (see SPEC 13.4)"
+                        .to_string(),
+                ),
+            };
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
                     "unknown `# root=` value `{r}` (only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4)"
                 ),
             )
-            .with_repair(StructuredError::fix_pattern_repair(
-                "root",
-                "only `item/expr/stmt/type` are supported in v0.1; remove it or use a supported value — see SPEC 13.4",
+            .with_repair(StructuredError::fix_directive_repair(
+                found.as_str(),
+                did_you_mean.as_deref(),
+                write_instead.as_str(),
             )));
         }
     }

@@ -86,6 +86,11 @@ pub(crate) fn noop_sweep_error(rule: &str, file: &str, range_desc: &str) -> Stru
     .with_suggestion(
         "change the plus side so the rewrite alters the matched text, or restrict the hunk range",
     )
+    .with_repair(serde_json::json!({
+        "action": "read_file",
+        "file": file,
+        "range": range_desc,
+    }))
 }
 
 /// WI-1b: true for rewrite kinds that owe the plus-instantiation
@@ -112,6 +117,11 @@ pub(crate) fn instantiation_error(rule: &str, file: &str, range_desc: &str) -> S
     .with_suggestion(
         "read the reported spans in the post-image file; fix the plus side so it matches the intended output, or restrict the hunk range",
     )
+    .with_repair(serde_json::json!({
+        "action": "read_file",
+        "file": file,
+        "range": range_desc,
+    }))
 }
 
 /// WI-1b/WI-1.2/WI-1.4: check the instantiated plus verifies in the

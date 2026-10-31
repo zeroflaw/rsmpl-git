@@ -168,6 +168,7 @@ fn range_err(rule: &str, line: u32) -> StructuredError {
         format!("span line {line} outside file"),
     )
     .with_rule(rule)
+    .with_repair(StructuredError::internal_repair())
 }
 
 /// Shared ident-span rewrite over collected candidates (attrs policies
@@ -216,7 +217,8 @@ fn apply_candidates(
                 ErrorCode::MatchConflict,
                 "member name span mismatch (file changed during matching?)",
             )
-            .with_rule(&rule));
+            .with_rule(&rule)
+            .with_repair(StructuredError::internal_repair()));
         }
         edits.push(TextEdit::new(a, b, new.to_string()).with_label("rename"));
         if hunk.attrs_policy() == AttrsPolicy::Strip && !c.member_attrs.is_empty() {
@@ -344,7 +346,11 @@ pub fn apply_field_rename_hunk(
             ),
         )
         .with_rule(hunk.rule_name())
-        .with_suggestion("write the field's real type on both sides, or use an ordinary hunk")),
+        .with_suggestion("write the field's real type on both sides, or use an ordinary hunk")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "type",
+            "write the field's real type on both sides, or use an ordinary hunk",
+        ))),
     }
     };
     apply_candidates(

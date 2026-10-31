@@ -189,7 +189,29 @@ fn zero_match_suggestion(file: &str, wide: Option<usize>) -> String {
     }
 }
 
+/// WI-3: partial-overlap `RSMPL_MATCH_CONFLICT` (SPEC 17.6/25.4).
+///
+/// The shape is a defensive backstop (real Rust AST nodes nest or stay
+/// disjoint), but a fired backstop still owes the agent a next action:
+/// narrow the range to one candidate or split into two hunks. One
+/// constructor serves every matcher so the repair cannot drift per
+/// call shape.
+pub fn partial_overlap_error(rule: &str) -> StructuredError {
+    StructuredError::new(
+        ErrorCode::MatchConflict,
+        "partially overlapping matches cannot be merged",
+    )
+    .with_rule(rule)
+    .with_repair(StructuredError::fix_pattern_repair(
+        "overlap",
+        "narrow the hunk range to cover one candidate, or split into two hunks",
+    ))
+}
+
 fn range_err(rule: &str, file: &str, start: u32, len: u32, n: u32) -> StructuredError {
+    // WI-3: machine `fix_range` repair (clamping rule shared with the
+    // ordinary-hunk applier via `fix_range_for`). The agent pastes
+    // `write_instead` verbatim.
     StructuredError::new(
         ErrorCode::RangeConflict,
         format!("old range {start},{len} exceeds file length ({n} lines)"),
@@ -198,6 +220,7 @@ fn range_err(rule: &str, file: &str, start: u32, len: u32, n: u32) -> Structured
     .with_file(file)
     .with_range(format!("{start}..{}", start + len))
     .with_suggestion(format!("read `{file}` to list valid ranges"))
+    .with_repair(StructuredError::fix_range_for(file, start, len, n))
 }
 
 /// v0.1 capability gate (SPEC 22-23): only `format=preserve` and AST matching

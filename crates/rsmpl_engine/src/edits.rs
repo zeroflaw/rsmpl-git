@@ -85,10 +85,14 @@ pub fn apply_edits(text: &str, edits: Vec<TextEdit>) -> Result<String, Structure
     let mut applied: Vec<TextEdit> = Vec::new();
     for (_, e) in indexed {
         if e.end > out.len() || e.start > e.end {
+            // WI-3: internal invariant (matcher-produced edits are always
+            // in-bounds; only hand-built edit lists trip this). The repair
+            // names the patch-side exit anyway: shrink the hunk range.
             return Err(StructuredError::new(
                 ErrorCode::RangeConflict,
                 format!("edit range {}..{} outside file", e.start, e.end),
-            ));
+            )
+            .with_repair(StructuredError::internal_repair()));
         }
         for prev in &applied {
             // `applied` holds edits at higher offsets already applied; `e`
@@ -98,7 +102,11 @@ pub fn apply_edits(text: &str, edits: Vec<TextEdit>) -> Result<String, Structure
                 return Err(StructuredError::new(
                     ErrorCode::GitHunkConflict,
                     "overlapping edits cannot be merged",
-                ));
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "overlap",
+                    "apply the overlapping rewrites in separate runs, or make the ranges disjoint",
+                )));
             }
         }
         out.replace_range(e.start..e.end, &e.replacement);
@@ -294,7 +302,11 @@ pub(crate) fn check_overlaps(edits: &[TextEdit], path: &str) -> Result<(), Struc
                 .with_file(path)
                 .with_suggestion(
                     "apply the overlapping rewrites in separate runs, or make the ranges disjoint",
-                ));
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "overlap",
+                    "apply the overlapping rewrites in separate runs, or make the ranges disjoint",
+                )));
             }
         }
     }

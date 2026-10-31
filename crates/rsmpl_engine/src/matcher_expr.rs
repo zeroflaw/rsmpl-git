@@ -506,11 +506,7 @@ pub fn apply_expr_hunk(
             let overlap = cand.start < e && s < cand.end;
             let nested = (s <= cand.start && cand.end <= e) || (cand.start <= s && e <= cand.end);
             if overlap && !nested {
-                return Err(StructuredError::new(
-                    ErrorCode::MatchConflict,
-                    "partially overlapping matches cannot be merged",
-                )
-                .with_rule(&rule));
+                return Err(crate::validate::partial_overlap_error(&rule));
             }
         }
         // T20 `# repeat`: fold nested matches by rewriting each bound
@@ -645,7 +641,11 @@ fn fold_bindings(
             "repeat nesting exceeds 64 levels (pathological nesting?)",
         )
         .with_rule(rule)
-        .with_suggestion("remove `# repeat` or simplify the nesting"));
+        .with_suggestion("remove `# repeat` or simplify the nesting")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "repeat",
+            "remove `# repeat` or simplify the nesting",
+        )));
     }
     // Snapshot names: rewriting mutates the map.
     let names: Vec<String> = bindings.keys().cloned().collect();
@@ -716,11 +716,7 @@ fn rewrite_nested(
             let overlap = cand.start < e && s < cand.end;
             let nested = (s <= cand.start && cand.end <= e) || (cand.start <= s && e <= cand.end);
             if overlap && !nested {
-                return Err(StructuredError::new(
-                    ErrorCode::MatchConflict,
-                    "partially overlapping matches cannot be merged",
-                )
-                .with_rule(rule));
+                return Err(crate::validate::partial_overlap_error(rule));
             }
         }
         fold_bindings(

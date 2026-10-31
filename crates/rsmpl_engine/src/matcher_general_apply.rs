@@ -70,7 +70,11 @@ fn fold_general_bindings(
             "repeat nesting exceeds 64 levels (pathological nesting?)",
         )
         .with_rule(rule)
-        .with_suggestion("remove `# repeat` or simplify the nesting"));
+        .with_suggestion("remove `# repeat` or simplify the nesting")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "repeat",
+            "remove `# repeat` or simplify the nesting",
+        )));
     }
     // Snapshot names: rewriting mutates the map.
     let names: Vec<String> = bindings.keys().cloned().collect();
@@ -142,11 +146,7 @@ fn rewrite_nested_general(
         }
         for &(s, e) in &accepted {
             if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
-                return Err(StructuredError::new(
-                    ErrorCode::MatchConflict,
-                    "partially overlapping matches cannot be merged",
-                )
-                .with_rule(rule));
+                return Err(crate::validate::partial_overlap_error(rule));
             }
         }
         fold_general_bindings(
@@ -342,7 +342,8 @@ pub fn apply_general_hunk(
                                 "attached attributes do not match explicitly written pattern attributes",
                             )
                             .with_rule(&rule)
-                            .with_suggestion("use `# attrs=preserve` (default) to ignore attributes"));
+                            .with_suggestion("use `# attrs=preserve` (default) to ignore attributes")
+                            .with_repair(StructuredError::add_directive_repair("# attrs=preserve")));
                         }
                     }
                     AttrsPolicy::Absent | AttrsPolicy::Explicit => {
@@ -354,7 +355,9 @@ pub fn apply_general_hunk(
                                     ErrorCode::MatchConflict,
                                     "attached attributes do not match explicitly written pattern attributes",
                                 )
-                                .with_rule(&rule));
+                                .with_rule(&rule)
+                                .with_suggestion("use `# attrs=preserve` (default) to ignore attributes")
+                                .with_repair(StructuredError::add_directive_repair("# attrs=preserve")));
                             }
                         } else if !tgt.attrs.is_empty() {
                             return Err(StructuredError::new(
@@ -367,7 +370,11 @@ pub fn apply_general_hunk(
                                     }
                                 ),
                             )
-                            .with_rule(&rule));
+                            .with_rule(&rule)
+                            .with_repair(StructuredError::fix_pattern_repair(
+                                "attrs",
+                                "remove the `# attrs=...` directive to ignore attributes (the default), or write the attributes into the pattern",
+                            )));
                         }
                     }
                     AttrsPolicy::Strip => {}
@@ -421,11 +428,7 @@ pub fn apply_general_hunk(
                 }
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
-                        return Err(StructuredError::new(
-                            ErrorCode::MatchConflict,
-                            "partially overlapping matches cannot be merged",
-                        )
-                        .with_rule(&rule));
+                        return Err(crate::validate::partial_overlap_error(&rule));
                     }
                 }
                 accepted.push((node.start, node.end));
@@ -514,11 +517,7 @@ pub fn apply_general_hunk(
                 }
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
-                        return Err(StructuredError::new(
-                            ErrorCode::MatchConflict,
-                            "partially overlapping matches cannot be merged",
-                        )
-                        .with_rule(&rule));
+                        return Err(crate::validate::partial_overlap_error(&rule));
                     }
                 }
                 accepted.push((node.start, node.end));
@@ -566,11 +565,7 @@ pub fn apply_general_hunk(
                 edits.push(TextEdit::new(node.start, node.end, replacement));
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
-                        return Err(StructuredError::new(
-                            ErrorCode::MatchConflict,
-                            "partially overlapping matches cannot be merged",
-                        )
-                        .with_rule(&rule));
+                        return Err(crate::validate::partial_overlap_error(&rule));
                     }
                 }
                 accepted.push((node.start, node.end));

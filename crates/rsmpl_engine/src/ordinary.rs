@@ -15,16 +15,25 @@ pub fn ordinary_hunk_edits(
     index: &LineIndex,
     original: &str,
     hunk: &OrdinaryHunk,
+    path: &str,
 ) -> Result<Vec<TextEdit>, StructuredError> {
     let rule = hunk.header.rule.clone().unwrap_or_default();
+    // WI-3: range-vs-file faults on ordinary hunks carry `fix_range`
+    // (same clamping rule as the semantic range validator); content
+    // mismatches keep the `fix_context` they already carry.
+    let n_lines = index.line_count() as u32;
+    let range_repair =
+        StructuredError::fix_range_for(path, hunk.header.old_start, hunk.header.old_len, n_lines);
     let fail = |msg: String| {
         StructuredError::new(ErrorCode::GitHunkConflict, msg)
             .with_rule(&rule)
+            .with_file(path)
             .with_range(format!(
                 "{}..{}",
                 hunk.header.old_start,
                 hunk.header.old_start + hunk.header.old_len
             ))
+            .with_repair(range_repair.clone())
     };
     let lines: Vec<&str> = original.split('\n').collect();
     // `split('\n')` on trailing-newline text yields a final ""; hunk line
@@ -194,7 +203,7 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n mod old;\n+mod new;\n\n fn main() {}\n",
         );
         let idx = LineIndex::new(src);
-        let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
+        let edits = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap();
         let out = crate::edits::apply_edits(src, edits).unwrap();
         assert!(out.contains("mod new;"));
     }
@@ -206,7 +215,7 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n mod old;\n+mod new;\n\n fn main() {}\n",
         );
         let idx = LineIndex::new(src);
-        assert!(ordinary_hunk_edits(&idx, src, &h).is_err());
+        assert!(ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").is_err());
     }
 
     #[test]
@@ -218,7 +227,7 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n WRONG-CTX\n",
         );
         let idx = LineIndex::new(src);
-        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        let err = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap_err();
         assert_eq!(err.code, ErrorCode::GitHunkConflict);
         let repair = err.repair.expect("mismatch must carry repair");
         assert_eq!(repair["action"], serde_json::json!("fix_context"));
@@ -234,7 +243,7 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n fn a() {}\n-WRONG\n+fn b2() {}\n",
         );
         let idx = LineIndex::new(src);
-        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        let err = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap_err();
         assert_eq!(err.code, ErrorCode::GitHunkConflict);
         let repair = err.repair.expect("mismatch must carry repair");
         assert_eq!(repair["action"], serde_json::json!("fix_context"));
@@ -252,7 +261,7 @@ mod tests {
             "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n a\n \n b\n",
         );
         let idx = LineIndex::new(src);
-        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        let err = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap_err();
         assert_eq!(err.code, ErrorCode::GitHunkConflict);
         let s = err.suggestion.expect("blank mismatch must hint prefix");
         assert!(s.contains("empty context"), "got: {s}");
@@ -267,7 +276,7 @@ mod tests {
             "diff --git a/link b/link\n--- /dev/null\n+++ b/link\n@@ -0,0 +1,1 @@\n+real.txt\n\\ No newline at end of file\n",
         );
         let idx = LineIndex::new(src);
-        let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
+        let edits = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap();
         let out = crate::edits::apply_edits(src, edits).unwrap();
         assert_eq!(out, "real.txt");
     }
@@ -280,7 +289,7 @@ mod tests {
             "diff --git a/link b/link\n--- a/link\n+++ b/link\n@@ -1,1 +1,1 @@\n-real.txt\n\\ No newline at end of file\n+other.txt\n\\ No newline at end of file\n",
         );
         let idx = LineIndex::new(src);
-        let edits = ordinary_hunk_edits(&idx, src, &h).unwrap();
+        let edits = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap();
         let out = crate::edits::apply_edits(src, edits).unwrap();
         assert_eq!(out, "other.txt");
     }
@@ -314,7 +323,7 @@ mod tests {
         };
         let src = "fn main() {}\n";
         let idx = LineIndex::new(src);
-        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        let err = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap_err();
         assert_eq!(err.code, ErrorCode::GitHunkConflict);
         assert_eq!(err.message, "context line beyond EOF (line 2)");
     }
@@ -345,7 +354,7 @@ mod tests {
         };
         let src = "fn main() {}\n";
         let idx = LineIndex::new(src);
-        let err = ordinary_hunk_edits(&idx, src, &h).unwrap_err();
+        let err = ordinary_hunk_edits(&idx, src, &h, "src/lib.rs").unwrap_err();
         assert_eq!(err.code, ErrorCode::GitHunkConflict);
         assert_eq!(err.message, "removal beyond EOF (line 2)");
     }

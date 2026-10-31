@@ -244,11 +244,7 @@ pub fn apply_sequence_hunk(
             }
             for &(s, e) in &accepted {
                 if wstart < e && s < wend && !(s <= wstart && wend <= e) {
-                    return Err(StructuredError::new(
-                        ErrorCode::MatchConflict,
-                        "partially overlapping matches cannot be merged",
-                    )
-                    .with_rule(&rule));
+                    return Err(crate::validate::partial_overlap_error(&rule));
                 }
             }
             accepted.push((wstart, wend));

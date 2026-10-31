@@ -246,7 +246,11 @@ pub(crate) fn check_attrs(
                     "item has attributes but `# attrs=absent` requires none",
                 )
                 .with_rule(rule)
-                .with_file(file));
+                .with_file(file)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "attrs",
+                    "remove `# attrs=absent` to ignore attributes (the default), or write the attributes into the pattern",
+                )));
             }
             Ok(())
         }
@@ -258,7 +262,8 @@ pub(crate) fn check_attrs(
                 )
                 .with_rule(rule)
                 .with_file(file)
-                .with_suggestion("use `# attrs=preserve` (default) to ignore attributes"));
+                .with_suggestion("use `# attrs=preserve` (default) to ignore attributes")
+                .with_repair(StructuredError::add_directive_repair("# attrs=preserve")));
             }
             Ok(())
         }
@@ -289,6 +294,7 @@ fn range_err(rule: &str, line: u32) -> StructuredError {
         format!("span line {line} outside file"),
     )
     .with_rule(rule)
+    .with_repair(StructuredError::internal_repair())
 }
 
 /// Apply an item-rename hunk. Returns the number of matches rewritten.
@@ -390,7 +396,8 @@ pub fn apply_item_rename_hunk(
                 ErrorCode::MatchConflict,
                 "item name span mismatch (file changed during matching?)",
             )
-            .with_rule(&rule));
+            .with_rule(&rule)
+            .with_repair(StructuredError::internal_repair()));
         }
         edits.push(TextEdit::new(a, b, plus_name.clone()).with_label("rename"));
         // `# attrs=strip`: delete attribute lines above the item.

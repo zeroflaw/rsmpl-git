@@ -24,6 +24,11 @@ pub(crate) fn reject_value(v: &str, line: &str) -> Result<Directive, ParseError>
         format!("invalid sweep value `{v}` (write bare `# sweep`): {line}"),
     )
     .with_suggestion("write bare `# sweep` with no value".to_string())
+    .with_repair(StructuredError::fix_directive_repair(
+        line,
+        Some("# sweep"),
+        "# sweep",
+    ))
     .into())
 }
 

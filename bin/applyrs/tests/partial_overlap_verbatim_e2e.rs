@@ -76,21 +76,36 @@ fn param_ellipsis_mixing_rejected_verbatim() {
 
 #[test]
 fn partial_overlap_spelling_shared_across_matchers() {
-    // Rot-gate: the four matcher sites + SPEC 17.6 must carry one spelling.
-    // (No real-Rust trigger exists — AST nodes nest or stay disjoint —
-    // so this pins the wording, not a runtime path.)
+    // Rot-gate: the matcher sites + SPEC 17.6 must carry one spelling.
+    // WI-3 funnels all eight sites through the shared
+    // `partial_overlap_error` constructor, so the gate accepts either
+    // the verbatim reason or the constructor call. (No real-Rust
+    // trigger exists — AST nodes nest or stay disjoint — so this pins
+    // the wording, not a runtime path.)
     let root = workspace_root();
     for rel in [
         "crates/rsmpl_engine/src/matcher_expr.rs",
         "crates/rsmpl_engine/src/matcher_general_apply.rs",
         "crates/rsmpl_engine/src/matcher_macro.rs",
+        "crates/rsmpl_engine/src/matcher_sequence.rs",
     ] {
         let text = std::fs::read_to_string(root.join(rel)).expect("engine source readable");
         assert!(
-            text.contains(PARTIAL_REASON),
-            "{rel} must carry the verbatim partial-overlap reason"
+            text.contains(PARTIAL_REASON) || text.contains("partial_overlap_error"),
+            "{rel} must carry the verbatim partial-overlap reason or the shared constructor"
         );
     }
+    // The shared constructor pins the one spelling plus its WI-3 repair.
+    let validate =
+        std::fs::read_to_string(root.join("crates/rsmpl_engine/src/validate.rs")).unwrap();
+    assert!(
+        validate.contains(PARTIAL_REASON),
+        "the shared constructor must carry the verbatim reason"
+    );
+    assert!(
+        validate.contains("narrow the hunk range to cover one candidate"),
+        "the shared constructor must carry the overlap repair"
+    );
     let spec = std::fs::read_to_string(root.join("SPEC.md")).expect("SPEC.md readable");
     assert!(
         spec.contains(PARTIAL_REASON),

@@ -164,10 +164,9 @@ is always 0-context, `--context N` renders reported/`--output` for vanilla `git 
 
 With `--format json`, failures print `{version, error: {code, rule, file, range,
 reason, suggestion, repair}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
-`repair` is `null` except on two ordinary-hunk errors, which carry machine
-self-correction (SPEC D.2): the count mismatch (`fix_header` with counts plus
-a drop-in corrected header) and the content mismatch (`fix_context` with the
-failing line plus expected/actual text for first-try repair).
+`repair` carries machine self-correction on every patch-input failure (SPEC D.2/25.9;
+paste `fix_range`/`fix_directive`/`fix_header`/`fix_context` verbatim, follow the
+`widen_scope`/`read_file`/`add_directive`/`fix_pattern`/`fix_name` template); `null` only on environmental IO.
 
 ## Full reference
 

@@ -89,6 +89,10 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
         if line.starts_with("@@ ") || line.starts_with("@@-") || line.starts_with("@@") {
             let section = current.as_mut().ok_or_else(|| {
                 StructuredError::new(ErrorCode::ParseConflict, "hunk header outside file section")
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "section",
+                        "start the patch with a `diff --git a/.. b/..` file section before the first `@@` header",
+                    ))
             })?;
             let target = section.target_path.clone();
             let (hunk, next) = parse_hunk(&lines, idx, &target)?;
@@ -151,6 +155,10 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
                 ErrorCode::ParseConflict,
                 format!("file metadata outside file section: {line}"),
             )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "section",
+                "move the metadata line below its `diff --git a/.. b/..` header",
+            ))
             .into());
         }
         // Unknown stray line.
@@ -164,6 +172,10 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
                 ErrorCode::ParseConflict,
                 format!("unexpected line outside file section: {line}"),
             )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "section",
+                "start the patch with a `diff --git a/.. b/..` file section (see SPEC 6 minimal recipe)",
+            ))
             .into());
         }
         // Stray line inside file section but outside hunk: be lenient and
@@ -184,6 +196,10 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
                 .with_file(sec.target_path.clone())
                 .with_range(format!("line {}", idx + 1))
                 .with_suggestion("remove the leading whitespace so the header starts at column 0")
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "header",
+                    "remove the leading whitespace so the header starts at column 0",
+                ))
                 .into());
             }
             sec.metadata.push(line.to_string());
@@ -209,6 +225,10 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
               (see SPEC 6 minimal recipe); check for an empty patch input \
               (stdin, --file, or --patch)",
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "empty",
+            "provide at least one `diff --git a/.. b/..` file section with a hunk (see SPEC 6 minimal recipe)",
+        ))
         .into());
     }
 
@@ -265,6 +285,10 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
                 "RSmPL hunk has no pattern body lines",
             )
             .with_rule(header.rule.clone().unwrap_or_default())
+            .with_repair(StructuredError::fix_pattern_repair(
+                "body",
+                "add at least one `-`/`+`/` ` pattern line below the header",
+            ))
             .into());
         }
         // Directive must precede body (SPEC 7.3) — guaranteed by construction.
@@ -284,6 +308,12 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
         // New-side elision (`@@ -old,len @@`) is RSmPL-only (SPEC 8):
         // ordinary hunks keep full Git two-range semantics.
         if header.new_elided {
+            // WI-3: `fix_header` names the exact header the agent pastes
+            // (new side mirrors the old side; counts verified at apply).
+            let expected_header = format!(
+                "@@ -{},{} +{},{} @@",
+                header.old_start, header.old_len, header.old_start, header.old_len
+            );
             return Err(StructuredError::new(
                 ErrorCode::ParseConflict,
                 format!(
@@ -294,6 +324,14 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
             .with_suggestion(
                 "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk",
             )
+            .with_repair(serde_json::json!({
+                "action": "fix_header",
+                "expected_old": header.old_len,
+                "expected_new": header.old_len,
+                "claimed_old": header.old_len,
+                "claimed_new": null,
+                "expected_header": expected_header,
+            }))
             .into());
         }
         let (mut body, mut next) = parse_body_lines(lines, idx, false)?;
@@ -419,6 +457,10 @@ fn parse_body_lines(
                     "directive line must appear immediately after hunk header, before body lines",
                 )
                 .with_suggestion("move the `#` line above the first `-`/`+`/` ` line")
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "directive",
+                    "move the `#` line above the first `-`/`+`/` ` line",
+                ))
                 .into());
             }
             break;
@@ -449,7 +491,15 @@ fn parse_body_lines(
 fn parse_hunk_header(line: &str) -> std::result::Result<HunkHeader, StructuredError> {
     // `@@ -old[,len] (+new[,len])? @@ tail`; the `+new` side may be elided
     // for RSmPL hunks (SPEC 8), defaulting to the old side (cf. SPEC 10.4).
-    let err = |msg: String| StructuredError::new(ErrorCode::ParseConflict, msg);
+    // WI-3: header-shape repairs name the exact header template.
+    let err = |msg: String| {
+        StructuredError::new(ErrorCode::ParseConflict, msg).with_repair(
+            StructuredError::fix_pattern_repair(
+                "header",
+                "write the header as `@@ -old[,len] [+new[,len]] @@ [rule=name]` (e.g. `@@ -1,3 @@ rule=r`)",
+            ),
+        )
+    };
     if !line.starts_with("@@") {
         return Err(err(format!("invalid hunk header: {line}")));
     }
@@ -488,22 +538,22 @@ fn parse_hunk_header(line: &str) -> std::result::Result<HunkHeader, StructuredEr
 }
 
 fn parse_range(s: &str, expect: char) -> std::result::Result<(u32, u32), StructuredError> {
-    let body = s.strip_prefix(expect).ok_or_else(|| {
+    // WI-3: range-shape repairs name the exact range template.
+    let range_err = |s: &str| {
         StructuredError::new(ErrorCode::ParseConflict, format!("invalid hunk range: {s}"))
-    })?;
+            .with_repair(StructuredError::fix_pattern_repair(
+                "header",
+                "write the range as `-start[,len]` / `+start[,len]` (e.g. `@@ -1,3 +1,3 @@`)",
+            ))
+    };
+    let body = s.strip_prefix(expect).ok_or_else(|| range_err(s))?;
     if let Some((a, b)) = body.split_once(',') {
-        let start: u32 = a.parse().map_err(|_| {
-            StructuredError::new(ErrorCode::ParseConflict, format!("invalid hunk range: {s}"))
-        })?;
-        let len: u32 = b.parse().map_err(|_| {
-            StructuredError::new(ErrorCode::ParseConflict, format!("invalid hunk range: {s}"))
-        })?;
+        let start: u32 = a.parse().map_err(|_| range_err(s))?;
+        let len: u32 = b.parse().map_err(|_| range_err(s))?;
         // Git allows `start=0` only with `len=0`.
         Ok((start, len))
     } else {
-        let start: u32 = body.parse().map_err(|_| {
-            StructuredError::new(ErrorCode::ParseConflict, format!("invalid hunk range: {s}"))
-        })?;
+        let start: u32 = body.parse().map_err(|_| range_err(s))?;
         Ok((start, 1))
     }
 }
@@ -522,10 +572,32 @@ fn parse_header_tags(tail: &str) -> std::result::Result<Option<String>, Structur
             if k == "rule" {
                 rule = Some(v);
             } else {
+                // WI-3: machine repair. Only `rule=` is legal in a header
+                // tail, so the only close spelling is `rule` itself
+                // (same first character, distance ≤ 2, e.g. `rul=x`);
+                // anything else repairs to a removal the agent applies
+                // verbatim.
+                let corrected =
+                    if k.starts_with('r') && crate::directives::edit_distance(k, "rule") <= 2 {
+                        Some(format!("rule={v}"))
+                    } else {
+                        None
+                    };
+                let write_instead = match &corrected {
+                    Some(c) => {
+                        format!("write `{c}` in the header tail (only `rule=` is supported)")
+                    }
+                    None => format!("remove `{k}={v}` (only `rule=` is supported in v0.1)"),
+                };
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,
                     format!("unknown header tag `{k}={v}` (only `rule=` is supported in v0.1; remove it, see SPEC 8.3)"),
-                ));
+                )
+                .with_repair(StructuredError::fix_directive_repair(
+                    format!("{k}={v}").as_str(),
+                    corrected.as_deref(),
+                    write_instead.as_str(),
+                )));
             }
         }
     }

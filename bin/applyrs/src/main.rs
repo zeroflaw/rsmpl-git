@@ -241,9 +241,19 @@ fn run() -> Result<(), CliError> {
         (Some(p), _) => p.clone(),
         (None, Some(f)) if f.as_os_str() == "-" => read_stdin()?,
         (None, Some(f)) => std::fs::read_to_string(f).map_err(|e| {
-            CliError::io_file(
-                format!("cannot read patch file {}: {e}", f.display()),
-                &f.to_string_lossy(),
+            // WI-3 allow-list: the unreadable patch file stays
+            // repair-null (environmental — no patch spelling fixes
+            // it), but the suggestion names the path.
+            let path = f.to_string_lossy().to_string();
+            CliError::Structured(
+                StructuredError::new(
+                    ErrorCode::IoConflict,
+                    format!("cannot read patch file {}: {e}", f.display()),
+                )
+                .with_file(&path)
+                .with_suggestion(format!(
+                    "check that `{path}` exists and is readable, then retry"
+                )),
             )
         })?,
         (None, None) => {
@@ -292,7 +302,16 @@ fn run() -> Result<(), CliError> {
             continue;
         }
         if let Some(reason) = reject_escaped_target(&rel) {
-            return Err(CliError::io_file(reason, &rel));
+            // WI-3: the escape stays `RSMPL_IO_CONFLICT` (T94 pin) but
+            // carries the mechanical patch-side fix, so the enumeration
+            // stays null-free.
+            let s = StructuredError::new(ErrorCode::IoConflict, reason)
+                .with_file(&rel)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "paths",
+                    "use a repo-relative `diff --git a/<path> b/<path>` target without leading `/` or `..`",
+                ));
+            return Err(CliError::Structured(s));
         }
         // T377: a rename section's hunks cite old-side coordinates, so
         // seed the new-side entry from the OLD file's content (the
@@ -300,7 +319,14 @@ fn run() -> Result<(), CliError> {
         let (read_rel, is_rename) = if section.is_rename() {
             let old_rel = rsmpl_patch::stripped_path(&section.old_path);
             if let Some(reason) = reject_escaped_target(&old_rel) {
-                return Err(CliError::io_file(reason, &old_rel));
+                // WI-3: same patch-side repair as the target-path escape.
+                let s = StructuredError::new(ErrorCode::IoConflict, reason)
+                    .with_file(&old_rel)
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "paths",
+                        "use a repo-relative `diff --git a/<path> b/<path>` target without leading `/` or `..`",
+                    ));
+                return Err(CliError::Structured(s));
             }
             (old_rel, true)
         } else {
@@ -1552,9 +1578,16 @@ fn prune_history(dir: &std::path::Path) {
 fn parse_err(e: rsmpl_patch::ParseError) -> CliError {
     match e {
         rsmpl_patch::ParseError::Structured(s) => CliError::Structured(s),
-        // Bare patch-structure faults with no rule/file context.
-        rsmpl_patch::ParseError::Message(m) => {
-            CliError::Structured(StructuredError::new(ErrorCode::ParseConflict, m))
-        }
+        // Bare patch-structure faults with no rule/file context (WI-3:
+        // defensive — `Message` is never constructed today, but any
+        // future site joins the null-free enumeration by construction).
+        rsmpl_patch::ParseError::Message(m) => CliError::Structured(
+            StructuredError::new(ErrorCode::ParseConflict, m).with_repair(
+                StructuredError::fix_pattern_repair(
+                    "patch",
+                    "provide a `diff --git a/.. b/..` file section with hunks (see SPEC 6 minimal recipe)",
+                ),
+            ),
+        ),
     }
 }

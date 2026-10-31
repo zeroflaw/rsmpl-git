@@ -99,6 +99,11 @@ fn apply_inner(
                 ErrorCode::ParseConflict,
                 format!("target file not found in tree: {path}"),
             )
+            .with_file(&path)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "paths",
+                "fix the `diff --git a/.. b/..` paths to name an existing tree file (new files need an empty entry in the tree)",
+            ))
         })?;
         let index = LineIndex::new(&original);
         let has_semantic = patch
@@ -113,6 +118,10 @@ fn apply_inner(
                     format!("target file does not parse as Rust: {e}"),
                 )
                 .with_file(&path)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "syntax",
+                    "fix the Rust syntax error in the target file first (ordinary hunks bypass the Rust parse)",
+                ))
             })?)
         } else {
             None
@@ -365,7 +374,7 @@ fn apply_inner(
                 Hunk::Ordinary(oh) => {
                     let mut e = {
                         let state = states.get(path).expect("file state");
-                        ordinary_hunk_edits(&state.index, &state.original, oh)
+                        ordinary_hunk_edits(&state.index, &state.original, oh, path)
                             .map_err(|s| s.with_file(path))?
                     };
                     file_edits.get_mut(path).expect("file state").append(&mut e);
@@ -777,6 +786,10 @@ fn apply_inner(
                     format!("rewritten file does not parse as Rust: {e}"),
                 )
                 .with_file(path)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "syntax",
+                    "adjust the plus pattern so the rewritten file parses as Rust (see reason)",
+                ))
             })?;
         }
         files.insert(path.clone(), updated);
@@ -1159,6 +1172,7 @@ pub(crate) fn range_err(rule: &str, file: &str, line: u32) -> StructuredError {
     )
     .with_rule(rule)
     .with_file(file)
+    .with_repair(StructuredError::internal_repair())
 }
 
 #[cfg(test)]

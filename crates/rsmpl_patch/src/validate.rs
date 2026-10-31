@@ -18,6 +18,10 @@ pub(crate) fn validate_no_broken_raw_quote_pattern(text: &str) -> Result<()> {
                 "invalid raw-identifier quoting `r#` + backtick in pattern `{text}` (use `` `r#...` ``)"
             ),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote",
+            "use `` `r#...` `` (backticks around the whole raw identifier)",
+        ))
         .into());
     }
     // Unbalanced backticks.
@@ -27,6 +31,10 @@ pub(crate) fn validate_no_broken_raw_quote_pattern(text: &str) -> Result<()> {
             ErrorCode::PatternConflict,
             format!("unbalanced backtick quoting in pattern `{text}`"),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote",
+            "balance the backticks in the pattern (every `` ` `` needs a pair)",
+        ))
         .into());
     }
     Ok(())
@@ -38,6 +46,10 @@ pub(crate) fn validate_no_broken_raw_quote_directive(line: &str) -> Result<()> {
             ErrorCode::PatternConflict,
             format!("invalid raw-identifier quoting in directive `{line}`"),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote",
+            "use `` `r#...` `` (backticks around the whole raw identifier)",
+        ))
         .into());
     }
     Ok(())

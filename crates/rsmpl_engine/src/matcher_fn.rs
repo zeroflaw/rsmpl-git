@@ -118,7 +118,11 @@ fn check_attrs(
                     "function has attributes but `# attrs=absent` requires none",
                 )
                 .with_rule(rule)
-                .with_file(file));
+                .with_file(file)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "attrs",
+                    "remove `# attrs=absent` to ignore attributes (the default), or write the attributes into the pattern",
+                )));
             }
             Ok(())
         }
@@ -130,7 +134,8 @@ fn check_attrs(
                 )
                 .with_rule(rule)
                 .with_file(file)
-                .with_suggestion("use `# attrs=preserve` (default) to ignore attributes"));
+                .with_suggestion("use `# attrs=preserve` (default) to ignore attributes")
+                .with_repair(StructuredError::add_directive_repair("# attrs=preserve")));
             }
             Ok(())
         }
@@ -560,6 +565,7 @@ pub(crate) fn plan_sig_edits(
             format!("span line {line} outside file"),
         )
         .with_rule(rule)
+        .with_repair(StructuredError::internal_repair())
     };
 
     // ---- Name (unchanged rename semantics). ----
@@ -578,7 +584,8 @@ pub(crate) fn plan_sig_edits(
                 ErrorCode::MatchConflict,
                 "function name span mismatch (file changed during matching?)",
             )
-            .with_rule(rule));
+            .with_rule(rule)
+            .with_repair(StructuredError::internal_repair()));
         }
         edits.push(TextEdit::new(start, end, plus_name.to_string()).with_label("rename"));
     }
@@ -1236,6 +1243,7 @@ fn range_err(rule: &str, line: u32) -> StructuredError {
         format!("span line {line} outside file"),
     )
     .with_rule(rule)
+    .with_repair(StructuredError::internal_repair())
 }
 
 #[cfg(test)]

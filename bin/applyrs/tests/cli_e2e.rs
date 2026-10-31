@@ -783,13 +783,22 @@ fn json_envelope_on_missing_patch_file() {
         "reason must name the unreadable patch, got: {v}"
     );
     // T266 pin: text mode omits null fields; the JSON envelope carries
-    // them explicitly (SPEC 25.8).
-    for key in ["rule", "range", "suggestion"] {
+    // them explicitly (SPEC 25.8). WI-3: the IO suggestion names the
+    // missing path (the allow-list entry documents it), so only
+    // rule/range stay null here.
+    for key in ["rule", "range"] {
         assert!(
             v["error"][key].is_null(),
             "IO envelope {key} must be null, got: {v}"
         );
     }
+    assert!(
+        v["error"]["suggestion"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("does-not-exist.rsmpl"),
+        "WI-3 allow-list: suggestion must name the unreadable path, got: {v}"
+    );
 }
 
 // --- T33 output budget (D.2.1): --diff-max-lines + files[] ---

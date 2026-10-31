@@ -139,6 +139,7 @@ fn range_err(rule: &str, line: u32) -> StructuredError {
         format!("span line {line} outside file"),
     )
     .with_rule(rule)
+    .with_repair(StructuredError::internal_repair())
 }
 
 /// Apply a `use`-path prefix rename hunk. Returns the number of matches.
@@ -194,7 +195,8 @@ pub fn apply_use_rename_hunk(
                     ErrorCode::MatchConflict,
                     "use prefix span is empty (file changed during matching?)",
                 )
-                .with_rule(&rule));
+                .with_rule(&rule)
+                .with_repair(StructuredError::internal_repair()));
             }
             edits.push(TextEdit::new(a, b, e.replacement.clone()));
             item_edits += 1;

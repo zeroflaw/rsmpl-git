@@ -41,7 +41,24 @@ fn work_tree_for(repo: &Path) -> Option<(PathBuf, String)> {
 use rsmpl_patch::{ErrorCode, StructuredError};
 
 fn git_error(code: ErrorCode, message: String) -> StructuredError {
-    StructuredError::new(code, message)
+    // WI-3: `git apply` failures are never prose-only. Spawn/pipe faults
+    // name the environment fix; a rejected lowering names the patch-side
+    // retry (fresh ranges after re-reading the file).
+    let repair = if message.starts_with("failed to run")
+        || message.starts_with("failed to feed")
+        || message.starts_with("failed waiting")
+    {
+        StructuredError::fix_pattern_repair(
+            "environment",
+            "ensure `git` is installed and the repo is writable, then retry the same patch",
+        )
+    } else {
+        StructuredError::fix_pattern_repair(
+            "stale",
+            "re-read the target files and retry with fresh ranges; if the failure persists it is an engine lowering bug, not a patch bug",
+        )
+    };
+    StructuredError::new(code, message).with_repair(repair)
 }
 
 fn run_git_apply(repo: &Path, patch: &str, check_only: bool) -> Result<String, StructuredError> {

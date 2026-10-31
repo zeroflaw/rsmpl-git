@@ -411,11 +411,7 @@ pub fn apply_macro_hunk(
         // Partial-overlap guard.
         for &(s, e) in &accepted {
             if cand.start < e && s < cand.end && !(s <= cand.start && cand.end <= e) {
-                return Err(StructuredError::new(
-                    ErrorCode::MatchConflict,
-                    "partially overlapping matches cannot be merged",
-                )
-                .with_rule(&rule));
+                return Err(crate::validate::partial_overlap_error(&rule));
             }
         }
         edits.push(TextEdit::new(cand.start, cand.end, replacement));
