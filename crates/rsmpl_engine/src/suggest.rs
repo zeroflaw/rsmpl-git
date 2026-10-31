@@ -29,6 +29,7 @@ pub(crate) fn candidate_preview(
             | PatternKind::ItemRename { .. }
             | PatternKind::FieldRename { .. }
             | PatternKind::VariantRename { .. }
+            | PatternKind::AssocRename { .. }
             | PatternKind::TypeAliasEvolution { .. }
             | PatternKind::ConstEvolution { .. }
             | PatternKind::FieldTypeEvolution { .. }
@@ -77,6 +78,18 @@ pub(crate) fn candidate_preview(
                 PatternKind::VariantRename { enum_name, .. } => {
                     Some(("enum ".to_string(), Some(enum_name.clone())))
                 }
+                PatternKind::AssocRename {
+                    is_type,
+                    minus_name,
+                    ..
+                } => Some((
+                    if *is_type {
+                        "type ".to_string()
+                    } else {
+                        "const ".to_string()
+                    },
+                    Some(minus_name.clone()),
+                )),
                 PatternKind::FieldTypeEvolution { struct_name, .. } => {
                     Some(("struct ".to_string(), Some(struct_name.clone())))
                 }

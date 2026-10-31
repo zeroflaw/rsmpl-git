@@ -343,6 +343,35 @@ pub(crate) fn plus_instantiated_parsed(
                 spans_count(post_text, spans, new, |h| post_text.contains(h)) >= matches.max(1),
             ),
         },
+        PatternKind::AssocRename {
+            plus_name,
+            minus_attrs,
+            plus_attrs,
+            ..
+        } => match post_parsed {
+            Some(parsed) => {
+                let preserve = rh.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve;
+                let (m, p): (&[String], &[String]) = if preserve {
+                    (minus_attrs, plus_attrs)
+                } else {
+                    (&[], &[])
+                };
+                Some(
+                    crate::postcheck_attr::count_spans_named_with_attrs(
+                        parsed,
+                        DefKind::Item,
+                        Some(plus_name.trim()),
+                        m,
+                        p,
+                        spans,
+                    ) >= matches.max(1),
+                )
+            }
+            None => Some(
+                spans_count(post_text, spans, plus_name, |h| post_text.contains(h))
+                    >= matches.max(1),
+            ),
+        },
         PatternKind::UseRename { plus_path, .. } => {
             // Grouped tails (`crate::{new::Deep}`) never contain the full
             // `crate::new` prefix as a substring; the final segment is the
@@ -1090,6 +1119,26 @@ impl<'ast> syn::visit::Visit<'ast> for DefCollector {
             self.push(DefKind::Item, ident);
         }
         syn::visit::visit_item_macro(self, node);
+    }
+
+    fn visit_trait_item_type(&mut self, node: &'ast syn::TraitItemType) {
+        self.push(DefKind::Item, &node.ident);
+        syn::visit::visit_trait_item_type(self, node);
+    }
+
+    fn visit_trait_item_const(&mut self, node: &'ast syn::TraitItemConst) {
+        self.push(DefKind::Item, &node.ident);
+        syn::visit::visit_trait_item_const(self, node);
+    }
+
+    fn visit_impl_item_type(&mut self, node: &'ast syn::ImplItemType) {
+        self.push(DefKind::Item, &node.ident);
+        syn::visit::visit_impl_item_type(self, node);
+    }
+
+    fn visit_impl_item_const(&mut self, node: &'ast syn::ImplItemConst) {
+        self.push(DefKind::Item, &node.ident);
+        syn::visit::visit_impl_item_const(self, node);
     }
 }
 

@@ -13,6 +13,7 @@ mod item_rename;
 mod macro_bracket;
 mod metavar;
 mod pattern;
+mod pattern_assoc;
 mod pattern_classify;
 mod pattern_def_evo;
 mod pattern_ellipsis;

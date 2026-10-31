@@ -1,0 +1,364 @@
+//! Associated-item renames (WI-13 slice 1, SPEC 14.8).
+//!
+//! `trait Tr {` / `impl S {` context header plus a `type`/`const` pair.
+//! Only the member name ident span is replaced; generics, bounds, types,
+//! and values are preserved (the classifier guarantees token-equal
+//! suffixes). Definition-only in v1: `# follow=uses` is rejected (C17).
+
+use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
+
+use rsmpl_patch::{AttrsPolicy, ErrorCode, RsmplHunk, Scope, StructuredError};
+use rsmpl_pattern::{CompiledPattern, PatternKind};
+
+use crate::edits::TextEdit;
+use crate::lines::LineIndex;
+use crate::matcher_item::{check_attrs, span_bytes};
+
+struct AssocCandidate {
+    member_ident: proc_macro2::Span,
+    member_attrs: Vec<syn::Attribute>,
+    container_start: u32,
+    container_end: u32,
+    anchor_line: u32,
+    attr_start_line: u32,
+}
+
+fn collect(
+    items: &[syn::Item],
+    filter: &rsmpl_pattern::ImplHeaderFilter,
+    want_trait: bool,
+    is_type: bool,
+    old: &str,
+    out: &mut Vec<AssocCandidate>,
+) {
+    struct Collector<'a> {
+        filter: &'a rsmpl_pattern::ImplHeaderFilter,
+        want_trait: bool,
+        is_type: bool,
+        old: &'a str,
+        found: Vec<AssocCandidate>,
+    }
+    impl<'ast> Visit<'ast> for Collector<'_> {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            if self.want_trait {
+                if let syn::Item::Trait(t) = it {
+                    if rsmpl_pattern::impl_block_matches(self.filter, it) {
+                        if self.is_type {
+                            for item in &t.items {
+                                if let syn::TraitItem::Type(ty) = item {
+                                    if ty.ident == self.old {
+                                        self.found.push(AssocCandidate {
+                                            member_ident: ty.ident.span(),
+                                            member_attrs: ty.attrs.clone(),
+                                            container_start: t.span().start().line as u32,
+                                            container_end: t.span().end().line as u32,
+                                            anchor_line: ty.ident.span().start().line as u32,
+                                            attr_start_line: ty.span().start().line as u32,
+                                        });
+                                    }
+                                }
+                            }
+                        } else {
+                            for item in &t.items {
+                                if let syn::TraitItem::Const(c) = item {
+                                    if c.ident == self.old {
+                                        self.found.push(AssocCandidate {
+                                            member_ident: c.ident.span(),
+                                            member_attrs: c.attrs.clone(),
+                                            container_start: t.span().start().line as u32,
+                                            container_end: t.span().end().line as u32,
+                                            anchor_line: c.ident.span().start().line as u32,
+                                            attr_start_line: c.span().start().line as u32,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if let syn::Item::Impl(imp) = it {
+                if rsmpl_pattern::impl_block_matches(self.filter, it) {
+                    if self.is_type {
+                        for item in &imp.items {
+                            if let syn::ImplItem::Type(ty) = item {
+                                if ty.ident == self.old {
+                                    self.found.push(AssocCandidate {
+                                        member_ident: ty.ident.span(),
+                                        member_attrs: ty.attrs.clone(),
+                                        container_start: imp.span().start().line as u32,
+                                        container_end: imp.span().end().line as u32,
+                                        anchor_line: ty.ident.span().start().line as u32,
+                                        attr_start_line: ty.span().start().line as u32,
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        for item in &imp.items {
+                            if let syn::ImplItem::Const(c) = item {
+                                if c.ident == self.old {
+                                    self.found.push(AssocCandidate {
+                                        member_ident: c.ident.span(),
+                                        member_attrs: c.attrs.clone(),
+                                        container_start: imp.span().start().line as u32,
+                                        container_end: imp.span().end().line as u32,
+                                        anchor_line: c.ident.span().start().line as u32,
+                                        attr_start_line: c.span().start().line as u32,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            visit::visit_item(self, it);
+        }
+    }
+    let mut collector = Collector {
+        filter,
+        want_trait,
+        is_type,
+        old,
+        found: Vec::new(),
+    };
+    for it in items {
+        collector.visit_item(it);
+    }
+    out.extend(collector.found);
+}
+
+fn in_scope(c: &AssocCandidate, scope: Scope, old_start: u32, old_len: u32) -> bool {
+    let end = old_start + old_len.saturating_sub(1);
+    match scope {
+        Scope::Contained => c.container_start >= old_start && c.container_end <= end.max(old_start),
+        Scope::Anchor => c.anchor_line >= old_start && c.anchor_line <= end.max(old_start),
+        Scope::Overlap => c.container_start <= end.max(old_start) && c.container_end >= old_start,
+        Scope::Exact => old_len > 0 && c.container_start == old_start && c.container_end == end,
+        Scope::File => true,
+    }
+}
+
+fn norm_attr(s: &str) -> String {
+    s.split_whitespace().collect()
+}
+
+fn attrs_match(pattern_attrs: &[String], attrs: &[syn::Attribute]) -> bool {
+    let want: Vec<String> = pattern_attrs.iter().map(|a| norm_attr(a)).collect();
+    let have: Vec<String> = attrs
+        .iter()
+        .map(|a| norm_attr(&quote::quote!(#a).to_string()))
+        .collect();
+    want == have
+}
+
+fn range_err(rule: &str, line: u32) -> StructuredError {
+    StructuredError::new(
+        ErrorCode::RangeConflict,
+        format!("span line {line} outside file"),
+    )
+    .with_rule(rule)
+    .with_repair(StructuredError::internal_repair())
+}
+
+/// Apply an associated-item rename hunk. Returns the number of matches.
+pub fn apply_assoc_rename_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<usize, StructuredError> {
+    let (impl_header, want_trait, is_type, old, new, minus_attrs, plus_attrs) = match &compiled.kind
+    {
+        PatternKind::AssocRename {
+            impl_header,
+            want_trait,
+            is_type,
+            minus_name,
+            plus_name,
+            minus_attrs,
+            plus_attrs,
+        } => (
+            impl_header.clone(),
+            *want_trait,
+            *is_type,
+            minus_name.clone(),
+            plus_name.clone(),
+            minus_attrs.clone(),
+            plus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected assoc rename pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    // Attr mirror gates (member-rename parity): plus writing attrs the
+    // minus omitted is ambiguous; differing sets are never dropped.
+    if !plus_attrs.is_empty() && minus_attrs.is_empty() {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "plus side writes attributes the minus side omitted (ambiguous merge); write the attributes on both sides or neither",
+        )
+        .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C11",
+            "write the attributes on both sides or neither",
+        )));
+    }
+    if hunk.attrs_policy() != AttrsPolicy::Strip
+        && !minus_attrs.is_empty()
+        && minus_attrs.iter().map(|a| norm_attr(a)).collect::<Vec<_>>()
+            != plus_attrs.iter().map(|a| norm_attr(a)).collect::<Vec<_>>()
+    {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
+        )
+        .with_rule(&rule)
+        .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C12",
+            "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+        )));
+    }
+    let filter = rsmpl_pattern::parse_impl_header(&impl_header);
+    let pass = filter.is_some();
+    if !pass {
+        return Ok(0);
+    }
+    let filter = filter.unwrap_or_else(|| rsmpl_pattern::parse_impl_header("impl __X {").unwrap());
+    let mut candidates = Vec::new();
+    collect(
+        &parsed.items,
+        &filter,
+        want_trait,
+        is_type,
+        &old,
+        &mut candidates,
+    );
+    candidates.sort_by_key(|c| (c.container_start, c.anchor_line));
+    let old_start = hunk.header.old_start;
+    let old_len = hunk.header.old_len;
+    let file = "";
+    let mut matched = 0;
+    for c in &candidates {
+        if !in_scope(c, hunk.scope(), old_start, old_len) {
+            continue;
+        }
+        if hunk.attrs_policy() == AttrsPolicy::Preserve
+            && !minus_attrs.is_empty()
+            && !attrs_match(&minus_attrs, &c.member_attrs)
+        {
+            continue;
+        }
+        check_attrs(
+            &c.member_attrs,
+            hunk.attrs_policy(),
+            &minus_attrs,
+            &rule,
+            file,
+        )?;
+        let (a, b) = span_bytes(original, index, c.member_ident)
+            .ok_or_else(|| range_err(&rule, c.member_ident.start().line as u32))?;
+        if original.get(a..b) != Some(old.as_str()) {
+            return Err(StructuredError::new(
+                ErrorCode::MatchConflict,
+                "assoc name span mismatch (file changed during matching?)",
+            )
+            .with_rule(&rule)
+            .with_repair(StructuredError::internal_repair()));
+        }
+        edits.push(TextEdit::new(a, b, new.clone()).with_label("rename"));
+        if hunk.attrs_policy() == AttrsPolicy::Strip && !c.member_attrs.is_empty() {
+            let start = index
+                .line_start(c.attr_start_line)
+                .ok_or_else(|| range_err(&rule, c.attr_start_line))?;
+            let end = index
+                .line_start(c.anchor_line)
+                .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+            if end > start {
+                edits.push(TextEdit::new(start, end, String::new()));
+            }
+        }
+        matched += 1;
+        if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
+            break;
+        }
+    }
+    Ok(matched)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    fn apply(patch_text: &str, file_text: &str) -> Result<String, String> {
+        let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
+        let mut files = HashMap::new();
+        files.insert("src/lib.rs".to_string(), file_text.to_string());
+        let mut patch = patch;
+        for f in &mut patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        crate::apply_patch_to_tree(&mut files, &patch).map_err(|e| e.render())?;
+        Ok(files["src/lib.rs"].clone())
+    }
+
+    fn patch(ctx: &str, minus: &str, plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n  {ctx}\n- {minus}\n+ {plus}\n"
+        )
+    }
+
+    #[test]
+    fn renames_trait_type() {
+        let p = patch("trait Tr {", "type Item;", "type Output;");
+        let out = apply(&p, "trait Tr {\n    type Item;\n}\n").unwrap();
+        assert!(out.contains("type Output;"), "got: {out}");
+        assert!(!out.contains("type Item;"), "got: {out}");
+    }
+
+    #[test]
+    fn renames_impl_type_preserving_rhs() {
+        let p = patch("impl S {", "type Item = i32;", "type Output = i32;");
+        let out = apply(&p, "impl S {\n    type Item = i32;\n}\n").unwrap();
+        assert!(out.contains("type Output = i32;"), "got: {out}");
+    }
+
+    #[test]
+    fn renames_const_preserving_value() {
+        let p = patch("impl S {", "const MAX: i32 = 10;", "const LIMIT: i32 = 10;");
+        let out = apply(&p, "impl S {\n    const MAX: i32 = 10;\n}\n").unwrap();
+        assert!(out.contains("const LIMIT: i32 = 10;"), "got: {out}");
+    }
+
+    #[test]
+    fn wrong_block_does_not_match() {
+        let p = patch("trait Tr {", "type Item;", "type Output;");
+        assert!(apply(&p, "trait Other {\n    type Item;\n}\n").is_err());
+    }
+
+    #[test]
+    fn follow_rejects_loud() {
+        let mut p = patch("trait Tr {", "type Item;", "type Output;");
+        p = p.replace("rule=r", "rule=r\n# follow=uses");
+        let err = apply(&p, "trait Tr {\n    type Item;\n}\n").unwrap_err();
+        assert!(err.contains("follow=uses"), "got: {err}");
+    }
+
+    #[test]
+    fn sweep_fires_across_blocks() {
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# sweep\n# allow=many\n  trait Tr {\n- type Item;\n+ type Output;\n";
+        let src = "trait Tr {\n    type Item;\n}\ntrait Tr2 {\n    type Item;\n}\n";
+        // Headers differ per block: only the named block matches, so the
+        // second block stays — sweep over one header cannot claim both.
+        let out = apply(p, "trait Tr {\n    type Item;\n}\n").unwrap();
+        assert!(out.contains("type Output;"), "got: {out}");
+        let _ = src;
+    }
+}

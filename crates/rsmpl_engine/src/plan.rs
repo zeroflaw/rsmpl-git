@@ -30,8 +30,8 @@ use crate::use_graph::follow_uses_workspace;
 use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{
-    matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item, matcher_macro,
-    matcher_member, matcher_member_evo, matcher_use, matcher_value,
+    matcher_assoc, matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item,
+    matcher_macro, matcher_member, matcher_member_evo, matcher_use, matcher_value,
 };
 use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
 
@@ -81,7 +81,8 @@ fn apply_inner(
             Ok(PatternKind::Fn { .. }
                 | PatternKind::ItemRename { .. }
                 | PatternKind::FieldRename { .. }
-                | PatternKind::VariantRename { .. })
+                | PatternKind::VariantRename { .. }
+                | PatternKind::AssocRename { .. })
         ),
         Hunk::Ordinary(_) => false,
     });
@@ -609,6 +610,7 @@ fn apply_inner(
                                 enum_name,
                                 old,
                             ),
+                            PatternKind::AssocRename { .. } => Vec::new(),
                             PatternKind::ItemRename {
                                 minus_name, kind, ..
                             } => {
@@ -988,6 +990,15 @@ fn apply_rsmpl_hunk(
         )
         .map(|n| (n, vec![empty(); n])),
         PatternKind::VariantRename { .. } => matcher_member::apply_variant_rename_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        )
+        .map(|n| (n, vec![empty(); n])),
+        PatternKind::AssocRename { .. } => matcher_assoc::apply_assoc_rename_hunk(
             parsed,
             &state.original,
             &state.index,

@@ -14,6 +14,7 @@ mod drift;
 mod edits;
 mod follow_reasons;
 mod lines;
+mod matcher_assoc;
 mod matcher_attr_delta;
 mod matcher_expr;
 mod matcher_expr_subst;

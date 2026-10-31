@@ -208,6 +208,20 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Associated-item rename (`trait Tr {` / `impl S {` context + `type
+    /// Item;` → `type Output;`, `const MAX: i32;` → `const LIMIT: i32;`):
+    /// only the member name ident span is replaced; generics, bounds,
+    /// types, and values are preserved. `# follow=uses` is rejected (C17)
+    /// in v1 (follow lands in WI-27). Reports `postcondition`.
+    AssocRename {
+        impl_header: String,
+        want_trait: bool,
+        is_type: bool,
+        minus_name: String,
+        plus_name: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -600,6 +614,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::ItemRename { .. } => "item-rename",
             PatternKind::FieldRename { .. } => "field-rename",
             PatternKind::VariantRename { .. } => "variant-rename",
+            PatternKind::AssocRename { .. } => "assoc-rename",
             PatternKind::TypeAliasEvolution { .. } => "type-alias evolution",
             PatternKind::ConstEvolution { .. } => "const/static evolution",
             PatternKind::FieldTypeEvolution { .. } => "field-type evolution",

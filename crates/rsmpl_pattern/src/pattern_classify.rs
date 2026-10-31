@@ -385,6 +385,15 @@ pub(crate) fn classify(
         });
     }
 
+    // Associated-item renames (`trait Tr {` / `impl S {` context +
+    // `type Item;` -> `type Output;`, `const MAX: ...` -> `const LIMIT:
+    // ...`). Shape-first like member renames; checked before the
+    // method-context router because `const ...` lines satisfy
+    // `looks_like_fn` and would otherwise misroute to the fn planner.
+    if let Some(rename) = crate::pattern_assoc::classify_assoc_rename(m, p, c)? {
+        return Ok(rename);
+    }
+
     // Method-context: context lines open an `impl` or `trait` block and
     // the minus side is fn-like. The trait half (T182) routes
     // `TraitItem::Fn` (`;` declarations and default bodies) through the

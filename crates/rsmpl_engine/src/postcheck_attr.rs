@@ -151,6 +151,26 @@ impl<'ast> syn::visit::Visit<'ast> for AttrCollector {
         }
         syn::visit::visit_item_macro(self, node);
     }
+
+    fn visit_trait_item_type(&mut self, node: &'ast syn::TraitItemType) {
+        self.push(DefKind::Item, &node.ident, &node.attrs);
+        syn::visit::visit_trait_item_type(self, node);
+    }
+
+    fn visit_trait_item_const(&mut self, node: &'ast syn::TraitItemConst) {
+        self.push(DefKind::Item, &node.ident, &node.attrs);
+        syn::visit::visit_trait_item_const(self, node);
+    }
+
+    fn visit_impl_item_type(&mut self, node: &'ast syn::ImplItemType) {
+        self.push(DefKind::Item, &node.ident, &node.attrs);
+        syn::visit::visit_impl_item_type(self, node);
+    }
+
+    fn visit_impl_item_const(&mut self, node: &'ast syn::ImplItemConst) {
+        self.push(DefKind::Item, &node.ident, &node.attrs);
+        syn::visit::visit_impl_item_const(self, node);
+    }
 }
 
 /// Attr-delta verdict for one post-image definition's attached set:
