@@ -15,7 +15,9 @@
 //! hunks and macro-shaped invocation hunks sharing one delta),
 //! `call_sweep`, `call_peel`,
 //! `qualified_call`, `turbofish`, `macro_rename`, `method_to_method`,
-//! `method_to_fn`, `use_prefix`. Same-callee shapes
+//! `method_to_fn`, `use_prefix`. `item_intent` (WI-15a) never groups:
+//! it already collapses its whole intent into one cross-file follow
+//! hunk, so there is nothing to join. Same-callee shapes
 //! (`call_arg_add`, `call_literal`, `call_arg_template`,
 //! `method_arg_template`, `method_same_literal`,
 //! `ref_strip`), template shapes (`let_type_add`, `type_sweep`),

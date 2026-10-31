@@ -1,0 +1,24 @@
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-struct Old {
++struct New {
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -2,2 +2,2 @@ struct Pair {
+-    first: Old,
+-    second: Old,
++    first: New,
++    second: New,
+@@ -5,3 +5,3 @@ struct Pair {
+-impl Old {
+-    fn make() -> Old {
+-        Old { x: 1, y: 2 }
++impl New {
++    fn make() -> New {
++        New { x: 1, y: 2 }
+@@ -10 +10 @@ impl Old {
+-fn get(o: Old) -> Old {
++fn get(o: New) -> New {

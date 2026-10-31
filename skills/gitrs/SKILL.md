@@ -47,7 +47,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments; write `#[...]` on its own diff line (single-line `#[a] let x = E;` never matches) |
 | `# root=item\|expr\|stmt\|type` | force parse context |
 | `# fallback=syntax` | syntactic match when `# symbol` can't resolve; with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing |
-| `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant/assoc rename (fn/item: unique-definition only, multi-def vetoes; fields anchor `.old` by receiver type — fn params, `let x: C`, `let x = S{…}`, `self` in `impl S` — plus `S`-labels with shorthand `S { old }` → `S { new: old }`, siblings never veto (`shadowed`/`off-target` skips); variants claim `E::Old` paths, bare `Old` needs `use E::*` else `second-hop`; assoc claims container-proven `Self::`/`S::`/`Tr::`/qself tails with per-block `shadowed` skips) (definition-only without it, with `orphans` evidence) |
+| `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant/assoc rename (fn/item: unique-definition only, multi-def vetoes; fields anchor `.old` by receiver type — fn params, `let x: C`, `let x = S{…}`, `self` in `impl S` — plus `S`-labels with shorthand `S { old }` → `S { new: old }`, siblings never veto (`shadowed`/`off-target` skips); variants claim `E::Old` paths, bare `Old` needs `use E::*` else `second-hop`; assoc claims container-proven `Self::`/`S::`/`Tr::`/qself tails with per-block `shadowed` skips) (definition-only without it, with `orphans` evidence; raised as `item_intent` when the cross-file probe proves the group) |
 | `# returns=none` | minus-side requires no return type (fn only) |
 
 ## Shapes (SPEC 14/15/16/18.6)

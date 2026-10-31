@@ -1,0 +1,6 @@
+diff --git a.rs
+@@ -1,1 @@ rule=r1
+# sweep
+# follow=uses
+- struct Old
++ struct New

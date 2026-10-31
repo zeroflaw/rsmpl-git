@@ -2417,8 +2417,12 @@ fail-loud tripwire when its text names the ident outside strings/comments
 (`RSMPL_SYMBOL_CONFLICT` naming the file, or a `follow_skipped` note with
 `# fallback=syntax`); multi-definition workspaces never attribute uses by
 module path (WI-7b owns only re-export prefix matching, never use
-attribution); `diffrs` emits no
-`# follow=uses` (WI-7 grouping owns the shared-intent spelling).
+attribution); `diffrs` raises item intents as `item_intent` (SPEC D.4:
+one definition hunk with `# follow=uses` when the cross-file
+scratch-apply probe proves the group's changed lines, else
+definition-only per-file hunks with uses ordinary — never an unproven
+follow). WI-7 grouping owns the shared-intent spelling for all other
+same-delta hunks.
 
 Fail loud (Section 2.6): a second same-named definition, a shadowing
 local binding or enum variant, or a macro/attribute mention the resolver
@@ -2463,7 +2467,7 @@ Rules:
 - Variants: expression/pattern paths spelling `E::Old` (any leading prefix, plus `Self::Old` inside an `impl` of `E`) and `use …::E::Old` import segments are proven (literal-path). Bare `Old` rewrites only with a `use …::E::*` glob anchor naming `E` in the same file; otherwise it is `second-hop` evidence (never a veto). `qself` paths and macro interiors mentioning the member name are opaque like scalar renames (veto without fallback, skip + report with it).
 - Orphan evidence mirrors scalar renames: a definition-only member rename lists anchored use lines as `orphans` (`off-target` for proven, `shadowed`/`second-hop` for unproven, `macro-hidden` for interiors) while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped` owns that signal, each with its WI-2 `reason` in `follow_skipped_details`).
 
-Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, cross-file definition+uses intents (each raised section is one file), multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename`, SPEC D.4; everything else stays ordinary).
+Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, cross-file member definition+uses intents (each raised member section is one file; item intents join across files via `item_intent`, SPEC D.4), multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename`, SPEC D.4; everything else stays ordinary).
 
 #### Definition RHS evolution (WI-11a/WI-11b)
 
@@ -7051,7 +7055,19 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `static`, vis echoed) compress to bare `- kind Old` /
   `+ kind New` pairs. Single indented (method/block-level) and
   single generic-fn lines are excluded (no token win as a slot hunk).
-- Field/variant member rename (WI-9a authored, WI-9b raised, single-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary; cross-file definition+uses intents stay ordinary (future work).
+- Item-intent raising (WI-15a, detector `item_intent`): exactly one
+  `split_item` definition pair (`struct`/`enum`/`trait`/`type`/`const`/
+  `static`/terse-`fn`; `macro_rules!` and `mod` decline to their own
+  detectors) joined with N-1 same-delta use lines (`impl Old`, `s: Old`,
+  `-> Old`, `Old { … }`, …) across one or more files compresses to the
+  single definition hunk with `# sweep` + `# follow=uses`. The
+  cross-file scratch-apply probe is the totality (the emission applied
+  to an in-memory pre-image clone must reproduce exactly the native
+  plus lines at the claimed sites with every other line byte-identical;
+  twin definitions, missing pre-images, and unbalanced sections
+  decline). The byte-win guard compares the one hunk against the
+  replaced native sections.
+- Field/variant member rename (WI-9a authored, WI-9b raised, single-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary; member cross-file intents stay ordinary (WI-15b).
 - Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). Emission is one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges) with `# follow=uses` on the first hunk; the scratch-apply line-equality probe is the totality. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline to ordinary; cross-file intents stay ordinary (future work). Detector name `assoc_rename`.
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but

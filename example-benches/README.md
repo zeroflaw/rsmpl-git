@@ -97,6 +97,7 @@ counts in the JSON report).
 | 37-bound-sweep (4 hetero-named fns gain `T: Clone`, `N` hole, 1 hunk, WI-9) | 577 B / 15 ln | 121 B / 7 ln | 79% |
 | 38-derive-migration (4 hetero structs gain `Clone`, `N` hole, 1 hunk, WI-10b) | 359 B / 15 ln | 116 B / 7 ln | 68% |
 | 39-assoc-rename (trait decl + 2 impl decls + 7 `::Item` uses, 3 hunks, follow on first, WI-28) | 849 B / 30 ln | 332 B / 19 ln | 61% |
+| 40-cross-file-struct-rename (struct def + 7 type/impl uses across 2 files, 1 hunk with `# follow=uses`, WI-15a) | 467 B / 24 ln | 83 B / 6 ln | 82% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

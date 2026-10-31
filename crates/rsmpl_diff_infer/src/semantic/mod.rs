@@ -63,6 +63,7 @@ mod verbatim;
 // WI-3c: covering-span helpers live in `item_span` (this file was over
 // the 1600-line soft cap); re-exported so `super::`/`crate::semantic::`
 // paths keep working.
+mod item_intent;
 mod item_span;
 
 pub(crate) use item_span::item_emission_header;
@@ -149,6 +150,60 @@ pub fn infer_semantic_with_provenance(
         }
         None => sections,
     };
+    // WI-15a whole-patch item-intent pre-pass (single definition +
+    // same-delta uses joined into one follow hunk); per-section
+    // detectors run on the rewritten sections below.
+    let intent_owned: Vec<String>;
+    let intent_rules_before = used_rules.len();
+    let sections: &[String] =
+        match item_intent::try_item_intent_sweep(sections, pre, &mut used_rules) {
+            Some((rewritten, def_path, _rule)) => {
+                compressed_any = true;
+                let emitted = rewritten
+                    .iter()
+                    .find(|s| {
+                        s.lines().next().is_some_and(|h| {
+                            h.starts_with("diff --git ")
+                                && crate::b_side_path(&h["diff --git ".len()..])
+                                    .is_some_and(|p| p == def_path)
+                        })
+                    })
+                    .cloned()
+                    .unwrap_or_default();
+                // Original bytes = the claimed (replaced) sections: every
+                // input section absent from the rewritten output.
+                let original: String = sections
+                    .iter()
+                    .filter(|s| !rewritten.iter().any(|r| r == *s))
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("");
+                let changed: Vec<usize> = sections
+                    .iter()
+                    .filter(|s| !rewritten.iter().any(|r| r == *s))
+                    .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
+                    .collect();
+                if !emitted.is_empty() && !original.is_empty() {
+                    let detector_of: Vec<(String, &'static str)> = used_rules
+                        [intent_rules_before..]
+                        .iter()
+                        .map(|r| (r.clone(), "item_intent"))
+                        .collect();
+                    prov::commit_prov(
+                        prov,
+                        &emitted,
+                        &original,
+                        &def_path,
+                        &detector_of,
+                        &changed,
+                        pre.get(&def_path).map(String::as_str),
+                    );
+                }
+                intent_owned = rewritten;
+                &intent_owned
+            }
+            None => sections,
+        };
     for section in sections {
         match chain::compress_section(section, &mut used_rules, pre, prov) {
             Some(semantic) => {
