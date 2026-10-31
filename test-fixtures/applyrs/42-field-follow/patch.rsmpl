@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,4 @@ rule=rename_field
+# allow=many
+# follow=uses
+  struct S {
+- old: u32
++ new: u32

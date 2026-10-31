@@ -265,6 +265,8 @@ const CYCLE_OK: &[&str] = &[
     "24-pat-sweep",
     "40-sequence-sweep",
     "41-single-block-sweep",
+    "42-field-follow",
+    "43-variant-follow",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -335,6 +337,38 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "30-trait-sweep",
         "hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)",
+    ),
+    (
+        "44-collection-move",
+        "nodet: collection move re-infers as ordinary add plus paste-less `- I` cut (collection emission declines; tree legs still close)",
+    ),
+    (
+        "45-macro-rules-rename",
+        "t375: single def + single use re-infer ordinary each",
+    ),
+    (
+        "46-fn-follow",
+        "hetero: fn+follow re-infers as ordinary def plus call sweep (no follow emission for plain fn)",
+    ),
+    (
+        "47-call-arg-wrap",
+        "t375: single-line arg-wrap re-infers ordinary",
+    ),
+    (
+        "48-token-tree-arg-hole",
+        "nodet: per-arg token-tree hole re-infers as whole-body `...` verbatim sweep (raising declines token-tree holes)",
+    ),
+    (
+        "49-struct-pat-let",
+        "t375: single-site struct-pat swap re-infers ordinary",
+    ),
+    (
+        "50-repeat-let",
+        "t375: single-site repeat-grow re-infers ordinary",
+    ),
+    (
+        "51-drift-stale-range",
+        "t375: drift-applied single-site rename re-infers as terse ordinary (drift is apply-only; S′ cites the actual range)",
     ),
 ];
 

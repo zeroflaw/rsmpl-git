@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,3 @@ rule=rename_macro
+# follow=uses
+- macro_rules! old_m
++ macro_rules! new_m

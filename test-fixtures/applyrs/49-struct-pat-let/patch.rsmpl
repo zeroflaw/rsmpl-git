@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -6,1 @@ rule=swap_fields
+# sweep
+- let S { f: P, g: Q } = E;
++ let S { f: Q, g: P } = E;

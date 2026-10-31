@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,3 @@ rule=rename_foo
+- fn foo(...) {
++ fn bar(...) {
+      ...
+  }
