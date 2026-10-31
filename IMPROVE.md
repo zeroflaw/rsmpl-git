@@ -1,4 +1,4 @@
-# IMPROVE — RSmPL as a verifiable agent contract: honest evidence, everyday-Rust coverage, raising depth
+# IMPROVE — RSmPL as a verifiable agent contract, round 3: structural proof, everyday-Rust completeness, lossless cycles
 
 ## Goal
 
@@ -7,15 +7,19 @@ reconstructing and inspecting every edit by hand:
 
 - **Lowering** (semantic → native, `applyrs` via `gitrs apply`) must prove,
   per site, what it touched, what it deliberately left alone, and what it
-  checked — in machine fields an agent can assert on, not prose, and never
-  in fields that are true by construction.
+  checked — by re-matching the authored pattern in the post-image, not by
+  searching for substrings, and never in fields that are true by
+  construction.
 - **Raising** (native → semantic, `diffrs` via `gitrs diff`) must compress
-  the refactor shapes real Rust code actually takes, at pre-image-proven
-  precision, so the semantic form is the cheapest *trustworthy* view of a
-  change, not merely the cheapest bytes.
+  the refactor shapes real Rust code actually takes — body rewrites,
+  literals, attributes, definition values, associated items — at
+  pre-image-proven precision, so the semantic form is the cheapest
+  *trustworthy* view of a change, not merely the cheapest bytes.
 - **Cycles must close under stated equalities**: semantic → native →
   semantic and native → semantic → native, with every remaining divergence
-  named, owned, and pinned — never silent.
+  named, owned, and pinned — never silent. The single-site demotion class
+  that now dominates the pinned-divergent list must shrink by decision,
+  not by drift.
 
 `gitrs` stays a thin dispatcher (`apply` → `applyrs`, `diff` → `diffrs`);
 all semantics live in the crates. Backwards compatibility is not required:
@@ -29,50 +33,73 @@ those spellings from training data and daily use. Diet spelling
 (`# sweep`, inferred metavars, terse renames) remains canonical.
 
 This review supersedes the previous IMPROVE.md in full. That plan's
-WI-1…WI-8 largely landed, WI-9/WI-10 did not, and one WI-8 slice
-(collection captures) never landed; each is carried forward explicitly
-below. Fresh gaps found by this review are new items. Work stops at
-10 items.
+WI-1…WI-10 all landed (see the carry-forward audit); this round carries
+their residues forward explicitly and adds the fresh gaps this review
+probe-verified. Work stops at 20 items.
 
 ## Success criteria
 
-1. **Trust (WI-1).** No success field is true by construction. An agent can
-   accept or reject a patch from the JSON reports alone — per-site
-   bindings (with truncation marked, never silent), per-rule postcondition
-   evidence, orphan evidence — including one deliberately over-broad patch
-   whose extra site is visible *before* apply.
-2. **Everyday Rust matches (WI-2, WI-3, WI-4).** Macro subterms, array
-   repeats, `const` blocks, `&raw` pointers, and destructuring patterns no
-   longer veto whole patterns silently; impl/trait headers select the
-   block they name in every scope. Anything still unsupported fails at
-   compile time with an exact diagnostic, never as a bare
-   `no match found` the agent must debug by reading the file.
-3. **Raising breadth without precision loss (WI-4, WI-5, WI-8, WI-9).**
-   Trait+impl method renames, hetero call-arg rewrites, multi-rename
-   sections, and field/variant renames compress with pre-image totality
-   and real-apply byte-compare (T361 doctrine: `--check` alone never
-   proves a sweep). `python3 tools/history_sweep.py` stays at 0 failures
-   and the compressing set does not shrink without a named reason in the
-   landing change.
-4. **Cycles (WI-4, WI-8).** The `cycle_e2e` harness stays green; the SPEC
-   D.5 exclusion list shrinks or gains sharpened owners — it never grows
-   silently. Single-site demotion stays a *defined* fixed-point equality.
-5. **Self-correction (WI-2, WI-3).** Every new compile-time fence carries a
-   machine `repair` payload with a concrete `write_instead` template an
-   agent can apply without parsing English; no `repair` echoes prose.
-6. **Gates.** `cargo test --workspace`, `cargo clippy --all-targets --
+1. **Trust (WI-1, WI-2, WI-3).** No success field is true by construction
+   and no verification is a substring search. A patch whose plus side
+   carries a string literal or `...` verifies structurally at its reported
+   spans, or the report says `reparse-only` and the global word is
+   `partial` — the per-rule `semantics` word itself is the
+   machine-visible verdict, never a prose explanation. Every binding an agent
+   might act on is either complete or accompanied by its length and
+   SHA-256, so equality across sites is assertable without paying for the
+   bytes twice. Every patch/IO failure carries a machine `repair`, or the
+   conformance suite names the one exception class that cannot.
+2. **Everyday Rust authors and raises (WI-5…WI-13).** Function-name holes,
+   general expressions, literal frames, control templates, header
+   slot-only evolution, attribute deltas, definition right-hand sides,
+   and associated items have authored spellings an agent already
+   recognises from Git/SmPL/Rust, and detectors that raise them only
+   under pre-image totality with a real-apply byte-compare (T361
+   doctrine: `--check` alone never proves a sweep).
+   `python3 tools/history_sweep.py` stays at 0 failures and the
+   compressing set does not shrink without a named reason in the landing
+   change.
+3. **Follow-through (WI-14, WI-15, WI-16).** A rename rewrites the sites
+   the code itself proves belong to it — typed receivers, literal labels,
+   multi-hop re-exports, cross-file members, `mod` + file renames — and
+   lists every other same-name site as structured evidence with a reason
+   code. No same-name sibling elsewhere in the workspace vetoes a rename
+   whose proven sites are unambiguous. `# symbol` either verifies
+   against a crate-local resolution graph or fails as syntax; it never
+   silently degrades to the text match it claims to improve on.
+4. **Cycles (WI-17, WI-18, WI-19).** The `cycle_e2e` harness stays green;
+   the SPEC D.5 exclusion list and the `KNOWN_DIVERGENT` table shrink by
+   named families (`nodet` first, then the `t375` single-site mass under
+   the WI-19 precision guard, then partial partition for the rest) — they
+   never grow silently. Token-tree holes, collection moves, and
+   mixed sections re-diff to the shape that was applied, or stay pinned
+   with a sharpened owner.
+5. **Self-correction (WI-3, WI-4).** A stale ranged patch either applies
+   with `drift` evidence naming cited vs actual spans, or fails with a
+   `repair` an agent can apply verbatim — never with a bare `null` and a
+   paragraph. Every new compile-time fence carries a concrete
+   `write_instead` template; no `repair` echoes prose.
+6. **Contract hygiene (WI-20).** One report version across `applyrs`,
+   `diffrs`, and `gitrs` errors; every RSmPL fence in SPEC.md,
+   AGENTS.md, and `skills/gitrs/SKILL.md` is machine-linted, so the
+   documents an agent learns the language from cannot teach a spelling
+   the engine rejects.
+7. **Gates.** `cargo test --workspace`, `cargo clippy --all-targets --
    -D warnings`, `cargo fmt --check`, and `./example-benches/run.sh` stay
    green per item; no `.rs` file exceeds 2000 lines (split before growing,
    D5); bench byte targets in each item are met or the item does not land.
 
 ## Review findings (evidence)
 
-Verified this run at HEAD `7d7cc14` (491 commits): **1939 tests passing,
+Verified this run at HEAD `ae6d2f3` (531 commits): **2148 tests passing,
 0 failed (summed across all `test result` lines); clippy and fmt clean;
 `./example-benches/run.sh` re-measures byte-identical to the committed
-tables (working tree clean after the run); history sweep sample
-`--limit 60` converts 60/60 with 0 failures.** The architecture is sound
-and stays: [rsmpl_patch](/home/ai/git/tools/rsmpl-git/crates/rsmpl_patch/src/model.rs)
+tables (working tree clean after the run).** Probes below were run with
+the release binaries against throwaway `/tmp` git repos (authored
+`applyrs --format json --check` and pending-change `diffrs` conversions);
+each finding names the probe so the landing change can re-run it as a
+fixture. The architecture is sound and stays:
+[rsmpl_patch](/home/ai/git/tools/rsmpl-git/crates/rsmpl_patch/src/model.rs)
 (document/parser/canonical form),
 [rsmpl_pattern](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/pattern.rs)
 (pattern compiler + inference),
@@ -87,134 +114,192 @@ and stays: [rsmpl_patch](/home/ai/git/tools/rsmpl-git/crates/rsmpl_patch/src/mod
 [totality.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/totality.rs)),
 facaded by [rsmpl_diff](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff/src/lib.rs);
 [gitrs](/home/ai/git/tools/rsmpl-git/bin/gitrs/src/main.rs) only re-execs
-siblings. The gaps are evidence honesty, everyday-Rust matcher coverage,
-and the remaining raising/veto surface — not correctness of what fires.
+siblings. The gaps are proof strength, authoring completeness for
+everyday Rust, and the raising/cycle tail — not correctness of what fires.
 
 ### Carry-forward audit of the previous plan
 
 | Old item | Verdict | Evidence / residue |
 |---|---|---|
-| WI-1 canonical cycles | Landed | Tree-aware canonical form + repeat-fold detector + SPEC D.5 equalities exist; 24 `CYCLE_OK`, 16 pinned divergent (12 defined single-site demotions, `05` empty, `12`/`14`/`30` hetero) in [cycle_e2e.rs](/home/ai/git/tools/rsmpl-git/bin/diffrs/tests/cycle_e2e.rs) |
-| WI-2 trust envelope | Landed, evidence still over-claims | Per-site `sites`, v2 envelope, temp-copy `--verify build`, honest diffrs provenance present; `checked.semantics` is hardcoded `true` and binding truncation is unmarked (F1) |
-| WI-3 repair + contract | Landed, generic tail weak | Five repair producers + `spec_examples` suite + diet rewrite landed; the long-tail filler echoes the English reason as `write_instead` (F10) |
-| WI-4 sub-line raising | Landed | Occurrence-counted sub-line sweeps; fixture `27` cycle-OK; bench 28 at 89% |
-| WI-5 sequences | Landed | Joint let (24), sequence (40), single-block (41) cycle-OK; `12` header+let mix declared a permanent non-goal in SPEC D.5 — accepted, not carried |
-| WI-6 engine remainder | Landed | `async`/`try`/`unsafe`/`yield`, stmt interiors, `Fn(A) -> B`, verbatim macro types; the `Expr` arms in F2 were never in its scope |
-| WI-7 rename completeness | Landed | Git-aware follow, one `pub use` hop, orphan evidence, `::`/qself parity both directions; glob/macro/shadow vetoes remain by design |
-| WI-8 move + evolve | Partial | Header evolution for every item kind (slices 1–8) + signature-evolving `fn` moves (slice 9) landed; collection captures (slice ③) never landed (F6) |
-| WI-9 macro depth | Not landed | `macro_rules!` rename, token-tree per-arg holes, and nested interiors are all still absent (F7) |
-| WI-10 addressing + native | Not landed | No drift fallback, no `--context`, no sibling handshake, `--check` still archives to `.history/` (F8) |
+| WI-1 honest `checked` | Landed | Plus-instantiation + per-rule `semantics`, schema v3, marked truncation — but instantiation is a substring search that abstains on strings/`...` (F1) |
+| WI-2 everyday expressions | Landed | Five `match_expr` arms + C19 lint + head-token preview fire; the anti-unification side never learned the same shapes (F5, F6) |
+| WI-3 structural patterns | Landed | Six `match_pat` composites + `gen_pat` fire; untyped let-init templates with destructuring still decline (F6) |
+| WI-4 headers + trait raising | Landed | Header is a filter in every scope; `trait_method_rename` groups same-file — pure trait-side and header slot-only classes stay ordinary (F7) |
+| WI-5 hetero arg templates | Landed | Wrap/permute specified in SPEC D.4; whole-arg permutation (`swap(E0, E1)` → `swap(E1, E0)`) still declines in code (F6) |
+| WI-6 collection captures | Landed | `# bind` + `# allow=many` cuts/pastes as one; the authored collection move does not re-raise (F10), and collections still cannot evolve per item (SPEC 33.2) |
+| WI-7 macro depth | Landed | `macro_rules!` rename + per-arg token-tree holes author; raising emits whole-body `...` instead of the holed form (F10) |
+| WI-8 pair partition | Landed | All-or-nothing per section; one double-delta pair keeps 8 claimable renames ordinary (F11) |
+| WI-9 field/variant renames | Landed | Authored + follow + raising fire single-file; cross-file is declared future work in SPEC D.4, and follow vetoes on any same-name sibling (F8) |
+| WI-10 CLI contract | Landed | Drift (context-anchored), `--context`, handshake, `diffrs` v2, rev-base — terse hunks without context lines still cannot drift (F4), and the envelopes now split v3/v2 (F3) |
+
+Fixture expansion after that plan (applyrs fixtures to 120, diffrs to
+100) grew the `KNOWN_DIVERGENT` table in
+[cycle_e2e.rs](/home/ai/git/tools/rsmpl-git/bin/diffrs/tests/cycle_e2e.rs)
+to roughly 70 pinned entries, most of them `t375` single-site demotions.
+That table, not the bench suite, is now the honest map of where the
+cycle contract is defined-but-lossy; WI-19 owns shrinking it.
 
 ### Findings
 
-- **F1. The trust envelope still over-claims.** The v2 success payload in
-  [applyrs main](/home/ai/git/tools/rsmpl-git/bin/applyrs/src/main.rs)
-  prints `"checked": {"lowering": true, "semantics": true, …}`
-  unconditionally: `semantics` is `true` even for a ranged rename where
-  the only postcondition that exists — the sweep no-op gate in
-  [postcheck.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/postcheck.rs),
-  which covers only non-`optional` file-scope `# allow=many` hunks — never
-  ran (probe-verified: a ranged `fn g` rename reports
-  `semantics: true`). Per-site binding values are cut at 80 chars in
-  `sites_json` with no marker: `sites_truncated` counts only omitted
-  *entries*, so an agent cannot tell a truncated binding from a complete
-  one and may act on half an expression.
-- **F2. Everyday expressions silently veto whole patterns.** The general
-  matcher in [matcher_general.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_general.rs)
-  (`match_expr`, 1997 lines) has no arms for `Expr::Macro`, `Expr::Repeat`
-  (`[0u8; 8]`), `Expr::RawAddr` (`&raw const x`), `Expr::Const`
-  (`const { … }`), or `Expr::Infer` (`_`), so each falls to `_ => false`.
-  Probe-verified at HEAD: `- let b = format!("x{}", 1);` (byte-identical
-  macro subterm) and `- let buf = [0u8; 8];` both fail with
-  `no match found`, and the candidate preview names line 1 (the
-  `# sweep` dummy start) — the agent learns nothing. SPEC 18.6 promises
-  fail-fast, but these are match-time silent rejections. The verbatim
-  precedent exists twice already: `Type::Macro` (WI-6c) and
-  `Stmt::Macro` (WI-6b) match token-equal and never bind holes.
-- **F3. Pattern positions accept only whole-pattern holes.**
-  `match_pat` in [matcher_general_ctrl.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_general_ctrl.rs)
-  binds only a whole-pattern `P` (or `P @ sub`); every composite pattern
-  compares token-equal. Probe-verified: `- let Some(P) = E;` over two
-  real sites fails `no match found`. Destructuring — `Some(P)`, `(P, E)`,
-  `S { f: P }` — is how Rust code actually binds, so `let`/`match`/`for`/
-  closure patterns cannot abstract the positions agents most need to
-  vary; C8 rejects embedded holes at compile time only for `let`, while
-  arm/for/closure positions fail silently at match time. Raising is
-  symmetric: the let detectors bind whole-pattern `P0` only.
-- **F4. Impl/trait headers do not select the block they name.** SPEC 13.4
-  documents headers as "advisory, not filters": under `# scope=file` the
-  gate in [matcher_impl.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_impl.rs)
-  is skipped entirely, and ranged matching falls back to token-containment
-  plus range overlap. Probe-verified: a `# sweep` hunk headed
-  `impl Tr for A {` renamed `fn m` in **both** `impl Tr for A` and the
-  inherent `impl A` — the header an agent writes to scope the rewrite is
-  ignored, and only the reported spans reveal it after the fact. The
-  familiar spelling promises scoping the semantics does not deliver.
-- **F5. Raising cannot see trait+impl method renames or hetero arg
-  rewrites.** Probe-verified with `diffrs` at HEAD: renaming
-  `greet` → `hello` across a trait declaration and two impls (3 sites,
-  one intent) stays three ordinary hunks (SPEC D.5 pins this as `30`);
-  wrapping `use_it(x)` → `use_it(x.clone())` at 3 sites stays ordinary,
-  although the authored form `- use_it(E)` / `+ use_it(E.clone())`
-  applies cleanly today — the engine is ready, only the detector is
-  missing. Grouping in [group.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/group.rs)
-  requires ≥2 *files*, so a same-file trait+impl intent could not share
-  a `rename_*` rule even if the hunks were emitted.
-- **F6. Collection captures never landed (old WI-8 ③).** SPEC 20.3/20.4/
-  24.4 still make `# bind=<Name>` scalar-only and `# bind` + `# allow=many`
-  a `RSMPL_CAPTURE_CONFLICT` (SPEC lines 3854, 3920, 4309; §32 lists
-  collection captures as a non-goal, §33.2 as future work). Moving five
-  items costs five range discoveries, five binds, and ten hunks authored;
-  `diffrs` moves emit the same scalar fan-out.
-- **F7. Macro depth never landed (old WI-9).** Item-rename kinds in
-  [item_rename.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/item_rename.rs)
-  omit `macro_rules!` (no rename in either direction); `# macro=token_tree`
-  accepts only `NAME!(...)` verbatim bodies — probe-verified:
-  `- greet!(E)` / `+ hello!(E)` fails at compile time with
-  "supports only `NAME!(...)` with verbatim body"; macro interiors inside
-  macro bodies stay ordinary (SPEC D.4), because `syn::visit` never enters
-  opaque token streams and the token-tree matcher compares bodies whole.
-- **F8. Addressing and the native side never landed (old WI-10).** A
-  ranged patch authored against shifted line numbers fails with a range/
-  match conflict and costs a full re-read (probe-verified: +3 drift lines
-  → `RSMPL_MATCH_CONFLICT`); the lowering is always 0-context, so
-  `--output` artifacts need `git apply --unidiff-zero`, not stock git;
-  [gitrs](/home/ai/git/tools/rsmpl-git/bin/gitrs/src/main.rs) re-execs
-  siblings with no version check; and `save_history` in
-  [applyrs main](/home/ai/git/tools/rsmpl-git/bin/applyrs/src/main.rs)
-  archives every run — including `--check` failures — into
-  `<repo>/.history/` (128 kept), dirtying the worktree it measures
-  (probe runs visibly littered `/tmp` probe repos). Separately, the
-  `diffrs` JSON envelope is still `version: 1` with hand-built error
-  payloads in [diffrs main](/home/ai/git/tools/rsmpl-git/bin/diffrs/src/main.rs),
-  while `applyrs`/`gitrs` emit `version: 2` — an agent must learn two
-  schemas, and a revision range (`HEAD~2..HEAD`) silently downgrades
-  every detector to section-visible evidence because
-  [rsmpl_diff](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff/src/lib.rs)
-  `pre_images` runs `git show <range>:<path>`, which always fails.
-- **F9. Multi-rename sections stay ordinary.** `try_item_rename` fires
-  only for a single pair (whole-section at
-  [chain.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/chain.rs):340,
-  or one pair per balanced hunk); a `-U0` hunk holding eight distinct
-  renames matches no chain detector and passes through whole — SPEC D.5
-  fixture `14` re-infers as 1 semantic + 7 ordinary. Distinct deltas are
-  distinct intents, but each is independently compressible; the missing
-  piece is pair-level partitioning, not grouping.
-- **F10. The generic repair filler echoes prose.** `fill_generic_repair`
-  in [validate.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/validate.rs)
-  fills any unpinned `PatternConflict`/`CaptureConflict` by copying the
-  English `message` into `repair.write_instead`. The payload is present
-  (WI-3's acceptance holds mechanically) but not machine-actionable: an
-  agent cannot apply a sentence as a template. New fences must not
-  repeat this, and the filler should key templates by error class.
-- **F11. Field and variant renames have no shape at all.** Item renames
-  cover item names only; there is no authored or raised form for
-  renaming a struct field (declaration + accesses + literal/pattern
-  labels) or an enum variant (declaration + constructions + patterns) —
-  two of the most common Rust refactors — so both pay full ordinary
-  bytes in both directions with no semantic precision. The member
-  matcher can already bind field positions in expressions
-  (`match_member`), but definition sites are unreachable.
+- **F1. Verification is a substring search, and it abstains exactly where
+  Rust lives.** The plus-instantiation gate in
+  [postcheck.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/postcheck.rs)
+  (`plus_instantiated`) returns `None` — downgrading the rule to
+  `reparse-only` and the run to `semantics: partial` — whenever the plus
+  template contains a `"` or a code-level `...`. Probe-verified: a
+  three-site sweep `- foo(E)` / `+ bar(E, "hi")` applies correctly yet
+  reports `reparse-only`/`partial`; benches 17 (macro sweep), 25 (async
+  blocks), and 28 (verbatim-macro `let`) print `semantics partial` for the
+  same reason. Where the gate does fire it is weaker than its name:
+  renames pass when the new ident occurs *anywhere* in the post-image
+  (`post_text.contains(new)`), so a pre-existing same-name item satisfies
+  a rename that never landed at its span. The engine already owns real
+  matchers for every plus shape; the postcondition never calls them.
+- **F2. Truncated evidence cannot be asserted on, and skip evidence is
+  prose.** Binding values cut at 80 chars gain a `…` and a count
+  (previous WI-1), but carry no length or digest: an agent seeing
+  `some_function_with_long_name(argument_one, …` cannot tell whether two
+  sites bound the same expression, nor fetch the full value without
+  re-reading the file the report exists to avoid. `follow_skipped` is one
+  `; `-joined string and `orphans` entries carry no reason code, so
+  neither is assertable. Signature-evolution spans repeat the same
+  `[1,1]` three times for one match (probe-verified on a lifetime-evolving
+  rename) with nothing naming which slot each edit belongs to.
+- **F3. Two report versions, and `repair: null` on common failures.**
+  `applyrs` success/error envelopes are `version: 3` while `diffrs`
+  prints `version: 2` for the same error object (probe-verified side by
+  side); an agent must branch on which binary answered. Two everyday
+  failures carry no machine repair at all (probe-verified):
+  `RSMPL_RANGE_CONFLICT` (range past EOF) and unknown-directive
+  `RSMPL_PATTERN_CONFLICT` both print `"repair": null`, although both
+  have mechanical fixes (clamp to the file length; name the closest known
+  directive). The seven repair producers from the previous plan cover the
+  shapes they pinned, not the error surface.
+- **F4. Drift still requires context lines the canonical spelling omits.**
+  The SPEC 10.8 anchored retry needs leading/trailing ` ` body lines as
+  literal anchors. The diet forms agents actually write — terse renames
+  (`- fn foo` / `+ fn bar`), bare call pairs — carry no context lines, so
+  a stale range fails with `RSMPL_MATCH_CONFLICT` and a
+  `widen_scope` repair that costs a second authoring round (probe-verified:
+  a rename authored 3 lines stale fails; the same hunk as `# sweep`
+  would have applied). The engine already computed the decisive fact —
+  exactly one match exists elsewhere in the file — and then declined to
+  act on it for `allow=one` hunks.
+- **F5. Raising has no general-expression detector, so body rewrites never
+  compress.** The detector chain in
+  [chain.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/chain.rs)
+  (`run_pair_chain`) covers calls, methods, `let`, types, and verbatim
+  lines — but no bare-expression anti-unification. Probe-verified with
+  multi-line fixtures: `1 + 1` → `1 + 2` across three fn bodies, a match
+  guard `v > 0` → `v >= 0`, closure bodies `x + 1` → `x + 2`, and
+  `foo().await + 1` → `+ 2` all stay ordinary, although the authored
+  forms (`- E + 1` / `+ E + 2` under `# sweep`) apply and verify today.
+  The engine is ready; only the detector is missing. This is the largest
+  single raising gap: most real diffs edit expressions inside bodies.
+- **F6. Template completeness lags the engine on four pinned shapes.**
+  (a) Whole-arg permutation declines despite SPEC D.4 promising it:
+  fixture `60-call-arg-swap` (`swap(E0, E1)` → `swap(E1, E0)`) is pinned
+  `nodet`. (b) Untyped let-init templates decline: fixture
+  `57-some-unwrap` / `68-diet-some` (`let Some(P) = E;` →
+  `let Some(P) = E.unwrap_or(0);`, two sites) stay ordinary because the
+  joint template detector requires an ascription. (c) Initializers
+  holding `const { … }` or `_` decline (`53-const-block`,
+  `55-infer-wildcard` pinned `nodet`) although WI-2 taught the matcher
+  both arms. (d) Tuple-pattern swaps decline (`56-tuple-pat-swap`)
+  although `gen_pat` matches the composites. Each is a detector-side
+  veto over an engine-proven shape.
+- **F7. Header evolution without a rename has neither spelling nor
+  detector.** Function patterns bind visibility/qualifiers/generics/where
+  as slots (`V Q G W`) but the fn *name* is always concrete — there is no
+  name hole — so "add `pub` to these four functions", "give these two
+  functions a `T: Clone` bound", and every other slot-only sweep across
+  differently-named functions cannot be authored as one hunk, and
+  `sig_evolution` (which requires one shared name delta) cannot raise it.
+  Probe-verified: four `fn a/b/c/d` → `pub fn …` stay four ordinary
+  hunks; two `fn foo<T>`/`fn bar<T>` gaining `: Clone` stay ordinary.
+  A single-site slot evolution authored with explicit slots applies
+  (probe-verified for lifetimes), so the missing piece is the name hole
+  plus its sweep detector.
+- **F8. Member follow is ident-global, not definition-anchored.**
+  Probe-verified: renaming `A::timeout` with `# follow=uses` in a file
+  that also defines `B::timeout` fails the whole run with
+  `RSMPL_SYMBOL_CONFLICT` ("shadowed definition … cannot tell which
+  definition each use names"), although the uses sit on receivers the
+  fn signature itself types (`fn f(a: A, b: B)`) and in `A { … }`
+  literals whose path names the struct. The definition rename — the one
+  edit that is unambiguous — is blocked by sites a type anchor would
+  have classified. With `# fallback=syntax` the ambiguous sites skip,
+  but the skip set is the F2 prose string, and provable `A` sites reached
+  only through typed locals still depend on the ident-global scan.
+- **F9. Attributes and definition values cannot evolve semantically.**
+  Probe-verified: adding `#[inline]` to a fn fails C11 ("replacement
+  writes attributes the pattern did not match") — there is no authored
+  spelling for add/remove/change of `#[derive(…)]`, `#[cfg(…)]`,
+  `#[inline]`, or doc lines, and no detector raises the four identical
+  `+#[inline]` insertions a real diff produces. Definition right-hand
+  sides are likewise frozen: `- type A = Vec<T>;` fails with "concrete
+  item shape after `<type> <name>` is not supported", field renames
+  require the type token-equal on both sides, variant payloads and
+  `const`/`static` values have no evolution shape at all, and associated
+  `type`/`const` items have neither rename nor evolution (a trait-context
+  `type Item;` pair fails as an unsupported concrete item shape).
+  Probe-verified raising side: field-type `u32` → `u64`, variant-payload
+  `A(i32)` → `A(String)`, struct-field addition with construction-site
+  updates, and enum-variant addition all stay ordinary.
+- **F10. Three cycle families are detector-shaped holes, not byte ties.**
+  (a) Token-tree holes: fixture `48-token-tree-arg-hole`
+  (`old_m!(E, 1)` → `new_m!(E, 1)`) re-diffs as a whole-body `...`
+  verbatim sweep — raising never emits the per-arg hole form the engine
+  has matched since WI-7a. (b) Collection moves: fixture
+  `44-collection-move` (three fns, `old.rs` → `new.rs`) re-diffs as
+  ordinary additions plus a paste-less `- I` cut — the collection
+  emission that bench 31 proves at 91% saved declines on the re-diff
+  shape (source file emptied to zero bytes). (c) Macro interiors stop at
+  one level by design; `macro_rules!` *body* edits (an `inner!(1)` →
+  `inner!(2)` inside a rule body) stay ordinary because token streams
+  are compared whole. Each family has an engine-proven authored form
+  waiting for its detector.
+- **F11. Partition atomicity wastes claimable renames.** Fixture
+  `14-item-rename` holds nine renames; eight are single-pair claimable,
+  but the `impl Printable for Old` → `impl Labeled for New` double-delta
+  pair vetoes the whole section under WI-8's all-or-nothing rule, so the
+  re-diff is 1 semantic + 7 ordinary where 8 semantic + 1 ordinary is
+  available and sound (SPEC 10.6 already permits semantic + ordinary
+  mixing in one section when ranges are disjoint). The same all-or-nothing
+  posture keeps mixed header+let sections (fixture `12`, declared a
+  permanent non-goal under the old fusion design) fully ordinary even
+  where a per-hunk split would compress the let run.
+- **F12. `# symbol` still cannot resolve, and the honest shapes are
+  taxed.** v0.1 has no semantic environment: `# symbol Old=crate::old_api`
+  without `# fallback=syntax` fails C13, and with it matches exact text —
+  the same result as writing the concrete path, plus two directive lines
+  and a `New`/`Old` binding pair in every `sites` report (probe-verified).
+  SPEC 19.3 already prefers concrete paths. What neither spelling offers
+  is the thing the directive promises: proof that `Old` names the item at
+  that path in *this* crate. A crate-local `mod`/`use` graph (the same
+  syntactic discipline as `follow=uses`, no build, no rust-analyzer) can
+  provide exactly that proof for `crate::`/`self::`/`super::` paths.
+- **F13. Item-rename intents fragment across contexts.** Probe-verified:
+  `struct S` → `struct T` with its `impl S` block and an `S`-typed fn
+  parameter (three lines, one intent) stays three ordinary hunks. The
+  single-pair rename detector claims at most one of the three lines, the
+  partition pass claims none (the `impl S {` line is not a bare rename
+  pair), and no grouping joins them — although authored
+  `- struct S` + `# follow=uses` semantics already define which sites
+  belong to the intent. The same fragmentation keeps `mod old;` →
+  `mod new;` plus its file rename and `old::` path uses as unrelated
+  sections, and member renames cross-file (SPEC D.4: "cross-file
+  definition+uses intents stay ordinary (future work)").
+- **F14. The documents that teach the language are only sample-tested.**
+  [spec_examples.rs](/home/ai/git/tools/rsmpl-git/bin/applyrs/tests/spec_examples.rs)
+  (292 lines) lints tagged fences and hand-pins six SPEC §29 examples;
+  the RSmPL fences in AGENTS.md and `skills/gitrs/SKILL.md`, and the
+  remaining SPEC examples, are checked by nothing. The recent history
+  (diagnostic-hint and gate-headroom commits at HEAD) shows wording and
+  behaviour drifting in small steps — each drift is an agent confidently
+  authoring a rejected spelling. SPEC.md is 7583 lines with no agent
+  quick-contract; the one-page summary lives in AGENTS.md and can diverge
+  undetected.
 
 ## Key decisions
 
@@ -226,619 +311,1214 @@ and the remaining raising/veto surface — not correctness of what fires.
   `index`/title stripping) — declared, as today. Binary/gitlink/non-UTF-8/
   CRLF semantic compression stays out of scope; passthrough cycles must
   remain tree-lossless.
-- **D2. No success field may be true by construction.** Every `checked`
-  claim must be computed by a check that can fail on real input
-  (plus-instantiation at reported spans, per-site bindings, orphan
-  enumeration). If a check cannot fail, it is removed or downgraded to
-  an honest label (`reparse-only`, `partial`), never renamed.
+- **D2. No success field may be true by construction, and no proof may be
+  a substring search.** Every `checked` claim must be computed by a check
+  that can fail on real input *at the reported span* (engine re-match of
+  the plus pattern, per-site bindings, orphan enumeration). If a shape
+  cannot be re-matched, it is labelled `reparse-only` — never upgraded by
+  finding its text somewhere in the file.
 - **D3. Inference stays precision-first.** Every new detector keeps
   pre-image totality (count must equal pair count, zero opaque hits) and
-  the T375 byte-win guard measured in diet bytes. A detector that cannot
-  prove totality stays ordinary — no guessing (SPEC 2.6).
-- **D4. One anti-unification core, thin detectors.** WI-5 and WI-9 reuse
-  the existing [antiunify.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/antiunify.rs)
+  the T375 byte-win guard measured in diet bytes, except the
+  precision guard for definition shapes (introduced in WI-12,
+  generalised in WI-19), which is itself bounded and pinned. A detector that cannot prove totality stays ordinary — no
+  guessing (SPEC 2.6).
+- **D4. One anti-unification core, thin detectors.** WI-6…WI-9 and WI-12
+  reuse and extend the existing
+  [antiunify.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/antiunify.rs)
   core instead of growing per-shape string surgery. Engine work is
   structural `syn` matching — concrete, fail-loud, no expansion, no
   guessing.
 - **D5. Split before growing.** New code lands in new modules; no item
   pushes a file over 2000 lines, and any file over 1600 lines touched by
   an item leaves under 1600 or with its new code in a sibling module.
-  [matcher_general.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_general.rs)
-  at 1997 lines is split by WI-2 before any arm is added.
+  [plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs)
+  (1756 lines), `matcher_fn.rs` (1732), `use_graph.rs` (1703),
+  `matcher_expr.rs` (1582), and `capture.rs` (1495) are the watch list.
 - **D6. Familiar syntax wins over clever syntax.** New surface reuses
   Git/SmPL/Rust spellings (`...`, `#` directives, concrete paths, context
-  headers that look like the block they select). Diet remains canonical;
-  the parser keeps accepting long forms so `.history/` archives stay
-  readable. Any new spelling must be explainable in one AGENTS.md row.
+  headers that look like the block they select, attr lines written where
+  Rust writes them). Diet remains canonical; the parser keeps accepting
+  long forms so `.history/` archives stay readable. Any new spelling must
+  be explainable in one AGENTS.md row.
 - **D7. Breaking changes are taken where they buy trust.** JSON schema
   stays at its current version for additive keys; a key whose *meaning*
   changes bumps the version with the old key removed, per SPEC D.2's own
-  rule. SPEC text moves with code in the same item.
+  rule. SPEC text moves with code in the same item. This round bumps the
+  unified report to `version: 4` exactly once (WI-20) after WI-1/WI-2
+  have settled the evidence shapes it carries.
+- **D8. Anchors before indirection.** Follow, symbol resolution, and
+  member anchoring prove site ownership from text the change already
+  contains — fn-signature param types, `let` annotations, struct-literal
+  paths, `use` chains — before consulting any wider graph. A site no
+  anchor proves is evidence (`orphans`/`follow_skipped` with a reason
+  code), never a rewrite and never a veto on the proven sites.
 
 ## Work plan
 
 Order is dependency order: WI-1 → WI-2 → WI-3 → WI-4 → WI-5 → WI-6 →
-WI-7 → WI-8 → WI-9 → WI-10. WI-1 first because every later item emits
-into the envelope it makes honest; WI-4's header filter precedes its own
-raising half. Sizes are relative (S ≤ 1 day, M ≈ 2–3 days, L ≈ 4–5 days
-of focused work).
+WI-7 → WI-8 → WI-9 → WI-10 → WI-11 → WI-12 → WI-13 → WI-14 → WI-15 →
+WI-16 → WI-17 → WI-18 → WI-19 → WI-20. WI-1 first because every later
+detector's `verified` claim rides on it; WI-5 (name hole) precedes WI-9
+and WI-18, which spend it; WI-20 last because it bumps the unified
+schema once, after WI-1/WI-2 settle the evidence shapes. Sizes are
+relative (S ≤ 1 day, M ≈ 2–3 days, L ≈ 4–5 days of focused work).
 
-### WI-1 (P0, M): Honest `checked` — per-rule postconditions, marked truncation [carries F1; hardens old WI-2]
+### WI-1 (P0, M): Structural postcondition — re-match the plus, never search for it [carries F1; hardens WI-1/WI-2 of the previous plan]
 
-**Problem.** F1/D2: `checked.semantics: true` is printed for every
-success, including ranged renames where no postcondition ran, and
-80-char binding truncation is invisible. An agent trusting the envelope
-cannot distinguish "the engine re-verified the rewrite" from "the file
-still parses".
+**Problem.** F1/D2: `plus_instantiated` abstains on any plus containing
+`"` or `...` (so string-bearing and body-preserving rewrites — the common
+case — report `reparse-only`/`partial`), and where it fires it accepts a
+rename whose new name merely occurs somewhere in the file. An agent
+cannot distinguish "the engine re-verified this rewrite at its spans"
+from "the text occurs in the file".
 
-**Decision — evidence that can fail, per rule.** (1) *Plus-instantiation
-postcondition.* After materialization, every rewrite hunk's plus pattern
-must re-match at each reported span in the post-image (for `# repeat`
-hunks, at each outermost reported span; `# optional` zero-edit hunks are
-`not-applicable`). Any span where the plus template does not instantiate
-fails the run loud with `RSMPL_MATCH_CONFLICT` — this check can fail on
-real input (attribute merges, evolution splices, capture pastes), unlike
-the deleted-by-construction re-derivation it completes. The existing
-sweep no-op gate stays as the second postcondition for file-scope
-sweeps. Minus-must-be-zero is *not* adopted: widening rewrites
-legitimately re-match their own output (`foo(E)` → `foo(foo(E))`,
-probe-verified under the previous plan). (2) *Envelope.* Each `rules[]`
-entry gains `semantics: "instantiated" | "postcondition" | "reparse-only"
-| "not-applicable"` (`postcondition` = sweep gate + instantiation both
-ran); the global becomes `checked: {lowering: bool, semantics:
-"verified" | "partial"}` — `"verified"` iff every rewrite rule is
-`instantiated`/`postcondition`, else `"partial"`. Insertions, cuts,
-pastes, and ordinary hunks are `reparse-only` and force `"partial"`:
-honest, never `true`. Schema bumps to `version: 3` (D7: a key's meaning
-changes; the boolean is removed, not aliased). Text mode's `check:` line
-gains the same word. (3) *Truncation honesty.* A binding value cut at
-80 chars gains a trailing `…` and the rule entry gains
-`bindings_truncated_chars: N` counting cut values; entry-count
-`sites_truncated` keeps its meaning. Same treatment for `orphans` text.
+**Decision — span-local engine re-match.** After materialisation, each
+rewrite hunk's plus pattern is re-matched *structurally at each reported
+span* in the post-image, using the same matchers that matched the minus
+(call/method/general/`let`/type/impl-context/fn-slot matchers, fed the
+plus pattern and the recorded per-site bindings). A span verifies iff
+the plus pattern matches the post-image node at that span with bindings
+equal to the recorded ones (SPEC 15.7 equality). String literals compare
+as literals inside the structural match (they were only ever opaque to
+the substring search); `...` tails verify as "the absorbed tail is
+present verbatim", checked by the block matcher, not by abstention.
+Rename kinds (`Fn`, `ItemRename`, `FieldRename`, `VariantRename`,
+`UseRename`) verify by matching the renamed header at the definition
+span — occurrence elsewhere in the file never counts. Any span that
+fails fails the run loud with the existing instantiation
+`RSMPL_MATCH_CONFLICT`. Shapes with no structural matcher (insertions,
+cuts, pastes, `Raw`) stay `reparse-only` — honest, never upgraded.
+Per-rule `semantics` words and the global `verified`/`partial` rule are
+unchanged; only the computation becomes structural. Schema stays
+`version: 3` (additive: no key changes meaning — more rules earn
+`instantiated`/`postcondition`, none lose an honest label they had).
 
-**Changes.** SPEC D.2 (v3 envelope, budget recomputed), 24.6
-(instantiation postcondition). Code: postcondition extension in
+**Changes.** SPEC 24.6 (span-local re-match; substring posture deleted),
+18.6 (no row changes). Code: `plus_instantiated` in
 [postcheck.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/postcheck.rs)
-(re-match via the existing matchers against the materialized tree —
-no new matcher); per-rule semantics threaded through
-[plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs)
-into `RuleReport`; envelope + truncation markers in
-[applyrs main](/home/ai/git/tools/rsmpl-git/bin/applyrs/src/main.rs).
+replaced by a `verify_plus_at_spans` that dispatches into the existing
+matchers; the `contains` arms for renames are deleted. No new matcher is
+written — dispatch reuses `matcher_expr`/`matcher_general`/
+`matcher_fn` entry points over a post-image `syn::File` parsed once per
+file (not per hunk).
 
-**Acceptance.** The identity-sweep fixture still fails loud; a new
-tampered-instantiation unit test proves `semantics` can fail (plus
-template that cannot re-match its own span); JSON pins show a ranged
-rename as `instantiated`, a sweep as `postcondition`, an insertion
-patch as global `"partial"` (never `"verified"`); an 81-char binding
-pins the `…` marker and count. Report overhead stays under the
-recomputed D.2 budget pin.
+**Acceptance.** The F1 probe sweep (`+ bar(E, "hi")`, 3 sites) now
+reports `postcondition`/`verified`; benches 17, 25, 28 report
+`verified` or the landing change names the remaining `reparse-only`
+shape per bench. The tampered-post-image unit (plus reverted at its
+span, same name present elsewhere) now fails — the old `contains`
+posture passed it. A widening rewrite (`foo(E)` → `foo(foo(E))`) still
+verifies (plus re-matches its own output; minus-zero remains rejected
+by design).
 
-**Tests.** V3 envelope shape pins (success + verify paths); per-rule
-semantics matrix (rename / sweep / insertion / optional / repeat);
-instantiation fire/no-fire units; truncation marker pins; full
-workspace + cycle harness.
+**Tests.** Postcheck matrix per pattern kind (fire at span, fail at
+span, name-elsewhere veto, string-bearing fire, `...`-tail fire);
+bench semantics-word pins; full workspace + cycle harness.
 
 **Non-goals / risks.** No type-level proof beyond opt-in
-`--verify build`; no minus-zero check (widening counterexample above).
-Risk: instantiation re-matching costs a second engine pass per rewrite
-hunk — bounded by reported spans (point re-matches, not file rescans);
-pinned by the bench suite staying green.
+`--verify build`. Risk: a second matcher pass per rewrite hunk costs
+time on large sweeps — bounded by reported spans (point re-matches over
+one parsed post-image per file); the bench suite and the WI-20 scale
+gate pin the cost.
 
-### WI-2 (P0, M): Everyday expressions — verbatim macro/repeat/raw/const arms + compile-time shape lint [carries F2; closes old WI-6 residue]
+### WI-2 (P0, M): Assertable evidence — binding digests, structured skips, labelled spans [carries F2]
 
-**Problem.** F2: a byte-identical `format!(…)` or `[0u8; 8]` inside a
-pattern silently vetoes the whole match, and the failure preview points
-at line 1. These are not exotic shapes; they are the default texture of
-Rust bodies, so general/`let` patches stop exactly where agents work.
+**Problem.** F2: an agent cannot assert "site A and site B bound the
+same `E`" from two 80-char prefixes, cannot fetch a full binding without
+re-reading the target file, reads follow skips as a prose sentence, and
+cannot tell three identical `[1,1]` spans apart.
 
-**Decision — verbatim where opaque, structural where safe, loud where
-unsupported.** (1) *New `match_expr` arms* in the WI-6 style:
-`Expr::Macro` matches verbatim-only (`render_eq`, never holed — the
-`Type::Macro`/`Stmt::Macro` precedent; a substituted hole inside can
-never render-equal, so holes reject by construction); `Expr::Repeat`
-recurses on element and length expressions; `Expr::RawAddr` compares
-mutability strictly and recurses; `Expr::Const` matches its block via
-`match_block`; `Expr::Infer` (`_`) matches any expression and binds
-nothing (plus-side `_` writes literally, mirroring `Type::Infer`).
-(2) *Compile-time shape lint (new C19).* Pattern compilation walks the
-minus/plus `syn` trees; any remaining unsupported node in a *pattern*
-position (`Expr::Verbatim`, a declared hole inside a macro body, a
-`Pat`/`Type` verbatim) fails at `RSMPL_PATTERN_CONFLICT` with the exact
-node kind and write-instead, carrying a `fix_pattern` repair with a
-concrete template — never a match-time `no match found`. The zero-match
-preview for general/call/`let` shapes gains a shape-aware tier: the
-nearest line containing the pattern's head token (callee/macro name/
-`let`), replacing the line-1 fallback for `# sweep` hunks.
-(3) *Repair hygiene (F10).* `fill_generic_repair` stops copying the
-English message into `write_instead`: the filler keys one concrete
-template per error class (`pattern` → the C-row's write-instead text,
-`capture` → the missing-name form, `symbol` → `# fallback=syntax`),
-and a conformance pin asserts no emitted `repair.write_instead` equals
-its own `reason`. (4) *Split first (D5):* `match_type`/`match_path` move from
-[matcher_general.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_general.rs)
-(1997 lines) into a new `matcher_types.rs`; the file leaves under
-1600 lines.
+**Decision — digest by default, bytes on request, structure everywhere.**
+(1) Each binding value in `sites[].bindings` stays the 80-char display
+string, and its site entry gains `binding_meta`: `{name: {len, sha256}}`
+for every binding whose value was cut (absent when nothing was cut, so
+uncut reports stay byte-identical to today). Length is in chars; the
+digest is over the full untruncated value. Cross-site equality is now a
+string compare on digests. (2) `applyrs --bindings full` (also via
+`gitrs apply`) lifts the 80-char cut for that run only; the default
+budget pin in SPEC D.2 is recomputed for the digest keys and the flag is
+documented as the token-expensive path. (3) `follow_skipped` becomes a
+structured array `[{file, line, reason}]` with `reason` one of
+`shadowed`, `glob-reexport`, `second-hop`, `macro-hidden`,
+`off-target` (the WI-14/WI-15 vocabulary); the `; `-joined string is
+removed (D7: meaning-bearing shape change, carried by the WI-20 version
+bump — until WI-20 lands, the array ships additive beside the string and
+the string's removal is WI-20's). (4) `orphans` entries gain the same
+`reason` codes. (5) Multi-edit spans (signature evolution) gain an
+`edit` label per span (`generics`/`params`/`return`/`rename`/`follow`)
+so identical `[s,e]` spans are distinguishable; single-edit rules omit
+it. All keys additive under `version: 3` except (3)'s removal, deferred
+to WI-20.
 
-**Changes.** SPEC 18.6 (R1 row gains the five arms; new C19 row; R-table
-"permanent scope" sentence narrowed), D.2 (C19 repair shape). Code: arms
-+ lint in `matcher_general.rs` / new `matcher_types.rs`; lint walk in
-[pattern_general.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/pattern_general.rs)
-(compile keeps the `syn` trees); preview tier in
-[suggest.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/suggest.rs).
+**Changes.** SPEC D.2 (digest keys, `--bindings full`, skip/orphan
+reason codes, span `edit` labels; budget pin recomputed), 14.8 (skip
+reason vocabulary). Code: digest + meta emission and the flag in
+[applyrs main](/home/ai/git/tools/rsmpl-git/bin/applyrs/src/main.rs)
+(`sites_json`/`orphans_json`); reason codes threaded from the collectors
+in [use_graph.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/use_graph.rs)
+and `use_graph_member.rs` (new `follow_reasons.rs` sibling if a touched
+file crosses 1600 lines, D5); span labels from
+[plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs)
+edit construction.
 
-**Acceptance.** Both HEAD probes now match: `- let b = format!("x{}", 1);`
-rewrites under `# sweep`, and `- let buf = [0u8; 8];` →
-`[0u8; 16]` applies; a hole-inside-macro pattern fails C19 at compile
-time (text + JSON pins, target file untouched); new applyrs bench 28
-(macro-bearing `let` sweep over 4 sites) ≥ 40% saved. History sweep
-0 failures; compressing set does not shrink.
+**Acceptance.** The long-binding probe reports equal `sha256` for both
+sites and `--bindings full` returns the untruncated call; a
+shadowed-field follow reports `follow_skipped: [{..., reason:
+"shadowed"}]` in JSON (text mode prints the same triples, one per
+line); the lifetime-evolution probe's three spans carry distinct
+`edit` labels. Default-report overhead stays under the recomputed D.2
+pin.
 
-**Tests.** Per-arm matcher units (verbatim fire, hole veto, repeat
-length-hole fire, raw-addr mutability veto, const-block fire); C19
-compile pins; preview-tier pins (head-token line, not line 1); SPEC
-18.6 verbatim expectations move rows, never deleted.
+**Tests.** Digest fire/cut/absent pins; full-bindings round-trip;
+skip/orphan reason matrix (one fixture per code); span-label pins for
+each evolution slot; budget pin test updated, never loosened silently.
 
-**Non-goals / risks.** No macro expansion (SPEC 21.5 stands); no holes
-inside macro bodies in the general matcher (token-tree holes are WI-7).
-Risk: verbatim macro equality is whitespace-sensitive via `render_eq`
-token normalization — same posture as the two existing precedents,
-pinned by a spacing-variant unit.
+**Non-goals / risks.** No pagination protocol — `--bindings full` plus
+digests covers the assert/fetch split at CLI scale. Risk: digest keys
+inflate wide-sweep reports; bounded by emitting meta only for cut
+values, pinned by the budget test.
 
-### WI-3 (P1, M): Structural pattern positions — destructuring holes in `let`/`match`/`for`/closures [carries F3]
+### WI-3 (P1, S): Repair completeness — no patch failure without a next action [carries F3-repair]
 
-**Problem.** F3: `let Some(P) = E;` cannot match `let Some(v) = opt;`.
-Agents must either spell every binding concretely (no fan-out) or drop
-to ordinary hunks for the most common binding shape in Rust.
+**Problem.** F3: `RSMPL_RANGE_CONFLICT` and unknown-directive failures
+print `repair: null`. The previous plan's rule — every new fence ships
+a template — was never extended backwards over the existing error
+surface, so the failures an agent hits first are the ones with no
+machine exit.
 
-**Decision — bounded composite `Pat` matching, one core.** `match_pat`
-gains structural arms, tried only after the whole-`P` and `P @ sub`
-fast paths: `TupleStruct` (path token-equal, elements recurse),
-`Tuple` (arity-equal, elements recurse), `Struct` (path token-equal,
-fields matched by member name with recursion, `..` rest presence must
-agree on both sides), `Paren`, `Reference` (mutability strict), and
-`Slice` (arity-equal, elements recurse). `Or` stays concrete-only
-(token-equal) in v1 — binding under alternation is ambiguous and is
-rejected at compile time when it carries a hole (C8 text updated, same
-posture for every pattern position, not just `let`). Plus-side
-instantiation reuses the existing text substitution over recorded
-binding spans; no new renderer. Raising follows the engine: the let
-detectors' pattern generalization in
+**Decision — enumerate the surface, then close it.** (1) A conformance
+test enumerates every `StructuredError` construction reachable from
+patch input (all `ErrorCode` variants × the construction sites in
+`rsmpl_patch`, `rsmpl_pattern`, `rsmpl_engine`, and the two CLI mains)
+and asserts `repair != null` for every class except a named allow-list
+(unreadable-file `RSMPL_IO_CONFLICT`, where the fix is environmental and
+the suggestion already names the path — the allow-list lives in the
+test, so a new null-repair error fails CI). (2) New producers:
+range-past-EOF carries `fix_range` (`{file, file_lines, write_instead:
+"@@ -<start>,<clamped-len> @@"}` — the largest in-file range starting
+at the cited start, or the last line when the start itself is past
+EOF); unknown directive/header-tag/`# root=` values carry
+`fix_directive` (`{found, did_you_mean, write_instead}` — closest known
+spelling by edit distance over the SPEC 9.3 table, `null` when nothing
+is within distance 2, `write_instead` the full corrected directive
+line); capture-name errors already carry `fix_name` and join the
+enumeration. (3) Text mode prints each new payload as the trailing
+`repair: {...}` line, same as existing producers.
+
+**Changes.** SPEC D.2 (two new repair shapes; the "seven producers"
+sentence replaced by the completeness rule), 25 (per-code repair
+expectation column). Code: producers beside `fill_generic_repair` in
+[validate.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/validate.rs);
+range data threaded through `ensure_file_range`; directive table shared
+from [directives.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_patch/src/directives.rs)
+(no second spelling list); conformance test in `bin/applyrs/tests/`.
+
+**Acceptance.** Both F3 probes now carry applicable repairs (paste the
+`write_instead` header/directive, retry, succeed — pinned end-to-end);
+the enumeration test fails if any pinned producer is removed.
+
+**Tests.** Per-producer JSON + text pins; edit-distance matrix
+(`# alow=many` → `# allow=many`, `# scope=files` → `# scope=file`,
+far miss → `did_you_mean: null`); enumeration conformance test.
+
+**Non-goals / risks.** No prose-reason rewriting — reasons stay human
+text; only `repair` must be machine-applicable. Risk: edit-distance
+suggests a wrong directive for a deliberate new spelling — mitigated by
+the distance-2 cap and `null` honesty.
+
+### WI-4 (P1, M): Pattern-anchored drift — stale terse hunks apply once, with evidence [carries F4; extends SPEC 10.8]
+
+**Problem.** F4: drift tolerance requires ` ` context anchors, so the
+diet spellings (terse renames, bare pairs) fail on any line shift and
+cost a re-author round, although the planner already proves "exactly
+one match exists elsewhere" to build its `widen_scope` repair.
+
+**Decision — the unique-match proof becomes the drift gate.** When a
+ranged semantic hunk with `allow=one` (the default) finds zero matches
+in its cited range, the engine retries once file-scoped with the same
+pattern: exactly one match in the file → apply it and report
+`"drift": {rule, cited: [s,e], actual: [a,b]}` exactly as SPEC 10.8
+does for anchored hunks (text mode: the same `drift:` stderr line).
+Zero or ≥2 file matches → the original `RSMPL_MATCH_CONFLICT` stands,
+now always carrying the WI-3 repair. The anchored path keeps priority
+(anchors, when present, must also agree with the unique candidate —
+disagreement is the ambiguous case and fails). `# sweep`/`# scope=file`
+hunks never drift-report (they made no locality claim); `allow=many`
+ranged hunks keep today's behaviour (their range is a real claim about
+a set). WI-1's postcondition gates drifted edits identically; overlaps
+with other hunks are checked in original coordinates as today, so a
+drifted edit colliding with a sibling hunk fails as overlap, never as
+a silent merge.
+
+**Changes.** SPEC 10.8 (pattern-anchored tier beside the context-anchor
+tier; both emit identical `drift` evidence), D.2 (`drift` bullet covers
+both tiers). Code: retry beside the T62 whole-file probe in
+[plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs);
+the existing whole-file count machinery is reused, not duplicated.
+
+**Acceptance.** The F4 probe (terse rename 3 lines stale) applies with
+correct `drift` evidence and a byte-identical post-tree; the ambiguous
+fixture (two identical `fn foo` items — twin veto) fails with the
+original conflict and applies nothing; an anchored hunk whose anchors
+name the *other* candidate fails rather than drifting.
+
+**Tests.** Drift matrix (terse/call/`let` shapes × unique/twin/zero;
+anchor-agree/anchor-disagree; drift × overlap; drift × `# optional`);
+`--check` vs apply parity; cycle fixture `51-drift-stale-range` keeps
+its pinned shape (drift stays apply-side evidence, `S′` cites the
+actual range).
+
+**Non-goals / risks.** No fuzzy matching — the pattern still matches
+semantically or not at all; only the search scope widens, once, under a
+uniqueness proof. Risk: masking a genuinely wrong range — mitigated by
+the exactly-one gate plus always-visible drift evidence (the agent sees
+cited vs actual without asking).
+
+### WI-5 (P0, M): Name holes — `N` binds the item name in fn/header patterns [enables WI-9, WI-18; carries F7-engine]
+
+**Problem.** F7: slots abstract everything about a fn header except the
+one part a slot-only sweep needs to vary — the name. Without a name
+hole, "evolve the headers, keep the names" is inexpressible, so the
+most mechanical header migrations (visibility, bounds, qualifiers) fall
+back to per-function ordinary hunks.
+
+**Decision — one inferred letter, one explicit kind, fn/header positions
+only.** (1) Bare `N` in a fn pattern's name position (and in
+impl/trait-context method pairs) infers as a *name hole*: it binds the
+site's ident text per site (SPEC 15.7 equality governs repeats), and on
+the plus side `N` replays the bound name while the written slots evolve
+around it — `- V Q fn N(...) {` / `+ pub fn N(...) {`. Writing a
+different literal name on the plus side beside an `N` minus is the
+existing concrete-rename shape and stays distinct. (2) Explicit form
+`# ident N` declares the kind for ambiguous positions (the `identifier`
+rejection in SPEC 15.1 is narrowed to exactly this kind name — agents
+meet `# ident` next to `# expr`/`# pat`, spelled as Rust names the
+concept). (3) `N` never binds qualified paths, never appears in
+call/method callee positions (those keep their backtick/literal rules),
+and a plus-side `N` with no minus-side `N` is unbound (`fix_pattern`
+repair, code `unbound`). (4) Inference: `N` joins the diet letters
+(`E T P V Q G W I` → `E T P V Q G W I N`) only in name position — a bare
+`N` elsewhere stays a literal ident, so no existing patch changes
+meaning.
+
+**Changes.** SPEC 15.1/15.8 (name-hole kind + inference position), 14.1/
+14.2 (name position in the slot table), 18.6 (new C-row for misplaced
+`N`). Code: kind + inference in
+[metavar.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/metavar.rs)
+and [fn_pattern.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/fn_pattern.rs);
+binding + replay in
+[matcher_fn.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_fn.rs)
+(sibling module if it crosses 1600 after the change, D5).
+
+**Acceptance.** The authored sweep `- V Q fn N(...) {` /
+`+ pub fn N(...) {` under `# sweep` adds `pub` to four differently-named
+fns; a fifth, already-`pub` fn also matches (`V` binds `pub`, the
+plus replays it) and is reported in `matches`/`spans` with a
+byte-identical edit that contributes no diff lines — and if *every*
+site is already in the plus state, the existing sweep no-op gate
+fails loud as today; a bound-adding sweep (`fn N<T>(...)` →
+`fn N<T: Clone>(...)`) fires; `N` in a call callee fails the new C-row
+at compile time with a template.
+
+**Tests.** Name-hole matrix (bind/replay, repeat equality across two
+`N` occurrences, unbound-plus veto, misplaced-`N` C-pin, literal-`N`
+elsewhere unchanged); impl-context method pair with `N`; diet-vs-declared
+canonicalisation pin (`# ident N` drops like other declarations).
+
+**Non-goals / risks.** No item-name holes for `struct`/`enum` bare pairs
+in this item (WI-15's grouped raising reuses `N` if it proves out
+there; the bare-pair rename keeps concrete names so canonical forms
+stay stable). Risk: single-letter inference creep — contained by the
+name-position-only rule and the C-row fence.
+
+### WI-6 (P0, L): General-expression raising — body rewrites compress [carries F5]
+
+**Problem.** F5: the commonest diff in real code — the same expression
+edit inside several bodies — has an authored form and no detector. Every
+such change pays ordinary bytes and, worse, the agent reviewing a
+`gitrs diff` output cannot see that three sites share one intent.
+
+**Decision — anti-unify the changed subterm, frame stays concrete.** New
+detector `general_expr`: N ≥ 2 balanced pairs whose changed lines each
+hold exactly one changed expression subterm at the same structural
+position, where the per-site subterm pairs anti-unify to one template
+pair via the shared core in
 [antiunify.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/antiunify.rs)
-gains `gen_pat` (same-variant composites at depth ≤ 2, ≥ 1 literal
-anchor — the variant path — repeated-hole equality per SPEC 15.7), so
-joint let templates with destructuring deltas raise instead of staying
-ordinary.
+— hole positions are subterms token-equal within each pair but hetero
+across sites (`E0…`), literal anchors are tokens equal across all sites
+on each side (the operator, the changed literal), and at least one
+anchor carries the delta. Whole-arg permutation is the same core's
+call-position case: `swap(a, b)` → `swap(b, a)` anti-unifies as two
+whole-arg holes exchanged (SPEC D.4 already promises this; the
+implementation's per-position same-hole assumption is the bug F6(a)
+pins, fixed here, not re-specified). Emission is one `# allow=many`
+general hunk (`- E0 + 1` / `+ E0 + 2`, diet holes, tight range or
+`# sweep` per the D.5 64-line rule). Totality is the real-pair engine
+probe (`template_pair_holds`): the emitted pair must match exactly N
+subterms in the pre-image — an untouched twin (`4 + 1` the diff did not
+touch) vetoes to ordinary. Macro-hiding subterms veto (the
+WI-9b2-delim precedent: TokenStream-normalised text is unmatchable).
+Chain placement: after `call_arg_template`/`method_arg_template`,
+before verbatim — tighter call templates win; verbatim keeps
+all-identical classes.
 
-**Changes.** SPEC 15.1/15.7 (composite pattern holes), 18.6 (C8
-narrowed uniformly across positions), D.4 (let-template bullet). Code:
-`match_pat` arms in
-[matcher_general_ctrl.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_general_ctrl.rs);
-C8 gate unification in pattern compilation; `gen_pat` in
-`antiunify.rs` consumed by `try_let_template_sweep` / single-block.
-
-**Acceptance.** The HEAD probe fires: `- let Some(P) = E;` /
-`+ let Some(P) = E.unwrap_or(0);` rewrites both sites under `# sweep`
-and re-diffs cycle-green; a struct-pattern fixture
-(`S { f: P }`) and a tuple fixture fire; an `Or`-with-hole pattern
-fails C8 at compile time in `let`, arm, and closure positions alike.
-New diffrs bench 30 (destructuring let migration, 3 sites) ≥ 50% saved.
-
-**Tests.** `match_pat` matrix per arm (fire, arity veto, rest-presence
-veto, nested composite); C8 position-uniformity pins; anti-unify
-`gen_pat` fire/veto units; fixtures round-trip real-apply; cycle harness.
-
-**Non-goals / risks.** No `Or` holes, no guard-position holes beyond
-the existing expression matcher, no `@` except the existing
-placeholder-head form. Risk: field-order sensitivity in `Struct`
-patterns — matching is by member name, source order irrelevant,
-pinned by a reordered-fields unit.
-
-### WI-4 (P0/P1, L): Impl/trait headers select their block — and raising learns trait+impl renames [carries F4 + F5-trait; closes D.5 `30`]
-
-**Problem.** F4+F5: the header spelling promises block selection the
-engine does not deliver (sweep renames across every impl), while the
-inverse direction cannot compress a trait+impl method rename at all.
-Both directions of the same context shape are untrustworthy.
-
-**Decision — header is a filter in every scope; one detector emits the
-grouped intent.** (1) *Engine.* The impl/trait header is parsed once at
-compile time into (kind, self-type tokens, trait-path tokens) and
-compared token-normalized against each candidate block's `syn` header:
-inherent impls require equal self type and no trait; trait impls
-require both halves equal; trait headers require equal trait path.
-The comparison applies under *every* scope including `# sweep`; the
-range-overlap fallback and the token-containment heuristic are deleted.
-This is a breaking SPEC 13.4 change: "advisory" becomes "filter", which
-is what the spelling has always suggested (D6). Bench 19/20 headers
-(`impl Svc`, trait sweeps) still match their named blocks.
-(2) *Raising.* New detector `try_trait_method_rename`: pairs spanning
-one trait block (declarations `fn m(…);` and defaults) plus impl
-definitions of the same trait, all sharing one ident delta with
-per-site suffixes preserved, ≥ 2 sites with ≥ 1 trait-side and ≥ 1
-impl-side (pure impl-only classes stay with the slot/impl sweeps).
-Emission is one trait-context hunk plus one impl-context hunk per
-distinct impl block (headers verbatim from the pre-image, now real
-filters per (1)), all sharing `rule=rename_Old_to_New`: grouping in
-[group.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/group.rs)
-is extended so this detector (only) may group within one file;
-canonical form already preserves shared `rename_*` names. Totality is
-per-hunk engine-count: the trait minus matches exactly its trait sites,
-each impl minus exactly that block's definitions.
-
-**Changes.** SPEC 13.4 (header filter, breaking), 29.9, D.4
-(trait-method detector bullet), D.5 (`30` re-pinned — see Acceptance).
-Code: header parse/filter in
-[matcher_impl.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_impl.rs)
-(header struct in `rsmpl_pattern` beside `ImplContext`); detector in
-new `crates/rsmpl_diff_infer/src/semantic/trait_methods.rs`; grouping
-extension in `group.rs`; chain registration in
-[chain.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/chain.rs).
-
-**Acceptance.** The HEAD over-match probe now rewrites only
-`impl Tr for A` under `# sweep` (inherent `impl A` untouched, pinned);
-the HEAD raising probe compresses trait + 2 impls into grouped hunks
-and real-applies byte-identical; a divergent-suffix fixture (one impl
-changes its signature too) vetoes to ordinary. Fixture `30` moves to
-`CYCLE_OK` if the authored form canonicalizes to the raised form under
-the tree-aware comparator, else stays pinned with the sharpened reason
-named here (authored single-hunk vs raised multi-hunk intent).
-
-**Tests.** Header-filter matrix (inherent vs trait impl, generic self
-type, sweep scope); raising fire/veto units (decl-only stays ordinary,
-impl-only veto, mixed-signature veto);
-grouped same-file rule pins; fixtures + cycle harness.
-
-**Non-goals / risks.** No cross-trait unification (two traits declaring
-the same method stay two hunks), no supertrait chasing. Risk: strict
-header equality breaks patches that relied on advisory sloppiness —
-intended (D7); the failure mode is a loud zero-match with the WI-2
-shape-aware preview, not a silent wrong rewrite.
-
-### WI-5 (P1, M): Hetero call-arg templates — raising learns wrap/transform migrations [carries F5-calls]
-
-**Problem.** F5: `foo(x)` → `foo(x.clone())` at N sites is a canonical
-API migration, applies cleanly when authored, and never raises. The
-detector family covers callee deltas, concrete arg additions, and
-concrete literal swaps — everything except a uniform *wrapper* around
-a varying argument.
-
-**Decision — anti-unify argument positions, engine already ready.** New
-detectors `try_call_arg_template_sweep` (calls) and its method sibling:
-N ≥ 2 pairs, uniform arity, callee token-equal *or* one shared callee
-delta (disjoint from `call_sweep`, which keeps token-equal-args
-classes), where each argument position independently is (a) token-equal
-concrete, (b) a whole-arg hole `E{i}`, or (c) a uniform wrapper — one
-`E{i}` occurrence inside a plus template with ≥ 1 literal anchor
-(`E.clone()`, `&E`, `f(E)`), generalized by extracting the existing
-`antiunify_plus_with_hole` core from the let-template code in
-[antiunify.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/antiunify.rs)
-(D4). Plus templates may permute holes (`f(E0, E1)` → `f(E1, E0)`);
-dropped or duplicated holes veto (a duplicated hole would need
-repeat-equality the emission cannot state). At least one position must
-carry a real delta; macro-hiding arguments veto (T448 precedent);
-all-identical classes stay with verbatim. Totality is the real-pair
-engine probe (`template_pair_holds`): the emitted pair must match
-exactly N sites in the pre-image. Chain placement: after
-`call_literal` / `method_same_literal`, before the cross-hunk verbatim
-stage (tighter templates win over identical-line grouping).
-
-**Changes.** SPEC D.4 (call/method arg-template bullets, detector names
-`call_arg_template`, `method_arg_template`). Code: shared arg-template
-core in `antiunify.rs`; detectors in
-[calls.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/calls.rs)
-and [methods.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/methods.rs)
-(no net growth — shared core only); provenance names registered in
+**Changes.** SPEC D.4 (`general_expr` detector bullet; the call-arg
+bullet's permutation sentence now true in code). Code: generalisation
+helpers in `antiunify.rs` (expression-position anti-unification reusing
+`antiunify_plus_with_hole`); detector in new
+`crates/rsmpl_diff_infer/src/semantic/general_expr.rs`; chain
+registration in
+[chain.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/chain.rs);
+provenance name in
 [prov.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/prov.rs).
 
-**Acceptance.** The HEAD wrap probe compresses (3 sites, one hunk) and
-real-applies byte-identical; new diffrs bench 31 (wrap migration,
-5 sites) ≥ 50% saved; arg-swap fixture fires with permuted holes;
-duplicated-hole and hetero-tail fixtures veto to ordinary. Authored
-round-trip of the emitted form is pinned (it already applies today).
+**Acceptance.** The F5 binary-op probe compresses and real-applies
+byte-identical (the guard/closure/await probes are WI-8's acceptance,
+not this item's); fixture `60-call-arg-swap` moves to `CYCLE_OK`;
+a hetero-distractor fixture (third site `4 + 9` untouched by the diff
+but matching the minus template) vetoes to ordinary. New diffrs bench
+35 (binary-op migration, 5 sites) ≥ 50% saved; history compressing set
+grows or the landing change names why a probed class declined.
 
-**Tests.** Anti-unify arg matrix (wrap, borrow, permute, drop veto,
-duplicate veto, macro-arg veto); detector fire/veto incl. hetero
-distractor site (untouched twin vetoes via totality); fixtures +
-cycle harness; history compressing set reported.
+**Tests.** Anti-unify matrix (binary/unary/field/index/cast, hole-left/
+hole-right, permute fire, duplicate-hole veto, macro-subterm veto);
+totality twin veto; fixtures round-trip real-apply; cycle harness.
 
-**Non-goals / risks.** No statement-level templates beyond the call
-(the sequence/`let` detectors own statements), no arity-changing
-wrappers (arg-add owns concrete tails). Risk: wrapper over-generality
-— the literal-anchor + real-pair totality gates are acceptance
-criteria, not aspirations.
+**Non-goals / risks.** No statement-level generalisation here (WI-8 owns
+control/statement positions), no multi-subterm-per-line classes (the
+sub-line driver owns repeated same-family subterms). Risk: over-broad
+templates (`E0 + E1` matching everything) — the ≥1-changed-anchor +
+real-pair totality gates are acceptance criteria, not aspirations.
 
-### WI-6 (P1, L): Collection captures — `# bind` + `# allow=many` moves many items as one [carries F6; completes old WI-8]
+### WI-7 (P1, M): Literal-frame raising — string/number/bool edits keep their frame [carries F5-literal]
 
-**Problem.** F6: multi-item moves — the largest patches there are —
-cost one scalar capture per item in both directions, five range
-discoveries for five helpers. SPEC 20.3 explicitly defers the syntax;
-this item defines it with directives agents already know (D6).
+**Problem.** Identical literal edits (`"old"` → `"new"`, `10` → `20`,
+`false` → `true`) inside hetero frames stay ordinary: the verbatim sweep
+deliberately vetoes bare literals ("would match every mention"), and no
+other detector owns a lone literal delta. Config strings, log messages,
+and feature names — a daily edit class — never compress, although the
+authored general form (`- "old"` / `+ "new"` under `# sweep`) applies
+today (F1's probe) and the frame around each site is byte-identical
+evidence the literal is the changed one.
 
-**Decision — ordered collections from existing directives.** (1) A cut
-hunk combining `# bind=Name` with `# allow=many` (today a
-`RSMPL_CAPTURE_CONFLICT`) binds an *ordered collection*: every match in
-scope, in source order, each the exact item span as scalar cuts record
-today. Match-count rules apply to the collection (zero without
-`# optional` fails; `# optional` binds the empty collection). (2) A
-paste hunk (`# use=Name`, pure insertion, `+ Name`) splices all items
-at the anchor in source order with the SPEC 20.2 one-blank join; the
-same collection may be pasted more than once (scalar fan-out parity).
-Evolution pastes (`+ <prefix>fn <New>(...) { ... }`) with a collection
-capture fail at `RSMPL_CAPTURE_CONFLICT` — one header template cannot
-evolve many items unambiguously. (3) The cut rule's report carries
-`matches` = item count and one span per item (WI-1 `sites` evidence
-extends naturally). (4) `diffrs` move inference emits the collection
-form when ≥ 3 items move between the same file pair and its bytes beat
-the scalar spelling under T375 (both spellings measured; smaller wins).
+**Decision — the frame is the anchor, occurrence-counted like sub-line
+sweeps.** New detector `literal_frame`: N ≥ 2 pairs where each changed
+line differs from its partner in exactly one literal token (string,
+char, number, bool — same literal kind on both sides), the surrounding
+line frame (text before + after the literal, per site) may differ
+across sites, and the (old-literal, new-literal) pair is uniform across
+sites. Emission is one `# allow=many` general hunk with the literal
+pair (`- "old"` / `+ "new"`). Totality reuses the sub-line
+occurrence-counting discipline (SPEC D.4): count occurrences of the old literal as an expression
+subterm in the pre-image (engine-count probe over `syn` literals, macro/
+string interiors opaque and vetoing only when they cover a changed
+line, per `totality.rs`); the count must equal N. A same-literal
+occurrence the diff left untouched vetoes — frame heterogeneity is why
+the *count*, not frame equality, carries the proof. T375 guard as
+usual; single-site literals stay ordinary.
 
-**Changes.** SPEC 20.3/20.4 (collection semantics; the "invalid in
-v0.1" fences rewritten), 24.4, §32/§33.2 (non-goal/future entries
-removed), D.4 (move bullet). Code: collection store beside scalar in
-[capture.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/capture.rs)
-(collections in new `capture_many.rs`, D5); planner pass-1 collection
-cuts in [plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs);
-validation updates in
-[validate.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/validate.rs);
-move emission choice in
-[moves.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/moves.rs)
-(no net growth — emission helper in `move_parts.rs`).
+**Changes.** SPEC D.4 (`literal_frame` bullet; verbatim bullet gains a
+"lone-literal deltas are `literal_frame`'s" cross-reference). Code:
+detector in new `crates/rsmpl_diff_infer/src/semantic/literal_frame.rs`
+(the existing `literal.rs` owns trailing-arg literals and is not grown,
+D5); literal-occurrence counting beside the sub-line counters in
+`totality.rs`.
 
-**Acceptance.** Authored five-item cross-file move is one cut + one
-paste, applies byte-identical, and re-diffs cycle-green; paste-order
-and blank-join pins match SPEC 20.2; a collection + evolution paste
-fails with the exact capture diagnostic; new diffrs bench 32
-(five-item move) ≥ 70% saved; every scalar move fixture and bench
-unchanged byte-for-byte.
+**Acceptance.** The F5 string probe (three `"old"` returns) compresses
+and real-applies byte-identical; a numeric probe (`MAX`-style `10` →
+`20` in three hetero lines) fires; an untouched-twin fixture (fourth
+`"old"` the diff did not change) vetoes to ordinary; a string *inside*
+a string (literal text mentioning `"old"`) never counts. New diffrs
+bench 36 (log-message rename, 4 sites) ≥ 45% saved.
 
-**Tests.** Collection cut/paste units (ordering, empty-optional,
-double paste, evolution veto, twin veto still applies per item);
-planner overlap pins (collection cut vs ordinary hunk on same lines);
-move round-trip fixtures; cycle harness.
+**Tests.** Literal-kind matrix (string/char/int/float/bool, kind-mismatch
+veto); occurrence-count fire/veto; macro-interior cover veto; fixtures
++ cycle harness.
 
-**Non-goals / risks.** No statement collections (items only), no
-per-item evolution, no list-separator syntax invention. Risk:
-collection cuts widen the blast radius of one hunk — mitigated by
-per-item spans in the report (WI-1) and the unchanged overlap checks;
-a partially-overlapping collection fails whole, never partially.
+**Non-goals / risks.** No literal holes (a varying literal is data, not
+a template), no raw-string/`concat!` interiors (opaque, as today).
+Risk: tiny literals (`0` → `1`) occur everywhere — the count-must-equal-N
+gate plus T375 keeps the detector silent unless the diff truly owns
+every occurrence; pinned by a dense-`0` veto fixture.
 
-### WI-7 (P2, M): Macro depth — `macro_rules!` renames, token-tree holes, one-level interiors [carries F7; completes old WI-9]
+### WI-8 (P1, L): Control and untyped-let templates — guards, closures, await chains, destructuring inits [carries F6(b–d)]
 
-**Problem.** F7: macros are Rust's largest opaque surface. Definitions
-cannot be renamed, authored token-tree patterns cannot abstract one
-argument, and edits inside macro bodies never compress — so macro-heavy
-changes (the `17`/`18` benches sit at 46%/41%, the worst in the suite)
-pay near-ordinary bytes.
+**Problem.** F6(b–d): the engine matches match guards, closure bodies,
+`if`/`for` scrutinees, `await`/`?` chains, and WI-3 destructuring
+patterns structurally, but raising templates stop at typed `let`s and
+bare calls. Diffs that change a guard comparison, bump a closure body,
+or wrap an untyped destructuring init stay ordinary, and three fixtures
+sit pinned `nodet` for exactly these shapes.
 
-**Decision — deepen by rendering, never by expansion (SPEC 21.5
-stands).** (1) *`macro_rules!` rename.* Item rename gains the
-`macro_rules` kind in
-[item_rename.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/item_rename.rs)
-(`- macro_rules! Old` / `+ macro_rules! New`; definition span is the
-full item, body preserved byte-verbatim like fn bodies). `# follow=uses`
-extends to invocation sites (bare and qualified last-segment) via the
-existing macro collector; `diffrs` gains the single-pair detector arm
-(`macro_rules_rename`, groupable like `macro_rename`). (2) *Token-tree
-holes.* `# macro=token_tree` patterns may name one metavariable per
-top-level comma-separated argument (`- old!(E, lit)` /
-`+ new!(E, lit)`), matched by the existing token-tree argument matcher
-in [matcher_macro.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_macro.rs);
-`...` remains the whole-body form; delimiters stay significant. The
-verbatim-only compile fence is narrowed to multi-hole/non-argument
-positions with updated C-table text. (3) *One-level interiors in
-raising.* The macro-interior detector emits token-tree hunks (concrete
-or single-hole per (2)) for same-name macro pairs whose bodies differ
-in exactly one top-level argument — reaching one level inside bodies
-the `syn` visitor cannot enter, matched by the token-tree engine that
-already compares bodies argument-wise. Recursive token descent and
-macros-inside-strings stay ordinary (strings are opaque literals).
+**Decision — one template family over the control positions the engine
+already owns.** (1) *Untyped let-template*: the joint let detector loses
+its ascription requirement — `let PAT = INIT;` pairs where PAT
+anti-unifies via `gen_pat` (including `_` and WI-3 composites) and INIT
+anti-unifies via the WI-6 core (including `Expr::Const` and
+`Expr::Infer` subterms, which `gen_init` currently vetoes) emit
+`- let P0 = E0;`-family hunks with the same real-pair totality. This is
+fixture `57`/`68`'s shape; typed classes keep firing in the existing
+detector first (chain order unchanged, disjoint by ascription).
+(2) *Control templates*: new detector `control_template` for N ≥ 2 pairs
+whose changed subterm sits in one uniform control position — match-arm
+guard, arm body, closure body, `if`/`while` condition, `for` iterable,
+`let`-else diverge expression, or an `await`/`?` base — anti-unified by
+the WI-6 core inside that position, emitted as the smallest general
+hunk that names the position (`- E0 + 1` suffices where the subterm
+template already matches only there; where the bare subterm would match
+wider, the emission carries its control frame, e.g. the arm pattern,
+exactly as the single-block detector frames its windows). Totality is
+the real-pair probe scoped to the position (guard twins outside guards
+never count). (3) Tuple-pattern swaps ride (1): `gen_pat` gains the
+tuple-position case the swap fixture needs (positions exchange, holes
+correspond per SPEC 15.7).
 
-**Changes.** SPEC 14.8 (kind list), 21.3 (holes + interior posture),
-D.4 (macro bullets). Code: kind arm in `item_rename.rs` +
-[matcher_item.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_item.rs);
-follow collector arm in
-[use_graph.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/use_graph.rs);
-token-tree hole gate in `matcher_macro.rs`; interior emission in
-[macros.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/macros.rs)
-(extraction helpers in existing `macro_parts.rs`; no net growth).
+**Changes.** SPEC D.4 (`control_template` bullet; let-template bullet
+splits typed/untyped), 18.6 (no engine rows move — detectors only).
+Code: `gen_pat`/`gen_init` extensions in `antiunify.rs` (tuple exchange,
+const/infer subterms); untyped arm in
+[generalized.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/generalized.rs)
+(`try_let_template_sweep` keeps its name; the untyped sibling lives in
+new `let_untyped.rs` if the file crosses 1600, D5); control detector in
+new `crates/rsmpl_diff_infer/src/semantic/control_template.rs`.
 
-**Acceptance.** Benches 17/18 each gain ≥ 5 points saved; new bench 33
-(`macro_rules!` rename + 4 invocation sites with follow) ≥ 60% saved;
-depth-2 body edit (macro inside a macro argument's tokens) stays
-ordinary (veto pin); string-hidden macro text never counts. History
-sweep 0 failures, compressing set reported.
+**Acceptance.** Fixtures `53-const-block`, `55-infer-wildcard`,
+`56-tuple-pat-swap`, `57-some-unwrap`, `68-diet-some` each move to
+`CYCLE_OK` or stay pinned with the sharpened reason the landing change
+names; the F5 guard and closure probes compress and real-apply
+byte-identical; a guard-template fixture whose same subterm appears in
+a plain body expression vetoes rather than rewriting the body site.
 
-**Tests.** macro_rules authored + raised + follow + distractor pins;
-token-tree hole fire / delimiter-mismatch veto / multi-hole veto;
-interior one-level fire + two-level veto; raw-span slicing fallback
-pin; cycle coverage.
+**Tests.** Position matrix (guard/arm-body/closure/condition/iterable/
+diverge/await-base × fire + out-of-position twin veto); untyped-let
+matrix (destructuring, wildcard, const-block init, macro-init veto);
+`gen_pat` tuple-exchange units; fixtures + cycle harness.
 
-**Non-goals / risks.** No expansion, no `macro` 2.0 items, no hygiene
-reasoning, no recursive token-tree descent. Risk: token-tree argument
-splitting on unbalanced bodies — the existing string-aware splitter is
-the only splitter, and split failure declines to ordinary.
+**Non-goals / risks.** No `Or`-pattern holes (C8 stands), no multi-arm
+fusion (arms stay per-position templates), no closure *signature*
+templates (params keep the existing pattern discipline). Risk: control
+frames over-specify and lose byte wins — T375 decides per class, and a
+frame that cannot beat ordinary declines.
 
-### WI-8 (P1, M): Pair-partition raising — multi-rename sections compress pair by pair [carries F9; closes D.5 `14`]
+### WI-9 (P1, M): Header slot-only evolution raising — one uniform slot delta, any names [carries F7-raising; spends WI-5]
 
-**Problem.** F9: eight renames in one file are eight intents, each
-individually compressible, yet the section passes through ordinary
-because every rename detector demands the whole section (or whole
-hunk) share one shape.
+**Problem.** F7: with WI-5's name hole the authored form exists, but
+`diffrs` still shows four `pub` additions as four ordinary hunks. The
+slot sweep demands a shared name delta; evolution demands the same.
+Nobody owns "same slot change, different names".
 
-**Decision — partition balanced hunks by single-pair detectors.** When
-the pair chain declines a balanced hunk with ≥ 2 pairs, a partition
-pass tries each pair singly through the single-pair rename detectors
-(item rename incl. its plain-`fn` arm; a `{-terminated fn header pair
-keeps today's single-pair gate). The hunk partitions only if *every*
-pair is claimed (hunk atomicity, WI-9e fixed-point precedent: a mixed
-hunk stays ordinary whole, never half-semantic). Emission is one file
-section with one hunk per pair (tight per-pair ranges from the changed
-lines, positional `rN` rules; distinct deltas never group — `group`
-stays `""`). Whole-section and per-hunk chain results are untouched:
-partition runs only where both declined, so existing fires keep their
-exact bytes.
+**Decision — `header_evolution` detector over name-holed headers.** N ≥ 2
+single-line fn-header pairs (free fns and, per enclosing block,
+impl/trait methods) where names are hetero and preserved (minus name ==
+plus name per site), and exactly one non-name slot carries a uniform
+delta: visibility (uniform plus text or uniform removal), qualifiers,
+generic params (one uniform template with per-site preserved holes
+riding `T`-family metavars where the core can prove correspondence),
+params (one uniform template over `E`-/`T`-holes), return type, or
+where clause. Emission is one hunk per uniform class (per impl block,
+verbatim headers as the slot sweep emits) in the WI-5 spelling:
+`- V Q fn N(...) {` / `+ pub fn N(...) {` (hetero preserved slots ride
+their existing wildcards under the same `V`/`Q`-pairing and
+return/where spelling laws the sig-evolution detector already enforces
+— shared emission helpers, not a second copy). Two slots evolving at
+once, or a name delta anywhere in the class, stays with
+`sig_evolution`/ordinary. Totality is the generic engine-count check:
+the emitted minus header (with `N`) must match exactly N headers in the
+pre-image — a same-shape header the diff left alone vetoes.
 
-**Changes.** SPEC D.4 (partition paragraph), D.5 (`14` re-pinned).
-Code: partition pass in
-[chain.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/chain.rs)
-`compress_section_per_hunk` fallback, reusing the single-pair entry in
-[rsmpl_diff_infer lib](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/lib.rs);
-provenance per emitted hunk via existing `prov.rs` accounting.
+**Changes.** SPEC D.4 (`header_evolution` bullet; sig-evolution bullet
+gains the disjointness note). Code: detector in new
+`crates/rsmpl_diff_infer/src/semantic/header_evolution.rs`; shared
+header-emission helpers extracted from `generalized.rs`'s sig-evolution
+section into `block_headers.rs` (existing sibling, D5) rather than
+duplicated.
 
-**Acceptance.** A new diffrs fixture with 8 mixed item/fn renames in
-one section compresses all 8 and real-applies byte-identical; a mixed
-fixture (7 renames + 1 unclassifiable pair) stays ordinary whole
-(atomicity pin); fixture `14`'s tree legs hold and its D.5 entry moves
-to the defined partition form (or `CYCLE_OK` if the tree-aware
-canonical forms converge — the landing change states which).
+**Acceptance.** The F7 probes compress (four `pub` adds → one hunk; two
+`: Clone` bound adds → one hunk) and real-apply byte-identical; new
+applyrs bench 29 (visibility sweep) and diffrs bench 37 (bound sweep)
+each ≥ 50% saved; a mixed fixture (three `pub` adds + one `async` add)
+splits into two uniform classes under two rules (a class left at
+N=1 by the split stays ordinary), never half-claimed under one rule.
 
-**Tests.** Partition fire/veto matrix (all-claimed, one-unclaimed,
-fn-header gate per pair, cross-hunk pairs); T375 per-hunk byte pins
-(a partition that costs more than ordinary declines); fixtures +
-cycle harness; history compressing set reported.
+**Tests.** Slot matrix (vis/qual/generics/params/return/where ×
+add/change/remove); name-delta exclusion; impl-block per-header
+emission; twin veto; cycle coverage for the authored WI-5 forms.
 
-**Non-goals / risks.** No partitioning for sweeps/templates (classes
-that must share one template keep whole-hunk semantics), no divergent-
-delta grouping. Risk: many small hunks cost more than one ordinary
-hunk on tiny renames — the per-hunk T375 guard is the gate, pinned.
+**Non-goals / risks.** No attr-slot evolution here (WI-10 owns attrs),
+no body evolution (bodies stay `...`-preserved), no cross-block method
+classes (per-block hunks, as today). Risk: `N` matches headers the diff
+did not intend (e.g. adding `pub` inside a trait, where `pub` is
+illegal) — trait-context classes reject vis deltas at emission, pinned.
 
-### WI-9 (P1, L): Field and variant renames — definition, uses, and raising [carries F11]
+### WI-10 (P1, M): Attribute evolution — write the attr delta where Rust writes it [carries F9-attrs]
 
-**Problem.** F11: renaming `Config.timeout` or `Color::Red` is a daily
-refactor with no semantic spelling. Agents hand-write every site as
-ordinary hunks, and `diffrs` shows them the same bytes back.
+**Problem.** F9: `#[derive]`, `#[cfg]`, `#[inline]`, `#[allow]`, and doc
+lines are the highest-frequency item-adjacent edit in Rust, and RSmPL
+can only preserve or strip them. Agents hand-write ordinary hunks for
+attribute migrations and `diffrs` hands the same bytes back.
 
-**Decision — context-pair shapes in the impl-context spelling family
-(D6).** (1) *Authored.* Two context shapes reuse the header+pair form
-agents already know from §29.9: a variant rename is an `enum` header
-context with a bare ident pair (suffix — discriminant, fields —
-preserved token-equal; only the ident span edits); a field rename is a
-`struct` header context with a `- Old: T` / `+ New: T` pair (type
-token-equal preserved, ident-span edit; named fields only). Both
-classify as rename kinds (`VariantRename`, `FieldRename`) so
-`# follow=uses`, orphan evidence (WI-7c plumbing), and report spans
-come along without new directives. Follow sites are syntactic:
-variants — `Enum::Old` paths in expressions and patterns; fields —
-`.old` accesses, struct-literal labels (shorthand `S { old }` rewrites
-to the expanded `New: old`, pinned — the local binding keeps its name),
-and struct-pattern labels. Multi-definition ambiguity vetoes/skips
-exactly as fn renames do (SPEC 14.8). (2) *Raising.* A detector pairs
-the definition-line delta with use-site lines sharing the ident delta
-and emits the definition hunk *with* `# follow=uses` only when a
-scratch-apply probe proves the follow rewrite reproduces exactly the
-changed use lines (template-probe totality); otherwise the definition
-hunk alone raises and uses stay ordinary.
+**Decision — written attr lines are a delta; unwritten attrs stay
+preserved.** (1) *Authoring.* On fn/item/`let` shapes, attr/doc lines
+written in the pattern are matched exactly as today; additionally, an
+attr line present only on the plus side *adds* it, only on the minus
+side *removes* it, and present on both sides with different text
+*replaces* it — per attached line, in written order, above the item
+line they attach to. C11/C12 narrow to the ambiguous remainder (an attr
+delta beside `# attrs=explicit`, or a plus attr set that partially
+overlaps the minus set without a one-to-one line correspondence) with
+updated write-instead text. `# attrs=preserve` (default) now means:
+unwritten attached attrs preserved, written lines are the delta.
+`# attrs=absent`/`strip` keep their meanings; a delta under `strip`
+fails C11 as today (contradictory instructions fail loud). (2) *Raising.*
+New detector `attr_sweep`: N ≥ 2 item-header pairs (or pure-insertion
+groups) sharing one uniform attr-line delta (add/remove/replace, same
+attr text) over hetero items emits one hunk in the (1) spelling with
+the item headers as concrete context (name-holed `N` form when the
+class is header-uniform, concrete headers otherwise). Totality counts
+items carrying the minus-side attr state in the pre-image; an untouched
+item already in the plus state never vetoes an *add* (it cannot match
+the minus), and an untouched item in the minus state always vetoes.
 
-**Changes.** SPEC 13.4 (two context shapes), 14.8 (follow-up table +
-follow semantics for members), D.4 (detector bullets). Code: context
+**Changes.** SPEC 14.6 (written-line delta semantics; C11/C12 narrowed),
+18.6 (C11/C12 rows updated — text moves with code), D.4 (`attr_sweep`
+bullet), AGENTS.md row for `# attrs=`. Code: attr-delta matching in
+[matcher_item.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_item.rs)
+and the fn matcher (attr handling already centralised there — extended,
+not forked); detector in new
+`crates/rsmpl_diff_infer/src/semantic/attr_sweep.rs`.
+
+**Acceptance.** Authored `#[inline]` addition sweeps four fns; authored
+`#[derive(Debug)]` → `#[derive(Debug, Clone)]` replacement fires on
+three structs; removal fires; the four-insertion F9 diff compresses
+under `attr_sweep` and real-applies byte-identical. New diffrs bench 38
+(derive migration, 4 items) ≥ 45% saved.
+
+**Tests.** Delta matrix (add/remove/replace × fn/struct/`let` ×
+doc-line/outer-attr); ambiguity vetoes (partial overlap, `strip`
+conflict); raising fire/twin-veto; SPEC 14.6 example pins updated in
+`spec_examples`.
+
+**Non-goals / risks.** No inner attrs (`#![…]`), no attr *reordering*
+as a delta (order is written order; a pure reorder stays ordinary), no
+`cfg`-evaluation (attrs compare as text, as today). Risk: doc-comment
+vs `#[doc]` spelling parity — matching normalises through the existing
+attr rendering, pinned by a `///`/`#[doc]` twin unit.
+
+### WI-11 (P1, L): Definition right-hand sides — type/const/static/field/payload evolution [carries F9-values-authored]
+
+**Problem.** F9: a definition's *value* side — the `= …` of a type
+alias, const, or static; a field's type; a variant's payload — has no
+semantic spelling. Renames freeze the RHS token-equal, so evolving it
+means ordinary hunks even when the change is a clean template
+(`Vec<T>` → `Box<[T]>` over the alias and nothing else).
+
+**Decision — context-pair evolution shapes in the member-rename family
+(D6).** Five shapes reuse the header+pair spelling agents already know
+from field/variant renames (SPEC 14.8): (1) *type-alias evolution*:
+`- type A = Vec<T>;` / `+ type A = Box<[T]>;` — name concrete and
+preserved, RHS a type template (`T` infers as today), trailing `;`
+required. (2) *const/static evolution*: `- const MAX: i32 = E;` /
+`+ const MAX: i32 = E + 1;` — name and ascribed type token-equal
+preserved, value a general-expr template. (3) *field-type evolution*:
+`struct S {` context with `- old: Vec<T>` / `+ old: Box<[T]>` — field
+name preserved, type template evolves (the field-rename gate "same type
+both sides" becomes "same field name both sides" for this kind; the
+classifier distinguishes by which side of the `:` is identical).
+(4) *variant-payload evolution*: `enum E {` context with
+`- Old(Vec<T>)` / `+ Old(Box<[T]>)` (tuple payloads as type templates)
+and `- Old { f: Vec<T> }` / `+ Old { f: Box<[T]> }` (struct payloads,
+field names preserved). (5) Discriminants (`Old = 1` → `Old = 2`) are
+an expr template on the discriminant, same context. Each classifies as
+its own `PatternKind` (`TypeAliasEvolution`, `ConstEvolution`,
+`FieldTypeEvolution`, `VariantPayloadEvolution`) so report spans,
+WI-1 postconditions (structural re-match of the evolved RHS at the
+definition span), and T375 accounting come along without new directives.
+`# follow=uses` is rejected on evolution kinds (C17 extension): evolving
+a type does not rename anything, and silently following would guess at
+conversion edits the patch never stated.
+
+**Changes.** SPEC 14.8 (evolution sibling table beside the rename
+table), 13.4 (five parse contexts), 18.6 (C17 extension row). Code:
 classification in
 [pattern_classify.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_pattern/src/pattern_classify.rs);
-matching in new `crates/rsmpl_engine/src/matcher_member.rs`; follow
-collectors in [use_graph.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/use_graph.rs)
-(new `use_graph_member.rs` sibling, D5); detector in new
-`crates/rsmpl_diff_infer/src/semantic/member.rs`.
+matching in the existing
+[matcher_member.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_member.rs)
+extended with RHS template arms (new `matcher_value.rs` sibling if it
+crosses 1600, D5); RHS template compilation reuses the type/general
+pattern compilers — no new template language.
 
-**Acceptance.** Authored field rename + follow rewrites declaration,
-accesses, literal labels (incl. shorthand expansion pin), and pattern
-labels in one patch; without follow, JSON `orphans` lists the sites
-while `--check` stays green. Variant rename covers construction and
-match-pattern sites. New diffrs benches 34 (field rename, 6 sites) and
-35 (variant rename, 5 sites) each ≥ 50% saved, real-apply identical.
+**Acceptance.** All five authored shapes apply with bodies/suffixes
+preserved byte-exact beside the evolved RHS; `- type A = Vec<T>;`
+fires (today: pattern conflict); a name-changing "evolution"
+(`type A` → `type B` with RHS delta) fails fast naming the rename
+spelling instead; WI-1 reports each as `instantiated`.
 
-**Tests.** Definition matcher matrix (discriminant/field-suffix
-preservation, tuple-variant name-only, union fields veto — unions keep
-ordinary); follow fire/veto (shadowed field name, shorthand, pattern
-labels); raising probe-totality veto (follow would touch an unchanged
-site → definition-only); fixtures + cycle harness.
+**Tests.** Per-shape matrix (fire, suffix/discriminant preservation,
+name-change veto, follow-rejection C-pin); type-template depth (nested
+`Vec<Vec<T>>`); const-expr template with `E` repeated (SPEC 15.7
+equality veto).
 
-**Non-goals / risks.** No tuple-struct positional fields, no rename of
-locals/params (ordinary hunks), no cross-crate resolution. Risk:
-field-name collisions across structs — the header names the struct,
-follow is definition-anchored (only uses of *that* struct's fields
-provable by literal/struct-path spelling rewrite; unprovable `.old`
-accesses on unknown receivers are orphan evidence, never rewritten —
-stated in SPEC, pinned by a same-name-other-struct fixture).
+**Non-goals / risks.** No generic-param evolution on aliases/fields in
+this item (headers keep today's preserve posture), no `where`-clause
+evolution on items, no value conversion at use sites (ordinary hunks or
+WI-6 templates own those). Risk: classifier ambiguity between
+field-rename and field-type-evolution when *both* sides differ — both
+differ fails fast naming both spellings, never guesses.
 
-### WI-10 (P1, L): CLI contract — drift-tolerant addressing, stock-git output, sibling handshake, honest diffrs envelope [carries F8; completes old WI-10]
+### WI-12 (P1, M): Definition-value raising — field types, payloads, alias/const values compress [carries F9-values-raising]
 
-**Problem.** F8: patches fail for the wrong reason (line drift), the
-"native" output needs a non-stock flag, sibling binaries can skew
-silently, measuring a repo dirties it, and the two JSON envelopes
-disagree. Each leak costs an agent a round-trip or a wrong conclusion.
+**Problem.** F9 (raising side): field-type changes, payload changes,
+field/variant additions, and alias/const value changes stay ordinary
+even at N sites, so the diff view hides that one definition changed and
+its constructions followed.
 
-**Decision — five bounded fixes, no new subcommands.** (1) *Anchor
-fallback.* When a ranged semantic hunk finds zero matches in its cited
-range, the engine retries once with file scope *anchored* by the hunk's
-body context lines (leading/trailing ` ` lines as literal anchors, in
-order): exactly one anchored candidate → apply it and report
-`"drift": {rule, cited: [s,e], actual: [s,e]}` in JSON (one `drift:`
-stderr line in text mode). Zero or ≥ 2 → the original
-`RSMPL_MATCH_CONFLICT` stands unchanged. `# sweep`/`# scope=file`
-hunks never drift-report (they made no locality claim). Emitted edits
-still cite original coordinates; WI-1 postconditions still gate.
-(2) *Stock-git output.* `applyrs --context N` (default 0, SPEC D.2.2
-canonical form unchanged) renders the *reported/`--output`* diff with
-N context lines via the existing `*_with_context` builders in
-[rsmpl_git diff](/home/ai/git/tools/rsmpl-git/crates/rsmpl_git/src/diff.rs),
-so `--output` artifacts apply with vanilla `git apply`; apply/`--check`
-internally always use the 0-context lowering. (3) *Sibling handshake.*
-`gitrs` reads each sibling's `--version` before re-exec and fails with
-`RSMPL_IO_CONFLICT` naming both versions on mismatch; `GITRS_*_BIN`
-overrides (test doubles) skip the check. (4) *Clean measurement.*
-`--check` runs skip the `.history/` archive unless `--history` is
-passed; real applies keep always-archive; JSON reports
-`"history": null` when skipped. (5) *Envelope parity + rev honesty.*
-`diffrs` JSON bumps to `version: 2` with the same error object as
-`applyrs` (keys `code/rule/file/range/reason/suggestion/repair`, via
-`rsmpl_patch::StructuredError` — the hand-built payload in
-[diffrs main](/home/ai/git/tools/rsmpl-git/bin/diffrs/src/main.rs) is
-deleted); revision ranges `A..B`/`A...B` resolve their pre-image base
-to `A` in [rsmpl_diff](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff/src/lib.rs),
-and a failed pre-image fetch for a changed `.rs` file warns on stderr
-naming the `proven` downgrade instead of silently weakening totality.
+**Decision — definition-first detectors with construction follow-through
+only by probe.** (1) *Single-definition evolution*: one definition pair
+matching a WI-11 shape (alias RHS, const/static value, field type,
+variant payload, discriminant) compresses to that shape under the
+*precision guard* this item introduces for definition shapes: fire
+whenever the semantic form costs at most `ordinary_bytes + 16` (the
+SPEC D.4 constant WI-19 later generalises to all definition-shape
+detectors, with its pin test written here first).
+(2) *Field/variant addition*: one definition-add pair (`S` gains
+`b: bool`; `E` gains `C`) plus construction-site pairs whose only delta
+is the added label/arm (`S { a: 1 }` → `S { a: 1, b: true }`,
+`E::A => 1` gaining `E::C => 3`) emits the definition evolution hunk
+plus one verbatim-class hunk per construction shape — but only when a
+scratch-apply probe proves the pair reproduces exactly the changed
+lines (the `member_rename` probe discipline). Heterogeneous added
+values (`b: true` at one site, `b: false` at another) are per-site
+concrete and still probe-proven; a construction the probe cannot
+reproduce stays ordinary and the definition hunk still fires alone.
+(3) Chain placement: after `member_rename`, before the method sweeps
+(disjoint by shape: `:`/payload lines vs call lines).
 
-**Changes.** SPEC 10/17 (anchor fallback + drift evidence), D.1
-(history-on-apply), D.2 (`drift`, `--context`, diffrs v2), D.2.2
-(presentation-context note), D.4 (rev-range base). Code: anchored retry
-in [plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs)
-beside the T62 whole-file probe (its count machinery becomes the
-fallback when anchors disambiguate); context plumbing + history gate +
-drift field in [applyrs main](/home/ai/git/tools/rsmpl-git/bin/applyrs/src/main.rs);
-handshake in [gitrs main](/home/ai/git/tools/rsmpl-git/bin/gitrs/src/main.rs);
-envelope + base resolution in diffrs main / `rsmpl_diff`.
+**Changes.** SPEC D.4 (`definition_evolution` bullet). Code: detector
+in new `crates/rsmpl_diff_infer/src/semantic/definition_evolution.rs`;
+construction probe reuses the scratch-apply helper from `member.rs`
+(extracted to `move_parts.rs`-style shared sibling if needed, D5).
 
-**Acceptance.** A patch authored 20 lines stale applies with correct
-`drift` evidence and byte-identical post-tree; the ambiguous-drift
-fixture (two anchor-satisfying candidates) fails with the original
-conflict and applies nothing. `--output --context 3` applies under
-vanilla `git apply` in an e2e pin. Mismatched-sibling fixture fails
-loud; `--check` leaves no `.history/` entry, apply leaves exactly one.
-`diffrs HEAD~2..HEAD --format json` on a compressing range reports
-`proven: true`; diffrs error JSON carries the same keys as applyrs.
+**Acceptance.** The F9 raising probes compress: field-type `u32`→`u64`
+(definition hunk), payload `A(i32)`→`A(String)`, field-add with two
+constructions (definition + probed constructions), variant-add with
+match-arm addition. A field-add fixture whose third construction uses
+`..Default::default()` (no explicit label to add) keeps that site
+ordinary while the rest compress — pinned, never half-rewritten.
 
-**Tests.** Drift fire/ambiguous/no-anchor matrix; context vanilla-apply
-pin; handshake pass/fail pins; history gating pins; envelope key-parity
-pin (applyrs vs diffrs error objects); rev-range provenance pin.
+**Tests.** Per-shape fire/probe-veto matrix; heterogeneous added-value
+fire; `..`-rest construction partial pin; T375/guard accounting pins;
+fixtures + cycle harness.
 
-**Non-goals / risks.** No fuzzy/textual matching (anchors are literal,
-patterns still semantic), no original-coordinate change (SPEC 10/23.4
-stand), no two-revision `diffrs A B` form (ranges cover it). Risk:
-anchored retry masks a genuinely wrong range — the exactly-one gate
-plus always-visible drift evidence are the mitigations.
+**Non-goals / risks.** No field *removal* with construction cleanup in
+this item (removal orphans uses it cannot prove — ordinary + orphan
+evidence), no tuple-struct positional payload addition (labels are the
+anchor; positional stays ordinary). Risk: addition probes over-fire on
+coincidental label matches — the scratch-apply exact-line proof is the
+gate, stated here so a probe-less emission cannot land.
+
+### WI-13 (P2, L): Associated items — trait/impl `type`/`const` rename, evolution, and `Self::` follow [carries F9-assoc]
+
+**Problem.** F9: associated types and consts are half of every trait's
+surface, and neither direction can name them. Renaming `Item` → `Output`
+across a trait, its impls, and `Self::Item` uses is per-line ordinary
+work today, although the trait-context spelling family already exists
+for methods.
+
+**Decision — assoc shapes in the trait/impl context family.** (1)
+*Rename*: trait or impl context header plus a bare assoc pair —
+`type Item;` → `type Output;` (trait decl, suffix/generics preserved),
+`type Item = i32;` → `type Output = i32;` (impl, RHS preserved
+token-equal), `const MAX: i32;`/`= 10;` likewise (name-span edit only).
+(2) *Evolution*: RHS/type templates in the WI-11 discipline under the
+same contexts (`type Item = Vec<T>;` → `type Item = Box<[T]>;`).
+(3) *Follow*: `# follow=uses` on an assoc rename rewrites `Self::Old`,
+`S::Old`, `<S as Tr>::Old`, and `obj::Old`-free path tails in expr/type/
+pattern positions that name the trait's assoc item — proven by the
+context header (the trait is named; impls of *that* trait are the
+follow domain, enumerated like WI-4's per-block hunks). A second trait
+defining the same assoc name vetoes only its own blocks (WI-2 reason
+`shadowed` per skipped block, not a whole-run failure — the D8 rule).
+(4) *Raising*: detector `assoc_rename` joins a trait-decl pair, its
+impl pairs, and `Self::` use lines sharing one ident delta into the
+(1)+(3) emission, totality by scratch-apply probe as in WI-12.
+
+**Changes.** SPEC 14.8 (assoc rename/evolution rows + follow domain),
+13.4 (assoc parse contexts), D.4 (`assoc_rename` bullet). Code: kinds
+in `pattern_classify.rs`; matching beside trait-method matching in
+[matcher_impl.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/matcher_impl.rs)
+(new `matcher_assoc.rs` sibling — `matcher_impl.rs` is not grown past
+its current size without the split, D5); follow collector arm in
+`use_graph.rs` sibling `use_graph_member.rs` pattern; detector in new
+`crates/rsmpl_diff_infer/src/semantic/assoc.rs`.
+
+**Acceptance.** Authored assoc rename + follow rewrites trait decl, two
+impls, and `Self::Item` return types in one patch; without follow,
+`orphans` lists every `Self::` site (named evidence, never hidden and
+never filtered away by a reason code). Raising probe (trait + 2 impls + uses)
+compresses and real-applies byte-identical. New diffrs bench 39
+(assoc-type rename, 5 sites) ≥ 55% saved.
+
+**Tests.** Decl/impl/use matrix (generics on assoc type preserved,
+GAT-style `type Item<'a>;` suffix preservation, const value preserved);
+same-name-other-trait partial-skip pin; raising probe veto (an impl of
+another trait in the class vetoes to ordinary); cycle coverage.
+
+**Non-goals / risks.** No assoc *fn* work (methods own it), no
+cross-trait assoc unification, no default-RHS evolution in trait decls
+beyond template parity with (2). Risk: `Self::` is also valid for
+inherent impls — inherent `type`/`const` in `impl S` without a trait
+stays an ordinary definition (no trait header, no follow domain),
+pinned.
+
+### WI-14 (P1, L): Type-anchored member follow — proven receivers rewrite, siblings become evidence [carries F8]
+
+**Problem.** F8/D8: member follow scans by ident globally, so an
+unrelated `B::timeout` vetoes `A::timeout`'s rename outright. The code
+that would prove ownership — param types, annotations, literal paths —
+is already in the file and ignored.
+
+**Decision — anchor classes in proof order, vetoes demoted to evidence.**
+Member follow (field + variant) classifies each candidate site by the
+strongest anchor that proves it, rewriting only proven sites:
+(1) *literal-path*: `A { timeout: … }`, `A { timeout, … }` (shorthand
+expands as today), `A::Variant` constructions/patterns — the path names
+the container. (2) *signature*: receivers/values whose type the
+enclosing fn signature states (`fn f(a: A)` → `a.timeout`;
+`-> A` construction-free returns do not prove field receivers and are
+not claimed). (3) *annotation*: `let x: A = …;` / `let A { … }` bindings
+whose later `x.timeout` uses fall in the same fn body after the binding
+(syntactic, flow-insensitive beyond order — stated in SPEC, pinned by a
+rebinding-shadow veto: a later `let x: B` re-anchors subsequent uses).
+(4) Everything else same-name is `follow_skipped` with reason
+`shadowed` (another container defines the name) or `off-target`, never
+a run failure. The shadowed-definition `RSMPL_SYMBOL_CONFLICT` is
+deleted for member renames: the definition hunk always applies;
+`# fallback=syntax` keeps its meaning from fn follows (skip, don't
+fail) and is no longer needed to survive a sibling definition. Variant
+follow gains the same anchoring (`E::Old` is already literal-path;
+bare imported `Old` requires a `use E::*` anchor line naming `E`,
+else evidence). Raising (`member_rename`) keeps its scratch-apply
+probe, which now validates against the anchored follow.
+
+**Changes.** SPEC 14.8 (anchor classes + proof order; shadow-veto
+paragraph replaced), D.2 (skip reasons already structured by WI-2).
+Code: anchored collectors replacing the ident-global scan in
+[use_graph_member.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/use_graph_member.rs);
+signature/annotation anchor pass in new
+`crates/rsmpl_engine/src/use_graph_anchor.rs`; orphan collection in
+[plan.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/plan.rs)
+consumes the same classification (one classifier, two consumers).
+
+**Acceptance.** The F8 probe renames `A::timeout` (definition, literal,
+and `a.timeout` rewritten; `b.timeout` reported skipped/`shadowed`,
+run green without `# fallback=syntax`); a same-file `B`-typed local
+with an interleaved rebinding fixture proves the shadow veto; new
+applyrs bench 30 (anchored field rename with sibling struct) passes
+with the sibling byte-untouched.
+
+**Tests.** Anchor matrix per class (fire, rebind veto, return-type
+non-claim, shorthand, pattern labels); variant `use E::*` anchor
+fire/unanchored-evidence; `member_rename` raising parity fixtures;
+cycle harness (`42`/`43` stay `CYCLE_OK`).
+
+**Non-goals / risks.** No cross-fn dataflow, no method-call return-type
+inference (`make_a().timeout` without annotation is evidence, not a
+rewrite — stated, pinned), no field follow through `Deref`/macros
+(opaque, as today). Risk: annotation anchoring over-claims after
+shadowing — the order+rebind rules above are the whole discipline, and
+each is pinned before the collector ships.
+
+### WI-15 (P1, L): Cross-file intents — item groups, member follow across files, `mod` + file renames [carries F13]
+
+**Problem.** F13: real renames cross files and contexts at once — a
+struct and its impl in another file, a field whose uses live in a
+second module, a `mod` whose file moves with it. Each fragment raises
+alone (or not at all), so the agent gets ordinary hunks for the joints
+of the change, exactly where intent matters most.
+
+**Decision — group what one ident delta joins, probe every joint.**
+(1) *Item-intent raising*: detector extension joining a definition pair
+(`struct S`/`enum`/`trait`/`type`/`fn`), its `impl S`/`impl Tr for S`
+header pairs, and same-delta type-position lines (`s: S`, `-> S`,
+`Vec<S>`) across files into one grouped intent: definition hunk with
+`# follow=uses` when a scratch-apply of the authored follow reproduces
+exactly the group's changed use lines (the scratch-apply probe discipline from member renaming, now
+cross-file), else definition-only hunks per file with uses ordinary —
+never a follow the probe did not prove. Group naming reuses
+`rename_Old_to_New` (WI-7 grouping, per-group T375 re-basis unchanged).
+(2) *Member cross-file*: `member_rename`'s probe extends across files
+(anchor classes per WI-14, evaluated per file); SPEC D.4's "cross-file
+stays ordinary (future work)" sentence is deleted. (3) *`mod` + file
+rename*: a `mod old;` → `mod new;` pair joined with a git rename
+section (`old.rs` → `new.rs` / `old/mod.rs` → `new/mod.rs`) and
+`old::` path-use lines emits the `mod` rename hunk, keeps the rename
+section's file move as the native rename prelude (round-trips as
+today), and adds a use-prefix sweep for the path uses when the probe
+proves them — one intent, three coordinated hunks, each independently
+totality-checked. Authored side needs no new syntax (`mod` rename +
+use-prefix + file rename already compose); this item is raising +
+grouping only.
+
+**Changes.** SPEC D.4 (item-intent grouping paragraph; member bullet
+loses its single-file limit; `mod_rename` bullet), 14.8 (follow probe
+wording cross-file). Code: grouping extension in
+[group.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/group.rs);
+item-intent join in `chain.rs`'s partition neighbourhood (new
+`item_intent.rs` sibling, D5); member probe widening in
+[member.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/member.rs).
+
+**Acceptance.** The F13 probe (struct + impl + typed param, one file)
+and its two-file variant compress grouped and real-apply
+byte-identical; a `mod`+file+uses fixture round-trips (apply the raised
+patch to the pre-tree, trees equal including the renamed file); a
+cross-file field rename with an unprovable receiver in the second file
+emits definition+proven-uses and lists the rest as orphans. New diffrs
+bench 40 (cross-file struct rename, 6 sites, 2 files) ≥ 55% saved.
+
+**Tests.** Intent-join matrix (def-only, def+impl, def+uses-probed,
+def+uses-unprobed); grouping T375 fallback pins; `mod` rename with
+`mod.rs`-layout and flat-layout files; cycle coverage incl. cross-mode
+canonical comparator (D.5).
+
+**Non-goals / risks.** No crate-boundary following (workspace = the
+repo, as today), no `pub use` chain joining beyond WI-16's hop proof,
+no rename of inline `mod { … }` bodies' files (there is no file).
+Risk: grouped hunks reorder sections definition-first (canonical form
+already does); a group whose probe fails mid-way must degrade per-hunk,
+never emit a follow that rewrites an unlisted file — pinned.
+
+### WI-16 (P2, L): Crate-local `# symbol` resolution — prove the path, or stay syntax [carries F12]
+
+**Problem.** F12: `# symbol` charges two directive lines and a binding
+pair in every report for a text match the concrete path spelling already
+provides. The promise — "the engine verifies `Old` resolves to this
+path" — is unkept, so agents learn to avoid the directive that exists
+for the highest-stakes renames (public API paths).
+
+**Decision — a syntactic crate graph verifies crate-relative paths; nothing
+else changes meaning.** (1) A new `rsmpl_engine` module builds a
+crate-local resolution index from `syn` alone (no build, no cargo):
+`mod` declarations (file and inline), item definitions per module, and
+`use` re-exports (the existing one-hop follow rule is the starting
+point; deeper hops are followed only while each hop's target is itself
+proven in the index, with cycles cut). Paths are normalised `crate::`/`self::`/`super::`/
+relative to module paths. (2) A `# symbol Old=crate::a::b` hunk *without*
+`# fallback=syntax` now verifies: `Old`'s seeded path must resolve to a
+definition in the indexed crate, and each matched call/qualified site's
+spelled path must resolve to that same definition — sites that spell a
+*different* definition with the same text (a vendored submodule copy)
+do not match and are counted as opaque for totality. Unresolvable paths
+(outside the crate, `std::`, dependency paths, glob-imported names)
+fail `RSMPL_SYMBOL_CONFLICT` with a WI-3 `repair` naming the concrete-path
+spelling as the `write_instead` — the honest fallback becomes a choice
+the agent makes by writing `# fallback=syntax`, never a silent downgrade.
+(3) With `# fallback=syntax`, behaviour is byte-identical to today
+(exact text), and the report's per-rule `semantics` stays
+`postcondition`/`instantiated` by WI-1 — the *resolution* fact is
+reported as a new additive rule key `symbol: "resolved" | "syntax"`
+(absent on non-symbol hunks), so an agent can require `"resolved"` for
+API renames. (4) Raising never emits `# symbol` (concrete paths stay
+canonical, SPEC 19.3 unchanged); canonicalisation keeps normalising
+single-pair symbol hunks to concrete form (D.5 paragraph unchanged).
+
+**Changes.** SPEC 19 (resolution index + verified posture; 19.3's
+"prefers concrete paths" gains "unless resolution proof is the point"),
+25.5 (failure modes), D.2 (`symbol` rule key). Code: index in new
+`crates/rsmpl_engine/src/crate_graph.rs`; verification hook in the
+symbol gate beside the existing exact-text matcher; hop-walk shared with
+[use_graph.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/use_graph.rs)
+helpers (extracted, not duplicated, D5).
+
+**Acceptance.** A same-crate symbol rename verifies `resolved` and
+rewrites only the proven definition's sites (a same-text vendored copy
+untouched, pinned); a `std::` symbol without fallback fails with the
+concrete-path repair; with fallback it applies as today with
+`symbol: "syntax"` — never `"resolved"`. History dogfood: at least one
+real `# symbol` bench (16-symbol-sweep) reports `resolved` in its
+authored form or the landing change names why its path is out of index
+scope.
+
+**Tests.** Graph units (file/inline mods, `self`/`super`, one-hop and
+chained re-exports, cycle cut, glob opacity); verification fire/veto
+(same-text-different-def, unresolvable, dependency path); report-key
+pins; cycle harness.
+
+**Non-goals / risks.** No dependency/`std` resolution, no rust-analyzer,
+no expansion-derived names (macro-defined items are opaque to the
+index — a symbol whose definition hides in a macro stays
+`SYMBOL_CONFLICT` with the concrete-path repair, stated in SPEC).
+Risk: index build cost per apply — built once per workspace search,
+only when a symbol hunk is present; the WI-20 scale gate pins it.
+
+### WI-17 (P2, M): Macro raising depth — token-tree holes and `macro_rules!` bodies [carries F10(a,c)]
+
+**Problem.** F10(a,c): the authored token-tree hole form
+(`old_m!(E, 1)` → `new_m!(E, 1)`) is what an agent wants from a macro
+migration, but re-diffing it produces a whole-body `...` sweep that
+hides which argument changed; and edits *inside* a `macro_rules!` body
+(one token inside a rule arm) compare whole and stay ordinary.
+
+**Decision — emit the hole the diff proves; descend exactly one token
+level inside rule bodies.** (1) *Hole raising*: the macro-interior
+detector gains a holed emission beside its concrete/verbatim emissions:
+when same-name (or one-delta rename) macro pairs share arity and differ
+in exactly one top-level comma-separated argument position while the
+remaining arguments are token-equal across sites (stable positions stay
+concrete; the differing position's per-site values ride one diet `E{i}`
+hole), emit the `# macro=token_tree` holed hunk instead of the concrete
+one. Totality is the real-pair probe over the holed pair (the concrete
+fallback keeps its own probe; the tighter of the two that proves wins,
+concrete first on ties — canonical stability). This is fixture `48`'s
+shape. (2) *Rule-body interiors*: pairs whose enclosing line is a
+`macro_rules!` rule arm and whose delta is one token-tree argument of
+an invocation *inside* the arm body reuse the existing one-level
+interior emission with the arm line as frame (the enclosing-macro
+discipline applied to rule bodies). Depth stays one: tokens nested
+inside that argument's own delimiters are compared whole, as today.
+Engine authoring for both forms already exists (WI-7a holes; token-tree
+matching) — this item is detectors plus cycle pins, no new matcher.
+
+**Changes.** SPEC D.4 (macro-interior bullet gains the holed emission +
+rule-body frame), 21.3 (raising posture note; engine text unchanged),
+D.5 (`48` re-pinned — see Acceptance). Code: holed emission in
+[macros.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/macros.rs)
+(arg-splitting helpers in existing `macro_parts.rs`, D5); rule-body
+frame arm in `macro_enclosing.rs`.
+
+**Acceptance.** Fixture `48-token-tree-arg-hole` moves to `CYCLE_OK`
+(raised form canonicalises to the authored holed form); the
+`inner!(1)` → `inner!(2)` rule-body probe compresses and real-applies
+byte-identical; a depth-2 body edit (changed token inside a nested
+delimiter) stays ordinary (veto pin); string-hidden macro text never
+counts. Benches 17/18 hold or gain; no bench loses without a named
+reason.
+
+**Tests.** Hole-emission matrix (one differing arg, two differing args
+veto to concrete/ordinary, rename+hole joint); rule-body fire/depth-2
+veto; real-pair totality twins; fixtures + cycle harness.
+
+**Non-goals / risks.** No recursive token descent beyond the one
+argument level (previous plan's rejection stands — depth two invents a
+second macro engine), no `macro` 2.0 bodies, no hygiene reasoning.
+Risk: arg-splitting on unbalanced bodies — the existing string-aware
+splitter is the only splitter; split failure declines to ordinary.
+
+### WI-18 (P1, M): Collection cycle + evolving collections — many items move as one, names may follow [carries F10(b); completes SPEC 33.2's collection-evolution note]
+
+**Problem.** F10(b): an authored collection move (three fns,
+`old.rs` → `new.rs`, source emptied) does not re-raise in that form —
+the re-diff fragments into ordinary additions and a paste-less cut, so
+the cheapest trustworthy view of a bulk move is unavailable exactly
+when bulk moves happen. Separately, SPEC 33.2 still lists per-item
+evolution of collections as future work: moving five helpers *and*
+renaming them costs the scalar fan-out the collection exists to avoid.
+
+**Decision — fix the decline at its gate; evolve by name template only.**
+(1) *Cycle fix, diagnosed first*: the landing change's first step is a
+pinned reproduction of fixture `44`'s re-diff through the move
+pre-pass, naming the gate that declines (empty-source section handling,
+cell pairing across the emptied file, or the ≥3-item threshold counting
+the wrong side). The fix targets that gate — candidate disciplines, in
+preference order, are: treat a source file emptied to zero bytes as a
+first-class move source (its section is a deletion of all items, not a
+file deletion); count the collection cell on the *paste* side when the
+source side is empty. Whichever gate it is, the fix is stated in SPEC
+D.4's move bullet; no threshold is silently loosened (the ≥3 rule and
+T375 stay). (2) *Evolving collections*: a collection cut
+(`# bind=H` + `# allow=many`) may be pasted with a name-evolution
+template — `+ fn N(...) { ... }` in the WI-5 name-hole spelling beside
+`# use=H` generalises to: each cut item's header replays through the
+template with `N` bound per item (names may be preserved, prefixed by
+concrete text around `N` such as `new_N`, or suffixed — the template
+is one header line; bodies, attrs, and remaining slots replay per item
+exactly as scalar evolution pastes do). Kind-changing templates (fn →
+non-fn) and per-item divergent templates fail
+`RSMPL_CAPTURE_CONFLICT` with a WI-3 repair. Scalar evolution pastes
+are untouched.
+
+**Changes.** SPEC 20.3/20.4 (evolving collection pastes), 33.2 (future
+entry removed), D.4 (move bullet's empty-source sentence), D.5 (`44`
+re-pinned). Code: decline fix in
+[moves.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/moves.rs)
+(cell/scan helpers in `move_collection.rs`/`move_scan.rs`); paste-side
+template replay in
+[capture.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_engine/src/capture.rs)
+(collection store from the previous WI-6; new `capture_evolve.rs`
+sibling if the file crosses 1600, D5).
+
+**Acceptance.** Fixture `44-collection-move` moves to `CYCLE_OK`,
+and whichever gate had declined it is named in the SPEC D.4 move
+bullet either way (a silent re-pin is a failed landing); an authored five-item move +
+`new_N` rename applies byte-identical in one cut + one paste and
+re-diffs grouped; a kind-changing collection template fails with the
+capture repair. Diffrs bench 31 (collection move) holds at ≥ 85% saved.
+
+**Tests.** Empty-source move matrix (source emptied, source partially
+emptied, file deleted outright stays file-deletion); evolve matrix
+(preserve/prefix/suffix, kind-change veto, attrs preserved per item);
+scalar move fixtures byte-unchanged; cycle harness.
+
+**Non-goals / risks.** No statement collections, no body evolution
+(bodies replay verbatim), no ordering syntax (source order, as today).
+Risk: empty-file sections collide with file-deletion inference — the
+preference order above keeps a true file deletion (section with
+`deleted file mode`) distinct from an emptied-but-present file, pinned.
+
+### WI-19 (P0, L): Precision-first cycles — safety shapes fire at N=1, partition degrades per-hunk [carries the `t375` mass + F11]
+
+**Problem.** Roughly 70 `KNOWN_DIVERGENT` entries pin the same story: a
+single-site rename/move/member/macro change re-diffs as ordinary
+because the semantic spelling ties or loses by a few diet bytes, so the
+agent loses the intent it authored. T375 prices bytes; it does not
+price the difference between "a rename the engine can re-verify" and
+"two lines that happen to differ". The strict guard made sense when
+semantic forms were verbose; with diet spelling the margin is noise.
+Independently, F11: one unclaimable pair vetoes a whole partition.
+
+**Decision — two guards, priced differently; partition falls back, never
+vetoes.** (1) *Precision guard*: definition-shape detectors — item/fn
+rename (incl. slot/sig-evolution singles), member rename, assoc rename
+(WI-13), `macro_rules_rename`, moves/deletes, and WI-11/12 definition
+evolutions — fire at N=1 whenever the semantic form costs at most
+`ordinary_bytes + 16` (a bounded, pinned constant: the price of the
+`diff --git` + `@@ … rule=` + pattern lines the ordinary form does not
+carry). Template/sweep detectors (calls, methods, verbatim,
+`general_expr`, `control_template`, macro interiors — shapes whose
+minus pattern could match wider than the diff) keep strict T375 at
+every N: their risk is over-match, and bytes remain the honest proxy
+there. The 16-byte bound is a SPEC D.4 constant with a pin test, not a
+tunable discovered in code. (2) *Partial partition*: WI-8's partition
+pass, when ≥1 pair is claimable and ≥1 is not, emits the claimable
+pairs as semantic hunks and leaves the rest ordinary *in the same
+section* (SPEC 10.6 disjointness already guarantees soundness), keeping
+all-or-nothing only within a single native hunk (a hunk never splits).
+Fixture `14` becomes 8 semantic + 1 ordinary; fixture `12`'s let run
+compresses per-hunk while its header line stays ordinary. (3) Every
+`KNOWN_DIVERGENT` entry the guard reclassifies moves to `CYCLE_OK` in
+the same change; entries that remain (empty-diff `05`, hetero shapes
+with genuinely no template) stay pinned with sharpened reasons. The
+landing change reports the before/after counts in its description —
+shrinking the table is the deliverable, not a side effect.
+
+**Changes.** SPEC D.4 (two-guard discipline + 16-byte constant;
+partition paragraph rewritten), D.5 (equalities unchanged; exclusion
+list shrinks per (3)). Code: guard selection per detector in
+[rsmpl_diff_infer lib](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/lib.rs)
+(one `guard_for(detector)` decision point — detectors stop open-coding
+T375 comparisons); partial-partition emission in
+[chain.rs](/home/ai/git/tools/rsmpl-git/crates/rsmpl_diff_infer/src/semantic/chain.rs).
+
+**Acceptance.** `KNOWN_DIVERGENT` shrinks by the full single-site
+definition-shape family (the landing change lists the count; any
+definition-shape single still pinned names why in its reason); fixtures
+`14` (8+1) and `12` (let run semantic) re-pin as stated; history sweep
+stays 0 failures and its compressing set grows; no sweep-class detector
+fires at a byte loss (guard pins per class).
+
+**Tests.** Guard matrix per detector class (fire-at-loss for definition
+shapes, decline-at-loss for sweeps, 16-byte boundary pins); partial
+partition (mixed claimable/unclaimable, single-hunk atomicity kept);
+cycle harness with the moved entries; T375 pins for sweeps unchanged.
+
+**Non-goals / risks.** No guard for insertions/ordinary shapes, no
+per-detector private thresholds (one constant, one decision point).
+Risk: single-site semantic forms cost a few more bytes per tiny change —
+accepted by decision (D3 amended here): precision is the product;
+token efficiency is served by the sweeps where fan-out lives. The risk
+is bounded by the 16-byte constant and reported by the bench suite
+(single-site benches may go a few points negative; the landing change
+must show them and this plan pre-approves exactly that trade).
+
+### WI-20 (P1, L): One contract — unified schema v4, linted documents, scale gates [carries F3-version + F14]
+
+**Problem.** F3/F14: an agent must learn two envelope versions and trust
+three documents nothing checks. Each is small; together they mean the
+*interface* drifts independently of the engine it describes.
+
+**Decision — one version constant, every fence linted, two scale pins.**
+(1) *Unified schema*: `diffrs` success and error envelopes move to the
+`applyrs` version; both binaries and the `gitrs` dispatcher take the
+number from one `rsmpl_patch::REPORT_VERSION` constant (today each main
+hard-codes its own). The unified number is `4` (D7: WI-2's
+`follow_skipped` string removal rides this bump, its one breaking
+change; everything else in this round was additive under v3). Text
+modes are unchanged. `gitrs` handshake (WI-10 of the previous plan)
+already rejects version-skewed siblings — it now also covers the schema
+constant transitively, pinned by the dispatcher test. (2) *Document
+lint*: a test extracts every `diff rsmpl`-tagged fence *and* every
+untagged patch-shaped fence (heuristic: starts with `diff --git` or
+`@@`, stated in the test) from SPEC.md, AGENTS.md, and
+`skills/gitrs/SKILL.md`, canonicalises each (`rsmpl_patch::canonicalize`
+must succeed and be a fixed point) and lints complete patches against
+an empty repo (`no match found` = well-formed, the SPEC D.2.4 posture).
+§29 runnable examples keep their behavioural pins in
+`spec_examples.rs`; the lint is the wide net under them. A fence that
+is deliberately invalid (error illustrations) carries an
+`<!-- rsmpl:invalid RSMPL_PATTERN_CONFLICT -->` marker naming the
+expected code — unmarked invalid fences fail CI. (3) *Scale gates*: two
+pinned performance fixtures join the bench suite (not wall-clock
+assertions in unit tests — recorded budgets in `example-benches/run.sh`
+output, reviewed like byte tables): a `# sweep` + follow over a
+500-file synthetic workspace, and WI-1 re-verification over a 10k-line
+file with a 100-site sweep. Budgets are set from the landing machine's
+measurement and only ever tightened deliberately. (4) SPEC gains a
+one-screen "agent contract" preamble (the five invariants: original
+coordinates, diet-canonical form, fail-loud, evidence fields, cycle
+equalities) linking into the normative sections — no normative text
+moves.
+
+**Changes.** SPEC D.2 (version 4, single-constant rule), D.1 (handshake
+note), front matter (contract preamble). Code: constant in
+[rsmpl_patch lib](/home/ai/git/tools/rsmpl-git/crates/rsmpl_patch/src/lib.rs);
+version literals deleted from `bin/applyrs/src/main.rs`,
+`bin/diffrs/src/main.rs`, `bin/gitrs/src/main.rs`; lint test in
+`bin/applyrs/tests/spec_examples.rs` (grown into `doc_fences.rs` sibling
+if it crosses comfortable size); scale fixtures under
+`example-benches/`.
+
+**Acceptance.** `applyrs`/`diffrs`/`gitrs` error JSON all report
+`version: 4` for the same failure (key-parity pin extended tri-way);
+every fence in the three documents lints clean or carries its
+`rsmpl:invalid` marker (the landing change reports how many fences were
+wrong and fixes or marks each); both scale fixtures complete within
+their recorded budgets in `run.sh`.
+
+**Tests.** Tri-way envelope parity; fence extraction + canonical
+fixed-point + empty-repo lint; invalid-marker pins; dispatcher
+handshake with a schema-skewed double; bench suite incl. new fixtures.
+
+**Non-goals / risks.** No SPEC rewrite (preamble + cross-references
+only), no wall-clock CI assertions (budgets are review artifacts, since
+CI hardware varies — stated so nobody "fixes" a flake by deleting the
+pin), no new CLI subcommands. Risk: fence heuristics catch prose that
+looks patch-shaped — the marker mechanism is the escape hatch, and a
+false positive costs one marker line, never a semantics change.
 
 ## Sequencing and gates
 
 | Item | Depends on | Size | Gate before next item |
 |---|---|---|---|
-| WI-1 honest `checked` | — | M | V3 pins green; tampered-instantiation test proves failure is reachable |
-| WI-2 everyday expressions | — (split first) | M | HEAD probes F2 match; C19 pins; bench 28 ≥ target |
-| WI-3 structural patterns | WI-2 lint | M | Destructuring probe fires; C8 uniformity pins; bench 30 ≥ target |
-| WI-4 headers + trait raising | WI-2 preview | L | Over-match probe scoped; raising probe grouped; `30` re-pinned |
-| WI-5 hetero arg templates | — | M | Wrap probe compresses; bench 31 ≥ target; veto matrix green |
-| WI-6 collection captures | WI-1 spans | L | Five-item authored + raised moves cycle-green; scalar pins unchanged |
-| WI-7 macro depth | WI-2 | M | Benches 17/18 +5 pts; bench 33 ≥ target; depth vetoes pinned |
-| WI-8 pair partition | — | M | 8-rename fixture compresses; atomicity pin; `14` re-pinned |
-| WI-9 field/variant renames | WI-1 orphans | L | Benches 34/35 ≥ targets; shorthand + collision pins green |
-| WI-10 CLI contract | WI-1 envelope | L | Drift matrix green; vanilla-apply pin; envelope parity pin |
+| WI-1 structural postcondition | — | M | String-bearing probe verifies; tampered-span test fails loud; benches 17/25/28 words pinned |
+| WI-2 assertable evidence | WI-1 words | M | Digest equality probe; structured skips pinned; budget pin recomputed green |
+| WI-3 repair completeness | — | S | Both null-repair probes carry templates; enumeration test green |
+| WI-4 pattern-anchored drift | WI-3 repairs | M | Stale terse probe applies with `drift`; twin fixture fails clean |
+| WI-5 name holes | — | M | `N` sweep authored probe fires; misplaced-`N` C-pin green |
+| WI-6 general-expression raising | WI-1 | L | F5 probes compress byte-identical; fixture `60` cycles; bench 35 ≥ target |
+| WI-7 literal-frame raising | WI-6 core | M | String probe compresses; dense-literal veto pinned; bench 36 ≥ target |
+| WI-8 control + untyped-let templates | WI-6 core (existing `gen_pat`) | L | Fixtures `53/55/56/57/68` re-pinned; position twin vetoes green |
+| WI-9 header slot-only raising | WI-5 | M | Vis/bound probes compress; benches 29/37 ≥ targets |
+| WI-10 attribute evolution | WI-1 | M | Add/replace/remove authored probes fire; bench 38 ≥ target |
+| WI-11 definition RHS authoring | WI-1 | L | Five shapes apply; both-sides-differ fails fast |
+| WI-12 definition-value raising | WI-11 | M | F9 raising probes compress; `..`-rest partial pinned |
+| WI-13 associated items | WI-11 contexts | L | Assoc follow probe fires; bench 39 ≥ target |
+| WI-14 anchored member follow | WI-2 reasons | L | F8 probe green without fallback; rebind veto pinned |
+| WI-15 cross-file intents | WI-14 anchors | L | Two-file + `mod`-rename fixtures round-trip; bench 40 ≥ target |
+| WI-16 crate-local symbol resolution | WI-14 graph discipline | L | Vendored-copy veto pinned; `resolved`/`syntax` report pins green |
+| WI-17 macro raising depth | — | M | Fixture `48` cycles; depth-2 veto pinned; benches 17/18 hold |
+| WI-18 collection cycle + evolution | WI-5 templates | M | Fixture `44` re-pinned with its gate named; evolve probe byte-identical |
+| WI-19 precision-first cycles | WI-12/13 detectors exist | L | Divergent table shrinks by the named family; sweep guards unchanged |
+| WI-20 one contract | WI-1, WI-2 shapes settled | L | Tri-way v4 parity; all fences linted; scale budgets recorded |
 
 Global validation per item: `cargo test --workspace`,
 `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
@@ -846,47 +1526,60 @@ Global validation per item: `cargo test --workspace`,
 change), and `python3 tools/history_sweep.py` (0 failures; compressing
 set reported, never asserted to a fixed number beyond "does not shrink
 without a named reason"). No item lands with a red gate, a new `.rs`
-file over 2000 lines, or an existing file pushed over 2000 lines.
+file over 2000 lines, or an existing file pushed over 2000 lines (D5).
 
 ## Risks / open questions
 
 Per-item risks are stated with each item. Open questions: none —
-scope, canonical form, detector order, guards, thresholds (64-line
-range rule, 80% move pairing, 80-char binding truncation, collection
-threshold 3, macro interior depth one token level), schema versioning
-(v3 in WI-1, diffrs v2 in WI-10), and acceptance numbers are decided
-here. If a threshold proves wrong against the probe corpora, the fix
-is a new pin plus a SPEC note, not a silent constant edit. Two
-deliberate non-goals bear repeating because they bound several items:
-no semantic resolver is built (SPEC 19.3 exact-text matching stands;
-WI-9 hardens the syntactic graph instead), and no macro expansion is
-attempted anywhere (SPEC 21.5 stands; WI-7 deepens rendering-level
-matching only).
+scope, canonical forms, detector order, guards (64-line range rule,
+16-byte precision bound, ≥3 collection threshold, one-level macro
+descent, distance-2 directive suggestions), anchor proof order, schema
+versioning (unified v4 in WI-20), and acceptance numbers are decided
+here. If a threshold proves wrong against the probe corpora, the fix is
+a new pin plus a SPEC note, not a silent constant edit. Three deliberate
+non-goals bear repeating because they bound several items: no
+type inference or trait solving anywhere (anchors are syntactic —
+WI-14/WI-16 prove from text, never from `rustc`), no macro expansion
+(SPEC 21.5 stands; WI-17 deepens rendering-level matching by one
+argument level only), and no minus-must-be-zero postcondition (widening
+rewrites legitimately re-match their own output — WI-1 verifies the
+plus at its spans instead).
 
 ## Considered and rejected
 
 - **Full type-directed resolution (rust-analyzer integration).** Would
-  make `# symbol` and follow=uses "really" correct, but couples every
+  make follow and `# symbol` "really" correct, but couples every
   `--check` to a build environment, breaks the no-`cargo`-by-default
   cost model, and is un-auditable in a hackathon prototype. Syntactic
-  precision + orphan evidence (WI-9) buys most of the trust.
+  anchors (WI-14) plus a crate-local graph (WI-16) buy the provable
+  majority of the trust at text cost.
+- **Dropping T375 entirely for token maximalism in reverse (always
+  emit semantic).** Rejected: sweep-class templates whose minus matches
+  wider than the diff are exactly where over-match risk lives; WI-19
+  narrows the byte guard to the classes whose precision does not depend
+  on it, with a bounded constant, instead of abolishing it.
 - **General `...` in expressions/types/statements.** Rejected beyond
-  the existing trailing-block and WI-3 composite positions:
-  unrestricted ellipsis turns precise patterns into guesses and breaks
-  totality counting.
-- **Dropping T375 for single-site semantics.** Rejected as before:
-  bytes are the token proxy agents pay; single-site safety shapes
-  (renames, moves) already fire. Cycle honesty for demoted singles is
-  bought with a defined equality (D1), not larger patches.
-- **Prose-echo repairs for new fences.** Rejected (F10): every new
-  compile-time fence ships a concrete `write_instead` template or does
-  not ship; the generic filler keys templates by error class instead
-  of copying the message.
-- **Recursive token-tree macro descent.** Rejected in WI-7: one
-  argument level is provable with the existing token-tree matcher;
-  deeper descent invents a second macro engine inside the first.
+  the existing trailing-block and composite positions: unrestricted
+  ellipsis turns precise patterns into guesses and breaks totality
+  counting. WI-6/WI-8 generalise by anti-unification with anchors, not
+  by ellipsis.
+- **Recursive token-tree macro descent.** Rejected in WI-17 as in the
+  previous plan: one argument level is provable with the existing
+  token-tree matcher; deeper descent invents a second macro engine
+  inside the first.
+- **A separate `verifyrs` binary or always-on `cargo check`.** Rejected:
+  trust must ride the existing `checked` envelope (WI-1) with build
+  verification opt-in, or agents pay build costs on every rename and
+  learn to skip the tool. `gitrs` stays a two-subcommand dispatcher.
 - **CRLF/binary semantic compression.** Stays declared-lossy (D1):
   detectors strip `\r` by construction and patches are UTF-8;
   passthrough tree-losslessness is the correct contract there.
+- **Prose-echo repairs for new fences.** Rejected (previous plan's rule,
+  extended by WI-3 to the whole surface): every failure ships a concrete
+  template or joins the named allow-list; the generic filler keys
+  templates by error class, never copies the message.
+
+
+
 
 
