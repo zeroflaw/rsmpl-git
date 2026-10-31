@@ -229,6 +229,12 @@ fn attrs_text_equal(a: &[String], b: &[String]) -> bool {
     norm(a) == norm(b)
 }
 
+// WI-10a helpers live in `matcher_attr_delta` (D5 sibling, no second copy).
+use crate::matcher_attr_delta::{
+    attr_delta as item_attr_delta, compact_attr, norm_pat_list, site_attr_texts,
+    subsequence_positions as subsequence_indices, AttrDelta as ItemAttrDelta,
+};
+
 pub(crate) fn check_attrs(
     attrs: &[syn::Attribute],
     policy: AttrsPolicy,
@@ -327,39 +333,67 @@ pub fn apply_item_rename_hunk(
         }
     };
     // A `+` side that writes attributes the `-` side omitted is ambiguous
-    // (same rule as General stmts): reject instead of guessing.
-    if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
-        if !plus_attrs.is_empty() && minus_attrs.is_empty() {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "plus side writes attributes the minus side omitted (ambiguous merge); write the attributes on both sides or neither",
+    // (same rule as General stmts): reject instead of guessing. WI-10a:
+    // under Preserve an add (minus empty) is the delta, not ambiguity.
+    let (plus_attrs_owned, delta_active, minus_norm, plus_norm, delta) =
+        if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
+            let preserve = hunk.attrs_policy() == AttrsPolicy::Preserve;
+            let mn = norm_pat_list(&minus_attrs);
+            let pn = norm_pat_list(plus_attrs);
+            let d = item_attr_delta(&minus_attrs, plus_attrs);
+            let ambiguous_len = preserve
+                && mn != pn
+                && !minus_attrs.is_empty()
+                && !plus_attrs.is_empty()
+                && minus_attrs.len() != plus_attrs.len();
+            let active = preserve && !ambiguous_len && d != ItemAttrDelta::Mirror;
+            (plus_attrs.clone(), active, mn, pn, d)
+        } else {
+            (
+                Vec::new(),
+                false,
+                Vec::new(),
+                Vec::new(),
+                ItemAttrDelta::Mirror,
             )
-            .with_rule(hunk.rule_name())
-            .with_repair(StructuredError::fix_pattern_repair(
-                "C11",
-                "write the attributes on both sides or neither",
-            )));
+        };
+    if !delta_active {
+        if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
+            if !plus_attrs.is_empty() && minus_attrs.is_empty() {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "plus side writes attributes the minus side omitted (ambiguous merge); write the attributes on both sides or neither",
+                )
+                .with_rule(hunk.rule_name())
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C11",
+                    "write the attributes on both sides or neither",
+                )));
+            }
         }
     }
     // Plus-side attribute text must mirror the minus side (same contract
     // as fn/general hunks, T235): the item rewrite only replaces the
     // ident span, so differing plus-side attrs would be silently dropped.
     // `# attrs=strip` skips this gate — the envelope is deleted anyway.
-    if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
-        if hunk.attrs_policy() != AttrsPolicy::Strip
-            && !minus_attrs.is_empty()
-            && !attrs_text_equal(&minus_attrs, plus_attrs)
-        {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
-            )
-            .with_rule(hunk.rule_name())
-            .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
-            .with_repair(StructuredError::fix_pattern_repair(
-                "C12",
-                "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
-            )));
+    // WI-10a: Preserve delta hunks skip it (attr edits carry the change).
+    if !delta_active {
+        if let PatternKind::ItemRename { plus_attrs, .. } = &compiled.kind {
+            if hunk.attrs_policy() != AttrsPolicy::Strip
+                && !minus_attrs.is_empty()
+                && !attrs_text_equal(&minus_attrs, plus_attrs)
+            {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
+                )
+                .with_rule(hunk.rule_name())
+                .with_suggestion("mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`")
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C12",
+                    "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
+                )));
+            }
         }
     }
     let rule = hunk.rule_name();
@@ -381,25 +415,121 @@ pub fn apply_item_rename_hunk(
         }
         // Preserve plus written minus-side attributes constrains the match
         // (T235, SPEC 14.6 — same as fn hunks): sites carrying different
-        // attributes are skipped, never silently rewritten.
-        if hunk.attrs_policy() == AttrsPolicy::Preserve
+        // attributes are skipped, never silently rewritten. WI-10a: delta
+        // hunks use subset semantics (add skips already-plus; remove/
+        // replace require the minus lines, preserving the rest).
+        if delta_active {
+            let have = site_attr_texts(&c.attrs);
+            match delta {
+                ItemAttrDelta::Add => {
+                    if subsequence_indices(&have, &plus_norm).is_some() {
+                        continue;
+                    }
+                }
+                ItemAttrDelta::Remove | ItemAttrDelta::Replace => {
+                    if subsequence_indices(&have, &minus_norm).is_none() {
+                        continue;
+                    }
+                }
+                ItemAttrDelta::Mirror => {}
+            }
+        } else if hunk.attrs_policy() == AttrsPolicy::Preserve
             && !minus_attrs.is_empty()
             && !attrs_equal(&minus_attrs, &c.attrs)
         {
             continue;
         }
         check_attrs(&c.attrs, hunk.attrs_policy(), &minus_attrs, &rule, file)?;
-        let (a, b) = span_bytes(original, index, c.ident)
-            .ok_or_else(|| range_err(&rule, c.ident.start().line as u32))?;
-        if original.get(a..b) != Some(minus_name.as_str()) {
-            return Err(StructuredError::new(
-                ErrorCode::MatchConflict,
-                "item name span mismatch (file changed during matching?)",
-            )
-            .with_rule(&rule)
-            .with_repair(StructuredError::internal_repair()));
+        // WI-10a: same-name evolution still emits the (byte-identical) name
+        // edit so reported spans overlap the ident and the WI-1.4
+        // span-local postcondition verifies (WI-5 conforming-site
+        // precedent); the attr edits below carry the visible change.
+        {
+            let (a, b) = span_bytes(original, index, c.ident)
+                .ok_or_else(|| range_err(&rule, c.ident.start().line as u32))?;
+            if original.get(a..b) != Some(minus_name.as_str()) {
+                return Err(StructuredError::new(
+                    ErrorCode::MatchConflict,
+                    "item name span mismatch (file changed during matching?)",
+                )
+                .with_rule(&rule)
+                .with_repair(StructuredError::internal_repair()));
+            }
+            edits.push(TextEdit::new(a, b, plus_name.clone()).with_label("rename"));
         }
-        edits.push(TextEdit::new(a, b, plus_name.clone()).with_label("rename"));
+        // WI-10a: attr-delta edits (Preserve only). Add inserts above the
+        // item line; remove deletes the matched lines; replace swaps each
+        // matched line in place (site indent preserved).
+        if delta_active {
+            let have = site_attr_texts(&c.attrs);
+            match delta {
+                ItemAttrDelta::Add => {
+                    let anchor_start = index
+                        .line_start(c.anchor_line)
+                        .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                    let anchor_line_text = &original[anchor_start..];
+                    let anchor_line_text = anchor_line_text.split('\n').next().unwrap_or("");
+                    let indent: String = anchor_line_text
+                        .chars()
+                        .take_while(|ch| *ch == ' ' || *ch == '\t')
+                        .collect();
+                    let mut text = String::new();
+                    for p in &plus_attrs_owned {
+                        text.push_str(&indent);
+                        text.push_str(&compact_attr(p.trim()));
+                        text.push('\n');
+                    }
+                    let at = index
+                        .line_start(c.anchor_line)
+                        .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                    edits.push(TextEdit::new(at, at, text));
+                }
+                ItemAttrDelta::Remove => {
+                    if let Some(idxs) = subsequence_indices(&have, &minus_norm) {
+                        for i in idxs {
+                            let attr = &c.attrs[i];
+                            let s = attr.span().start().line as u32;
+                            let e = attr.span().end().line as u32;
+                            let a = index.line_start(s).ok_or_else(|| range_err(&rule, s))?;
+                            let b = index.line_start(e + 1).unwrap_or(original.len());
+                            if b > a {
+                                edits.push(TextEdit::new(a, b, String::new()));
+                            }
+                        }
+                    }
+                }
+                ItemAttrDelta::Replace => {
+                    if let Some(idxs) = subsequence_indices(&have, &minus_norm) {
+                        for (k, i) in idxs.iter().enumerate() {
+                            let Some(plus_line) = plus_attrs_owned.get(k) else {
+                                continue;
+                            };
+                            let attr = &c.attrs[*i];
+                            let s = attr.span().start().line as u32;
+                            let e = attr.span().end().line as u32;
+                            let a = index.line_start(s).ok_or_else(|| range_err(&rule, s))?;
+                            let b = index.line_start(e + 1).unwrap_or(original.len());
+                            let cur_start =
+                                index.line_start(s).ok_or_else(|| range_err(&rule, s))?;
+                            let cur_line = &original[cur_start..];
+                            let cur_line = cur_line.split('\n').next().unwrap_or("");
+                            let indent: String = cur_line
+                                .chars()
+                                .take_while(|ch| *ch == ' ' || *ch == '\t')
+                                .collect();
+                            let mut text = String::new();
+                            text.push_str(&indent);
+                            text.push_str(&compact_attr(plus_line.trim()));
+                            text.push('\n');
+                            if b > a {
+                                edits.push(TextEdit::new(a, b, text));
+                            }
+                        }
+                    }
+                }
+                ItemAttrDelta::Mirror => {}
+            }
+        }
         // `# attrs=strip`: delete attribute lines above the item.
         if hunk.attrs_policy() == AttrsPolicy::Strip && !c.attrs.is_empty() {
             let start = index
@@ -723,24 +853,61 @@ mod tests {
             out.contains("/// Local thing.\nstruct Remote;"),
             "got: {out}"
         );
-        // Plus-side attrs differing from the minus side are rejected
-        // instead of silently dropped (fn/general mirror-gate parity).
+        // WI-10a: same-length differing attrs are the Preserve replace
+        // delta (rename + attr replace land together), not C12. Note the
+        // `///` pattern normalizes to `#[doc]` at parse (T155), so the
+        // replacement lands in `#[doc]` spelling.
         let differ = mirror.replace("+ /// Local thing.", "+ /// Changed thing.");
-        let err = apply(&differ, "/// Local thing.\nstruct Local;\n").unwrap_err();
+        let out = apply(&differ, "/// Local thing.\nstruct Local;\n").unwrap();
+        assert!(out.contains("struct Remote;"), "got: {out}");
+        assert!(out.contains("Changed thing."), "got: {out}");
+        assert!(!out.contains("Local thing."), "got: {out}");
+        // Differing non-empty lengths stay C12 (ambiguous partial overlap).
+        let ambiguous = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- #[a]\n- struct Local\n+ #[b]\n+ #[c]\n+ struct Remote\n";
+        let err = apply(ambiguous, "#[a]\nstruct Local;\n").unwrap_err();
         assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
-        assert!(err.contains("differ from matched attributes"), "got: {err}");
         // `# attrs=strip` skips the differ gate: the envelope is deleted.
         let strip = differ.replace("# lang=rust", "# attrs=strip\n# lang=rust");
         let out = apply(&strip, "/// Local thing.\nstruct Local;\n").unwrap();
         assert!(out.contains("struct Remote;"), "got: {out}");
         assert!(!out.contains("Local thing"), "got: {out}");
-        // Plus-side attr omission is also a differ (T241, fn/general
-        // parity): the plus side must mirror the minus side exactly
-        // (SPEC 14.6), never silently drop.
+        // WI-10a: pure attr removal (minus N, plus empty) is the remove
+        // delta (rename + removal land together), not C12.
         let drop = mirror.replace("+ /// Local thing.\n", "");
-        let err = apply(&drop, "/// Local thing.\nstruct Local;\n").unwrap_err();
-        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
-        assert!(err.contains("differ from matched attributes"), "got: {err}");
+        let out = apply(&drop, "/// Local thing.\nstruct Local;\n").unwrap();
+        assert!(out.contains("struct Remote;"), "got: {out}");
+        assert!(!out.contains("Local thing"), "got: {out}");
+    }
+
+    #[test]
+    fn attr_delta_add_replace_remove_fire() {
+        // WI-10a: same-name attr evolution (no rename) + sweep add.
+        // Add cites the item line with file scope (sites may carry other
+        // attrs above it, so a tight range would miss them).
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n# sweep\n- struct S\n+ #[derive(Clone)]\n+ struct S\n";
+        let out = apply(add, "struct S;\n").unwrap();
+        assert_eq!(out, "#[derive(Clone)]\nstruct S;\n", "got: {out:?}");
+        // Add preserves an unrelated existing attr.
+        let out = apply(add, "#[derive(Debug)]\nstruct S;\n").unwrap();
+        assert!(out.contains("#[derive(Debug)]"), "got: {out:?}");
+        assert!(out.contains("#[derive(Clone)]"), "got: {out:?}");
+        // Already-plus skips (no duplicate).
+        assert!(apply(add, "#[derive(Clone)]\nstruct S;\n").is_err());
+        // Same-name replace.
+        let rep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- #[derive(Debug)]\n- struct S\n+ #[derive(Debug, Clone)]\n+ struct S\n";
+        let out = apply(rep, "#[derive(Debug)]\nstruct S;\n").unwrap();
+        assert!(out.contains("#[derive(Debug, Clone)]"), "got: {out:?}");
+        assert!(!out.contains("#[derive(Debug)]\nstruct"), "got: {out:?}");
+        // Sweep add over two items.
+        let two = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n# sweep\n# allow=many\n- struct A\n+ #[inline]\n+ struct A\n";
+        let src = "struct A;\nstruct B;\nmod m {\n    struct A;\n}\n";
+        let out = apply(two, "struct A;\nstruct A;\n").unwrap();
+        assert_eq!(out.matches("#[inline]").count(), 2, "got: {out:?}");
+        let _ = src;
+        // Same-name without attr delta still fails (rename-usage error kept).
+        let same = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- struct S\n+ struct S\n";
+        let err = apply(same, "struct S;\n").unwrap_err();
+        assert!(err.contains("identical"), "got: {err}");
     }
 
     #[test]

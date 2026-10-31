@@ -156,6 +156,12 @@ pub(crate) fn attrs_equal(pattern_attrs: &[String], item_attrs: &[syn::Attribute
     want == have
 }
 
+// WI-10a helpers live in `matcher_attr_delta` (D5 sibling, no second copy).
+use crate::matcher_attr_delta::{
+    attr_delta as fn_attr_delta, compact_attr, line_indent as fn_line_indent, norm_pat_list,
+    site_attr_texts, subsequence_positions as subsequence_indices, AttrDelta as FnAttrDelta,
+};
+
 /// Reconstruct the `FnPattern` for the minus side (also validates it parses).
 ///
 /// For method-context hunks the full minus text includes the surrounding
@@ -947,9 +953,26 @@ pub fn apply_fn_hunk(
     // Attribute mirror gates (same contract as the general-Stmt matcher:
     // plus-side attribute text must mirror the minus side, never invent
     // or drop — silently ignoring written attributes would violate SPEC
-    // 2.6). The plus side is otherwise dead text: `plan_sig_edits`
+    // 2.6). WI-10a: under `# attrs=preserve` written lines are the delta
+    // (add/remove/same-length replace); other policies keep the gates
+    // byte-identical. The plus side is otherwise dead text: `plan_sig_edits`
     // preserves the original envelope and never reads plus attrs.
-    if !plus_pat.attrs_written.is_empty() && minus_pat.attrs_written.is_empty() {
+    //
+    // Attr-delta classification (Preserve only): Mirror (equal) keeps the
+    // existing path; Add (minus empty), Remove (plus empty), Replace
+    // (same non-zero length, differing) skip the gates and emit attr edits
+    // per site below. Differing non-empty lengths stay ambiguous (C11/C12).
+    let preserve = hunk.attrs_policy() == AttrsPolicy::Preserve;
+    let minus_norm = norm_pat_list(&minus_pat.attrs_written);
+    let plus_norm = norm_pat_list(&plus_pat.attrs_written);
+    let delta = fn_attr_delta(&minus_pat.attrs_written, &plus_pat.attrs_written);
+    let ambiguous_len = preserve
+        && minus_norm != plus_norm
+        && !minus_pat.attrs_written.is_empty()
+        && !plus_pat.attrs_written.is_empty()
+        && minus_pat.attrs_written.len() != plus_pat.attrs_written.len();
+    let delta_active = preserve && !ambiguous_len && delta != FnAttrDelta::Mirror;
+    if !delta_active && !plus_pat.attrs_written.is_empty() && minus_pat.attrs_written.is_empty() {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
@@ -961,7 +984,8 @@ pub fn apply_fn_hunk(
             "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`",
         )));
     }
-    if hunk.attrs_policy() != AttrsPolicy::Strip
+    if !delta_active
+        && hunk.attrs_policy() != AttrsPolicy::Strip
         && !minus_pat.attrs_written.is_empty()
         && minus_pat
             .attrs_written
@@ -1013,8 +1037,27 @@ pub fn apply_fn_hunk(
         // Written attributes constrain even under the default preserve
         // policy (SPEC 14.6): a site lacking them is a non-match like any
         // other slot mismatch, so skip it — count validation (plus the
-        // T62 whole-file hint) keeps typos fail-safe.
-        if hunk.attrs_policy() == AttrsPolicy::Preserve && !minus_pat.attrs_written.is_empty() {
+        // T62 whole-file hint) keeps typos fail-safe. WI-10a: delta hunks
+        // use subset semantics (add skips already-plus sites; remove/
+        // replace require the minus lines present, preserving the rest).
+        if delta_active {
+            let have = site_attr_texts(&c.item.attrs);
+            match delta {
+                FnAttrDelta::Add => {
+                    if subsequence_indices(&have, &plus_norm).is_some() {
+                        continue;
+                    }
+                }
+                FnAttrDelta::Remove | FnAttrDelta::Replace => {
+                    if subsequence_indices(&have, &minus_norm).is_none() {
+                        continue;
+                    }
+                }
+                FnAttrDelta::Mirror => {}
+            }
+        } else if hunk.attrs_policy() == AttrsPolicy::Preserve
+            && !minus_pat.attrs_written.is_empty()
+        {
             if !attrs_equal(&minus_pat.attrs_written, &c.item.attrs) {
                 continue;
             }
@@ -1048,6 +1091,83 @@ pub fn apply_fn_hunk(
             name_hole,
         )?;
         edits.append(&mut new_edits);
+        // WI-10a: same-name attr evolution still needs an ident-bearing
+        // span for the WI-1.4 postcondition (which counts `fn {name}`
+        // defs at reported spans). Emit the byte-identical name edit
+        // (WI-5 conforming-site precedent) when the names are equal.
+        if delta_active && minus_name == plus_name && !minus_name.starts_with('$') {
+            if let Some((a, b)) = span_bytes(original, index, c.item.sig.ident.span()) {
+                if original.get(a..b) == Some(minus_name.as_str()) {
+                    edits.push(TextEdit::new(a, b, plus_name.clone()).with_label("rename"));
+                }
+            }
+        }
+        // WI-10a: attr-delta edits (Preserve only). Add inserts above the
+        // fn line (after existing attrs, same indent); remove deletes the
+        // matched lines; replace swaps each matched line in place.
+        if delta_active {
+            let have = site_attr_texts(&c.item.attrs);
+            match delta {
+                FnAttrDelta::Add => {
+                    let indent = fn_line_indent(original, index, c.fn_line);
+                    let mut text = String::new();
+                    for p in &plus_pat.attrs_written {
+                        text.push_str(&indent);
+                        text.push_str(&compact_attr(p.trim()));
+                        text.push('\n');
+                    }
+                    let at = index
+                        .line_start(c.fn_line)
+                        .ok_or_else(|| range_err(&rule, c.fn_line))?;
+                    edits.push(TextEdit::new(at, at, text));
+                }
+                FnAttrDelta::Remove => {
+                    if let Some(idxs) = subsequence_indices(&have, &minus_norm) {
+                        for i in idxs {
+                            let attr = &c.item.attrs[i];
+                            let s = attr.span().start().line as u32;
+                            let e = attr.span().end().line as u32;
+                            let a = index.line_start(s).ok_or_else(|| range_err(&rule, s))?;
+                            let b = index.line_start(e + 1).unwrap_or(original.len());
+                            if b > a {
+                                edits.push(TextEdit::new(a, b, String::new()));
+                            }
+                        }
+                    }
+                }
+                FnAttrDelta::Replace => {
+                    if let Some(idxs) = subsequence_indices(&have, &minus_norm) {
+                        for (k, i) in idxs.iter().enumerate() {
+                            let Some(plus_line) = plus_pat.attrs_written.get(k) else {
+                                continue;
+                            };
+                            let attr = &c.item.attrs[*i];
+                            let s = attr.span().start().line as u32;
+                            let e = attr.span().end().line as u32;
+                            let a = index.line_start(s).ok_or_else(|| range_err(&rule, s))?;
+                            let b = index.line_start(e + 1).unwrap_or(original.len());
+                            // Preserve the site's indent, swap the attr text.
+                            let cur_start =
+                                index.line_start(s).ok_or_else(|| range_err(&rule, s))?;
+                            let cur_line = &original[cur_start..];
+                            let cur_line = cur_line.split('\n').next().unwrap_or("");
+                            let indent: String = cur_line
+                                .chars()
+                                .take_while(|ch| *ch == ' ' || *ch == '\t')
+                                .collect();
+                            let mut text = String::new();
+                            text.push_str(&indent);
+                            text.push_str(&compact_attr(plus_line.trim()));
+                            text.push('\n');
+                            if b > a {
+                                edits.push(TextEdit::new(a, b, text));
+                            }
+                        }
+                    }
+                }
+                FnAttrDelta::Mirror => {}
+            }
+        }
         // `# attrs=strip`: delete attribute lines above the fn item.
         if hunk.attrs_policy() == AttrsPolicy::Strip && !c.item.attrs.is_empty() {
             let start = index
@@ -1406,20 +1526,56 @@ mod tests {
 
     #[test]
     fn attrs_mirror_gates_fail_fast() {
-        // T165: the plus side must mirror the minus side — inventing or
-        // changing attributes is a pattern error, never a silent drop.
-        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
-        let err = apply(add, "fn foo() {}\n").unwrap_err();
+        // WI-10a: pure add / same-length replace are the Preserve delta
+        // (they apply); the gates keep the ambiguous remainder: differing
+        // non-empty lengths, and deltas under non-default policies.
+        let ambiguous = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- #[a]\n- fn foo(...) {\n+ #[b]\n+ #[c]\n+ fn bar(...) {\n      ...\n  }\n";
+        let err = apply(ambiguous, "#[a]\nfn foo() {}\n").unwrap_err();
+        assert!(
+            err.contains("replacement attributes differ from matched attributes")
+                || err.contains("replacement writes attributes the pattern did not match"),
+            "got: {err}"
+        );
+        // Delta under explicit stays C11/C12 (written lines are not the
+        // delta there — the policy demands exactness).
+        let explicit_add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# attrs=explicit\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
+        let err = apply(explicit_add, "fn foo() {}\n").unwrap_err();
         assert!(
             err.contains("replacement writes attributes the pattern did not match"),
             "got: {err}"
         );
-        let diff = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[other]\n+ fn bar(...) {\n      ...\n  }\n";
-        let err = apply(diff, "#[inline]\nfn foo() {}\n").unwrap_err();
+        // Delta under strip stays C11 (contradictory instructions).
+        let strip_add = explicit_add.replace("# attrs=explicit", "# attrs=strip");
+        let err = apply(&strip_add, "fn foo() {}\n").unwrap_err();
         assert!(
-            err.contains("replacement attributes differ from matched attributes"),
+            err.contains("replacement writes attributes the pattern did not match"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn attrs_delta_add_replace_remove_fire() {
+        // WI-10a: Preserve delta — add inserts above the fn, preserving
+        // existing attrs; already-plus sites skip; replace swaps in place;
+        // remove deletes the matched lines.
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# sweep\n- fn foo(...) {\n+ #[inline]\n+ fn foo(...) {\n      ...\n  }\n";
+        let out = apply(add, "fn foo() {}\n").unwrap();
+        assert_eq!(out, "#[inline]\nfn foo() {}\n", "got: {out:?}");
+        // Add preserves an unrelated existing attr.
+        let out = apply(add, "#[derive(Debug)]\nfn foo() {}\n").unwrap();
+        assert!(out.contains("#[derive(Debug)]"), "got: {out:?}");
+        assert!(out.contains("#[inline]"), "got: {out:?}");
+        assert!(out.contains("fn foo()"), "got: {out:?}");
+        // Already-plus site has nothing to do: no match (fail, not duplicate).
+        assert!(apply(add, "#[inline]\nfn foo() {}\n").is_err());
+        // Replace (same length, differing text).
+        let rep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[other]\n+ fn foo(...) {\n      ...\n  }\n";
+        let out = apply(rep, "#[inline]\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "#[other]\nfn foo() {}\n", "got: {out:?}");
+        // Remove (minus N, plus empty) deletes the line, keeps the item.
+        let rem = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,1 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ fn foo(...) {\n      ...\n  }\n";
+        let out = apply(rem, "#[inline]\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "fn foo() {}\n", "got: {out:?}");
     }
 
     #[test]

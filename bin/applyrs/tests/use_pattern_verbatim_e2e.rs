@@ -171,7 +171,9 @@ fn fn_where_missing_brace_rejected_verbatim() {
 
 #[test]
 fn attrs_plus_adds_rejected_verbatim() {
-    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
+    // WI-10a: pure add under Preserve is the delta (it applies); the gate
+    // keeps deltas under non-default policies.
+    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# attrs=explicit\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n";
     let reason = "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them";
     let suggestion = "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`";
     check_text_ruled_suggestion(ATTR_BASE, "src/lib.rs", patch, reason, suggestion);
@@ -179,7 +181,9 @@ fn attrs_plus_adds_rejected_verbatim() {
 
 #[test]
 fn attrs_plus_drops_rejected_verbatim() {
-    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
+    // WI-10a: pure remove under Preserve is the delta (it applies); the gate
+    // keeps differing non-empty lengths (no 1-to-1 correspondence).
+    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[a]\n+ #[b]\n+ fn bar(...) {\n      ...\n  }\n";
     let reason =
         "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges";
     let suggestion = "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`";

@@ -88,12 +88,12 @@ fn item_preserve_written_mismatch_fails_safe_text_and_json() {
 
 #[test]
 fn item_plus_attrs_differ_rejected_with_needle() {
-    // T235: the item rewrite only replaces the ident span, so plus-side
-    // attrs differing from the minus side are rejected (fn/general
-    // parity) instead of silently dropped.
+    // WI-10a: same-length differing attrs are the Preserve replace delta
+    // (they apply); the gate keeps differing non-empty lengths (ambiguous
+    // partial overlap, no 1-to-1 correspondence).
     let dir = init_repo();
     write(dir.path(), "a.rs", "/// Other thing.\nstruct Other;\n");
-    let patch = "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- /// Other thing.\n- struct Other\n+ /// Changed thing.\n+ struct Renamed\n";
+    let patch = "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- /// Other thing.\n- struct Other\n+ /// Changed thing.\n+ #[extra]\n+ struct Renamed\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr).to_string();
@@ -107,12 +107,11 @@ fn item_plus_attrs_differ_rejected_with_needle() {
 
 #[test]
 fn item_plus_attrs_dropped_rejected_with_needle() {
-    // T241: minus writes attrs, plus omits them -- fn/general hunks
-    // reject this drop with `RSMPL_PATTERN_CONFLICT` (SPEC 14.6), and
-    // item renames now match instead of applying cleanly.
+    // WI-10a: pure removal is the Preserve remove delta (it applies); under
+    // `# attrs=explicit` the delta stays rejected (exactness required).
     let dir = init_repo();
     write(dir.path(), "a.rs", "#[inline]\nstruct Old;\n");
-    let patch = "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- #[inline]\n- struct Old\n+ struct New\n";
+    let patch = "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n# attrs=explicit\n- #[inline]\n- struct Old\n+ struct New\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr).to_string();

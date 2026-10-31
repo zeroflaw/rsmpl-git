@@ -39,7 +39,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 | `# optional` | zero matches OK (default: error) |
 | `E` / `T` / `P` / `V Q G W` / `I` / `N` | inferred metavariables — no declaration needed (SPEC 15.8); `N` is the fn-header name hole (binds per-site, replays; `# ident X` declares others); explicit `# expr E` etc. still legal |
 | `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8); `+ # allow=many` on the cut binds an ordered collection (SPEC 20.3) |
-| `# attrs=preserve` | default: ignore + preserve attrs/doc comments (SPEC 14.6) |
+| `# attrs=preserve` | default: ignore + preserve attrs/doc comments; written attr lines are the delta (add/remove/same-length replace, SPEC 14.6) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous (SPEC 13.4) |
 | `# fallback=syntax` | allow syntactic match when `# symbol` can't resolve (SPEC 19); with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing (SPEC 14.8) |
 | `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant rename (unique-definition only, multi-def vetoes; one-hop `pub use` re-exports followed, second-hop/off-target/glob-re-export vetoes; fields claim `.old` + `S`-labels with shorthand `S { old }` → `S { new: old }`, variants claim `E::Old` paths while bare `Old` stays opaque); definition-only without it, with `orphans` evidence (SPEC 14.8) |

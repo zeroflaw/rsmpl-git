@@ -2091,9 +2091,14 @@ them).
 Written attributes constrain the match even under the default preserve
 policy: a minus side naming `#[inline]` matches only sites carrying
 exactly those attributes (other sites are skipped, like any slot
-mismatch). The plus side must mirror the minus side exactly; a plus
-side that adds, drops, or changes attributes is a pattern error
-(mirror the `#[...]` lines, or use `# attrs=strip`).
+mismatch). The plus side must mirror the minus side exactly, except for
+the WI-10a Preserve delta: written lines are the delta — a plus-only
+line adds it, a minus-only line removes it, and same-length differing
+lines replace 1-to-1 in written order above the item line (unwritten
+attached attrs are preserved; already-plus sites skip an add; remove/
+replace require the minus lines present). Differing non-empty lengths
+stay a pattern error, as does any delta under `# attrs=explicit` /
+`# attrs=strip` (mirror the `#[...]` lines, or use `# attrs=strip`).
 
 To require that no attributes or doc comments are attached, use:
 
@@ -2231,7 +2236,7 @@ Supported kinds:
 
 Rules:
 
-- Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error.
+- Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error, except for the WI-10a Preserve attr-evolution pair (same name with differing written attr sets classifies as an attr delta, not a rename).
 - An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. Unlike function slots, there is no slot to evolve, so a *differing* prefix (`pub struct Old` / `struct New`) is a pattern error instead of a silent vis change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors), and `macro_rules!` definitions take neither visibility nor `unsafe` (`pub macro_rules! Old`, `unsafe macro_rules! Old` are pattern errors). The `!` between `macro_rules` and the name is required (`macro_rules Old` without it is not an item shape). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
 - `auto trait` headers are not supported in v0.1: the author gets a fail-fast pattern error directing to an ordinary hunk (auto traits are never renamed in practice; silently falling through to a no-match would violate Section 2.6).
@@ -3673,8 +3678,8 @@ case where an ordinary hunk cannot express the edit.
 | C8 | embedded metavariable inside a bound pattern in any pattern position (`let`, match-arm, `for`, closure-param, `let`-expression): anything other than a whole-pattern `# pat P` placeholder, a `P @ sub` shape with a placeholder head and a single-placeholder-or-concrete subpattern, a concrete pattern, a WI-3 structural composite (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`, `(P)`) with holes only in bindable leaf positions, or `P: T` with placeholder parts | `v1 patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, WI-3 structural composites (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`, `(P)`) with holes in bindable leaf positions, or `P: T` with placeholder parts, in `let`, match-arm, `for`, closure, and `let`-expression positions; embedded metavariables elsewhere in a pattern are not supported` |
 | C9 | `# returns=none` on a non-function hunk | `` `# returns=none` requires a function-item pattern `` |
 | C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
-| C11 | `+` side writes attributes the `-` side did not match | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
-| C12 | `+` attributes differ from matched `-` attributes | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
+| C11 | `+` side writes attributes the `-` side did not match (outside the WI-10a Preserve add delta: minus empty plus non-empty under `# attrs=preserve` adds) | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
+| C12 | `+` attributes differ from matched `-` attributes (outside the WI-10a Preserve remove/same-length-replace delta under `# attrs=preserve`) | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |

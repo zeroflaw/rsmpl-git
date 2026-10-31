@@ -15,11 +15,15 @@ const DIFFER: &str =
 const DIFFER_SUGGESTION: &str = "mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip`";
 
 fn omitted_patch() -> &'static str {
-    "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- struct Old\n+ #[derive(Clone)]\n+ struct New\n"
+    // WI-10a: pure add under Preserve is the delta (it applies); the
+    // plus-omitted gate keeps deltas under non-default policies.
+    "diff --git a.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n# attrs=explicit\n- struct Old\n+ #[derive(Clone)]\n+ struct New\n"
 }
 
 fn differ_patch() -> &'static str {
-    "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- #[derive(Clone)]\n- struct Old\n+ #[derive(Debug)]\n+ struct New\n"
+    // WI-10a: same-length replace under Preserve is the delta (it applies);
+    // the gate keeps differing non-empty lengths (no 1-to-1 correspondence).
+    "diff --git a.rs\n@@ -1,2 @@ rule=r\n# lang=rust\n- #[derive(Clone)]\n- struct Old\n+ #[derive(Debug)]\n+ #[extra]\n+ struct New\n"
 }
 
 fn check_text(patch: &str, content: &str, reason: &str, want_suggestion: bool) {

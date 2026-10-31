@@ -794,12 +794,22 @@ fn classify_item_rename(
                 ));
             }
             if mn == pn {
-                return Err(StructuredError::new(
-                    ErrorCode::PatternConflict,
-                    format!(
-                        "item rename minus and plus names are identical (`{mn}`); write the new name on the `+` side"
-                    ),
-                ));
+                // WI-10a: same-name pairs are attr evolution when the
+                // written attr sets differ (normalized); identical names
+                // *and* identical attrs stay the rename-usage error.
+                let norm = |ss: &Vec<String>| {
+                    ss.iter()
+                        .map(|a| a.split_whitespace().collect::<String>())
+                        .collect::<Vec<_>>()
+                };
+                if norm(&mattrs) == norm(&pattrs) {
+                    return Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        format!(
+                            "item rename minus and plus names are identical (`{mn}`); write the new name on the `+` side"
+                        ),
+                    ));
+                }
             }
             if mprefix != pprefix {
                 return Err(StructuredError::new(

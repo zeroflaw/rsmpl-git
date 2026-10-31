@@ -184,8 +184,10 @@ fn c10_leading_attrs_on_non_let() {
 
 #[test]
 fn c11_plus_writes_unmatched_attrs() {
+    // WI-10a: pure add under Preserve is the delta (it applies); the gate
+    // keeps deltas under non-default policies.
     check(
-        "diff --git a.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n",
+        "diff --git a.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n# attrs=explicit\n- fn foo(...) {\n+ #[inline]\n+ fn bar(...) {\n      ...\n  }\n",
         "replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them",
         true,
     );
@@ -193,8 +195,10 @@ fn c11_plus_writes_unmatched_attrs() {
 
 #[test]
 fn c12_attrs_differ() {
+    // WI-10a: same-length replace under Preserve is the delta (it applies);
+    // the gate keeps differing non-empty lengths (no 1-to-1 correspondence).
     check(
-        "diff --git a.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[must_use]\n+ fn bar(...) {\n      ...\n  }\n",
+        "diff --git a.rs\n@@ -1,3 @@ rule=r\n# lang=rust\n- #[inline]\n- fn foo(...) {\n+ #[must_use]\n+ #[extra]\n+ fn bar(...) {\n      ...\n  }\n",
         "replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges",
         true,
     );
