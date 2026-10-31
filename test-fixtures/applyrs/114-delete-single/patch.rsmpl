@@ -1,0 +1,4 @@
+diff --git src/lib.rs
+@@ -4,4 @@ rule=delete_items
+# allow=many
+- I

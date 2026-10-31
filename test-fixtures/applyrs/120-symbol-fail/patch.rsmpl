@@ -1,0 +1,8 @@
+diff --git src/lib.rs
+@@ -2,1 @@ rule=symbol_rewrite
+# allow=many
+# symbol Old=crate::does_not_exist
+# symbol New=crate::new_api
+# expr E
+- Old(E)
++ New(E)

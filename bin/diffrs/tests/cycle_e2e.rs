@@ -577,6 +577,38 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "110-new-file-move-single",
         "t375: single-item new-file move re-infers ordinary",
     ),
+    (
+        "112-trait-sweep-single",
+        "t375: single-site trait-sweep rewrite re-infers ordinary",
+    ),
+    (
+        "113-sig-evolve-single",
+        "t375: single-site sig evolution re-infers ordinary",
+    ),
+    (
+        "114-delete-single",
+        "t375: single-item delete re-infers ordinary",
+    ),
+    (
+        "115-move-evolve-single",
+        "t375: single-item move+evolve re-infers ordinary",
+    ),
+    (
+        "116-call-arg-wrap-single",
+        "t375: single-site arg-wrap rewrite re-infers ordinary",
+    ),
+    (
+        "117-type-rewrite-single",
+        "t375: single-site type rewrite re-infers ordinary",
+    ),
+    (
+        "118-repeat-hole-many-single",
+        "t375: single-site repeat-hole rewrite re-infers ordinary",
+    ),
+    (
+        "119-match-arm-many-single",
+        "t375: single-site match-arm rewrite re-infers ordinary",
+    ),
 ];
 
 /// Load the fixture pre-image: repo-relative path → file text.

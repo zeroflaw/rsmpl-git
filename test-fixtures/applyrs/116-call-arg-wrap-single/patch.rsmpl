@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -8,1 @@ rule=wrap_clone
+# allow=many
+- use_it(E0)
++ use_it(E0.clone())

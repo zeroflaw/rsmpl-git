@@ -1,0 +1,8 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,1 @@ rule=box_param
+# lang=rust
+# type T
+- Vec<T>
++ Box<[T]>

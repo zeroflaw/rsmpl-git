@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,3 @@ rule=sweep_trait
+# allow=many
+  trait T {
+-     fn old_name(...);
++     fn new_name(...);
+  }
