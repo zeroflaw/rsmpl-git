@@ -1,0 +1,9 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=path_hole
+# sweep
+# lang=rust
+# type S
+# pat P
+# expr E
+- let S { f: P } = E;
++ let S { f: P } = E + 1;

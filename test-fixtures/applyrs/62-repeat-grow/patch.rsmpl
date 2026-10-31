@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=repeat_grow
+# scope=file
+- let buf = [0u8; 8];
++ let buf = [0u8; 16];

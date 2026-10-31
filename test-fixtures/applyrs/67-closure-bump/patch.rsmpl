@@ -1,0 +1,8 @@
+diff --git src/lib.rs
+@@ -2,1 @@ rule=clo_bump
+# lang=rust
+# pat P
+# pat Q
+# expr E
+- |(P, Q)| E
++ |(P, Q)| E + 1

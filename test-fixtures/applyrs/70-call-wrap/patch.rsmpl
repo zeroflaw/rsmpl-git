@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=wrap
+# scope=file
+# allow=many
+- use_it(E0)
++ use_it(E0.clone())

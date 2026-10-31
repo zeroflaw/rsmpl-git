@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=repeat_hole
+# scope=file
+# expr E
+- let buf = [E; 8];
++ let buf = [E; 16];

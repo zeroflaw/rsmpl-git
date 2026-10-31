@@ -1,0 +1,8 @@
+diff --git src/lib.rs
+@@ -2,1 @@ rule=for_swap
+# lang=rust
+# pat P
+# pat Q
+# expr E
+- for (P, Q) in E { break; }
++ for (P, Q) in E { continue; }

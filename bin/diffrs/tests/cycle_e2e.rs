@@ -267,6 +267,7 @@ const CYCLE_OK: &[&str] = &[
     "41-single-block-sweep",
     "42-field-follow",
     "43-variant-follow",
+    "70-call-wrap",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -405,6 +406,38 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "60-call-arg-swap",
         "nodet: call arg-swap re-infers as ordinary line rewrite (no arg-swap emission; tree legs still close)",
+    ),
+    (
+        "62-repeat-grow",
+        "t375: single-site repeat-grow re-infers ordinary",
+    ),
+    (
+        "63-repeat-hole",
+        "t375: single-site repeat-hole re-infers ordinary",
+    ),
+    (
+        "64-struct-reorder",
+        "t375: single-site struct-reorder re-infers ordinary",
+    ),
+    (
+        "65-match-arm",
+        "t375: single-site match-arm rewrite re-infers ordinary",
+    ),
+    (
+        "66-for-continue",
+        "t375: single-site for-continue rewrite re-infers ordinary",
+    ),
+    (
+        "67-closure-bump",
+        "t375: single-site closure-bump re-infers ordinary",
+    ),
+    (
+        "68-diet-some",
+        "nodet: diet some-unwrap sweep re-infers as two ordinary hunks (raising declines some-unwrap at 2 sites; tree legs still close)",
+    ),
+    (
+        "69-typehole-path",
+        "t375: single-site type-hole path rewrite re-infers ordinary",
     ),
 ];
 

@@ -1,0 +1,9 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=swap_fields
+# sweep
+# lang=rust
+# pat P
+# pat Q
+# expr E
+- let S { f: P, g: Q } = E;
++ let S { f: Q, g: P } = E;

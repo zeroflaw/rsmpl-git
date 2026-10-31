@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -2,1 @@ rule=arm_bump
+# lang=rust
+# pat P
+# expr E
+- match E { Some(P) => 1, _ => 2 }
++ match E { Some(P) => 9, _ => 2 }
