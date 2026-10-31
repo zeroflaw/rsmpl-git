@@ -22,7 +22,7 @@ use crate::edits::{
 };
 use crate::lines::{FileState, LineIndex};
 use crate::postcheck::{
-    instantiation_error, is_rewrite_kind, noop_sweep_error, plus_instantiated,
+    instantiation_error, is_rewrite_kind, noop_sweep_error, plus_instantiated_parsed,
     sweep_edits_are_noop, sweep_hunk_needs_postcheck,
 };
 use crate::suggest::candidate_preview;
@@ -770,21 +770,32 @@ fn apply_inner(
         files.insert(path.clone(), updated);
     }
 
-    // WI-1b/WI-1.2: plus-instantiation postcondition (SPEC 24.6). Every
-    // rewrite hunk's plus template, instantiated with its recorded
-    // per-site bindings, must appear in the post-image at the reported
+    // WI-1b/WI-1.2/WI-1.4: plus-instantiation postcondition (SPEC 24.6).
+    // Every rewrite hunk's plus template, instantiated with its recorded
+    // per-site bindings, must verify in the post-image at the reported
     // spans (translated to post-image coordinates: line-changing
-    // rewrites shift later sites). Renames verify the new ident on the
-    // span lines (WI-1.1); Expr/General/Macro verify the instantiated
-    // plus inside the span windows — strings as literals, `...` as
-    // ordered fragments — and ImplContext verifies `fn {name}`
-    // span-locally (WI-1.2). Occurrence elsewhere never counts.
-    // Failures are loud `RSMPL_MATCH_CONFLICT`; unverifiable plus shapes
-    // (insertions, cuts, `Raw`, unextractable impl names) downgrade to
-    // `reparse-only` (honest, never over-claimed).
+    // rewrites shift later sites). Renames verify the new ident by syn
+    // ident equality at overlapping spans (WI-1.4); Expr/General/Macro
+    // verify the instantiated plus by token-edge comparison inside the
+    // span windows, pairwise when one span per match holds (WI-1.4);
+    // ImplContext verifies `fn {name}` span-locally by ident equality.
+    // Occurrence elsewhere never counts. Failures are loud
+    // `RSMPL_MATCH_CONFLICT`; unverifiable plus shapes (insertions,
+    // cuts, `Raw`, unextractable impl names) downgrade to `reparse-only`
+    // (honest, never over-claimed).
     // `probe_pending` and the provisional `instantiated|postcondition`
     // entries are both in document order, so zip in order.
     {
+        // WI-1.4: parse each touched post-image once; the structural
+        // postcondition reuses the parse instead of re-splitting text
+        // per rule (reparse already validated above, so failures here
+        // only mean falling back to the text posture inside the check).
+        let mut post_parsed: HashMap<String, syn::File> = HashMap::new();
+        for (path, text) in files.iter() {
+            if let Ok(f) = syn::parse_str::<syn::File>(text) {
+                post_parsed.insert(path.clone(), f);
+            }
+        }
         let mut jobs = probe_pending.into_iter();
         for r in report.rules.iter_mut() {
             if r.semantics != RuleSemantics::Instantiated
@@ -818,11 +829,12 @@ fn apply_inner(
                     )
                 })
                 .unwrap_or_else(|| r.spans.clone());
-            match plus_instantiated(
+            match plus_instantiated_parsed(
                 &compiled,
                 &rh,
                 &bindings_list,
                 &post_text,
+                post_parsed.get(&r.file),
                 &post_spans,
                 r.matches,
             ) {

@@ -4440,34 +4440,45 @@ if:
    legitimately remain; byte-identical fixed-point instantiations per
    Section 18.6 R4 `P @` stay valid matches), `optional` zero-edit
    hunks are skipped by design, and insertions/cuts never participate.
- 3. the plus-instantiation gate holds (WI-1b, WI-1.1, WI-1.2): every
-   rewrite hunk with at least one match has its plus template,
-   instantiated with the recorded per-site bindings, verified at the
-   reported spans in the post-image (whitespace-insensitive, trailing
-   commas ignored, backticks stripped, `$`-sigils resolved). Rename
-   kinds (`fn`, item, field, variant, use) and impl-context method
-   renames verify span-locally (WI-1.1, WI-1.2): at least `matches`
-   reported spans must carry the new ident (`fn {name}` for
-   impl-context) on their post-image lines — occurrence elsewhere in
-   the file never counts, and a span still carrying the old name fails.
-   `Expr`/`General`/`Macro` verify span-locally too (WI-1.2): every
-   recorded binding's instantiated plus must appear inside at least one
-   reported span's adaptive window (`max(span_len, template_lines)`
-   lines from the span start, clamped to EOF). String literals compare
-   as literals inside the instantiated text (no abstention);
-   code-level `...` verifies as ordered fragments (each concrete
-   fragment present in order; an empty absorbed remainder may swallow
-   its adjacent comma per Section 18.6 R4). Empty spans fall back to
-   the whole-file check (span-less callers keep the old posture, never
-   a new veto); all-empty bindings check the concrete template. A
-   rewrite that did not land as authored (e.g. the post-image still
-   names the old ident, or a span was reverted while the same text
-   occurs elsewhere) fails loud with `RSMPL_MATCH_CONFLICT`
-   (`postcondition: plus pattern did not re-match ...`), never a
-   silent `verified`. Unverifiable plus shapes downgrade the rule to
-   `reparse-only` (honest, never over-claimed): insertions, cuts,
-   pastes, `Raw`, and impl-context hunks whose plus-side `fn` name
-   cannot be extracted.
+ 3. the plus-instantiation gate holds (WI-1b, WI-1.1, WI-1.2, WI-1.4):
+    every rewrite hunk with at least one match has its plus template,
+    instantiated with the recorded per-site bindings, verified at the
+    reported spans in the post-image (backticks stripped, `$`-sigils
+    resolved; the post-image is parsed once per file and shared by all
+    rules over that file). Rename kinds (`fn`, item, field, variant,
+    use) and impl-context method renames verify span-locally by syn
+    ident equality (WI-1.4): at least `matches` reported spans must
+    overlap the new ident's own token lines (`fn {name}` for
+    impl-context) with exact text equality — occurrence elsewhere in
+    the file never counts, a longer ident merely containing the needle
+    (`New2`) never counts, and a span still carrying the old ident
+    fails. `Expr`/`General`/`Macro` verify span-locally too (WI-1.4):
+    every recorded binding's instantiated plus must verify inside the
+    reported spans' adaptive windows (`max(span_len, template_lines)`
+    lines from the span start, clamped to EOF) under string-aware
+    token-edge comparison — whitespace is ignored outside string
+    literals but significant inside them, trailing commas before closers
+    are ignored, and every fragment edge beginning/ending in an ident
+    character requires a token boundary (so `x + 2` never verifies
+    inside `x + 22`); code-level `...` verifies as ordered fragments
+    (each concrete fragment present in order with the same boundary
+    rule; an empty absorbed remainder may swallow its adjacent comma
+    per Section 18.6 R4). When one span per recorded binding holds, the
+    check is pairwise — binding `i` must verify at span `i`, so a
+    swapped or reverted site fails even when its text occurs at a
+    sibling span; multi-edit shapes (several spans per match) keep the
+    count/existence formulation on the same structural predicate.
+    Empty spans fall back to the whole-file check (span-less callers
+    keep the old posture, never a new veto); all-empty bindings check
+    the concrete template. A rewrite that did not land as authored
+    (e.g. the post-image still names the old ident, or a span was
+    reverted while the same text occurs elsewhere) fails loud with
+    `RSMPL_MATCH_CONFLICT`
+    (`postcondition: plus pattern did not re-match ...`), never a
+    silent `verified`. Unverifiable plus shapes downgrade the rule to
+    `reparse-only` (honest, never over-claimed): insertions, cuts,
+    pastes, `Raw`, and impl-context hunks whose plus-side `fn` name
+    cannot be extracted.
    Per-rule evidence is `semantics`: `instantiated` (instantiation ran),
    `postcondition` (sweep gate + instantiation both ran),
    `reparse-only` (insertions, cuts, pastes, follow-only extras, or
