@@ -7469,7 +7469,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   tails fail the scratch and stay ordinary). Probe failure falls back to one hunk per enclosing
   block with verbatim headers sharing the `rename_Old_to_New` rule
   (no follow, def-only classes; each hunk clears its own engine probe,
-  twin headers and untouched twins veto to ordinary). Divergent per-pair
+  twin headers and untouched twins veto to ordinary). WI-22: any def in an
+  inherent `impl S` block declines the whole class to ordinary (different
+  items, never the K-hunk fallback). Divergent per-pair
   suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually

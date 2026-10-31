@@ -630,9 +630,9 @@ mod tests {
     #[test]
     fn trait_method_groups_within_one_file() {
         // WI-4b: the trait-method intent lives in one file (trait
-        // block + impl blocks), so same-file members group — every
+        // block + trait-proven impl blocks), so same-file members group — every
         // other detector keeps the sweep posture above.
-        let pre = "trait T {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\nstruct S;\nimpl S {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n        0\n    }\n}\n";
+        let pre = "trait T {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\nstruct S;\nimpl T for S {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n        0\n    }\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@\n-    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n+    fn new(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n@@ -6 +6 @@\n-    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n+    fn new(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n".to_string();
         let mut pre_map = HashMap::new();
         pre_map.insert("f.rs".to_string(), pre.to_string());

@@ -107,6 +107,13 @@ pub(crate) fn try_trait_method_rename(
     if trait_lines.is_empty() || impl_lines.is_empty() {
         return None;
     }
+    // WI-22 (D9): inherent `impl S` defs are different items from trait
+    // decls — never share the intent, decline to ordinary.
+    for &site in &impl_lines {
+        if site_in_inherent_impl(pre, site) {
+            return None;
+        }
+    }
     let trait_groups = super::block_headers::group_sites_by_trait_block(file_old, &trait_lines)?;
     let impl_groups = super::block_headers::group_sites_by_impl_block(file_old, &impl_lines)?;
     // Pair index per site line (whole-section and per-hunk callers
@@ -374,6 +381,40 @@ fn in_impl_block(pre: &str, site: usize) -> bool {
     }
     walk(&file.items, site)
 }
+/// True when 1-based `site` lies in an inherent `impl S` block
+/// (`trait_.is_none()`), top-level and inline-mod items, smallest
+/// enclosing span wins. WI-22 (D9): inherent defs never share a
+/// trait-method intent with a trait declaration.
+fn site_in_inherent_impl(pre: &str, site: usize) -> bool {
+    use syn::spanned::Spanned;
+    let Ok(file) = syn::parse_str::<syn::File>(pre) else {
+        return false;
+    };
+    fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, bool)>) {
+        for it in items {
+            match it {
+                syn::Item::Impl(imp) => {
+                    if imp.span().start().line <= site && site <= imp.span().end().line {
+                        let len = imp.span().end().line - imp.span().start().line;
+                        let inherent = imp.trait_.is_none();
+                        if best.is_none_or(|(bl, _)| len < bl) {
+                            *best = Some((len, inherent));
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, site, best);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut best: Option<(usize, bool)> = None;
+    walk(&file.items, site, &mut best);
+    best.is_some_and(|(_, inherent)| inherent)
+}
 
 #[cfg(test)]
 mod tests {
@@ -423,18 +464,20 @@ mod tests {
     #[test]
     fn inherent_impl_declines_single_follow() {
         // Trait decl + inherent impl def are different items: the single
-        // follow hunk must not claim the inherent def, so the class falls
-        // back to the K-hunk intent (or ordinary if probes fail).
+        // follow hunk must not claim the inherent def (WI-22, D9) — the
+        // whole class declines to ordinary, never a K-hunk intent.
         let pre =
             "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl S {\n    fn old(&self) {}\n}\n";
-        let out = run(
-            &["    fn old(&self);", "    fn old(&self) {"],
-            &["    fn new(&self);", "    fn new(&self) {"],
-            pre,
-            &[2, 6],
-        )
-        .expect("fallback intent still compresses");
-        assert!(!out.contains("# follow=uses"), "got:\n{out}");
+        assert!(
+            run(
+                &["    fn old(&self);", "    fn old(&self) {"],
+                &["    fn new(&self);", "    fn new(&self) {"],
+                pre,
+                &[2, 6],
+            )
+            .is_none(),
+            "trait+inherent mix must stay ordinary"
+        );
     }
 
     #[test]

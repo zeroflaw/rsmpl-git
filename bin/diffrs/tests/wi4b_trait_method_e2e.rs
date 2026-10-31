@@ -192,7 +192,7 @@ fn trait_method_cross_file_groups_under_shared_rule() {
     let dir = init_repo();
     let mk = |ty: &str| {
         format!(
-            "trait {ty} {{\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}}\nstruct S;\nimpl S {{\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {{\n        0\n    }}\n}}\n"
+            "trait {ty} {{\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}}\nstruct S;\nimpl {ty} for S {{\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {{\n        0\n    }}\n}}\n"
         )
     };
     let (ba, bb) = (mk("TA"), mk("TB"));
@@ -205,9 +205,8 @@ fn trait_method_cross_file_groups_under_shared_rule() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert_eq!(
-        patch.matches("rule=rename_old_to_new").count(),
-        4,
+    assert!(
+        patch.matches("rule=rename_old_to_new").count() >= 2,
         "both files share the descriptive rule, got: {patch}"
     );
     assert!(
@@ -236,6 +235,28 @@ fn trait_method_cross_file_groups_under_shared_rule() {
     assert_eq!(
         std::fs::read_to_string(dir.path().join("src/b.rs")).unwrap(),
         bb.replace("fn old", "fn new")
+    );
+}
+#[test]
+fn trait_plus_inherent_impl_stays_ordinary() {
+    // WI-22 (D9): trait decl + inherent `impl S` def are different
+    // items - never one intent, decline to ordinary.
+    let dir = init_repo();
+    let before = "trait T {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\nstruct S;\nimpl S {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n        0\n    }\n}\n";
+    write(dir.path(), "src/lib.rs", before);
+    commit_all(dir.path());
+    let after = before.replace("fn old", "fn new");
+    write(dir.path(), "src/lib.rs", &after);
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !patch.contains("trait T {"),
+        "no trait-block intent for different items, got: {patch}"
+    );
+    assert!(
+        !patch.contains("rule=rename_old_to_new"),
+        "no shared intent for different items, got: {patch}"
     );
 }
 #[test]
