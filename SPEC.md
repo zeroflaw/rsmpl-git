@@ -7120,8 +7120,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   (call-callee and macro-head uses belong to their own detectors and
   veto the join; the per-section `use_prefix` chain may still compress
   the unclaimed remainder, each hunk independently totality-checked).
-- Field/variant member rename (WI-9a authored, WI-9b raised single-file, WI-15b raised cross-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary. Single-section shapes raise per section; multi-section / cross-file shapes raise via the whole-patch `member_rename` pre-pass (one def pair joined with same-delta use lines across files, file/section-pure partial: proven files collapse to the one hunk, unproven files stay ordinary, mixed sections veto the intent).
-- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). Emission is one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges) with `# follow=uses` on the first hunk; the scratch-apply line-equality probe is the totality. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline to ordinary; cross-file intents stay ordinary (future work). Detector name `assoc_rename`.
+- Field/variant member rename (WI-9a authored, WI-9b raised single-file, WI-15b raised cross-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary. Single-section shapes raise per section; multi-section / cross-file shapes raise via the whole-patch `member_rename` pre-pass (one def pair joined with same-delta use lines across files, file/section-pure partial: proven files collapse to the one hunk, unproven files stay ordinary, mixed sections veto the intent). Def-only singles (WI-19b, N = 1 definition pair, no use sites): the definition hunk alone with no `# follow=uses` (a follow would rewrite uses the diff did not touch) in the concrete directive-free spelling, under the precision guard; same container recovery + scratch probe.
+- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). Emission is one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges) with `# follow=uses` on the first hunk; the scratch-apply line-equality probe is the totality. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline the whole-section follow to ordinary; cross-file intents stay ordinary (future work). Def-only singles (WI-19b, N = 1 definition pair, no use sites, no follow, concrete directive-free spelling, precision guard) still compress per hunk with the opaque remainder left ordinary verbatim in the same section (disjoint ranges) — the WI-28 whole-section veto owns the follow intent, not the follow-free def hunk. Detector name `assoc_rename`.
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
   every pair is a single-pair item rename above (including the plain
@@ -7158,9 +7158,15 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   after WI-7 grouping); each hunk clears its own engine probe
   (twin headers veto to
   ordinary). Mixed indent or divergent deltas stay
-  passthrough. The slot sweep is the zero-delta (rename-only) special
-  case of the signature-evolution sweep below; both detectors run, slot
-  first, and rename-only classes never reach evolution.
+   passthrough. The slot sweep is the zero-delta (rename-only) special
+   case of the signature-evolution sweep below; both detectors run, slot
+   first, and rename-only classes never reach evolution.
+   Rename-only header singles (WI-19b, N = 1): a lone
+   vis-prefixed / generic / `->` / `where` header pair the terse
+   item-rename declines compresses to the same sweep spelling under
+   the precision guard. Same `slot_holds` totality; a pre-image is
+   required (the wide wildcard minus has no section-visible
+   evidence without an occurrence count).
 - Signature-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header, where the name plus any of
   vis/qualifiers/generics/params/return/where carry one uniform delta
@@ -7187,6 +7193,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    uniform name delta plus slot deltas); hetero-name slot-only
    classes belong to the header-evolution sweep below — the two are
    disjoint by construction (uniform names vs hetero preserved names).
+   Vis/qual-only evolution singles (WI-19b, N = 1): a lone
+   vis/qual-evolving header pair compresses as a precision single
+   (uniform-by-construction; preserved long slots ride the wildcard
+   even when uniform, so the emission matches the diet
+   `...`/`G`/`W` spelling). A lone params/generics/return/where
+   evolution stays ordinary — the sig rewrite would re-render the
+   type with pretty spacing (`Box<[i32]>` to `Box <[ i32 ]>`, 117
+   precedent), so those shapes belong to the type-sweep family
+   (strict N ≥ 2) instead. An N = 1 sig single requires a pre-image
+   (same wide-minus doctrine as the slot sweep).
 - Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
    `{`-terminated fn header, where every name is preserved per site
    (`minus name == plus name`) but names differ across sites (≥ 2
@@ -7195,7 +7211,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    delta. Slot classification and emission ride the
    signature-evolution laws above (concrete uniform bases,
    wildcarded hetero bases, the `V Q` pairing rule, the
-   `-> T W` fixup), except the emitted name is the WI-5 name hole
+   `-> T W` fixup). The header sweep keeps N ≥ 2 (every N = 1
+   name-preserving evolution is the sig sweep's concrete-name
+   class below); the emitted name is the WI-5 name hole
    `N` (`- fn N(...) {` / `+ pub fn N(...) {`). Zero evolving slots
    is nothing to raise; two or more stay ordinary (never
    half-claimed under one rule); any name delta stays with the
@@ -7806,10 +7824,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `+ New!(...)`). Bare invocations only (qualified `crate::Old!`
   stays ordinary); twin definitions, indented (block-level)
   definitions, and untouched invocation twins veto to ordinary.
-  Totality is pre-image-proven (one `macro_rules! Old` definition
-  covering its changed line plus `macro_holds` over the invocation
-  subset) plus a scratch-apply probe of the combined emission.
-  Detector name `macro_rules_rename`.
+   Totality is pre-image-proven (one `macro_rules! Old` definition
+   covering its changed line plus `macro_holds` over the invocation
+   subset) plus a scratch-apply probe of the combined emission.
+   Def-only singles (WI-19b, N = 1 definition pair, no invocations):
+   the definition hunk alone in the concrete directive-free spelling,
+   under the precision guard; same def-site proof + scratch probe.
+   Detector name `macro_rules_rename`.
 - Macro-interior sweep (WI-9a): N ≥ 2 `-`/`+` pairs rendering (whole-line
   statements and `let`-init unwraps — the emitted pattern is the bare
   `name!(args)`, never `let`) to one identical same-name pair —

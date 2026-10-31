@@ -401,6 +401,53 @@ fn contains_path_tail(haystack: &str, needle: &str) -> bool {
     false
 }
 
+/// WI-19b def-only single: exactly one assoc `type`/`const` definition
+/// pair in a trait/impl block, no use sites, no `# follow=uses` (a
+/// follow would rewrite uses the diff did not touch). Same block proof
+/// + scratch line-equality probe as the follow path, def hunk only.
+pub(crate) fn try_assoc_def_only(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    let def = parse_assoc_def_pair(minuses[0], pluses[0])?;
+    if def.old == def.new || def.old.is_empty() {
+        return None;
+    }
+    let (header, start, end) = enclosing_block(pre, changed[0])?;
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let pre_line = pre_lines.get(changed[0].saturating_sub(1))?;
+    let want = minuses[0].trim();
+    let got = pre_line.trim();
+    if got != want
+        && got != format!("{want},").as_str()
+        && got.trim_end_matches(',').trim() != want.trim_end_matches(',').trim()
+    {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let rule = unique_rule(used_rules, &format!("rename_{}_to_{}", def.old, def.new));
+    // WI-19b: concrete def-only hunk, no directives (59/77 doctrine:
+    // default `allow=one` matches the one proven site).
+    let mut out = String::new();
+    out.push_str(&crate::emission_header(path, &rule, &[start, end]).replace("# allow=many\n", ""));
+    out.push_str(&format!("  {header}\n"));
+    out.push_str(&format!("- {}\n", minuses[0].trim()));
+    out.push_str(&format!("+ {}\n", pluses[0].trim()));
+    if !scratch_reproduces(pre, path, &out, &pre_lines, changed, pluses) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some((out, "assoc_rename"))
+}
+
 /// Apply `section` to `pre` in memory and require exact line equality:
 /// every `changed[i]` post line trims to `pluses[i]`, every other line
 /// is byte-identical to `pre`.
@@ -607,7 +654,11 @@ mod tests {
     }
 
     #[test]
-    fn two_trait_same_name_declines() {
+    fn two_trait_same_name_declines_whole_section() {
+        // WI-19b: two same-name defs in different traits are two
+        // intents — the whole-section follow detector declines. Per-hunk,
+        // each def is a sound def-only single (no follow, no ambiguity),
+        // so the pipeline claims both and round-trips.
         let pre = "trait A {\n    type Item;\n}\ntrait B {\n    type Item;\n}\n";
         let raw = section(
             "f.rs",
@@ -621,15 +672,65 @@ mod tests {
             ),
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "two-trait classes stay ordinary"
-        );
+        let mut used = Vec::new();
+        assert!(super::try_assoc_rename(
+            &["    type Item;", "    type Item;"],
+            &["    type Output;", "    type Output;"],
+            "f.rs",
+            Some(pre),
+            &[2, 5],
+            &mut used,
+        )
+        .is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("per-hunk def-only singles must fire");
+        assert!(!out.contains("follow=uses"), "got:\n{out}");
+        validated_live(&out, &pre_map);
         let _ = unique_rule(&mut Vec::new(), "r1");
     }
 
     #[test]
-    fn hetero_kind_declines() {
+    fn def_only_single_fires_and_round_trips() {
+        // WI-19b: a lone assoc `type` definition (uses untouched)
+        // compresses to the def-only hunk with no follow.
+        let pre =
+            "trait Tr {\n    type Item;\n}\nstruct S;\nimpl Tr for S {\n    type Item = u8;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,1 +2,1 @@\n-    type Item;\n+    type Output;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("assoc def-only must fire");
+        assert!(out.contains("type Item;"), "got:\n{out}");
+        assert!(out.contains("type Output;"), "got:\n{out}");
+        assert!(!out.contains("follow=uses"), "got:\n{out}");
+        validated_live(&out, &pre_map);
+        let _ = unique_rule(&mut Vec::new(), "r1");
+    }
+
+    #[test]
+    fn def_only_use_line_declines() {
+        // A lone `::Item` use line is not a definition.
+        let pre = "trait Tr {\n    type Item;\n    fn make() -> Self::Item;\n}\n";
+        let mut used = Vec::new();
+        assert!(super::try_assoc_def_only(
+            &["    fn make() -> Self::Item;"],
+            &["    fn make() -> Self::Output;"],
+            "f.rs",
+            Some(pre),
+            &[3],
+            &mut used,
+        )
+        .is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn hetero_kind_declines_whole_section() {
+        // WI-19b: hetero kinds are never one follow intent — the
+        // whole-section detector declines. Per-hunk, each def is a
+        // sound def-only single, so the pipeline claims both.
         let pre = "trait Tr {\n    type Item;\n    const Item: i32;\n}\n";
         let raw = section(
             "f.rs",
@@ -643,10 +744,20 @@ mod tests {
             ),
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "hetero kinds stay ordinary"
-        );
+        let mut used = Vec::new();
+        assert!(super::try_assoc_rename(
+            &["    type Item;", "    const Item: i32;"],
+            &["    type Output;", "    const Output: i32;"],
+            "f.rs",
+            Some(pre),
+            &[2, 3],
+            &mut used,
+        )
+        .is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("per-hunk def-only singles must fire");
+        assert!(!out.contains("follow=uses"), "got:\n{out}");
+        validated_live(&out, &pre_map);
     }
 
     #[test]

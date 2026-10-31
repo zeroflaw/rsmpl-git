@@ -786,6 +786,74 @@ fn field_prefix_hint(file_old: Option<&str>, container: &str, old: &str) -> Stri
     String::new()
 }
 
+/// WI-19b def-only single (fixtures 59/77): exactly one field/variant
+/// definition pair, no use sites, no `# follow=uses`. The follow would
+/// rewrite uses the diff did not touch; the def-only hunk renames the
+/// definition and leaves every use ordinary (orphans). Same container
+/// recovery + scratch line-equality probe as the follow path.
+pub(crate) fn try_member_def_only(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    let def = if let Some(f) = parse_field_pair(minuses[0], pluses[0]) {
+        MemberDef::Field(f)
+    } else if let Some((old, new)) = parse_variant_pair(minuses[0], pluses[0]) {
+        MemberDef::Variant { old, new }
+    } else {
+        return None;
+    };
+    let (old, new) = def.idents();
+    if old == new || old.is_empty() || new.is_empty() {
+        return None;
+    }
+    let container = match &def {
+        MemberDef::Field(f) => struct_of_field(pre, &f.old, changed[0])?,
+        MemberDef::Variant { old, .. } => enum_of_variant(pre, old, changed[0])?,
+    };
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let pre_line = pre_lines.get(changed[0].saturating_sub(1))?;
+    let want = minuses[0].trim();
+    if pre_line.trim() != want
+        && pre_line.trim() != format!("{want},").as_str()
+        && pre_line.trim_end_matches(',').trim() != want.trim_end_matches(',').trim()
+    {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
+    // WI-19b: def-only singles emit the concrete definition hunk with no
+    // directives (default `allow=one` matches the one proven site;
+    // `# allow=many` is vacuous at N=1 and would miss the authored diet
+    // canonically — 59/77 precedent).
+    let mut out =
+        item_emission_header(path, &rule, Some(pre), changed).replace("# allow=many\n", "");
+    match &def {
+        MemberDef::Field(f) => {
+            out.push_str(&format!("  struct {container} {{\n"));
+            let prefix = field_prefix_hint(Some(pre), &container, &f.old);
+            out.push_str(&format!("- {prefix}{}: {}\n", f.old, f.ty));
+            out.push_str(&format!("+ {prefix}{}: {}\n", f.new, f.ty));
+        }
+        MemberDef::Variant { old, new } => {
+            out.push_str(&format!("  enum {container} {{\n"));
+            out.push_str(&format!("- {old}\n+ {new}\n"));
+        }
+    }
+    if !scratch_reproduces(pre, path, &out, &pre_lines, changed, pluses) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some((out, "member_rename"))
+}
+
 /// Apply `section` to `pre` in memory and require exact line equality:
 /// every `changed[i]` post line trims to `pluses[i]`, every other line
 /// is byte-identical to `pre`. `pre_lines` is `pre.lines()`.
@@ -969,6 +1037,55 @@ mod tests {
         assert!(post.contains("Status::Ready(1)"), "got: {post}");
         assert!(post.contains("Status::Ready(v) => v,"), "got: {post}");
         assert!(!post.contains("Active"), "got: {post}");
+    }
+
+    #[test]
+    fn def_only_single_fires_and_round_trips() {
+        // WI-19b: a lone field definition (uses untouched) compresses
+        // to the definition hunk with no follow.
+        let pre =
+            "struct S {\n    old: u32,\n    keep: bool,\n}\nfn f(s: S) -> u32 {\n    s.old\n}\n";
+        let raw = section("f.rs", "@@ -2,1 +2,1 @@\n-    old: u32,\n+    new: u32,\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("def-only single must fire");
+        assert!(out.contains("struct S {"), "got:\n{out}");
+        assert!(out.contains("- old: u32"), "got:\n{out}");
+        assert!(out.contains("+ new: u32"), "got:\n{out}");
+        assert!(
+            !out.contains("follow=uses"),
+            "def-only carries no follow, got:\n{out}"
+        );
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn def_only_variant_single_fires() {
+        let pre = "enum E {\n    Old,\n    Keep,\n}\n";
+        let raw = section("f.rs", "@@ -2,1 +2,1 @@\n-    Old,\n+    New,\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("variant def-only must fire");
+        assert!(out.contains("enum E {"), "got:\n{out}");
+        assert!(!out.contains("follow=uses"), "got:\n{out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn def_only_use_line_declines() {
+        // A lone use-site line is not a definition — never a def-only.
+        let pre = "struct S {\n    old: u32,\n}\nfn f(s: S) -> u32 {\n    s.old\n}\n";
+        let mut used = Vec::new();
+        assert!(super::try_member_def_only(
+            &["    s.old"],
+            &["    s.new"],
+            "f.rs",
+            Some(pre),
+            &[4],
+            &mut used,
+        )
+        .is_none());
+        assert!(used.is_empty());
     }
 
     #[test]

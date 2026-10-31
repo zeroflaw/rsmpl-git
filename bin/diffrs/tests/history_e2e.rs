@@ -189,7 +189,10 @@ const CASES: &[Case] = &[
         // `Raw`; the engine matches `Unary` structurally).
         // T465: +1 partial-file item deletion (14-line whole-item
         // removal; --check green + byte-identical).
-        expect_sem: 2,
+        // WI-19b: +1 vis-only sig single (`fn b_side_path` →
+        // `pub(crate)`, concrete-name emission, count==1 probe,
+        // T361 round-trip byte-identical).
+        expect_sem: 3,
     },
     Case {
         commit: "1b8993a08b6b8c9175403230c8daaff9e3dd3f5b",
@@ -198,7 +201,10 @@ const CASES: &[Case] = &[
         // T430 whole-item move inference: four byte-identical fns move
         // matcher_fn.rs -> new matcher_impl.rs (vis/fmt leftovers stay
         // ordinary); WI-6 one collection cut + one paste = 2 hunks.
-        expect_sem: 2,
+        // WI-19b: +2 vis-only sig singles (`attrs_equal`,
+        // `extract_fn_block` pub(crate)-adds, concrete-name emissions,
+        // count==1 probes, T361 round-trips byte-identical).
+        expect_sem: 4,
     },
     Case {
         commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",

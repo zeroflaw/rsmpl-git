@@ -78,16 +78,16 @@ pub(crate) use trait_methods::try_trait_method_rename;
 pub(crate) use arg_template::{try_call_arg_template_sweep, try_method_arg_template_sweep};
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_perm_sweep, try_call_sweep};
 pub(crate) use literal::try_call_literal_sweep;
-pub(crate) use macro_rules::try_macro_rules_rename;
+pub(crate) use macro_rules::{try_macro_rules_def_only, try_macro_rules_rename};
 pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};
-pub(crate) use member::try_member_rename;
+pub(crate) use member::{try_member_def_only, try_member_rename};
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
     try_ref_method_strip_sweep,
 };
 pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
-pub(crate) use assoc::try_assoc_rename;
+pub(crate) use assoc::{try_assoc_def_only, try_assoc_rename};
 pub(crate) use attr_sweep::{try_attr_replace_sweep, try_attr_sweep_section};
 pub(crate) use control_template::try_control_template_sweep;
 pub(crate) use definition_addition::{try_definition_addition, try_definition_addition_follow};
@@ -379,6 +379,48 @@ pub(crate) fn try_item_rename(
         ));
     }
     Some(hunk)
+}
+
+/// WI-19b precision singles beyond item-rename/definition-evolution:
+/// slot, sig-evolution, member def-only, macro-rules def-only, assoc
+/// def-only — in that order (disjoint by construction: item-rename
+/// owns plain `fn` renames, the slot sweep owns rename-only headers it
+/// declines, sig owns evolving headers — including every N=1
+/// name-preserving evolution, so the hetero-names header sweep stays
+/// N≥2 — and def-only owns non-header definition lines). Each
+/// detector keeps its own totality; callers apply the precision guard.
+pub(crate) fn try_precision_definition_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    if let Some(sweep) = try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules) {
+        debug_assert_eq!(guard_for("fn_slot_sweep"), Guard::Precision);
+        return Some((sweep, "fn_slot_sweep"));
+    }
+    if let Some(evo) = try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        debug_assert_eq!(guard_for("sig_evolution"), Guard::Precision);
+        return Some((evo, "sig_evolution"));
+    }
+    if let Some(out) = try_member_def_only(minuses, pluses, path, file_old, changed, used_rules) {
+        return Some(out);
+    }
+    if let Some(out) =
+        try_macro_rules_def_only(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some(out);
+    }
+    if let Some(out) = try_assoc_def_only(minuses, pluses, path, file_old, changed, used_rules) {
+        return Some(out);
+    }
+    None
 }
 
 /// Split `fn foo() {`-style header lines into

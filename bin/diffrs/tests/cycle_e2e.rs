@@ -281,6 +281,11 @@ const CYCLE_OK: &[&str] = &[
     "48-token-tree-arg-hole",
     "44-collection-move",
     "121-collection-evolve",
+    "99-slot-sweep-single",
+    "105-attrs-slot-single",
+    "108-impl-sweep-single",
+    "59-field-nofollow",
+    "77-variant-nofollow",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -296,7 +301,7 @@ const CYCLE_OK: &[&str] = &[
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "01-rename-fn",
-        "t375: single-site fn rename re-infers ordinary",
+        "WI-19b: single-site fn rename re-infers as slot sweep single (sweep spelling), canonically distinct from the authored terse form (terse-vs-sweep canonical equality stays open)",
     ),
     ("04-mixed", "t375: two single-site edits re-infer ordinary"),
     (
@@ -329,7 +334,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "13-sig-evolution",
-        "t375: two single-site sig evolutions re-infer ordinary each",
+        "WI-19b: N=1 sig singles own vis/qual-only evolutions; ret/generics/where evolutions stay ordinary (type-sweep domain, strict N>=2)",
     ),
     (
         "14-item-rename",
@@ -392,10 +397,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "58-impl-filter",
         "t375: single-site impl-filter rename re-infers ordinary",
     ),
-    (
-        "59-field-nofollow",
-        "t375: single-site field def-only re-infers ordinary (orphan uses stay ordinary)",
-    ),
+
     (
         "62-repeat-grow",
         "t375: single-site repeat-grow re-infers ordinary",
@@ -444,10 +446,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "76-impl-filter-B",
         "t375: single-site impl-filter rename re-infers ordinary",
     ),
-    (
-        "77-variant-nofollow",
-        "t375: single-site variant def-only re-infers ordinary (orphan uses stay ordinary)",
-    ),
+
     (
         "78-method-to-function",
         "t375: single-site m2f re-infers ordinary",
@@ -486,7 +485,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "90-macro-rules-nofollow",
-        "t375: single-site macro-rules def-only re-infers ordinary (orphan use stays ordinary)",
+        "WI-19b: def re-infers as precision item_rename single (allow=many spelling), canonically distinct from the authored directive-free form (orphan use stays ordinary; canonical-equality follow-up)",
     ),
     (
         "92-m2m-single",
@@ -516,10 +515,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "98-pat-sweep-single",
         "t375: single-site pat-sweep rewrite re-infers ordinary",
     ),
-    (
-        "99-slot-sweep-single",
-        "t375: single-site slot-sweep rewrite re-infers ordinary",
-    ),
+
     (
         "100-call-sweep-single",
         "t375: single-site call-sweep rewrite re-infers ordinary",
@@ -536,10 +532,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "104-symbol-single",
         "t375: single-site symbol rewrite re-infers ordinary",
     ),
-    (
-        "105-attrs-slot-single",
-        "t375: single-site attrs slot rewrite re-infers ordinary",
-    ),
+
     (
         "106-repeat-fold-single",
         "t375: single-site repeat-fold rewrite re-infers ordinary",
@@ -548,10 +541,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "107-sequence-single",
         "t375: single-site sequence rewrite re-infers ordinary",
     ),
-    (
-        "108-impl-sweep-single",
-        "t375: single-site impl-sweep rewrite re-infers ordinary",
-    ),
+
     (
         "109-rename-calls-single",
         "t375: single-site rename-calls rewrite re-infers ordinary",
@@ -562,7 +552,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "113-sig-evolve-single",
-        "t375: single-site sig evolution re-infers ordinary",
+        "WI-19b: vis+ret evolution stays ordinary (N=1 sig singles own vis/qual-only; ret belongs to the type domain)",
     ),
     (
         "116-call-arg-wrap-single",

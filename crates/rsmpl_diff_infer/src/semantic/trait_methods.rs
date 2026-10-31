@@ -335,6 +335,21 @@ mod tests {
     }
 
     #[test]
+    fn single_declines_by_design() {
+        // WI-19b: N=1 needs both a trait and an impl side to share one
+        // intent; a lone line is never this detector's shape (slot or
+        // a future single-impl detector owns it).
+        assert!(run(&["    fn old(&self);"], &["    fn new(&self);"], PRE, &[2],).is_none());
+        assert!(run(
+            &["    fn old(&self) {"],
+            &["    fn new(&self) {"],
+            PRE,
+            &[6],
+        )
+        .is_none());
+    }
+
+    #[test]
     fn untouched_twin_vetoes() {
         // Two identical trait blocks, only one renamed: the per-block
         // probe counts both, vetoing the emission.

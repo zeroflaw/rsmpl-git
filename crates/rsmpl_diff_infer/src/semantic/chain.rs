@@ -691,6 +691,49 @@ pub(crate) fn compress_section(
                 used_rules.truncate(evo_checkpoint);
             }
         }
+        // WI-19b: slot/sig/header + def-only member/macro/assoc singles
+        // under the precision guard (same `semantic <= ordinary + 16`
+        // posture as the two shapes above).
+        let prec_checkpoint = used_rules.len();
+        if let Some((prec, detector)) = super::try_precision_definition_single(
+            &minuses, &pluses, path, file_old, &changed, used_rules,
+        ) {
+            debug_assert_eq!(super::guard_for(detector), super::Guard::Precision);
+            if let Some(prelude) = &rename_prelude {
+                if let Some(final_text) = reheader_rename(&prec, prelude) {
+                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
+                        push_section_prov(
+                            prov,
+                            &final_text,
+                            section,
+                            path,
+                            detector,
+                            &changed,
+                            file_old,
+                            prec_checkpoint,
+                            used_rules,
+                        );
+                        return Some(final_text);
+                    }
+                }
+                used_rules.truncate(prec_checkpoint);
+            } else if prec.len() <= section.len() + super::PRECISION_GUARD {
+                push_section_prov(
+                    prov,
+                    &prec,
+                    section,
+                    path,
+                    detector,
+                    &changed,
+                    file_old,
+                    prec_checkpoint,
+                    used_rules,
+                );
+                return Some(prec);
+            } else {
+                used_rules.truncate(prec_checkpoint);
+            }
+        }
         return compress_section_per_hunk(section, path, file_old, used_rules, prov);
     }
     if !whole {

@@ -36,10 +36,10 @@ pub(crate) fn try_header_evolution_sweep(
     changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
+    // WI-19b: N=1 name-preserving evolutions belong to
+    // `try_sig_evolution_sweep` (concrete-name emission, tighter
+    // totality); this detector keeps its hetero-names class (N≥2).
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
-    }
-    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
         return None;
     }
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
@@ -281,15 +281,50 @@ mod tests {
     }
 
     #[test]
-    fn vis_add_twin_vetoes() {
-        // An untouched fifth plain fn matches the minus header too, so
-        // the engine-count totality (5 != 4) keeps the section ordinary.
+    fn vis_add_twin_vetoes_whole_section() {
+        // WI-19b: an untouched fifth plain fn matches the `N`-hole minus
+        // header too, so the whole-section engine-count totality
+        // (5 != 4) still vetoes the sweep. Per-hunk, each pair is a
+        // sound sig single (concrete names never match `extra`), so the
+        // pipeline claims all four and leaves `extra` alone.
         let raw = section("f.rs", &vis_body());
         let pre = pre_map(&[(
             "f.rs",
             "fn alpha(first_argument: FirstLongTypeArgument) {\n    first_argument\n}\nfn beta(second_argument: SecondLongTypeArgument) {\n    second_argument\n}\nfn gamma(third_argument: ThirdLongTypeArgument) {\n    third_argument\n}\nfn delta(fourth_argument: FourthLongTypeArgument) {\n    fourth_argument\n}\nfn extra(fifth_argument: FifthLongTypeArgument) {\n    fifth_argument\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let mut used = Vec::new();
+        assert!(super::try_header_evolution_sweep(
+            &[
+                "fn alpha(first_argument: FirstLongTypeArgument) {",
+                "fn beta(second_argument: SecondLongTypeArgument) {",
+                "fn gamma(third_argument: ThirdLongTypeArgument) {",
+                "fn delta(fourth_argument: FourthLongTypeArgument) {"
+            ],
+            &[
+                "pub fn alpha(first_argument: FirstLongTypeArgument) {",
+                "pub fn beta(second_argument: SecondLongTypeArgument) {",
+                "pub fn gamma(third_argument: ThirdLongTypeArgument) {",
+                "pub fn delta(fourth_argument: FourthLongTypeArgument) {"
+            ],
+            "f.rs",
+            Some(&pre["f.rs"]),
+            &[1, 4, 7, 10],
+            &mut used,
+        )
+        .is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("per-hunk sig singles must fire");
+        let files = validated_live(&out, &pre);
+        assert!(
+            files["f.rs"].contains("pub fn delta("),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("fn extra(fifth_argument: FifthLongTypeArgument) {"),
+            "twin untouched, got: {}",
+            files["f.rs"]
+        );
     }
 
     #[test]
@@ -317,9 +352,11 @@ mod tests {
     }
 
     #[test]
-    fn name_delta_declines() {
-        // One renamed site is not evolution — the sibling detectors own
-        // name deltas, this class stays ordinary.
+    fn name_delta_declines_whole_section() {
+        // One renamed site is not a header sweep — the whole-section
+        // detector declines (name delta). Per-hunk, each pair is a
+        // sound WI-19b sig single (concrete names), so the pipeline
+        // claims both hunks and round-trips.
         let raw = section(
             "f.rs",
             "@@ -1,1 +1,1 @@\n-fn alpha(first_argument: FirstLongTypeArgument) {\n+pub fn alpha(first_argument: FirstLongTypeArgument) {\n@@ -4,1 +4,1 @@\n-fn beta(second_argument: SecondLongTypeArgument) {\n+pub fn gamma(second_argument: SecondLongTypeArgument) {\n",
@@ -328,19 +365,81 @@ mod tests {
             "f.rs",
             "fn alpha(first_argument: FirstLongTypeArgument) {\n    first_argument\n}\nfn beta(second_argument: SecondLongTypeArgument) {\n    second_argument\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let mut used = Vec::new();
+        assert!(super::try_header_evolution_sweep(
+            &[
+                "fn alpha(first_argument: FirstLongTypeArgument) {",
+                "fn beta(second_argument: SecondLongTypeArgument) {"
+            ],
+            &[
+                "pub fn alpha(first_argument: FirstLongTypeArgument) {",
+                "pub fn gamma(second_argument: SecondLongTypeArgument) {"
+            ],
+            "f.rs",
+            Some(&pre["f.rs"]),
+            &[1, 4],
+            &mut used,
+        )
+        .is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("per-hunk sig singles must fire");
+        let files = validated_live(&out, &pre);
+        assert!(
+            files["f.rs"].contains("pub fn alpha("),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("pub fn gamma("),
+            "got: {}",
+            files["f.rs"]
+        );
     }
 
     #[test]
-    fn two_slot_mixed_declines() {
+    fn two_slot_mixed_declines_whole_section() {
         // Three `pub` adds plus one `async` add: the plus side is
-        // divergent, so no uniform class exists — stays ordinary.
+        // divergent, so no uniform sweep class exists — the
+        // whole-section detector declines. Per-hunk, each pair is a
+        // sound WI-19b sig single, so the pipeline claims all four.
         let raw = section(
             "f.rs",
             "@@ -1,1 +1,1 @@\n-fn alpha(first_argument: FirstLongTypeArgument) {\n+pub fn alpha(first_argument: FirstLongTypeArgument) {\n@@ -4,1 +4,1 @@\n-fn beta(second_argument: SecondLongTypeArgument) {\n+pub fn beta(second_argument: SecondLongTypeArgument) {\n@@ -7,1 +7,1 @@\n-fn gamma(third_argument: ThirdLongTypeArgument) {\n+pub fn gamma(third_argument: ThirdLongTypeArgument) {\n@@ -10,1 +10,1 @@\n-fn delta(fourth_argument: FourthLongTypeArgument) {\n+async fn delta(fourth_argument: FourthLongTypeArgument) {\n",
         );
         let pre = pre_map(&[("f.rs", PRE_VIS)]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let mut used = Vec::new();
+        assert!(super::try_header_evolution_sweep(
+            &[
+                "fn alpha(first_argument: FirstLongTypeArgument) {",
+                "fn beta(second_argument: SecondLongTypeArgument) {",
+                "fn gamma(third_argument: ThirdLongTypeArgument) {",
+                "fn delta(fourth_argument: FourthLongTypeArgument) {"
+            ],
+            &[
+                "pub fn alpha(first_argument: FirstLongTypeArgument) {",
+                "pub fn beta(second_argument: SecondLongTypeArgument) {",
+                "pub fn gamma(third_argument: ThirdLongTypeArgument) {",
+                "async fn delta(fourth_argument: FourthLongTypeArgument) {"
+            ],
+            "f.rs",
+            Some(&pre["f.rs"]),
+            &[1, 4, 7, 10],
+            &mut used,
+        )
+        .is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("per-hunk sig singles must fire");
+        let files = validated_live(&out, &pre);
+        assert!(
+            files["f.rs"].contains("pub fn alpha("),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("async fn delta("),
+            "got: {}",
+            files["f.rs"]
+        );
     }
 
     #[test]
@@ -506,8 +605,8 @@ mod tests {
 
     #[test]
     fn single_pair_declines() {
-        // Singles never reach the pair chain; the detector itself also
-        // requires N ≥ 2.
+        // WI-19b: N=1 name-preserving evolutions belong to the sig sweep
+        // (concrete-name emission); this detector keeps N ≥ 2.
         let raw = section(
             "f.rs",
             "@@ -1,1 +1,1 @@\n-fn alpha(first_argument: FirstLongTypeArgument) {\n+pub fn alpha(first_argument: FirstLongTypeArgument) {\n",

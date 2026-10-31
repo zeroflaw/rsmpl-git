@@ -21,7 +21,20 @@ pub(crate) fn try_fn_slot_sweep(
     changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
-    if minuses.len() < 2 {
+    // WI-19b: N=1 rename-only header singles ride the same totality
+    // (`slot_holds` over the emitted minus header) under the precision
+    // guard (callers). Disjoint from `try_item_rename`, which declines
+    // vis-prefixed / generic / `->` / `where` headers. N=1 requires a
+    // pre-image: the wide wildcard minus has no section-visible
+    // evidence without an occurrence count (a same-shape twin
+    // elsewhere would be silently rewritten).
+    if minuses.is_empty() || minuses.len() != pluses.len() {
+        return None;
+    }
+    if minuses.len() == 1 && file_old.is_none() {
+        return None;
+    }
+    if changed.len() != minuses.len() {
         return None;
     }
     let mut old_name: Option<String> = None;
@@ -162,4 +175,65 @@ pub(crate) fn split_fn_ident(text: &str) -> Option<(String, String, String)> {
         i += 1;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{infer_semantic_with_pre_images, unique_rule};
+    use std::collections::HashMap;
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn single_vis_rename_fires_and_round_trips() {
+        // WI-19b: a lone vis-prefixed rename single (item-rename
+        // declines vis) compresses under the precision guard.
+        let pre = "pub fn foo(x: VeryLongTypeNameArgumentNumberOne) {\n    x\n}\n";
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: VeryLongTypeNameArgumentNumberOne) {\n+pub fn bar(x: VeryLongTypeNameArgumentNumberOne) {\n";
+        let out = infer_semantic_with_pre_images(&[raw.to_string()], &pre_map(&[("f.rs", pre)]))
+            .expect("slot single must fire");
+        assert!(out.contains("fn foo"), "got:\n{out}");
+        assert!(out.contains("fn bar"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map(&[("f.rs", pre)]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("pub fn bar("),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(!files["f.rs"].contains("pub fn foo("));
+        let _ = unique_rule(&mut Vec::new(), "r1");
+    }
+
+    #[test]
+    fn single_twin_vetoes() {
+        // An untouched same-header twin vetoes via `slot_holds`.
+        let pre = "pub fn foo(x: i32) {\n    x\n}\npub fn foo(y: i32) {\n    y\n}\n";
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) {\n+pub fn bar(x: i32) {\n";
+        assert!(
+            infer_semantic_with_pre_images(&[raw.to_string()], &pre_map(&[("f.rs", pre)]),)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn single_plain_fn_stays_item_rename() {
+        // Plain `fn foo` singles belong to `try_item_rename` (terse
+        // diet), never the slot sweep: order pin.
+        let pre = "fn foo() {\n    1\n}\n";
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -1,1 +1,1 @@\n-fn foo() {\n+fn bar() {\n";
+        let out = infer_semantic_with_pre_images(&[raw.to_string()], &pre_map(&[("f.rs", pre)]))
+            .expect("plain single must fire");
+        assert!(out.contains("- fn foo\n"), "got:\n{out}");
+        assert!(
+            !out.contains("V Q"),
+            "slot must not claim plain singles, got:\n{out}"
+        );
+    }
 }

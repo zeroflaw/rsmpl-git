@@ -821,15 +821,21 @@ mod tests {
     #[test]
     fn rename_pair_declines() {
         // Same-type different-name is the rename shape, never evolution.
+        // WI-19b: the def-only member single may claim it (with or
+        // without follow) or it stays ordinary — it must never claim
+        // to be an evolution (provenance detector decides, not text).
         let raw = section("f.rs", "@@ -2,1 +2,1 @@\n-    old: u32,\n+    new: u32,\n");
         let pre = pre_map(&[("f.rs", "struct S {\n    old: u32,\n}\n")]);
-        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre);
-        // Either member_rename claims it (with follow) or it stays
-        // ordinary — it must never claim to be an evolution.
-        if let Some(o) = out {
+        let mut prov = Vec::new();
+        let out = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&raw),
+            &pre,
+            &mut prov,
+        );
+        if out.is_some() {
             assert!(
-                !o.contains("old: u32") || o.contains("follow=uses"),
-                "got:\n{o}"
+                prov.iter().all(|p| p.detector != "definition_evolution"),
+                "must never be evolution, got: {prov:?}"
             );
         }
     }

@@ -351,10 +351,26 @@ pub(crate) fn try_sig_evolution_sweep(
     changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
-    if minuses.len() != pluses.len() || minuses.len() < 2 {
+    // WI-19b: N=1 slot-evolution singles (uniform-by-construction) ride
+    // the same exactly-1-evolving gate + engine-count totality under
+    // the precision guard (callers). Disjoint from `try_item_rename`
+    // (suffix-equal gate) and the slot sweep (rename-only gate). N=1
+    // requires a pre-image (same wide-minus doctrine as the slot sweep).
+    if minuses.is_empty() || minuses.len() != pluses.len() {
         return None;
     }
-    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
+    if minuses.len() == 1 && file_old.is_none() {
+        return None;
+    }
+    if changed.len() != minuses.len() {
+        return None;
+    }
+    // WI-19b: the all-identical veto is an N≥2 verbatim-territory rule;
+    // at N=1 it is trivially true and must not fire.
+    if minuses.len() > 1
+        && minuses.iter().all(|m| *m == minuses[0])
+        && pluses.iter().all(|p| *p == pluses[0])
+    {
         return None;
     }
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
@@ -414,6 +430,29 @@ pub(crate) fn try_sig_evolution_sweep(
         slot_col(&plus_slots, |s| &s.where_),
         true,
     )?;
+    // WI-19b: N=1 owns only vis/qual evolutions (single-token slots,
+    // formatting-stable under rewrite). A params/generics/ret/where
+    // evolution belongs to the type-sweep family (strict N≥2 by
+    // design): the sig rewrite would re-render the type with pretty
+    // spacing (`Box<[i32]>` → `Box <[ i32 ]>`, 117 precedent), losing
+    // to the ordinary hunk it claims to compress.
+    if minuses.len() == 1 {
+        for c in [&params, &generics, &ret, &where_] {
+            if matches!(c, SlotClass::Evolving { .. }) {
+                return None;
+            }
+        }
+    }
+    // WI-19b: at N=1 every preserved long slot (generics/params/where)
+    // rides the wildcard even when uniform — the concrete text buys no
+    // totality the engine-count probe (count must equal 1) does not
+    // already prove, and the wildcarded form is the diet spelling the
+    // cycle canonicalizes to (`...`/`G`/`W`).
+    let (generics, params, where_) = if minuses.len() == 1 {
+        wildcard_preserved_long_1(generics, params, where_)
+    } else {
+        (generics, params, where_)
+    };
     // The rename-only zero-delta class belongs to the slot sweep (which
     // runs first and keeps those classes); this detector owns classes
     // with ≥ 1 evolving non-name slot, including pure evolutions whose
@@ -611,6 +650,23 @@ impl SlotClass {
             }
         }
     }
+}
+
+/// WI-19b helper: wildcard the preserved long slots of a single-site
+/// evolution (see the call site for the doctrine). Evolving slots pass
+/// through untouched.
+pub(crate) fn wildcard_preserved_long_1(
+    generics: SlotClass,
+    params: SlotClass,
+    where_: SlotClass,
+) -> (SlotClass, SlotClass, SlotClass) {
+    fn wild(c: SlotClass) -> SlotClass {
+        match c {
+            SlotClass::Preserved { .. } => SlotClass::Preserved { uniform: None },
+            e => e,
+        }
+    }
+    (wild(generics), wild(params), wild(where_))
 }
 
 /// One side of one plain slot in a header under construction.
@@ -1200,6 +1256,89 @@ mod tests {
             "@@ -1,3 +1,3 @@\n-fn alpha(x: i32) -> i32 {\n+fn beta(x: i32) -> u32 {\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn sig_evo_single_fires_with_pre_image() {
+        // WI-19b: a vis+qual single with a pre-image compresses under
+        // the precision guard (uniform-by-construction), byte-exact:
+        // single-token slots re-render stably.
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn helper(x: VeryLongTypeNameArgumentNumberOne) {\n+pub async fn helper(x: VeryLongTypeNameArgumentNumberOne) {\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn helper(x: VeryLongTypeNameArgumentNumberOne) {\n    x\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("sig single must fire");
+        assert!(out.contains("helper"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "pub async fn helper(x: VeryLongTypeNameArgumentNumberOne) {\n    x\n}\n"
+        );
+    }
+
+    #[test]
+    fn sig_evo_single_params_evolution_declines() {
+        // WI-19b/117: a params evolution is the type-sweep's domain —
+        // the sig rewrite would re-render the type with pretty spacing
+        // (`Box<[i32]>` → `Box <[ i32 ]>`), so the single stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn sum(values: Vec<i32>) -> i32 {\n+fn sum(values: Box<[i32]>) -> i32 {\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn sum(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let mut used = Vec::new();
+        assert!(super::try_sig_evolution_sweep(
+            &["fn sum(values: Vec<i32>) -> i32 {"],
+            &["fn sum(values: Box<[i32]>) -> i32 {"],
+            "f.rs",
+            Some(&pre["f.rs"]),
+            &[1],
+            &mut used,
+        )
+        .is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn sig_evo_single_twin_vetoes() {
+        // An untouched twin header vetoes via the engine-count totality.
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn helper(x: i32) {\n+pub fn helper(x: i32) -> i64 {\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn helper(x: i32) {\n    x\n}\nfn helper(y: i32) {\n    y\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn sig_evo_single_zero_evolving_declines() {
+        // Pure renames belong to the slot sweep, never here — even at N=1.
+        let mut used = Vec::new();
+        assert!(super::try_sig_evolution_sweep(
+            &["fn alpha(x: i32) {"],
+            &["fn beta(x: i32) {"],
+            "f.rs",
+            Some("fn alpha(x: i32) {\n    x\n}\n"),
+            &[1],
+            &mut used,
+        )
+        .is_none());
+        assert!(used.is_empty());
     }
 
     #[test]

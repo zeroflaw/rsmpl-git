@@ -29,6 +29,7 @@ pub(crate) fn guard_for(detector: &str) -> Guard {
         | "member_rename"
         | "assoc_rename"
         | "macro_rules_rename"
+        | "fn_slot_sweep"
         | "sig_evolution"
         | "header_evolution"
         | "definition_evolution"
@@ -58,6 +59,7 @@ mod tests {
             "member_rename",
             "assoc_rename",
             "macro_rules_rename",
+            "fn_slot_sweep",
             "sig_evolution",
             "header_evolution",
             "definition_evolution",
@@ -100,7 +102,6 @@ mod tests {
             "method_same_literal",
             "method_to_fn",
             "method_to_method",
-            "fn_slot_sweep",
             "trait_method_rename",
             "attr_sweep",
         ] {

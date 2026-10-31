@@ -753,17 +753,23 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             native_input.len()
         );
     } else if name == "117-assoc-rename-bare-use-stays-ordinary" {
-        // WI-28 boundary: a bare `Item` use (no `::` tail) is opaque
-        // to the engine follow, so the section declines and stays
-        // ordinary (normalized passthrough, never half-semantic).
+        // WI-28 boundary, WI-19b relaxed: a bare `Item` use (no `::`
+        // tail) is opaque to the engine follow, so the whole-section
+        // follow intent still declines — but the def pair compresses
+        // per-hunk as a follow-free def-only single (the bare lines
+        // stay ordinary verbatim in the same section; disjoint ranges).
+        // Never a follow hunk: the opaque use must not be claimed.
         assert!(
-            !semantic.contains("rule="),
-            "bare-use class must stay ordinary, got: {semantic}"
+            !semantic.contains("follow=uses"),
+            "bare-use class must never carry follow, got: {semantic}"
         );
-        let normalized = normalize_native(native_input);
         assert!(
-            semantic == normalized,
-            "[{name}] ordinary passthrough must equal normalized native"
+            semantic.contains("- type Item;"),
+            "def pair must raise def-only, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("-    Item\n") && semantic.contains("+    Output\n"),
+            "bare use stays ordinary, got: {semantic}"
         );
     } else if name == "115-variant-add-unanchored-bare-ordinary" {
         // WI-12d boundary: a bare arm with no `use E::*` glob in scope

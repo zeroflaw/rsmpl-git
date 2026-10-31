@@ -463,13 +463,19 @@ pub(crate) fn compress_balanced_pair_body(
         }
     }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
-        // Single pairs: item rename under the precision guard (the
-        // engine re-verifies the plus at its span), whole-arg
+        // Single pairs: definition shapes under the precision guard
+        // (the engine re-verifies the plus at its span), whole-arg
         // permutation under strict T375 (subterm-counted multi-site
-        // swaps owe canonical-losslessness). Every other single-pair
-        // posture is untouched (WI-6 slice 2).
+        // swaps owe canonical-losslessness). WI-19b extends the
+        // precision family past item-rename/definition-evolution to
+        // slot/sig/header + def-only member/macro/assoc singles.
         semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
             .map(|f| (f, "item_rename"))
+            .or_else(|| {
+                semantic::try_precision_definition_single(
+                    minuses, pluses, path, file_old, changed, used_rules,
+                )
+            })
             .or_else(|| {
                 semantic::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules)
                     .map(|f| (f, "call_arg_template"))

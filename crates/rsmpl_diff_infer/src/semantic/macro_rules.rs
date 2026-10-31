@@ -197,6 +197,60 @@ fn strip_git_header(section: &str) -> &str {
     }
 }
 
+/// WI-19b def-only single (fixture 90): exactly one `macro_rules!`
+/// definition pair, no invocations, no follow. Same def-site proof +
+/// scratch probe as the combined path, definition hunk only.
+pub(crate) fn try_macro_rules_def_only(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let (old, new) = is_macro_rules_def_pair(minuses[0], pluses[0])?;
+    if old == new || old.is_empty() || new.is_empty() {
+        return None;
+    }
+    let pre = file_old?;
+    if macro_rules_def_site(pre, &old) != Some(changed[0]) {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
+    // WI-19b: concrete def-only hunk, no directives (59/77 doctrine:
+    // default `allow=one` matches the one proven site).
+    let def_sec =
+        item_emission_header(path, &rule, Some(pre), changed).replace("# allow=many\n", "");
+    let mut out = crate::git_header(path);
+    out.push('\n');
+    out.push_str(strip_git_header(&def_sec));
+    out.push_str(&format!("- macro_rules! {old}\n+ macro_rules! {new}\n"));
+    if scratch_matches(pre, path, &out) != Some(1) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // Post line must equal the native plus (the count probe alone
+    // cannot tell a same-count miss from a hit).
+    let parsed = rsmpl_patch::parse_patch(&out).ok()?;
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).ok()?;
+    let post_lines: Vec<&str> = files[path].lines().collect();
+    if post_lines
+        .get(changed[0].saturating_sub(1))
+        .map(|l| l.trim())
+        != Some(pluses[0].trim())
+    {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some((out, "macro_rules_rename"))
+}
+
 /// Apply `section` (one `diff --git` section) to `pre` in memory and
 /// return the total match count, or `None` when the patch does not parse
 /// or apply cleanly.
@@ -406,6 +460,33 @@ mod tests {
             )
             .is_none(),
             "untouched twin must veto"
+        );
+    }
+
+    #[test]
+    fn def_only_single_fires_and_round_trips() {
+        // WI-19b: a lone `macro_rules!` definition (use untouched)
+        // compresses to the def-only hunk with no follow.
+        let pre = "macro_rules! old_m {\n    ($x:expr) => { $x + 1 };\n}\nfn f() -> i32 {\n    old_m!(41)\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-macro_rules! old_m {\n+macro_rules! new_m {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("macro def-only must fire");
+        assert!(out.contains("- macro_rules! old_m\n"), "got:\n{out}");
+        assert!(out.contains("+ macro_rules! new_m\n"), "got:\n{out}");
+        assert!(!out.contains("follow=uses"), "got:\n{out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(files["f.rs"].contains("macro_rules! new_m {"));
+        assert!(
+            files["f.rs"].contains("old_m!(41)"),
+            "use stays, got: {}",
+            files["f.rs"]
         );
     }
 
