@@ -207,7 +207,7 @@ fn apply_inner(
                 .with_file(path)
                 .with_repair(StructuredError::fix_pattern_repair(
                     "bind",
-                    "use one `# bind=<Name>` per hunk (scalar captures only)",
+                    "use one `# bind=<Name>` per hunk (one collection per hunk)",
                 )));
             }
             let compiled = rsmpl_pattern::compile(rh)
@@ -239,6 +239,19 @@ fn apply_inner(
                 rh.header.old_start,
                 rh.header.old_start + rh.header.old_len
             );
+            // WI-6: an optional collection cut with no match binds the
+            // empty collection (the paste then splices nothing). This
+            // check precedes the scalar-optional `continue` below.
+            if targets.is_empty() && rh.allow() == rsmpl_patch::Allow::Many && rh.is_optional() {
+                let report = crate::capture::eval_empty_collection_cut(
+                    &rh.rule_name(),
+                    path,
+                    binds[0],
+                    &mut captures,
+                )?;
+                rule_order.push(((sec_idx, hunk_idx), report));
+                continue;
+            }
             if targets.is_empty() && rh.is_optional() {
                 continue; // optional cut with no match: no capture, no cut
             }
@@ -263,47 +276,68 @@ fn apply_inner(
             };
             ensure_match_count(
                 targets.len(),
-                rsmpl_patch::Allow::One,
+                rh.allow(),
                 false,
                 &rh.rule_name(),
                 path,
                 &range_desc,
                 ZeroMatchHint { wide, preview },
             )?;
-            let (sl, el) = targets[0];
-            // Capture the exact item span (no blank-line absorption); the
-            // delete edit may absorb an adjacent blank separator line.
-            let cap_start = state
-                .index
-                .line_start(sl)
-                .ok_or_else(|| range_err(&rh.rule_name(), path, sl))?;
-            let cap_end = state
-                .index
-                .line_start(el + 1)
-                .unwrap_or_else(|| state.index.eof());
-            let cut =
-                matcher_fn::delete_lines(&state.original, &state.index, sl, el, &rh.rule_name())
-                    .map_err(|e| e.with_file(path))?;
-            let captured = state
-                .original
-                .get(cap_start..cap_end)
-                .unwrap_or("")
-                .to_string();
-            captures.define(binds[0], captured, &rh.rule_name(), path)?;
-            file_edits.get_mut(path).expect("file state").push(cut);
-            rule_order.push((
-                (sec_idx, hunk_idx),
-                RuleReport {
-                    rule: rh.rule_name(),
-                    file: path.clone(),
-                    matches: 1,
-                    spans: vec![(sl, el)],
-                    sites: Vec::new(),
-                    follow_skipped: None,
-                    orphans: Vec::new(),
-                    semantics: RuleSemantics::ReparseOnly,
-                },
-            ));
+            // WI-6: a collection cut captures and deletes every in-scope
+            // item in source order (helper in `capture.rs`, D5); the
+            // scalar path keeps `targets[0]`.
+            if rh.allow() == rsmpl_patch::Allow::Many {
+                let report = crate::capture::eval_collection_cut(
+                    state,
+                    path,
+                    &rh.rule_name(),
+                    binds[0],
+                    &targets,
+                    &mut captures,
+                    file_edits.get_mut(path).expect("file state"),
+                )?;
+                rule_order.push(((sec_idx, hunk_idx), report));
+            } else {
+                let (sl, el) = targets[0];
+                // Capture the exact item span (no blank-line absorption); the
+                // delete edit may absorb an adjacent blank separator line.
+                let cap_start = state
+                    .index
+                    .line_start(sl)
+                    .ok_or_else(|| range_err(&rh.rule_name(), path, sl))?;
+                let cap_end = state
+                    .index
+                    .line_start(el + 1)
+                    .unwrap_or_else(|| state.index.eof());
+                let cut = matcher_fn::delete_lines(
+                    &state.original,
+                    &state.index,
+                    sl,
+                    el,
+                    &rh.rule_name(),
+                )
+                .map_err(|e| e.with_file(path))?;
+                let captured = state
+                    .original
+                    .get(cap_start..cap_end)
+                    .unwrap_or("")
+                    .to_string();
+                captures.define(binds[0], captured, &rh.rule_name(), path)?;
+                file_edits.get_mut(path).expect("file state").push(cut);
+                rule_order.push((
+                    (sec_idx, hunk_idx),
+                    RuleReport {
+                        rule: rh.rule_name(),
+                        file: path.clone(),
+                        matches: 1,
+                        spans: vec![(sl, el)],
+                        sites: Vec::new(),
+                        follow_skipped: None,
+                        orphans: Vec::new(),
+                        semantics: RuleSemantics::ReparseOnly,
+                    },
+                ));
+            }
         }
     }
 
@@ -866,7 +900,7 @@ fn probe_whole_file(
     .map(|(n, _)| n)
 }
 
-fn range_err(rule: &str, file: &str, line: u32) -> StructuredError {
+pub(crate) fn range_err(rule: &str, file: &str, line: u32) -> StructuredError {
     StructuredError::new(
         ErrorCode::RangeConflict,
         format!("span line {line} outside file"),

@@ -168,7 +168,12 @@ pub(crate) fn minus_last_cut_sound(
     // The file line right after the last paired run: in-hunk first
     // (covers trailing leftovers), else the pre-image's next line (a cut
     // absorbs beyond hunk bounds; EOF has no following line).
-    let follows_blank = if hi + 1 < body.len() {
+    // WI-6: a following blank OUTSIDE the hunk is a kept line the last
+    // cut would silently eat (git alignment keeps it; the rebuild has
+    // no leftover accounting for it) — veto so capping degrades to the
+    // sound prefix instead of diverging.
+    let following_in_hunk = hi + 1 < body.len();
+    let follows_blank = if following_in_hunk {
         line_text(&body[hi + 1]).trim().is_empty()
     } else {
         file_old
@@ -177,15 +182,29 @@ pub(crate) fn minus_last_cut_sound(
             .is_some_and(|l| l.trim().is_empty())
     };
     if follows_blank {
-        return true;
+        return following_in_hunk;
     }
     if n != 1 {
         return false;
     }
     if lo == 0 {
-        // No prefix: the preceding line lives outside the hunk,
-        // unclaimed by any leftover hunk — absorbing it is harmless.
-        return true;
+        // No prefix in-hunk. Away from EOF the cut absorbs nothing, so
+        // the outside preceding line is untouched. At EOF the cut
+        // absorbs a preceding blank — sound only when that file line
+        // is absent (BOF) or non-blank; a kept blank outside the hunk
+        // would be silently eaten (same WI-6 root cause as above).
+        let last_file_line = old_start as usize + hi;
+        let at_eof = last_file_line >= file_old.lines().count();
+        if !at_eof {
+            return true;
+        }
+        if old_start as usize + lo < 2 {
+            return true;
+        }
+        return !file_old
+            .lines()
+            .nth(old_start as usize + lo - 2)
+            .is_some_and(|l| l.trim().is_empty());
     }
     if !line_text(&body[lo - 1]).trim().is_empty() {
         return true;

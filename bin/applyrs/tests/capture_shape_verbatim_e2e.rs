@@ -80,14 +80,14 @@ fn use_only_on_pure_insertion_is_verbatim() {
 fn duplicate_bind_echoes_name_verbatim() {
     check(
         "diff --git a.rs\n@@ -1,1 @@ rule=r\n# item I\n# bind=H\n- I\n\ndiff --git a.rs\n@@ -1,1 @@ rule=r\n# item I\n# bind=H\n- I\n",
-        "duplicate `# bind=H` (scalar captures must be unique)",
+        "duplicate `# bind=H` (capture names must be unique)",
     );
 }
 
 #[test]
-fn bind_with_allow_many_envelope_is_verbatim() {
+fn bind_many_on_non_item_cut_is_verbatim() {
     check(
-        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# item I\n# bind=H\n# allow=many\n- I\n",
-        "`# bind=<Name>` cannot be combined with `# allow=many` in v0.1 (scalar captures only)",
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n# bind=H\n# allow=many\n- foo(E)\n+ bar(E)\n",
+        "v0.1 `# bind=` is only supported on item-capture cut hunks (`- I`)",
     );
 }

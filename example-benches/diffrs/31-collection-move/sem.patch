@@ -1,0 +1,13 @@
+diff --git a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -2,54 @@ rule=r1
+# allow=many
+# bind=M1
+- I
+diff --git b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,0 @@ rule=r2
+# use=M1
++ M1

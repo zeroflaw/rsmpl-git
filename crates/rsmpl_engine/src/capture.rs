@@ -1,21 +1,34 @@
-//! Scalar capture store for code moves (SPEC 20).
+//! Capture store for code moves (SPEC 20).
 //!
-//! v0.1: captures hold exactly one AST object's source text. `# bind=<Name>`
-//! is only supported on item-capture cut hunks; `# use=<Name>` only on pure
-//! insertion hunks. Forward references are resolved by the two-pass planner
-//! in `plan.rs` (SPEC 20.3, 23.2).
+//! Scalar captures hold exactly one item's source text, while a
+//! `# bind=<Name>` + `# allow=many` cut hunk holds an ordered
+//! collection (WI-6). Binds are only supported on item-capture cut
+//! hunks and uses only on pure insertion hunks. Forward references are
+//! resolved by the two-pass planner in `plan.rs` (SPEC 20.3, 23.2).
 
 use std::collections::HashMap;
 
 use rsmpl_patch::{ErrorCode, StructuredError};
 
 use crate::edits::TextEdit;
-use crate::lines::LineIndex;
+use crate::lines::{FileState, LineIndex};
+use crate::matcher_fn;
+use crate::{RuleReport, RuleSemantics};
 
-/// Patch-local capture map: name -> captured source text.
+/// Patch-local capture map: name -> captured item text(s).
+///
+/// Scalar captures hold exactly one item's source text. WI-6 collection
+/// captures (`# bind=` + `# allow=many`) hold every matched item in
+/// source order (SPEC 20.3).
 #[derive(Debug, Default)]
 pub struct CaptureStore {
-    map: HashMap<String, String>,
+    map: HashMap<String, Captured>,
+}
+
+#[derive(Debug)]
+struct Captured {
+    texts: Vec<String>,
+    collection: bool,
 }
 
 impl CaptureStore {
@@ -31,34 +44,77 @@ impl CaptureStore {
             known.sort();
             return Err(StructuredError::new(
                 ErrorCode::CaptureConflict,
-                format!("duplicate `# bind={name}` (scalar captures must be unique)"),
+                format!("duplicate `# bind={name}` (capture names must be unique)"),
             )
             .with_rule(rule)
             .with_file(file)
             .with_repair(StructuredError::fix_name_repair(name, &known)));
         }
-        self.map.insert(name.to_string(), text);
+        self.map.insert(
+            name.to_string(),
+            Captured {
+                texts: vec![text],
+                collection: false,
+            },
+        );
         Ok(())
     }
 
-    pub fn get(&self, name: &str, rule: &str, file: &str) -> Result<&str, StructuredError> {
-        self.map.get(name).map(|s| s.as_str()).ok_or_else(|| {
-            let mut known: Vec<&str> = self.map.keys().map(|s| s.as_str()).collect();
+    /// WI-6: define an ordered collection (possibly empty via `# optional`).
+    pub fn define_collection(
+        &mut self,
+        name: &str,
+        texts: Vec<String>,
+        rule: &str,
+        file: &str,
+    ) -> Result<(), StructuredError> {
+        if self.map.contains_key(name) {
+            let mut known: Vec<String> = self.map.keys().cloned().collect();
             known.sort();
-            let owned: Vec<String> = known.iter().map(|s| s.to_string()).collect();
-            StructuredError::new(
+            return Err(StructuredError::new(
                 ErrorCode::CaptureConflict,
-                format!("capture `{name}` is not bound by any hunk"),
+                format!("duplicate `# bind={name}` (capture names must be unique)"),
             )
             .with_rule(rule)
             .with_file(file)
-            .with_suggestion(if known.is_empty() {
-                "add a hunk with `# bind=<Name>`".to_string()
-            } else {
-                format!("available captures: {}", known.join(", "))
+            .with_repair(StructuredError::fix_name_repair(name, &known)));
+        }
+        self.map.insert(
+            name.to_string(),
+            Captured {
+                texts,
+                collection: true,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn get_all(
+        &self,
+        name: &str,
+        rule: &str,
+        file: &str,
+    ) -> Result<(&[String], bool), StructuredError> {
+        self.map
+            .get(name)
+            .map(|c| (c.texts.as_slice(), c.collection))
+            .ok_or_else(|| {
+                let mut known: Vec<&str> = self.map.keys().map(|s| s.as_str()).collect();
+                known.sort();
+                let owned: Vec<String> = known.iter().map(|s| s.to_string()).collect();
+                StructuredError::new(
+                    ErrorCode::CaptureConflict,
+                    format!("capture `{name}` is not bound by any hunk"),
+                )
+                .with_rule(rule)
+                .with_file(file)
+                .with_suggestion(if known.is_empty() {
+                    "add a hunk with `# bind=<Name>`".to_string()
+                } else {
+                    format!("available captures: {}", known.join(", "))
+                })
+                .with_repair(StructuredError::fix_name_repair(name, &owned))
             })
-            .with_repair(StructuredError::fix_name_repair(name, &owned))
-        })
     }
 }
 /// Paste captured item text at a zero-length anchor (SPEC 10.5, 20.2).
@@ -82,10 +138,44 @@ pub(crate) fn paste_capture(
     file: &str,
     edits: &mut Vec<TextEdit>,
 ) -> Result<(), StructuredError> {
-    let text = captures.get(target.name, rule, file)?;
+    let (texts, collection) = captures.get_all(target.name, rule, file)?;
+    if collection {
+        // WI-6: one header template cannot evolve many items; paste the
+        // bare collection verbatim or fail loud (SPEC 20.3).
+        if target.template.is_some_and(|t| t.trim() != target.name) {
+            return Err(StructuredError::new(
+                ErrorCode::CaptureConflict,
+                "collection captures cannot use evolution pastes (one header template cannot evolve many items)",
+            )
+            .with_rule(rule)
+            .with_file(file)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "use",
+                "paste with a bare `+ Name` (`# use=<Name>`) or move items singly",
+            )));
+        }
+        if texts.is_empty() {
+            return Ok(());
+        }
+        let mut ins = texts
+            .iter()
+            .map(|t| t.trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        ins.push('\n');
+        let pos = if target.anchor == 0 {
+            0
+        } else {
+            index
+                .line_start(target.anchor + 1)
+                .unwrap_or_else(|| index.eof())
+        };
+        edits.push(TextEdit::new(pos, pos, ins));
+        return Ok(());
+    }
     let text = match target.template {
-        Some(t) if t.trim() != target.name => splice_evolved_header(text, t, rule)?,
-        _ => text.to_string(),
+        Some(t) if t.trim() != target.name => splice_evolved_header(&texts[0], t, rule)?,
+        _ => texts[0].clone(),
     };
     let pos = if target.anchor == 0 {
         0
@@ -100,6 +190,76 @@ pub(crate) fn paste_capture(
     }
     edits.push(TextEdit::new(pos, pos, ins));
     Ok(())
+}
+
+/// WI-6: evaluate an `# optional` collection cut with zero matches
+/// (pass 1). Binds the empty collection and stages the zero-match rule
+/// report; the paste then splices nothing.
+pub(crate) fn eval_empty_collection_cut(
+    rule: &str,
+    file: &str,
+    bind: &str,
+    captures: &mut CaptureStore,
+) -> Result<RuleReport, StructuredError> {
+    captures.define_collection(bind, Vec::new(), rule, file)?;
+    Ok(RuleReport {
+        rule: rule.to_string(),
+        file: file.to_string(),
+        matches: 0,
+        spans: Vec::new(),
+        sites: Vec::new(),
+        follow_skipped: None,
+        orphans: Vec::new(),
+        semantics: RuleSemantics::ReparseOnly,
+    })
+}
+
+/// WI-6: evaluate a collection cut hunk (pass 1): capture + delete every
+/// in-scope item in source order, define the collection, and stage the
+/// per-file edits. Returns the cut's rule report.
+pub(crate) fn eval_collection_cut(
+    state: &FileState,
+    path: &str,
+    rule: &str,
+    bind: &str,
+    targets: &[(u32, u32)],
+    captures: &mut CaptureStore,
+    file_edits: &mut Vec<TextEdit>,
+) -> Result<RuleReport, StructuredError> {
+    let mut spans = Vec::with_capacity(targets.len());
+    let mut texts = Vec::with_capacity(targets.len());
+    for &(sl, el) in targets {
+        let cap_start = state
+            .index
+            .line_start(sl)
+            .ok_or_else(|| super::plan::range_err(rule, path, sl))?;
+        let cap_end = state
+            .index
+            .line_start(el + 1)
+            .unwrap_or_else(|| state.index.eof());
+        texts.push(
+            state
+                .original
+                .get(cap_start..cap_end)
+                .unwrap_or("")
+                .to_string(),
+        );
+        let cut = matcher_fn::delete_lines(&state.original, &state.index, sl, el, rule)
+            .map_err(|e| e.with_file(path))?;
+        file_edits.push(cut);
+        spans.push((sl, el));
+    }
+    captures.define_collection(bind, texts, rule, path)?;
+    Ok(RuleReport {
+        rule: rule.to_string(),
+        file: path.to_string(),
+        matches: spans.len(),
+        spans,
+        sites: Vec::new(),
+        follow_skipped: None,
+        orphans: Vec::new(),
+        semantics: RuleSemantics::ReparseOnly,
+    })
 }
 
 /// WI-8a + WI-8 slices 1-8 + WI-8 slice 9: splice a captured item under an

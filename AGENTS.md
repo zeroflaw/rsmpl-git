@@ -38,7 +38,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 | `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3); prefer `# sweep` for sweeps |
 | `# optional` | zero matches OK (default: error) |
 | `E` / `T` / `P` / `V Q G W` / `I` | inferred metavariables — no declaration needed (SPEC 15.8); explicit `# expr E` etc. still legal |
-| `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8) |
+| `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8); `+ # allow=many` on the cut binds an ordered collection (SPEC 20.3) |
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments (SPEC 14.6) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous (SPEC 13.4) |
 | `# fallback=syntax` | allow syntactic match when `# symbol` can't resolve (SPEC 19); with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing (SPEC 14.8) |

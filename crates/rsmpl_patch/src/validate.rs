@@ -56,7 +56,7 @@ pub(crate) fn validate_patch(patch: &Patch) -> Result<()> {
                     if bind_to_hunk.contains_key(b) {
                         return Err(StructuredError::new(
                             ErrorCode::CaptureConflict,
-                            format!("duplicate `# bind={b}` (scalar captures must be unique)"),
+                            format!("duplicate `# bind={b}` (capture names must be unique)"),
                         )
                         .with_rule(rh.rule_name())
                         .with_file(&f.target_path)
@@ -66,19 +66,9 @@ pub(crate) fn validate_patch(patch: &Patch) -> Result<()> {
                         ))
                         .into());
                     }
-                    if rh.allow() == Allow::Many {
-                        return Err(StructuredError::new(
-                            ErrorCode::CaptureConflict,
-                            "`# bind=<Name>` cannot be combined with `# allow=many` in v0.1 (scalar captures only)",
-                        )
-                        .with_rule(rh.rule_name())
-                        .with_file(&f.target_path)
-                        .with_repair(StructuredError::fix_pattern_repair(
-                            "bind",
-                            "drop `# allow=many` (scalar captures bind one item)",
-                        ))
-                        .into());
-                    }
+                    // WI-6: `# bind=` + `# allow=many` on an item-capture cut
+                    // hunk binds an ordered collection (SPEC 20.3); the kind
+                    // gate lives in the engine (non-item binds stay loud).
                     bind_to_hunk.insert(b.to_string(), (f.target_path.clone(), rh.rule_name()));
                 }
                 for u in rh.uses() {

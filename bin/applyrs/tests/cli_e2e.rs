@@ -1687,30 +1687,30 @@ fn repeat_with_bind_rejected_json_envelope() {
 }
 
 #[test]
-fn bind_with_allow_many_rejected_json_envelope() {
-    // T262: `# bind=` + `# allow=many` is a capture conflict (scalar
-    // captures only, SPEC 20.4/25.6) — move several items with separate
-    // scalar captures under distinct names instead.
+fn bind_with_allow_many_cuts_collection() {
+    // WI-6: `# bind=` + `# allow=many` on an item cut binds the ordered
+    // collection (SPEC 20.3) — one hunk cuts every in-scope item.
     let dir = init_repo();
     write(dir.path(), "src/lib.rs", "fn a() {}\nfn b() {}\n");
     let patch =
         "diff --git src/lib.rs\n@@ -1,2 @@ rule=cut\n# item I\n# bind=H\n# allow=many\n- I\n";
-    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let v: serde_json::Value =
-        serde_json::from_str(&stdout).expect("failure stdout must be a JSON envelope");
-    assert_eq!(
-        v["error"]["code"],
-        serde_json::json!("RSMPL_CAPTURE_CONFLICT")
-    );
+    let out = run_stdin(dir.path(), patch, &["--check"]);
     assert!(
-        v["error"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("# allow=many"),
-        "got: {v}"
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(2));
+    assert_eq!(v["rules"][0]["spans"], serde_json::json!([[1, 1], [2, 2]]));
+    assert_eq!(read(dir.path(), "src/lib.rs"), "");
 }
 
 #[test]

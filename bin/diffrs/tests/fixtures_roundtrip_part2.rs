@@ -361,5 +361,28 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic == normalized,
             "[{name}] ordinary passthrough must equal normalized native"
         );
+    } else if name == "97-collection-move-fires" {
+        // WI-6: one (minus hunk, plus hunk) cell with >=3 items shares a
+        // single ranged `# allow=many` cut + one bare paste (the
+        // trailing item degrades to ordinary under the absorbed-blank
+        // gate, and the move still round-trips byte-exact).
+        assert!(
+            semantic.contains("@@ -2,15 @@ rule=r1\n# allow=many\n# bind=M1\n- I\n"),
+            "collection cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("@@ -1,0 @@ rule=r2\n# use=M1\n+ M1\n"),
+            "collection paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("-fn e() {"),
+            "gated-out item stays ordinary, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "collection must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     }
 }

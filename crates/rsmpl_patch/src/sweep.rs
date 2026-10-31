@@ -74,10 +74,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sweep_with_bind() {
-        // WI-1a: `# sweep` implies allow=many, so scalar captures reject it.
+    fn sweep_with_bind_parses_as_collection() {
+        // WI-6: `# sweep` implies allow=many, so `# bind=` on an item cut
+        // declares a whole-file collection (the kind gate lives in the
+        // engine, not the parser).
         let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=cut\n# sweep\n# item I\n# bind=H\n- I\n";
-        let err = parse_patch(text).unwrap_err();
-        assert!(err.to_string().contains("allow=many"), "got: {err}");
+        let p = parse_patch(text).expect("bind+many must parse");
+        match &p.files[0].hunks[0] {
+            Hunk::Rsmpl(rh) => {
+                assert_eq!(rh.allow(), Allow::Many);
+                assert_eq!(rh.binds(), vec!["H"]);
+            }
+            _ => panic!("expected rsmpl hunk"),
+        }
     }
 }

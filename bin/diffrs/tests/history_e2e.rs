@@ -190,8 +190,8 @@ const CASES: &[Case] = &[
         root: false,
         // T430 whole-item move inference: four byte-identical fns move
         // matcher_fn.rs -> new matcher_impl.rs (vis/fmt leftovers stay
-        // ordinary); four cuts + four pastes = 8 semantic hunks.
-        expect_sem: 8,
+        // ordinary); WI-6 one collection cut + one paste = 2 hunks.
+        expect_sem: 2,
     },
     Case {
         commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",
@@ -283,12 +283,12 @@ const CASES: &[Case] = &[
         expect_sem: 1,
     },
     // 675431e (T172): seven byte-identical test fns move cli_e2e.rs
-    // -> apply_report_e2e.rs — 7 cuts + 7 pastes.
+    // -> apply_report_e2e.rs — WI-6 one collection cut + one paste.
     Case {
         commit: "675431e16e0dfc18f28161467dedfadd13a5fc4a",
         rev: None,
         root: false,
-        expect_sem: 14,
+        expect_sem: 2,
     },
     // b849869 (T365+T367): two identical string-literal `let patch`
     // lines (one gains two interior lines) — one verbatim hunk.

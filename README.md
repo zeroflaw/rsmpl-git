@@ -195,6 +195,7 @@ context would be larger, so these are lower bounds.)
 | 28-two-per-line (12 lines x 2 sites, sub-line call sweep) | 656 B / 28 ln | 75 B / 5 ln | 89% |
 | 29-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 670 B / 18 ln | 144 B / 7 ln | 79% |
 | 30-arg-template (5 sites, wrap migration `use_it(x)` → `use_it(x.clone())`, 1 hunk) | 470 B / 14 ln | 88 B / 5 ln | 81% |
+| 31-collection-move (5 helpers move files, one `# allow=many` cut + one paste) | 1720 B / 117 ln | 156 B / 13 ln | 91% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

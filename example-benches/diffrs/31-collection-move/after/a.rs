@@ -1,0 +1,2 @@
+fn keep() {}
+fn tail() {}

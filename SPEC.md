@@ -785,7 +785,7 @@ hunks that already carry other directives omit it.
 | `# scope=exact` | Matched AST node span must exactly match the old range after trivia normalization. |
 | `# scope=file` | Search the whole file; the `@@` old range is a dummy (canonical `@@ -1,1 @@`) and range-bounds validation is skipped. Insertion anchors ignore scope. |
 | `# sweep` | Exactly `# allow=many` + `# scope=file` (fused sweep header). Ranged multi-match keeps spelling `# allow=many` without `# scope=file`. |
-| `# bind=Name` | Capture exactly one rewritten or removed AST object under a cross-hunk name. Scalar only in this version. |
+| `# bind=Name` | Capture exactly one rewritten or removed AST object under a cross-hunk name — or, combined with `# allow=many` on an item cut, every matched item in source order (ordered collection, Section 20.3). |
 | `# use=Name` | Use a previously captured scalar object. |
 | `# attrs=preserve` | Ignore unwritten attached attributes for match eligibility and preserve them across rewrite, deletion capture, and movement. Default. Explicitly written attributes constrain the match (exact match, other sites skipped); the plus side must mirror the minus side. |
 | `# attrs=absent` | Require no attached attributes or doc comments. |
@@ -3858,11 +3858,13 @@ The value of `# use=Helper` imports that capture.
 
 Names are patch-local.
 
-In this version, `# bind=<Name>` is a scalar capture. It binds exactly one AST object. Collection-valued captures are not part of v0.1 and there is no syntax such as `# bind_list=Name`, `# bind_many=Name`, or `# use_list=Name`.
+A bare `# bind=<Name>` is a scalar capture: it binds exactly one AST object. Combined with `# allow=many` on an item-capture cut hunk (`- I`), it binds an ordered collection: every item matched in scope, in source order (ranges cite the original pre-patch file, never rebased). There is no separate syntax such as `# bind_list=Name` or `# use_list=Name` — the paste side is unchanged (`+ Name` splices the whole collection).
 
 > **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, the single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>fn <New>(concrete signature) { ... }` / `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` / `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` / `+ <prefix>const <New> = ...;` / `+ <prefix>static [mut ]<New> = ...;` / `+ <prefix>mod <New> { ... }` / `+ <prefix>trait <New> { ... }` evolution paste). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file. An evolution paste is verbatim plus-side text, never a match pattern: its idents (`T`, `Vec`, …) are not metavariable holes, so the unbound-plus gate never fires for it.
 
-A hunk that declares both `# bind=<Name>` and `# allow=many` is invalid in v0.1 unless a future version defines explicit collection-capture syntax. Authors who need to move several items must use separate scalar captures with distinct names.
+A hunk that declares both `# bind=<Name>` and `# allow=many` is a collection cut only on an item-capture cut hunk (`- I`); on any other shape it is invalid (`RSMPL_CAPTURE_CONFLICT`, same envelope as the shape fences below). Authors who need to move a single item keep the scalar form (separate scalar captures under distinct names).
+
+An ordered collection binds every item matched in scope, in source order (ranges cite the original pre-patch file, never rebased). A paste hunk (`+ Name`) splices all items at its anchor in source order with the Section 20.2 one-blank join; the same collection may be pasted more than once (a copy — scalar fan-out parity). `# optional` with zero matches binds the empty collection, and the paste splices nothing. An evolution paste (a header template instead of the bare name) with a collection capture fails loud with `RSMPL_CAPTURE_CONFLICT` — one header template cannot evolve many items. A collection cut deletes every matched item span; an overlapping ordinary hunk on the same lines fails the patch whole, never partially.
 
 The five shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fences in Section 25.6, which set `suggestion:`):
 
@@ -3891,7 +3893,7 @@ reason: v0.1 `# use=` is only supported on pure insertion hunks (`+ Name`)
 RSMPL_CAPTURE_CONFLICT
 rule: r
 file: src/lib.rs
-reason: duplicate `# bind=Helper` (scalar captures must be unique)
+reason: duplicate `# bind=Helper` (capture names must be unique)
 ```
 
 ```text
@@ -3927,8 +3929,8 @@ This patch is valid. The engine must resolve `Helper` by first collecting all ca
 
 The engine must verify that:
 
-- every `# use=<Name>` has exactly one corresponding scalar `# bind=<Name>`;
-- no hunk combines `# bind=<Name>` with `# allow=many` in v0.1;
+- every `# use=<Name>` has exactly one corresponding `# bind=<Name>` (scalar or collection);
+- `# bind=<Name>` + `# allow=many` appears only on item-capture cut hunks;
 - forward references are resolved before application, not treated as missing captures;
 - the cut hunk matched exactly one item;
 - the pasted item is syntactically valid at the insertion site;
@@ -4317,7 +4319,7 @@ Reject if:
 1. inserted syntax is invalid at the target site;
 2. captured syntax is inserted into an incompatible AST context;
 3. a `# use` capture remains unresolved after full-patch forward-reference resolution;
-4. a scalar `# bind` hunk matches more than one AST object or is combined with `# allow=many`;
+4. a scalar `# bind` hunk matches more than one AST object, or a `# bind` + `# allow=many` hunk is not an item-capture cut;
 5. a rewrite would produce duplicate or invalid syntax;
 6. a move would remove a required node and fail to insert it.
 7. a `# repeat` hunk is not a call/method-call/general-expression rewrite, is combined with `# bind=`/`# use=`, or has an empty minus/plus side.
@@ -4835,10 +4837,10 @@ placeholder, not the missing name.
 Captures are patch-local, not document-ordered: a `# use=Helper` paste
 may precede its `# bind=Helper` cut (forward references, Section 20.3).
 A second capture failure needs no missing name: a hunk declaring both
-`# bind=<Name>` and `# allow=many` fails with `RSMPL_CAPTURE_CONFLICT`
-(reason: `` `# bind=<Name>` cannot be combined with `# allow=many` in v0.1
-(scalar captures only) ``). Move several items with separate scalar captures
-under distinct names instead (Section 20.3). The failure carries `rule:`/`file:`
+`# bind=<Name>` and `# allow=many` on a non-item shape fails with `RSMPL_CAPTURE_CONFLICT`
+(reason: `` v0.1 `# bind=` is only supported on item-capture cut hunks (`- I`) ``
+— the same envelope as the Section 20.3 kind fence). On an item cut the
+combination is the ordered collection (Section 20.3), never a failure. The failure carries `rule:`/`file:`
 like the shape fences in Section 20.3 (text omits the null `range:`/`suggestion:` lines,
 JSON carries explicit nulls); suggestion is null — the two missing-capture
 fences above are the only 25.6 entries with a set suggestion.
@@ -5676,8 +5678,7 @@ RSmPL-Git v0.1 does not aim to:
 5. perform global search without declared line ranges;
 6. silently repair imports, visibility, or module paths;
 7. guarantee type correctness unless semantic/type checking is explicitly enabled;
-8. define collection-valued capture syntax in v0.1;
-9. define a complete Rust parser grammar.
+8. define a complete Rust parser grammar.
 
 ---
 
@@ -5715,7 +5716,7 @@ Possible future extensions:
 - conflict markers for semantic patches;
 - automatic import management;
 - semantic move with path rewriting;
-- explicit collection-valued captures and list paste separators;
+- per-item evolution of collections (one header template cannot evolve many items);
 - explicit edition support (currently rejected, see Section 9.6):
 
 ```text
@@ -7022,9 +7023,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   its bind across its pastes; duplicate plus-run claims dedup to the first
   pair in document order, the rest stay ordinary), cut-file pre-image flat-ws uniqueness (twin
   veto), minus paired runs anywhere with exactly one blank between runs (a cut
-  absorbs exactly one following blank; the last run needs a following blank
-  in the file — without one a multi-pair last cut or a blank-ending
-  prefix double-claims the preceding blank (f09edcd); uncovered
+  absorbs exactly one following blank; the last run's absorbed blank must lie
+  inside the minus hunk — a file-only following blank is a kept line the
+  cut would silently eat, so the gate caps to the sound prefix instead (WI-6);
+  without an absorbed blank a multi-pair last cut or a blank-ending prefix
+  double-claims the preceding blank (f09edcd); uncovered
   prefix/trailing minus lines stay as rewritten ordinary hunks around the
   cuts, one post-run blank absorbed, never re-emitted), interior blanks ride
   with their item (the cut removes the whole span, so covered lines need no
@@ -7089,6 +7092,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     `mod`) (paste `+ <vis>trait <New> { ... }`, with `unsafe`
      riding verbatim in the prefix like `fn` qualifiers; any `auto`
      token or `impl Trait for` restriction vetoes).
+   WI-6 collection cells: one (minus hunk, plus hunk) cell holding ≥3
+   distinct moved items that owns every pair of its minus hunk and every
+   paired run of its plus hunk (no fan-out interleave, no split anchors,
+   no evolved pairs) emits one ranged `# allow=many` + `# bind` cut plus
+   one bare `+ Mk` paste (items joined plus-run order, one blank between)
+   when that spelling beats the scalar fan-in under T375, else the cell
+   keeps scalar emission; the absorbed-blank gate above applies unchanged.
      Everything else (other item kinds, attr/body deltas, multi-line
      `fn` headers) stays ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose

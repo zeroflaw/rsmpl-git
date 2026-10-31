@@ -294,8 +294,21 @@ pub(crate) fn try_move_sweep(
     // each paste keeps its own rule name.
     let mut named: Vec<(MovePair, String, String)> = Vec::new();
     let mut bind_seq: usize = 0;
+    // WI-6: collection cells plan first (sibling module keeps moves.rs
+    // net-flat); planned pairs share one cut, paste on the primary only.
+    let collections =
+        super::move_collection::plan_collections(&final_pairs, &parsed, used_rules, &mut bind_seq);
     let mut bind_of: HashMap<(usize, usize, usize, usize), (String, String)> = HashMap::new();
-    for p in &final_pairs {
+    for (pair_idx, p) in final_pairs.iter().enumerate() {
+        if let Some((cell, is_primary)) = super::move_collection::cell_for(&collections, pair_idx) {
+            let paste = if is_primary {
+                cell.paste.clone()
+            } else {
+                String::new()
+            };
+            named.push((p.clone(), cell.cut.clone(), paste));
+            continue;
+        }
         let key = (
             p.minus_hunk_key.0,
             p.minus_hunk_key.1,
@@ -1147,9 +1160,11 @@ mod tests {
     fn move_one_to_two_fanout_fires() {
         // T432 fan-out: one minus item, two plus copies — one cut,
         // two pastes sharing the bind (a copy, round-trips exactly).
+        // WI-6: the minus hunk carries the trailing blank (the real-git
+        // shape); a hunk excluding it vetoes instead of eating a kept line.
         let big = big_fn("big");
         let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
-        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,43 +2,0 @@\n{a_minus}-\n");
         let mk_plus = || big.lines().map(|l| format!("+{l}\n")).collect::<String>();
         let b = format!(
             "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{}",
@@ -1259,12 +1274,14 @@ mod tests {
         let big = big_fn("big");
         let mk_minus = || big.lines().map(|l| format!("-{l}\n")).collect::<String>();
         let mk_plus = || big.lines().map(|l| format!("+{l}\n")).collect::<String>();
+        // WI-6: minus hunks carry the trailing blank (real-git shape);
+        // hunks excluding it veto instead of eating a kept line.
         let a = format!(
-            "diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{}",
+            "diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,43 +2,0 @@\n{}-\n",
             mk_minus()
         );
         let b = format!(
-            "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,42 +2,0 @@\n{}",
+            "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,43 +2,0 @@\n{}-\n",
             mk_minus()
         );
         let c = format!(
@@ -1293,7 +1310,7 @@ mod tests {
         assert_eq!(text.matches("rule=r1\n").count(), 1, "got:\n{text}");
         assert_eq!(text.matches("+ M1\n").count(), 2, "got:\n{text}");
         assert!(
-            text.contains("@@ -2,42 +2,0 @@\n-fn big()"),
+            text.contains("@@ -2,43 +2,0 @@\n-fn big()"),
             "losing twin stays ordinary, got:\n{text}"
         );
         validated_live(&text, &pre);

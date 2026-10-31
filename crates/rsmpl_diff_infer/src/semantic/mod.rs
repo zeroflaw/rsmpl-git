@@ -27,6 +27,7 @@ mod macro_hetero;
 mod macro_parts;
 mod macros;
 mod methods;
+mod move_collection;
 mod move_evolve;
 mod move_evolve_sig;
 mod move_pair_evolve;
