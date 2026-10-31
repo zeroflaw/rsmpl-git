@@ -210,6 +210,7 @@ context would be larger, so these are lower bounds.)
 | 38-derive-migration (4 hetero structs gain `Clone`, `N` hole, 1 hunk) | 359 B / 15 ln | 116 B / 7 ln | 68% |
 | 39-assoc-rename (trait decl + 2 impl decls + 7 `::Item` uses, 3 hunks, follow on first) | 849 B / 30 ln | 332 B / 19 ln | 61% |
 | 40-cross-file-struct-rename (struct def + 7 type/impl uses across 2 files, 1 hunk with `# follow=uses`) | 467 B / 24 ln | 83 B / 6 ln | 82% |
+| 41-cross-file-field-rename (field def + 4 anchored uses across 2 files, 1 hunk with `# follow=uses`) | 1176 B / 21 ln | 155 B / 7 ln | 87% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

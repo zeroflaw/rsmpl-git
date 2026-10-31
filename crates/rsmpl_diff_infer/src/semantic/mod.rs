@@ -204,6 +204,57 @@ pub fn infer_semantic_with_provenance(
             }
             None => sections,
         };
+    // WI-15b whole-patch member-intent pre-pass (single member definition
+    // + same-delta uses across files, file/section-pure partial); runs on
+    // the item-intent output (disjoint def shapes, no double-claim).
+    let member_owned: Vec<String>;
+    let member_rules_before = used_rules.len();
+    let sections: &[String] = match member::try_member_intent_sweep(sections, pre, &mut used_rules)
+    {
+        Some((rewritten, def_path, _rule)) => {
+            compressed_any = true;
+            let emitted = rewritten
+                .iter()
+                .find(|s| {
+                    s.lines().next().is_some_and(|h| {
+                        h.starts_with("diff --git ")
+                            && crate::b_side_path(&h["diff --git ".len()..])
+                                .is_some_and(|p| p == def_path)
+                    })
+                })
+                .cloned()
+                .unwrap_or_default();
+            let original: String = sections
+                .iter()
+                .filter(|s| !rewritten.iter().any(|r| r == *s))
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("");
+            let changed: Vec<usize> = sections
+                .iter()
+                .filter(|s| !rewritten.iter().any(|r| r == *s))
+                .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
+                .collect();
+            if !emitted.is_empty() && !original.is_empty() {
+                let detector_of: Vec<(String, &'static str)> = used_rules[member_rules_before..]
+                    .iter()
+                    .map(|r| (r.clone(), "member_rename"))
+                    .collect();
+                prov::commit_prov(
+                    prov,
+                    &emitted,
+                    &original,
+                    &def_path,
+                    &detector_of,
+                    &changed,
+                    pre.get(&def_path).map(String::as_str),
+                );
+            }
+            member_owned = rewritten;
+            &member_owned
+        }
+        None => sections,
+    };
     for section in sections {
         match chain::compress_section(section, &mut used_rules, pre, prov) {
             Some(semantic) => {

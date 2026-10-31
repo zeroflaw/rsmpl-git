@@ -1,10 +1,12 @@
-//! Field/variant member rename raising (WI-9b, SPEC D.4).
+//! Field/variant member rename raising (WI-9b + WI-15b, SPEC D.4).
 //!
-//! Single-file def+uses intent: exactly one definition pair (a field
-//! `old: T` → `new: T` line or a bare `Old` → `New` variant line) plus
-//! N-1 use-site lines sharing the ident delta compress to the authored
-//! definition hunk *with* `# follow=uses`. The follow rewrite does the
-//! rest at apply time, so the emission is one hunk only.
+//! Single-file def+uses intent (`try_member_rename`): exactly one
+//! definition pair (a field `old: T` → `new: T` line or a bare `Old` →
+//! `New` variant line) plus N-1 use-site lines sharing the ident delta
+//! compress to the authored definition hunk *with* `# follow=uses`.
+//! Cross-file intent (`try_member_intent_sweep`, WI-15b): the same one-def
+//! shape joined across files, file/section-pure partial (proven files
+//! collapse, unproven files stay ordinary).
 //!
 //! Totality is a scratch-apply line-equality probe (template-probe
 //! posture): the authored emission is applied to an in-memory clone of
@@ -15,7 +17,9 @@
 //! at apply time without fallback (WI-14: sibling definitions and
 //! unanchored uses never veto — the probe reproduces exactly the
 //! anchored follow). `None` pre-image declines (the container is unprovable
-//! without it). Cross-file def+uses intents stay ordinary (future work).
+//! without it).
+
+use std::collections::{HashMap, HashSet};
 
 use super::{item_emission_header, unique_rule};
 
@@ -114,6 +118,327 @@ pub(crate) fn try_member_rename(
     }
     let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
     Some(emit(path, &rule, Some(pre), def_site, &container, &def))
+}
+
+/// WI-15b whole-patch member-intent pre-pass: one member definition pair
+/// (field or variant, same `parse_*` as the single-file path) joined with
+/// same-delta use lines across files into the single definition hunk with
+/// `# follow=uses`. File/section-pure partial: proven sections collapse to
+/// the emission at the def section's slot, unproven sections pass through
+/// byte-identical. Returns the rebuilt section list plus the def path and
+/// rule, or `None` when the patch holds no provable cross-file intent.
+/// Reserved rule names are released on decline.
+pub(crate) fn try_member_intent_sweep(
+    sections: &[String],
+    pre: &HashMap<String, String>,
+    used_rules: &mut Vec<String>,
+) -> Option<(Vec<String>, String, String)> {
+    let checkpoint = used_rules.len();
+    struct SecPairs {
+        idx: usize,
+        path: String,
+        minuses: Vec<String>,
+        pluses: Vec<String>,
+        changed: Vec<usize>,
+    }
+    struct Pair {
+        sec: usize,
+        path: String,
+        minus: String,
+        plus: String,
+        site: usize,
+    }
+    let mut parsed: Vec<SecPairs> = Vec::new();
+    let mut eligible: Vec<usize> = Vec::new();
+    for (i, sec) in sections.iter().enumerate() {
+        let header = sec.lines().next().unwrap_or("");
+        if !header.starts_with("diff --git ") || sec.contains('\r') {
+            continue;
+        }
+        if super::is_rename_header(header) {
+            continue;
+        }
+        let rest = header.strip_prefix("diff --git ")?;
+        let path = crate::b_side_path(rest)?;
+        if !path.ends_with(".rs") {
+            continue;
+        }
+        eligible.push(i);
+        let (minuses, pluses, balanced) = section_pairs(sec);
+        if !balanced || minuses.is_empty() {
+            return None;
+        }
+        let changed = crate::totality::changed_old_lines(sec);
+        if changed.len() != minuses.len() {
+            return None;
+        }
+        parsed.push(SecPairs {
+            idx: i,
+            minuses,
+            pluses,
+            changed,
+            path,
+        });
+    }
+    if parsed.is_empty() {
+        return None;
+    }
+    let mut pairs: Vec<Pair> = Vec::new();
+    for sp in &parsed {
+        for ((m, p), s) in sp
+            .minuses
+            .iter()
+            .zip(sp.pluses.iter())
+            .zip(sp.changed.iter())
+        {
+            pairs.push(Pair {
+                sec: sp.idx,
+                path: sp.path.clone(),
+                minus: m.clone(),
+                plus: p.clone(),
+                site: *s,
+            });
+        }
+    }
+    if pairs.len() < 2 {
+        return None;
+    }
+    // Exactly one definition pair.
+    let mut def_idx: Option<usize> = None;
+    let mut def_kind: Option<MemberDef> = None;
+    for (i, pair) in pairs.iter().enumerate() {
+        let found = if let Some(f) = parse_field_pair(&pair.minus, &pair.plus) {
+            Some(MemberDef::Field(f))
+        } else if let Some((old, new)) = parse_variant_pair(&pair.minus, &pair.plus) {
+            Some(MemberDef::Variant { old, new })
+        } else {
+            None
+        };
+        if let Some(d) = found {
+            if def_idx.is_some() {
+                return None;
+            }
+            def_idx = Some(i);
+            def_kind = Some(d);
+        }
+    }
+    let def_idx = def_idx?;
+    let def = def_kind?;
+    let (old, new) = def.idents();
+    if old == new || old.is_empty() || new.is_empty() {
+        return None;
+    }
+    for (i, pair) in pairs.iter().enumerate() {
+        if i == def_idx {
+            continue;
+        }
+        if pair.minus.trim() == pair.plus.trim() {
+            return None;
+        }
+        if !contains_ident(&pair.minus, &old) || !contains_ident(&pair.plus, &new) {
+            return None;
+        }
+    }
+    for pair in &pairs {
+        if !pre.contains_key(&pair.path) {
+            return None;
+        }
+    }
+    let def_pair = &pairs[def_idx];
+    let def_pre = pre.get(&def_pair.path).map(String::as_str)?;
+    let container = match &def {
+        MemberDef::Field(f) => struct_of_field(def_pre, &f.old, def_pair.site)?,
+        MemberDef::Variant { old: o, .. } => enum_of_variant(def_pre, o, def_pair.site)?,
+    };
+    // Single-file two-pair shapes stay with `try_member_rename` + T375
+    // (that path owns the one-section win; the intent needs ≥2 sections
+    // or ≥3 pairs to beat ordinary — enforced by the T375 below, but a
+    // lone section with exactly the single-file shape must not
+    // double-claim it).
+    if parsed.len() == 1 {
+        let sp = &parsed[0];
+        if sp.minuses.len() == pairs.len() {
+            // Same shape the per-section detector owns: let it fire (or
+            // decline) alone so canonical bytes stay stable.
+            return None;
+        }
+    }
+    let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
+    let emission = emit(
+        &def_pair.path,
+        &rule,
+        Some(def_pre),
+        def_pair.site,
+        &container,
+        &def,
+    );
+    // Cross-file scratch probe: apply emission to a `pre` clone, then
+    // classify each pair as proven (post trim == plus trim).
+    let parsed_patch = rsmpl_patch::parse_patch(&emission).ok()?;
+    let mut files = pre.clone();
+    for section in &parsed_patch.files {
+        files.entry(section.target_path.clone()).or_default();
+    }
+    if rsmpl_engine::apply_patch_to_tree(&mut files, &parsed_patch).is_err() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    let mut proven = vec![false; pairs.len()];
+    for (i, pair) in pairs.iter().enumerate() {
+        let Some(post) = files.get(&pair.path) else {
+            used_rules.truncate(checkpoint);
+            return None;
+        };
+        let post_lines: Vec<&str> = post.lines().collect();
+        let Some(got) = post_lines.get(pair.site.saturating_sub(1)) else {
+            used_rules.truncate(checkpoint);
+            return None;
+        };
+        proven[i] = got.trim() == pair.plus.trim();
+    }
+    if !proven[def_idx] {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    if proven.iter().filter(|&&p| p).count() < 2 {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // Section purity: every section holding a proven pair must be fully
+    // proven (else the emission would rewrite a line the ordinary
+    // remainder also rewrites). Mixed sections veto the whole intent.
+    let mut sec_proven_all: HashMap<usize, bool> = HashMap::new();
+    let mut sec_has_proven: HashMap<usize, bool> = HashMap::new();
+    for (i, pair) in pairs.iter().enumerate() {
+        let e = sec_proven_all.entry(pair.sec).or_insert(true);
+        if !proven[i] {
+            *e = false;
+        }
+        if proven[i] {
+            sec_has_proven.insert(pair.sec, true);
+        }
+    }
+    for (sec, has) in &sec_has_proven {
+        if *has && !sec_proven_all.get(sec).copied().unwrap_or(false) {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+    }
+    let claimed_secs: HashSet<usize> = sec_has_proven
+        .iter()
+        .filter(|(_, h)| **h)
+        .map(|(s, _)| *s)
+        .collect();
+    // Unclaimed files must be byte-identical under the emission (the
+    // follow touches nothing there); claimed files must be clean outside
+    // claimed sites.
+    let claimed_files: HashSet<&str> = pairs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| proven[*i])
+        .map(|(_, p)| p.path.as_str())
+        .collect();
+    for (path, pre_text) in pre.iter() {
+        let Some(post_text) = files.get(path) else {
+            used_rules.truncate(checkpoint);
+            return None;
+        };
+        if !claimed_files.contains(path.as_str()) {
+            if post_text != pre_text {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+            continue;
+        }
+        let pre_lines: Vec<&str> = pre_text.lines().collect();
+        let post_lines: Vec<&str> = post_text.lines().collect();
+        if post_lines.len() != pre_lines.len() {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+        let mut claimed_sites: HashSet<usize> = HashSet::new();
+        for (i, pair) in pairs.iter().enumerate() {
+            if proven[i] && pair.path == *path {
+                claimed_sites.insert(pair.site);
+            }
+        }
+        for (idx, (a, b)) in pre_lines.iter().zip(post_lines.iter()).enumerate() {
+            if claimed_sites.contains(&(idx + 1)) {
+                continue;
+            }
+            if a != b {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+        }
+    }
+    let claimed_bytes: usize = parsed
+        .iter()
+        .filter(|sp| claimed_secs.contains(&sp.idx))
+        .map(|sp| sections[sp.idx].len())
+        .sum();
+    if emission.len() >= claimed_bytes {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (i, sec) in sections.iter().enumerate() {
+        if !eligible.contains(&i) {
+            out.push(sec.clone());
+            continue;
+        }
+        if !claimed_secs.contains(&i) {
+            out.push(sec.clone());
+            continue;
+        }
+        if i == def_pair.sec {
+            out.push(emission.clone());
+        }
+    }
+    Some((out, def_pair.path.clone(), rule))
+}
+
+/// One section's minus/plus lines plus the balanced gate (same walk as
+/// `chain.rs` / `item_intent.rs`: every hunk balanced, global counts
+/// equal, non-empty).
+fn section_pairs(section: &str) -> (Vec<String>, Vec<String>, bool) {
+    let mut minuses: Vec<String> = Vec::new();
+    let mut pluses: Vec<String> = Vec::new();
+    let mut hunk_minus = 0usize;
+    let mut hunk_plus = 0usize;
+    let mut balanced = true;
+    let mut in_hunk = false;
+    let mut saw_hunk = false;
+    for line in section.lines().skip(1) {
+        if line.starts_with("@@") {
+            if in_hunk && hunk_minus != hunk_plus {
+                balanced = false;
+            }
+            in_hunk = true;
+            saw_hunk = true;
+            hunk_minus = 0;
+            hunk_plus = 0;
+            continue;
+        }
+        if !in_hunk {
+            if line.starts_with("old mode ") || line.starts_with("new mode ") {
+                balanced = false;
+            }
+            continue;
+        }
+        if line.starts_with('-') && !line.starts_with("---") {
+            minuses.push(line[1..].to_string());
+            hunk_minus += 1;
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            pluses.push(line[1..].to_string());
+            hunk_plus += 1;
+        }
+    }
+    if in_hunk && hunk_minus != hunk_plus {
+        balanced = false;
+    }
+    let ok = balanced && saw_hunk && minuses.len() == pluses.len() && !minuses.is_empty();
+    (minuses, pluses, ok)
 }
 
 /// A classified definition pair.
@@ -704,5 +1029,189 @@ mod tests {
             "bare uses must not raise with follow"
         );
         let _ = unique_rule(&mut Vec::new(), "r1");
+    }
+
+    const XDEF_PRE: &str = "struct Config {\n    timeout_ms: u32,\n    retries: u8,\n}\n";
+    const XUSE_PRE: &str = "fn f(c: Config) -> u32 {\n    c.timeout_ms + c.retries as u32\n}\nfn g() -> Config {\n    Config { timeout_ms: 5, retries: 1 }\n}\n";
+
+    fn xdef_sections() -> Vec<String> {
+        vec![
+            section(
+                "a.rs",
+                "@@ -2,1 +2,1 @@\n-    timeout_ms: u32,\n+    deadline_ms: u32,\n",
+            ),
+            section(
+                "b.rs",
+                concat!(
+                    "@@ -2,1 +2,1 @@\n",
+                    "-    c.timeout_ms + c.retries as u32\n",
+                    "+    c.deadline_ms + c.retries as u32\n",
+                    "@@ -5,1 +5,1 @@\n",
+                    "-    Config { timeout_ms: 5, retries: 1 }\n",
+                    "+    Config { deadline_ms: 5, retries: 1 }\n",
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn cross_file_field_fires_and_round_trips() {
+        let sections = xdef_sections();
+        let pre = pre_map(&[("a.rs", XDEF_PRE), ("b.rs", XUSE_PRE)]);
+        let mut used = Vec::new();
+        let (out, path, rule) =
+            try_member_intent_sweep(&sections, &pre, &mut used).expect("cross-file must fire");
+        assert_eq!(path, "a.rs");
+        assert_eq!(out.len(), 1, "claimed sections collapse, got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- timeout_ms: u32"), "got:\n{}", out[0]);
+        assert!(!rule.is_empty());
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["a.rs"].contains("deadline_ms: u32,"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(
+            files["b.rs"].contains("c.deadline_ms"),
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(
+            files["b.rs"].contains("Config { deadline_ms: 5"),
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(
+            !files["a.rs"].contains("timeout_ms"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(
+            !files["b.rs"].contains("timeout_ms"),
+            "got: {}",
+            files["b.rs"]
+        );
+    }
+
+    #[test]
+    fn cross_file_pipeline_compresses() {
+        let sections = xdef_sections();
+        let pre = pre_map(&[("a.rs", XDEF_PRE), ("b.rs", XUSE_PRE)]);
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- timeout_ms: u32"), "got:\n{out}");
+        validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn cross_file_unproven_stays_ordinary_for_that_file() {
+        // `b.rs` use is anchored (`c: Config`); `c.rs` use has an
+        // unprovable receiver, so the follow skips it: the intent claims
+        // the proven files, the unproven file stays ordinary, and the
+        // joint patch round-trips byte-identical.
+        let b_pre = "fn f(c: Config) -> u32 {\n    c.timeout_ms\n}\n";
+        let c_pre = "fn h(x: Other) -> u32 {\n    x.timeout_ms\n}\n";
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -2,1 +2,1 @@\n-    timeout_ms: u32,\n+    deadline_ms: u32,\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -2,1 +2,1 @@\n-    c.timeout_ms\n+    c.deadline_ms\n",
+            ),
+            section(
+                "c.rs",
+                "@@ -2,1 +2,1 @@\n-    x.timeout_ms\n+    x.deadline_ms\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", XDEF_PRE), ("b.rs", b_pre), ("c.rs", c_pre)]);
+        let mut used = Vec::new();
+        let (out, path, _) =
+            try_member_intent_sweep(&sections, &pre, &mut used).expect("partial must fire");
+        assert_eq!(path, "a.rs");
+        assert_eq!(out.len(), 2, "proven collapse + one ordinary, got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[1].contains("x.deadline_ms"), "got:\n{}", out[1]);
+        // Joint apply reproduces the full native post.
+        let joint = out.join("");
+        validated_live(&joint, &pre);
+        let parsed = rsmpl_patch::parse_patch(&joint).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["b.rs"].contains("c.deadline_ms"),
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(
+            files["c.rs"].contains("x.deadline_ms"),
+            "got: {}",
+            files["c.rs"]
+        );
+    }
+
+    #[test]
+    fn cross_file_single_use_section_stays_single_file() {
+        // One def + one use in the same single section is the
+        // single-file detector's shape — the cross-file pre-pass must not
+        // steal it (canonical bytes stay stable).
+        let raw = section(
+            "f.rs",
+            concat!(
+                "@@ -2,1 +2,1 @@\n",
+                "-    old: u32,\n",
+                "+    new: u32,\n",
+                "@@ -6,1 +6,1 @@\n",
+                "-    a.old\n",
+                "+    a.new\n",
+            ),
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "struct S {\n    old: u32,\n}\nfn f(a: S) -> u32 {\n    a.old\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_member_intent_sweep(std::slice::from_ref(&raw), &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn cross_file_variant_fires_and_round_trips() {
+        // Variant path shares the pre-pass: enum def in one file, `E::Old`
+        // tails in another.
+        let a_pre = "enum Status {\n    Active(u32),\n    Idle,\n}\n";
+        let b_pre = "fn f(s: Status) -> u32 {\n    let a = Status::Active(1);\n    0\n}\n";
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -2,1 +2,1 @@\n-    Active(u32),\n+    Ready(u32),\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -2,1 +2,1 @@\n-    let a = Status::Active(1);\n+    let a = Status::Ready(1);\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
+        let mut used = Vec::new();
+        let (out, path, _) =
+            try_member_intent_sweep(&sections, &pre, &mut used).expect("variant must fire");
+        assert_eq!(path, "a.rs");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["b.rs"].contains("Status::Ready(1)"),
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(!files["b.rs"].contains("Active"), "got: {}", files["b.rs"]);
     }
 }
