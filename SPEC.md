@@ -1439,15 +1439,22 @@ file: src/lib.rs
 reason: `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable)
 ```
 
-Impl/trait-context header values are advisory, not filters: the engine
-checks the header first (impl: the block's self type or trait path
-mentions a header token; trait: the header names the trait ident), but
-on mismatch it falls back to range-overlap gating — any `impl` (resp.
-`trait`) block overlapping the old range is accepted and the inner fn
-match decides. To target one block, scope the range to that block;
-to sweep every block, use `# scope=file` with `@@ -1,1 @@`.
-Under `# scope=file` the header gate is skipped entirely (header purely
-advisory): both halves sweep every block whose methods match.
+Impl/trait-context header values are filters: the engine parses the
+header once and compares it structurally against each candidate
+block — `quote!`-normalized, so authored spacing never matters. An
+`impl` header matches only the `impl` block with the equal self type
+and equal trait path (inherent impls: no trait half on either side);
+a trait-impl header (`impl Tr for S`) requires both halves equal; a
+`trait` header matches only the trait block with the equal ident and
+equal generics. Kind halves never mix. The comparison applies under
+every scope, including `# scope=file` with `@@ -1,1 @@`: to rewrite
+methods in K blocks, write K hunks (one header per block — the
+`diffrs` slot/sig-evolution emitters do exactly this, sharing one
+rule name). A header that parses as neither `impl` nor `trait`
+matches nothing: the hunk fails loud with zero-match instead of
+guessing a block. Copy the header verbatim from the file (modulo
+whitespace); a mistyped header rewrites nothing, never the wrong
+block.
 
 ---
 
@@ -6502,9 +6509,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   params/return/where byte-equal, heterogeneous across sites, one
   shared `Old`→`New` delta). Uniformly column-0 sites emit the
   free-fn sweep (`- V Q fn Old G (...) W {` /
-  `+ V Q fn New G (...) W {`); uniformly indented sites emit the
-  `impl Svc` advisory-context sweep (T323: header names no block,
-  all blocks rewrite). Mixed indent or divergent deltas stay
+  `+ V Q fn New G (...) W {`); uniformly indented sites emit one
+  hunk per enclosing `impl` block with the block's verbatim header
+  line from the pre-image (Section 13.4: the engine filter matches
+  only the named block), all sharing the `rename_Old_to_New` rule
+  name; each hunk clears its own engine probe (twin headers veto to
+  ordinary). Mixed indent or divergent deltas stay
   passthrough. The slot sweep is the zero-delta (rename-only) special
   case of the signature-evolution sweep below; both detectors run, slot
   first, and rename-only classes never reach evolution.
@@ -6527,8 +6537,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   engine's slots are all-or-nothing: `...`, concrete, or omitted).
   Pre-image totality is the generic engine-count check: the emitted
   minus header must match exactly N fn items in the pre-image
-  (macro/string twins never count — the engine never enters them).
-  Detector name `sig_evolution`.
+  (macro/string twins never count — the engine never enters them);
+  indented classes emit one verbatim-header hunk per enclosing `impl`
+  block, each probed separately. Detector name `sig_evolution`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
@@ -7188,7 +7199,9 @@ Canonical RSmPL is what `diffrs` emits and what cycle comparisons
 compare: diet spelling (tight ranges or `# sweep`, inferred
 metavariables, terse renames), directives in fixed order, files in
 canonical order with hunks in document order, one hunk per detector
-class per file. Two comparators share this form: pure
+class per file — except per-block impl/trait-context hunks (slot /
+sig-evolution over K blocks), which share one rule name across K
+hunks in document order. Two comparators share this form: pure
 `rsmpl_patch::canonicalize` (parse → re-emit) preserves the authored
  locality spelling, while `rsmpl_engine::canonicalize_with_tree`
  matches every `allow == many` hunk against the pre-image tree and

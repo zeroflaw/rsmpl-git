@@ -1,7 +1,37 @@
 diff --git src/lib.rs
-@@ -11,21 @@ rule=sweep_impl
+@@ -11,3 @@ rule=r1
 # allow=many
-  impl Svc {
+  impl A {
+      ...
+-     V Q fn old_name G (...) W {
++     V Q fn new_name G (...) W {
+          ...
+      }
+  }
+diff --git src/lib.rs
+@@ -17,3 @@ rule=r1
+# allow=many
+  impl<T: Clone> B<T> {
+      ...
+-     V Q fn old_name G (...) W {
++     V Q fn new_name G (...) W {
+          ...
+      }
+  }
+diff --git src/lib.rs
+@@ -23,3 @@ rule=r1
+# allow=many
+  impl C {
+      ...
+-     V Q fn old_name G (...) W {
++     V Q fn new_name G (...) W {
+          ...
+      }
+  }
+diff --git src/lib.rs
+@@ -29,3 @@ rule=r1
+# allow=many
+  impl crate::T for D {
       ...
 -     V Q fn old_name G (...) W {
 +     V Q fn new_name G (...) W {

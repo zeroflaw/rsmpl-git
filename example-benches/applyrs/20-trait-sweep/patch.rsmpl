@@ -1,7 +1,19 @@
 diff --git src/lib.rs
 @@ -1,1 @@ rule=sweep_trait
 # sweep
-  trait ZZZ {
+  trait T {
+-     fn old_name(...);
++     fn new_name(...);
+  }
+@@ -1,1 @@ rule=sweep_trait
+# sweep
+  trait U<T: Clone> {
+-     fn old_name(...);
++     fn new_name(...);
+  }
+@@ -1,1 @@ rule=sweep_trait
+# sweep
+  trait V {
 -     fn old_name(...);
 +     fn new_name(...);
   }

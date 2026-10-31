@@ -34,14 +34,20 @@ pub fn apply_impl_context_hunk(
             ))
         }
     };
+    // WI-4a: the header is a filter in every scope (SPEC 13.4). It is
+    // parsed once into an `ImplHeaderFilter` and compared
+    // structurally against each candidate block — `quote!`-normalized,
+    // so authored spacing never matters. The old advisory fallbacks
+    // (token-containment mention, range-overlap acceptance, the
+    // `# scope=file` skip) are deleted: only the named block matches,
+    // and an unparseable header matches nothing (loud zero-match).
+    let filter = rsmpl_pattern::parse_impl_header(&impl_header);
     let rule = hunk.rule_name();
     // Method-context covers `impl` blocks (existing behavior) and `trait`
     // blocks (T182: `;` declarations + default bodies via `TraitItem::Fn`).
     // The pattern header picks the half: an `impl` header never matches a
-    // trait block and vice versa.
+    // trait block and vice versa (enforced inside `impl_block_matches`).
     let want_trait = rsmpl_pattern::is_trait_header(&impl_header);
-    // Find the block whose header matches (whitespace-normalized).
-    let want = impl_header.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut matched = 0;
     for it in &parsed.items {
         // Resolve each item to a borrowable method list; other items (incl.
@@ -56,45 +62,13 @@ pub fn apply_impl_context_hunk(
         )> = Vec::new();
         match it {
             syn::Item::Impl(imp) if !want_trait => {
-                // T336: under `# scope=file` the header is purely advisory
-                // (SPEC 13.4) — every `impl` block is scanned and the inner
-                // fn match decides, giving impl/trait sweep parity.
-                if hunk.scope() != Scope::File {
-                    let header_tokens: Vec<&str> = want.split_whitespace().collect();
-                    // Verify the impl's self type + optional trait match the pattern by
-                    // comparing normalized renderings.
-                    let pat_self = header_tokens.join(" ");
-                    let self_ty = &imp.self_ty;
-                    let got_self = quote::quote!(#self_ty)
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let got_trait = imp
-                        .trait_
-                        .as_ref()
-                        .map(|(_, p, _)| {
-                            quote::quote!(#p)
-                                .to_string()
-                                .split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .unwrap_or_default();
-                    let pat_has_trait = pat_self.contains(&got_trait) && !got_trait.is_empty();
-                    let pat_mentions_self = header_tokens.iter().any(|t| {
-                        got_self.split_whitespace().any(|g| g == *t) || pat_self.contains(&got_self)
-                    });
-                    if !pat_has_trait && !pat_mentions_self {
-                        // Fallback: accept impl blocks overlapping the range and let the
-                        // inner fn match decide (range-gated).
-                        let s = it.span().start().line as u32;
-                        let e = it.span().end().line as u32;
-                        let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-                        if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
-                            continue;
-                        }
-                    }
+                // WI-4a: strict filter — no advisory fallback, no
+                // range-overlap acceptance. Only the named block matches.
+                let pass = filter
+                    .as_ref()
+                    .is_some_and(|f| rsmpl_pattern::impl_block_matches(f, it));
+                if !pass {
+                    continue;
                 }
                 for item in &imp.items {
                     if let syn::ImplItem::Fn(m) = item {
@@ -103,23 +77,13 @@ pub fn apply_impl_context_hunk(
                 }
             }
             syn::Item::Trait(t) if want_trait => {
-                // T336: under `# scope=file` the header is purely advisory
-                // (SPEC 13.4) — every `trait` block is scanned, impl parity.
-                if hunk.scope() != Scope::File {
-                    // T182: the header names the trait ident
-                    // (`trait T<U>: B ...` → `T`). Anything else (attribute
-                    // lines, garbage) falls back to the range-overlap check so
-                    // a mistyped header fails as no-match, never a wrong match.
-                    let ident_ok = rsmpl_pattern::trait_header_ident(&impl_header)
-                        .is_some_and(|w| t.ident == w);
-                    if !ident_ok {
-                        let s = it.span().start().line as u32;
-                        let e = it.span().end().line as u32;
-                        let end = hunk.header.old_start + hunk.header.old_len.saturating_sub(1);
-                        if !(s <= end.max(hunk.header.old_start) && e >= hunk.header.old_start) {
-                            continue;
-                        }
-                    }
+                // WI-4a: strict filter, impl parity — only the named
+                // trait block matches; garbage headers match nothing.
+                let pass = filter
+                    .as_ref()
+                    .is_some_and(|f| rsmpl_pattern::impl_block_matches(f, it));
+                if !pass {
+                    continue;
                 }
                 for item in &t.items {
                     if let syn::TraitItem::Fn(f) = item {

@@ -2,14 +2,14 @@ diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -11 +11 @@
--    fn old_name(&self) -> i32 {
-+    fn new_name(&self) -> i32 {
+-    fn old_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {
++    fn new_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {
 @@ -17 +17 @@
--    fn old_name(&self) -> i32 {
-+    fn new_name(&self) -> i32 {
+-    fn old_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> Result<i32, Error> {
++    fn new_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> Result<i32, Error> {
 @@ -23 +23 @@
--    fn old_name(&self) -> i32 {
-+    fn new_name(&self) -> i32 {
+-    fn old_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument, third_argument: ThirdLongTypeArgument) -> Vec<i32> {
++    fn new_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument, third_argument: ThirdLongTypeArgument) -> Vec<i32> {
 @@ -29 +29 @@
--    fn old_name(&self) -> i32 {
-+    fn new_name(&self) -> i32 {
+-    fn old_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument, third_argument: ThirdLongTypeArgument) -> i32 {
++    fn new_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument, third_argument: ThirdLongTypeArgument) -> i32 {

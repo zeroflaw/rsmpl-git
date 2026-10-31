@@ -1,7 +1,27 @@
 diff --git src/lib.rs
-@@ -6,15 @@ rule=r1
+@@ -6,3 @@ rule=r1
 # allow=many
-  impl Svc {
+  impl Alpha {
+      ...
+-     fn run(...) {
++     fn execute(...) -> u64 {
+          ...
+      }
+  }
+diff --git src/lib.rs
+@@ -12,3 @@ rule=r1
+# allow=many
+  impl Beta {
+      ...
+-     fn run(...) {
++     fn execute(...) -> u64 {
+          ...
+      }
+  }
+diff --git src/lib.rs
+@@ -18,3 @@ rule=r1
+# allow=many
+  impl Gamma {
       ...
 -     fn run(...) {
 +     fn execute(...) -> u64 {

@@ -37,8 +37,8 @@ below).
 | 16-symbol-sweep | `Old`→`New` rewrites 5 qualified `crate::old_api` sites, bare/other distractors untouched | 152 B / 8 ln | 425 B / 14 ln | 64% |
 | 17-macro-sweep | `old_mac!`→`new_mac!` over 5 sites, `other_mac!` distractor untouched, 1 hunk | 110 B / 6 ln | 285 B / 14 ln | 61% |
 | 18-attrs-sweep | `V`/`Q`/`G`/`W` rename `foo`→`baz` over 4 attributed sigs, attrs preserved, `bar` untouched, 1 hunk | 122 B / 7 ln | 407 B / 15 ln | 70% |
-| 19-impl-sweep | 1 hunk renames `old_name`→`new_name` over 4 heterogeneous `impl` blocks, `;` decl + free fn untouched | 156 B / 10 ln | 391 B / 15 ln | 60% |
-| 20-trait-sweep | 1 hunk renames `old_name`→`new_name` over 3 heterogeneous `trait` blocks (`;` decls + default body), `impl` + free fn untouched | 124 B / 7 ln | 303 B / 12 ln | 59% |
+| 19-impl-sweep | 4 verbatim-header hunks rename `old_name`→`new_name` over 4 heterogeneous `impl` blocks (WI-4a filter: one hunk names one block), `;` decl + free fn untouched | 576 B / 37 ln | 1227 B / 15 ln | 53% |
+| 20-trait-sweep | 3 verbatim-header hunks rename `old_name`→`new_name` over 3 heterogeneous `trait` blocks (long headers), `impl` + free fn untouched | 332 B / 19 ln | 891 B / 12 ln | 63% |
 | 21-if-cond-rewrite | 1 hunk rewrites `> 0`→`>= 0` in `if` conditions over 4 sites (WI-5a: condition hole binds per site, then/else blocks concrete) | 115 B / 5 ln | 411 B / 12 ln | 72% |
 | 22-match-scrutinee-rewrite | 1 hunk rewrites `_ => 2`→`_ => 3` in `match` arms over 4 sites (WI-5b: scrutinee hole binds per site, arms concrete) | 131 B / 5 ln | 463 B / 12 ln | 72% |
 | 23-let-else-init-rewrite | 1 hunk rewrites `return 0`→`return 1` in `let-else` diverges over 4 sites (WI-5b: `P`/`E` holes bind per site, diverge concrete) | 122 B / 5 ln | 359 B / 12 ln | 66% |
@@ -79,7 +79,7 @@ counts in the JSON report).
 | 21-qualified-call (6 sites, qualified-call sweep) | 981 B / 16 ln | 133 B / 5 ln | 86% |
 | 22-turbofish (6 sites, turbofish sweep with T hole) | 801 B / 16 ln | 105 B / 5 ln | 87% |
 | 23-macro-rename (5 sites, macro-rename sweep) | 671 B / 14 ln | 125 B / 6 ln | 81% |
-| 24-sig-evolution (3 sites, rename + return evolution, `impl` framing) | 383 B / 12 ln | 155 B / 10 ln | 60% |
+| 24-sig-evolution (3 sites, rename + return evolution, per-block `impl` hunks) | 807 B / 12 ln | 469 B / 30 ln | 42% |
 | 25-let-type-add (3 sites, let type-addition with P0/E0 holes, `impl` framing) | 458 B / 12 ln | 90 B / 5 ln | 80% |
 | 26-type-sweep (3 sites, type sweep with T hole, `impl` framing) | 513 B / 12 ln | 77 B / 5 ln | 85% |
 | 27-move-evolve (fn move + vis/name evolve, header-template paste) | 942 B / 56 ln | 183 B / 14 ln | 81% |

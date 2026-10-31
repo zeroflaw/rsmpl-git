@@ -259,8 +259,9 @@ fn slice_type_text(line: &str, ty: &syn::Type) -> Option<String> {
 /// where carry one uniform concrete delta, bodies untouched. Each pair
 /// is a single-line `{`-terminated header (`ItemFn`/`ImplItemFn`
 /// probe); uniformly column-0 sites emit the free-fn sweep, uniformly
-/// indented sites the `impl Svc` advisory-context sweep (`slot.rs`
-/// framing); mixed indent stays passthrough. Every non-name slot is
+/// indented sites one hunk per enclosing `impl` block with its
+/// verbatim header line (WI-4a: the engine header filter matches only
+/// the named block); mixed indent stays passthrough. Every non-name slot is
 /// either preserved (per-site minus == plus) or evolving (one uniform
 /// plus text; the base may be hetero). Emission spells uniform bases
 /// concrete (absent → omitted), hetero preserved bases as wildcards
@@ -275,7 +276,8 @@ fn slice_type_text(line: &str, ty: &syn::Type) -> Option<String> {
 /// evolving non-name slot is required. A concrete plus-side return
 /// drops the `where` wildcard (`-> T W` is unparsable); every other
 /// wildcard/concrete mix is probed legal. Totality is the engine-count
-/// check over the emitted minus header (`template_fn_holds`):
+/// check over the emitted minus header (`template_fn_holds` for free
+/// fns, one `probe_block_hunk` per block for methods):
 /// wildcard/`Any` slots match broadly, so an extra same-name fn
 /// anywhere in the file vetoes (the `slot_holds` posture). Detector
 /// name `sig_evolution`.
@@ -410,29 +412,48 @@ pub(crate) fn try_sig_evolution_sweep(
         ret_p.as_deref(),
         where_p.text("W").as_deref(),
     );
-    if !crate::totality::template_fn_holds(
-        path,
-        file_old,
-        &minus_header,
-        all_indented,
-        minuses.len(),
-    ) {
+    let rule = unique_rule(used_rules, "sig_evolution");
+    if all_indented {
+        // WI-4a: the engine header filter matches only the named block,
+        // so the old single advisory `impl Svc` hunk could no longer
+        // apply. Emit one hunk per enclosing `impl` block with its
+        // verbatim header line (slot.rs posture); each hunk clears its
+        // own engine probe (twin headers veto to ordinary).
+        let pre = file_old?;
+        let groups = super::block_headers::group_sites_by_impl_block(file_old, changed)?;
+        let mut out = String::new();
+        for g in &groups {
+            if !super::block_headers::probe_block_hunk(
+                path,
+                pre,
+                &g.header_line,
+                &minus_header,
+                &plus_header,
+                g.sites.len(),
+            ) {
+                return None;
+            }
+            out.push_str(&crate::semantic::item_emission_header(
+                path, &rule, file_old, &g.sites,
+            ));
+            out.push_str(&super::block_headers::block_hunk_body(
+                &g.header_line,
+                &minus_header,
+                &plus_header,
+            ));
+        }
+        return Some(out);
+    }
+    if !crate::totality::template_fn_holds(path, file_old, &minus_header, None, minuses.len()) {
         return None;
     }
-    let rule = unique_rule(used_rules, "sig_evolution");
     // Item-shape emission (slot.rs posture): fn patterns match whole
     // multi-line items, so the range must cover every changed item —
     // a header-line range could never match under Contained scope.
     let mut hunk = crate::semantic::item_emission_header(path, &rule, file_old, changed);
-    if all_indented {
-        hunk.push_str(&format!(
-            "  impl Svc {{\n      ...\n-     {minus_header}\n+     {plus_header}\n          ...\n      }}\n  }}\n"
-        ));
-    } else {
-        hunk.push_str(&format!(
-            "- {minus_header}\n+ {plus_header}\n      ...\n  }}\n"
-        ));
-    }
+    hunk.push_str(&format!(
+        "- {minus_header}\n+ {plus_header}\n      ...\n  }}\n"
+    ));
     Some(hunk)
 }
 /// One fn-header slot class.
@@ -1050,8 +1071,9 @@ mod tests {
 
     #[test]
     fn sig_evo_impl_context_fires() {
-        // Uniformly indented methods evolve under the `impl Svc`
-        // advisory framing (slot.rs shape with concrete slots).
+        // Uniformly indented methods evolve under the block's verbatim
+        // header (WI-4a filter: the header is literally `impl Svc`,
+        // so the verbatim emission reuses it).
         let raw = section(
             "f.rs",
             "@@ -2,1 +2,1 @@\n-    fn alpha(x: i32) -> i32 {\n+    fn beta(x: i32) -> u32 {\n@@ -5,1 +5,1 @@\n-    fn alpha(y: String) -> String {\n+    fn beta(y: String) -> u32 {\n",

@@ -1,20 +1,21 @@
-//! T337: impl-method slot-metavar sweep (`V`/`Q`/`G`/`W`, SPEC 14.3/14.4 + 13.4).
+//! WI-4a: impl-method slot-metavar sweep (`V`/`Q`/`G`/`W`, SPEC 14.3/14.4 + 13.4).
 //!
 //! T329 proved slot sweeps for free fns; T335 proved impl-context sweeps
 //! with concrete slots. The combination failed fast with verbatim
-//! `fn pattern must contain \`fn\` keyword` because `extract_fn_block`
-//! did not recognise a leading slot-metavar line (`V Q fn ...`) as the
-//! fn-block start. One hunk now renames `old_name` -> `new_name` across
-//! four heterogeneous methods (plain / `pub` / `async`+generics+`where` /
+//! `fn pattern must contain `fn` keyword` because `extract_fn_block`
+//! did not recognise a leading slot-metavar line as the fn-block start.
+//! Four verbatim-header hunks (WI-4a: one per block — the filter matches
+//! only the named block) rename `old_name` -> `new_name` across four
+//! heterogeneous methods (plain / `pub` / `async`+generics+`where` /
 //! trait-impl) while preserving every slot. Pins: apply, JSON
-//! `matches == 4` + spans, `--check` untouched.
+//! summed `matches == 4` + per-hunk spans, `--check` untouched.
 
 mod common;
 use common::*;
 
 const BEFORE: &str = "struct A;\nstruct B<T>(T);\nstruct C;\nstruct D;\n\nimpl A {\n    fn old_name(&self) -> i32 {\n        1\n    }\n}\n\nimpl B<i32> {\n    pub fn old_name(&self) -> i32 {\n        2\n    }\n}\n\nimpl C {\n    pub async fn old_name<T>(&self, x: T) -> T where T: Clone {\n        x.clone()\n    }\n}\n\nimpl crate::T for D {\n    fn old_name(&self) -> i32 {\n        4\n    }\n}\n\nfn old_name() -> i32 {\n    0\n}\n";
 
-const PATCH: &str = "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep_impl_slots\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl Svc {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n";
+const PATCH: &str = "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep_impl_slots\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl A {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n@@ -1,1 @@ rule=sweep_impl_slots\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl B<i32> {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n@@ -1,1 @@ rule=sweep_impl_slots\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl C {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n@@ -1,1 @@ rule=sweep_impl_slots\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl crate::T for D {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n";
 
 #[test]
 fn impl_slot_sweep_renames_all_four_preserving_slots() {
@@ -66,7 +67,13 @@ fn impl_slot_sweep_json_reports_four_matches_with_spans() {
     );
     let v: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
-    assert_eq!(v["rules"][0]["matches"], serde_json::json!(4), "got: {v}");
+    let total: i64 = v["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["matches"].as_i64().unwrap())
+        .sum();
+    assert_eq!(total, 4, "got: {v}");
 }
 
 #[test]

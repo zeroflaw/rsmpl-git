@@ -180,7 +180,9 @@ fn slot_metavars_rename_methods_inside_impl() {
     // T337: `V Q fn ... G (...) W` in method context failed fast with
     // `fn pattern must contain `fn` keyword` — `extract_fn_block` did not
     // recognise a leading slot-metavar line as the fn-block start.
-    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl Svc {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n";
+    // WI-4a: verbatim per-block headers (the filter matches only the
+    // named block) — one hunk per block, shared rule name.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl A {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n@@ -1,1 +1,1 @@ rule=x\n# scope=file\n# allow=many\n# visibility V\n# qualifier_list Q\n# generic_params G\n# where_clause W\n  impl B<i32> {\n      ...\n-     V Q fn old_name G (...) W {\n+     V Q fn new_name G (...) W {\n          ...\n      }\n  }\n";
     let src = "struct A;\nstruct B<T>(T);\nimpl A {\n    fn old_name(&self) -> i32 {\n        1\n    }\n}\nimpl B<i32> {\n    pub async fn old_name<T>(&self, x: T) -> T where T: Clone {\n        x.clone()\n    }\n}\n";
     let out = apply(patch, src).unwrap();
     assert!(out.contains("fn new_name(&self) -> i32"), "got: {out}");

@@ -10,8 +10,9 @@ use super::{ident_len, is_ident_char, item_emission_header, unique_rule};
 /// fn header differing in exactly the fn ident (vis/qual/generics/
 /// params/return/where byte-equal per site, heterogeneous across
 /// sites). Column-0 sites emit the free-fn slot sweep (T329 shape);
-/// uniformly indented sites emit the `impl Svc` advisory-context
-/// sweep (T337 shape); mixed indent stays passthrough.
+/// uniformly indented sites emit one hunk per enclosing `impl` block
+/// with its verbatim header line (WI-4a: the engine header filter
+/// matches only the named block); mixed indent stays passthrough.
 pub(crate) fn try_fn_slot_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -58,16 +59,41 @@ pub(crate) fn try_fn_slot_sweep(
         return None;
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
-    let mut hunk = item_emission_header(path, &rule, file_old, changed);
     if all_indented {
-        hunk.push_str(&format!(
-            "  impl Svc {{\n      ...\n-     V Q fn {old_name} G (...) W {{\n+     V Q fn {new_name} G (...) W {{\n          ...\n      }}\n  }}\n"
-        ));
-    } else {
-        hunk.push_str(&format!(
-            "- V Q fn {old_name} G (...) W {{\n+ V Q fn {new_name} G (...) W {{\n      ...\n  }}\n"
-        ));
+        // WI-4a: the engine header filter matches only the named block,
+        // so one advisory hunk can no longer sweep every block. Emit one
+        // hunk per enclosing `impl` block with its verbatim header line;
+        // all share the rule name (one intent, K hunks). Each hunk clears
+        // its own engine probe (twin headers veto to ordinary).
+        let pre = file_old?;
+        let groups = super::block_headers::group_sites_by_impl_block(file_old, changed)?;
+        let minus_fn = format!("V Q fn {old_name} G (...) W {{");
+        let plus_fn = format!("V Q fn {new_name} G (...) W {{");
+        let mut out = String::new();
+        for g in &groups {
+            if !super::block_headers::probe_block_hunk(
+                path,
+                pre,
+                &g.header_line,
+                &minus_fn,
+                &plus_fn,
+                g.sites.len(),
+            ) {
+                return None;
+            }
+            out.push_str(&item_emission_header(path, &rule, file_old, &g.sites));
+            out.push_str(&super::block_headers::block_hunk_body(
+                &g.header_line,
+                &minus_fn,
+                &plus_fn,
+            ));
+        }
+        return Some(out);
     }
+    let mut hunk = item_emission_header(path, &rule, file_old, changed);
+    hunk.push_str(&format!(
+        "- V Q fn {old_name} G (...) W {{\n+ V Q fn {new_name} G (...) W {{\n      ...\n  }}\n"
+    ));
     Some(hunk)
 }
 

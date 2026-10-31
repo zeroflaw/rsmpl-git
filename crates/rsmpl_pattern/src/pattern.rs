@@ -17,7 +17,9 @@ use crate::pattern_classify::classify;
 use crate::pattern_ellipsis::validate_ellipsis_positions;
 use crate::quote_utils::validate_quoting;
 
-pub use crate::pattern_classify::{is_trait_header, trait_header_ident};
+pub use crate::pattern_classify::{
+    impl_block_matches, is_trait_header, parse_impl_header, trait_header_ident, ImplHeaderFilter,
+};
 pub use crate::pattern_evolution::{
     is_evolution_template, parse_const_evolution_template, parse_enum_evolution_template,
     parse_evolution_template, parse_fn_full_header_template, parse_mod_evolution_template,

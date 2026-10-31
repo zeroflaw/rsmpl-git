@@ -1110,6 +1110,37 @@ fn trait_header_ident_cases() {
 }
 
 #[test]
+fn impl_header_filter_cases() {
+    // WI-4a: structured header filter — `quote!`-normalized equality,
+    // kind halves never mix, garbage parses to `None` (matches nothing).
+    use rsmpl_pattern::{impl_block_matches, parse_impl_header};
+    let item = |src: &str| syn::parse_str::<syn::Item>(src).unwrap();
+    let f = parse_impl_header("impl A {").unwrap();
+    assert!(!f.want_trait);
+    assert!(impl_block_matches(&f, &item("impl A {}")));
+    assert!(!impl_block_matches(&f, &item("impl B {}")));
+    // Trait-impl needs both halves; inherent `impl A` has no trait half.
+    let g = parse_impl_header("impl crate::T for D {").unwrap();
+    assert!(impl_block_matches(&g, &item("impl crate::T for D {}")));
+    assert!(!impl_block_matches(&g, &item("impl D {}")));
+    assert!(!impl_block_matches(&g, &item("impl crate::T for E {}")));
+    // Inherent header never matches a trait-impl block and vice versa.
+    assert!(!impl_block_matches(&f, &item("impl crate::T for A {}")));
+    // Trait headers match ident + generics; `impl` blocks never match.
+    let t = parse_impl_header("trait T<U: Clone> {").unwrap();
+    assert!(t.want_trait);
+    assert!(impl_block_matches(&t, &item("trait T<U: Clone> {}")));
+    assert!(!impl_block_matches(&t, &item("trait T<U: Debug> {}")));
+    assert!(!impl_block_matches(&t, &item("impl T {}")));
+    // Spacing-insensitive on both sides; garbage matches nothing.
+    let h = parse_impl_header("impl<T:Clone>B<T>{").unwrap();
+    assert!(impl_block_matches(&h, &item("impl <T : Clone> B <T> {}")));
+    assert!(parse_impl_header("#[cfg(x)]").is_none());
+    assert!(parse_impl_header("impl A").is_none());
+    assert!(parse_impl_header("struct S {").is_none());
+}
+
+#[test]
 fn evolution_template_accepts_restricted_visibility() {
     // WI-history-70d72c0: `diffrs` emits `pub(crate)`-prefixed evolution
     // pastes for vis-only fn moves; the template gate must accept every

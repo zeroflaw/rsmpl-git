@@ -3,19 +3,19 @@ struct Beta;
 struct Gamma;
 
 impl Alpha {
-    fn execute(&self, x: i32) -> u64 {
+    fn execute(&self, first_argument: FirstLongTypeArgument) -> u64 {
         x + 1
     }
 }
 
 impl Beta {
-    fn execute(&self, y: String) -> u64 {
+    fn execute(&self, second_argument: SecondLongTypeArgument, third_argument: ThirdLongTypeArgument) -> u64 {
         y
     }
 }
 
 impl Gamma {
-    fn execute(&self, z: u8) -> u64 {
+    fn execute(&self, fourth_argument: FourthLongTypeArgument, fifth_argument: FifthLongTypeArgument, sixth_argument: SixthLongTypeArgument) -> u64 {
         z
     }
 }

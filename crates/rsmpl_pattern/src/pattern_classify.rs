@@ -172,6 +172,27 @@ fn has_trait_keyword(text: &str) -> bool {
     }
     false
 }
+/// Word-bounded `impl` keyword opening a block header (`impl A ...`,
+/// `impl<T> B<T> ...`, `unsafe impl ...`). Accepts whitespace or `<`
+/// after the keyword so generic headers (`impl<T: Clone> B<T> {`)
+/// route to method-context matching; anything else is not a header.
+fn has_impl_keyword(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i..].starts_with(b"impl")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes
+                .get(i + 4)
+                .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<')
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
 #[allow(clippy::too_many_lines)]
 pub(crate) fn classify(
     minus_raw: &str,
@@ -368,7 +389,7 @@ pub(crate) fn classify(
     // `TraitItem::Fn` (`;` declarations and default bodies) through the
     // shared slot planner; `impl` is checked first so a pathological
     // both-match stays deterministic.
-    if (c.contains("impl ") || is_trait_context(c)) && looks_like_fn(m, table) {
+    if (has_impl_keyword(c) || is_trait_context(c)) && looks_like_fn(m, table) {
         let impl_header = c.lines().next().unwrap_or("").to_string();
         return Ok(PatternKind::ImplContext { impl_header });
     }
@@ -597,9 +618,98 @@ fn is_trait_context(context_raw: &str) -> bool {
     context_raw.lines().any(is_trait_header)
 }
 
+/// Structured `impl`/`trait`-context header filter (WI-4a, SPEC 13.4).
+///
+/// The header an agent writes names exactly one block; matching is
+/// structured equality over `quote!`-normalized tokens, never
+/// containment or range overlap. `unsafe` is ignored (T185 routes
+/// unsafe headers identically). Copy the header verbatim from the
+/// file and only the named block matches — in every scope, including
+/// `# sweep`.
+pub struct ImplHeaderFilter {
+    /// True for `trait` headers (match `Item::Trait` only), false for
+    /// `impl` headers (match `Item::Impl` only).
+    pub want_trait: bool,
+    /// `impl` half: normalized trait path (`""` for inherent impls and
+    /// trait declarations); `trait` half: the declared ident.
+    pub trait_path: String,
+    /// Normalized self type (`impl` headers only; `""` otherwise).
+    pub self_ty: String,
+    /// Normalized generics (`trait` declarations only; `""` otherwise).
+    pub generics: String,
+}
+
+/// Whitespace-normalized token rendering: both the authored header and
+/// every candidate block pass through `quote!`, so authored spacing
+/// never matters (`impl<T:Clone> B<T>` and `impl < T : Clone > B < T >`
+/// compare equal).
+fn norm_tokens(t: &impl quote::ToTokens) -> String {
+    quote::quote!(#t)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Parse an impl/trait-context header line into its filter.
+/// `None` when the line does not parse as an `impl`/`trait` item
+/// header (garbage, attributes) — the engine then matches nothing,
+/// failing loud as zero-match instead of guessing a block.
+pub fn parse_impl_header(header: &str) -> Option<ImplHeaderFilter> {
+    let t = header.trim();
+    if !t.ends_with('{') {
+        return None;
+    }
+    let item: syn::Item = syn::parse_str(&format!("{t}}}")).ok()?;
+    match item {
+        syn::Item::Impl(imp) => {
+            let self_ty = norm_tokens(&imp.self_ty);
+            let trait_path = imp
+                .trait_
+                .as_ref()
+                .map(|(_, p, _)| norm_tokens(p))
+                .unwrap_or_default();
+            Some(ImplHeaderFilter {
+                want_trait: false,
+                trait_path,
+                self_ty,
+                generics: String::new(),
+            })
+        }
+        syn::Item::Trait(tr) => Some(ImplHeaderFilter {
+            want_trait: true,
+            trait_path: tr.ident.to_string(),
+            self_ty: String::new(),
+            generics: norm_tokens(&tr.generics),
+        }),
+        _ => None,
+    }
+}
+
+/// Does a candidate block satisfy a parsed header filter? Kind halves
+/// never mix: an `impl` header matches no `trait` block and vice
+/// versa. Both sides are `quote!`-normalized (see `norm_tokens`).
+pub fn impl_block_matches(filter: &ImplHeaderFilter, item: &syn::Item) -> bool {
+    match item {
+        syn::Item::Impl(imp) if !filter.want_trait => {
+            if norm_tokens(&imp.self_ty) != filter.self_ty {
+                return false;
+            }
+            let trait_path = imp
+                .trait_
+                .as_ref()
+                .map(|(_, p, _)| norm_tokens(p))
+                .unwrap_or_default();
+            trait_path == filter.trait_path
+        }
+        syn::Item::Trait(tr) if filter.want_trait => {
+            tr.ident == filter.trait_path && norm_tokens(&tr.generics) == filter.generics
+        }
+        _ => false,
+    }
+}
 /// Ident a `trait` header line declares (`trait T<U>: B ...` → `T`; T182).
-/// `None` when the line is not a trait header (attribute lines, garbage) —
-/// callers fall back to range-overlap behavior instead of guessing.
+/// `None` when the line is not a trait header (attribute lines, garbage).
 pub fn trait_header_ident(header: &str) -> Option<String> {
     let t = header.trim_start();
     let rest = t

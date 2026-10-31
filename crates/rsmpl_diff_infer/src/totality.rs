@@ -477,8 +477,10 @@ pub(crate) fn strip_holds(
 }
 
 /// N-site slot totality: free `fn old` (file + inline mods) when
-/// `indented` is false, else `impl`-block methods named `old` (advisory
-/// header scans every impl under `# scope=file`; trait blocks excluded).
+/// `indented` is false, else `impl`-block methods named `old`. The
+/// whole-file count is a pre-gate only: per-block emissions each clear
+/// their own engine probe (`probe_block_hunk`), which also enforces the
+/// WI-4a header filter. Trait-block methods are excluded.
 pub(crate) fn slot_holds(
     file_old: Option<&str>,
     old: &str,
@@ -789,14 +791,17 @@ pub(crate) fn template_expr_holds(
 }
 
 /// Generic template totality for fn-header sweeps (WI-4c): the emitted
-/// minus header template `minus_header` (e.g. `fn old (...)`, concrete
-/// evolving slots, preserved slots omitted or `(...)`) must match exactly
-/// `n` fn items in the pre-image file. Counted by the engine itself,
-/// not by a hand-rolled syntactic walk: a `# sweep` self-rewrite probe
-/// (`- H` / `+ H` with a `...` body, `impl Svc` wrapper when
-/// `indented`) is compiled and engine-applied to a scratch tree and its
-/// match count must equal `n` (the `template_type_holds` prescription
-/// lifted to items). `None` pre-image keeps the legacy allow; probe
+/// minus header `minus_header` (e.g. `fn old (...)`, concrete slots,
+/// preserved slots omitted or `(...)`) must match exactly `n` fn items
+/// in the pre-image file. Counted by the engine itself, not by a
+/// hand-rolled syntactic walk: a `# sweep` self-rewrite probe
+/// (`- H` / `+ H` with a `...` body, wrapped in `header` when `Some`)
+/// is compiled and engine-applied to a scratch tree and its match
+/// count must equal `n` (the `template_type_holds` prescription lifted
+/// to items). Free-fn probes pass `None`; method probes pass the block's
+/// verbatim header line (`Some("impl Svc {")`) — under the WI-4a header
+/// filter an unwrapped method probe counts nothing, and a wrong-header
+/// probe vetoes. `None` pre-image keeps the legacy allow; probe
 /// parse/apply failure vetoes. Opaque positions need no extra veto:
 /// the engine never matches fn items inside macro bodies or string
 /// literals. Conservative by construction: the sweep probe counts
@@ -807,7 +812,7 @@ pub(crate) fn template_fn_holds(
     path: &str,
     file_old: Option<&str>,
     minus_header: &str,
-    indented: bool,
+    header: Option<&str>,
     n: usize,
 ) -> bool {
     if n == 0 || minus_header.contains('\n') {
@@ -816,12 +821,11 @@ pub(crate) fn template_fn_holds(
     let Some(pre) = file_old else {
         return true;
     };
-    let body = if indented {
-        format!(
-            "  impl Svc {{\n      ...\n-     {minus_header}\n+     {minus_header}\n          ...\n      }}\n  }}\n"
-        )
-    } else {
-        format!("- {minus_header}\n+ {minus_header}\n      ...\n  }}\n")
+    let body = match header {
+        Some(h) => format!(
+            "  {h}\n      ...\n-     {minus_header}\n+     {minus_header}\n          ...\n      }}\n  }}\n"
+        ),
+        None => format!("- {minus_header}\n+ {minus_header}\n      ...\n  }}\n"),
     };
     // WI-2c: self-rewrite counting device — `# optional` exempts the
     // sweep change gate (verdicts unchanged).
@@ -1504,7 +1508,7 @@ mod tests {
             "f.rs",
             Some(pre),
             "V Q fn alpha(...) {",
-            false,
+            None,
             2
         ));
         // Concrete slots narrow the domain: the params-concrete probe
@@ -1514,7 +1518,7 @@ mod tests {
             "f.rs",
             Some(pre),
             "fn alpha(x : i32) {",
-            false,
+            None,
             2
         ));
         let pre_single =
@@ -1523,24 +1527,33 @@ mod tests {
             "f.rs",
             Some(pre_single),
             "fn alpha(x : i32) {",
-            false,
+            None,
             1
         ));
-        // Indented probes wrap in `impl Svc` and count methods.
+        // Method probes wrap in the block's verbatim header line and
+        // count methods through the WI-4a filter.
         let pre_impl =
             "impl Svc {\n    fn alpha(x: i32) -> i32 {\n        x\n    }\n    fn alpha(y: String) -> String {\n        y\n    }\n}\n";
         assert!(crate::totality::template_fn_holds(
             "f.rs",
             Some(pre_impl),
             "fn alpha(...) {",
-            true,
+            Some("impl Svc {"),
+            2
+        ));
+        // A wrong header matches nothing by construction.
+        assert!(!crate::totality::template_fn_holds(
+            "f.rs",
+            Some(pre_impl),
+            "fn alpha(...) {",
+            Some("impl Other {"),
             2
         ));
         assert!(!crate::totality::template_fn_holds(
             "f.rs",
             Some(pre_impl),
             "fn alpha(...) {",
-            false,
+            None,
             2
         ));
     }
@@ -1550,7 +1563,7 @@ mod tests {
             "f.rs",
             None,
             "fn alpha(...) {",
-            false,
+            None,
             2
         ));
         let pre = "fn m() {}\n";
@@ -1558,21 +1571,21 @@ mod tests {
             "f.rs",
             Some(pre),
             "fn alpha(...) {",
-            false,
+            None,
             2
         ));
         assert!(!crate::totality::template_fn_holds(
             "f.rs",
             Some(pre),
             "fn alpha(",
-            false,
+            None,
             2
         ));
         assert!(!crate::totality::template_fn_holds(
             "f.rs",
             Some(pre),
             "fn alpha(...) {",
-            false,
+            None,
             0
         ));
     }

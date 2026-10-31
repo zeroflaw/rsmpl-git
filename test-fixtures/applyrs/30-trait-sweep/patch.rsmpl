@@ -1,9 +1,19 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=sweep_trait
-# scope=file
+@@ -1,3 @@ rule=sweep_trait
 # allow=many
-# lang=rust
-  trait ZZZ {
+  trait T {
+-     fn old_name(...);
++     fn new_name(...);
+  }
+@@ -5,3 @@ rule=sweep_trait
+# allow=many
+  trait U<T: Clone> {
+-     fn old_name(...);
++     fn new_name(...);
+  }
+@@ -9,5 @@ rule=sweep_trait
+# allow=many
+  trait V {
 -     fn old_name(...);
 +     fn new_name(...);
   }

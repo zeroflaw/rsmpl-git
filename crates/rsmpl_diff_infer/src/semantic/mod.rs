@@ -15,6 +15,7 @@
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
 pub(crate) mod antiunify;
+mod block_headers;
 mod calls;
 pub(crate) mod chain;
 mod deletes;
@@ -1153,9 +1154,13 @@ mod tests {
             "f.rs",
             "impl T {\n    fn old_method_name(&self, first_argument: FirstLongType) {\n        1\n    }\n    pub fn old_method_name(&self, first_argument: FirstLongType) {\n        2\n    }\n}\n",
         )]);
-        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        // WI-4a: verbatim block header (the engine filter matches only
+        // the named block); needs the pre-image — without it the
+        // header is unprovable and the class stays ordinary.
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
         validated_live(&out, &pre);
-        assert!(out.contains("impl Svc {\n"), "got: {out}");
+        assert!(out.contains("  impl T {\n"), "got: {out}");
+        assert!(!out.contains("impl Svc"), "got: {out}");
         assert!(
             out.contains("-     V Q fn old_method_name G (...) W {\n"),
             "got: {out}"
