@@ -199,9 +199,9 @@ context would be larger, so these are lower bounds.)
 | 29-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 670 B / 18 ln | 144 B / 7 ln | 79% |
 | 30-arg-template (5 sites, wrap migration `use_it(x)` → `use_it(x.clone())`, 1 hunk) | 470 B / 14 ln | 88 B / 5 ln | 81% |
 | 31-collection-move (5 helpers move files, one `# allow=many` cut + one paste) | 1720 B / 117 ln | 156 B / 13 ln | 91% |
-| 33-macro-rules-rename (`macro_rules!` def + 4 uses, 2 hunks sharing one rule) | 637 B / 15 ln | 253 B / 10 ln | 60% |
-| 34-field-rename (field def + 5 uses incl. shorthand expansion, 1 hunk with `# follow=uses`) | 1444 B / 21 ln | 170 B / 7 ln | 88% |
-| 35-variant-rename (variant def + 4 uses incl. `use` segment, 1 hunk with `# follow=uses`) | 793 B / 17 ln | 133 B / 7 ln | 83% |
+| 32-macro-rules-rename (`macro_rules!` def + 4 uses, 2 hunks sharing one rule) | 637 B / 15 ln | 253 B / 10 ln | 60% |
+| 33-field-rename (field def + 5 uses incl. shorthand expansion, 1 hunk with `# follow=uses`) | 1444 B / 21 ln | 170 B / 7 ln | 88% |
+| 34-variant-rename (variant def + 4 uses incl. `use` segment, 1 hunk with `# follow=uses`) | 793 B / 17 ln | 133 B / 7 ln | 83% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic
