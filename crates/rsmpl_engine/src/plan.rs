@@ -218,6 +218,9 @@ fn apply_inner(
     // failures are loud, abstentions stay `reparse-only`. (Type lives in
     // `postcheck_follow` so `plan.rs` stays under the file-size gate.)
     let mut follow_probe_pending: Vec<crate::postcheck_follow::FollowJob> = Vec::new();
+    // WI-6b: same-file `follow` bytes per (rule, file); map type + helpers
+    // live in `postcheck_follow` so this file stays under the size gate.
+    let mut def_follow_pending: crate::postcheck_follow::DefFollowMap = HashMap::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     for (sec_idx, section) in patch.files.iter().enumerate() {
@@ -520,6 +523,16 @@ fn apply_inner(
                             crate::edits::edit_span_labels(new_edits),
                         )
                     };
+                    // WI-6b: record `follow` bytes for the byte-exact probe.
+                    {
+                        let edits = file_edits.get(path).expect("file state");
+                        crate::postcheck_follow::record_def_follow(
+                            &mut def_follow_pending,
+                            &rule,
+                            path,
+                            &edits[edits_before..],
+                        );
+                    }
                     // A non-insertion hunk carrying `# use=` has no v0.1 meaning.
                     if !rh.uses().is_empty()
                         && !matches!(
@@ -771,7 +784,7 @@ fn apply_inner(
                     // the post-materialization probe upgrades or fails
                     // loud. Labels ride along: use sites `follow`, WI-1
                     // impl-definition claims `rename`.
-                    for (file, matches, spans, labels) in extra_reports {
+                    for (file, matches, spans, labels, byte_edits) in extra_reports {
                         let span_labels = labels.into_iter().map(Some).collect();
                         let method_new = match &compiled.kind {
                             PatternKind::ImplContext { .. } => {
@@ -786,6 +799,7 @@ fn apply_inner(
                             file.clone(),
                             spans.clone(),
                             method_new,
+                            byte_edits,
                         ));
                         rule_order.push((
                             (sec_idx, hunk_idx),
@@ -847,7 +861,7 @@ fn apply_inner(
     // section order, then hunk order within a section).
     rule_order.sort_by_key(|(pos, _)| *pos);
     probe_pending.sort_by_key(|(pos, _, _, _, _)| *pos);
-    follow_probe_pending.sort_by_key(|(pos, _, _, _, _, _)| *pos);
+    follow_probe_pending.sort_by_key(|(pos, _, _, _, _, _, _)| *pos);
     report.rules.extend(rule_order.into_iter().map(|(_, r)| r));
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
@@ -986,24 +1000,19 @@ fn apply_inner(
             }
             // WI-6: same-file follow spans verify identically (helper owns
             // the subset probe; `rename` impl-def claims stay under WI-1).
-            let method_new = match &compiled.kind {
-                PatternKind::ImplContext { .. } => {
-                    crate::use_graph_method::method_follow_new_name(&rh, &compiled)
-                }
-                _ => None,
-            };
-            crate::postcheck_follow::verify_definition_follows(
+            crate::postcheck_follow::verify_definition_follows_recorded(
+                &rh,
                 &r.rule,
                 &r.file,
                 &r.spans,
                 &r.span_labels,
                 &compiled,
-                method_new.as_deref(),
                 &states,
                 &full_edits,
                 &post_text,
                 post_parsed.get(&r.file),
                 &range_desc,
+                &def_follow_pending,
             )?;
         }
     }

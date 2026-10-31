@@ -1013,7 +1013,13 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 /// (SPEC 14.8). Zero new def edits (optional zero-match) means nothing to
 /// WI-6b1: one follow-only entry per non-definition file touched by
 /// `# follow=uses`: (file, rewritten use-site count, line spans).
-pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>, Vec<String>)>;
+pub(crate) type FollowExtras = Vec<(
+    String,
+    usize,
+    Vec<(u32, u32)>,
+    Vec<String>,
+    Vec<(usize, usize, String)>,
+)>;
 
 /// Resolved follow edits per file: (path, [(start, end, replacement, label)]).
 /// Labels are WI-2 evidence only (`follow` for use sites, `rename` for
@@ -1399,7 +1405,11 @@ pub(crate) fn follow_uses_workspace(
             .iter()
             .map(|e| e.label.unwrap_or("follow").to_string())
             .collect();
-        extras.push((f.clone(), edits.len(), line_spans, labels));
+        let byte_edits: Vec<(usize, usize, String)> = edits
+            .iter()
+            .map(|(a, b, r, _)| (*a, *b, r.clone()))
+            .collect();
+        extras.push((f.clone(), edits.len(), line_spans, labels, byte_edits));
     }
     extras.sort_by(|a, b| a.0.cmp(&b.0));
     let mut skipped = outcome.skipped;

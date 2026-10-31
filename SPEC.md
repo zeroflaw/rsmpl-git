@@ -4854,7 +4854,12 @@ if:
       `follow`-labeled use span in the post-image must name the new ident
       as an exact ident token (same boundary discipline, so the
       shorthand `S { new: old }` verifies by its `new` token and a
-      reverted `S { old }` fails). Follow-only entries whose spans all
+      reverted `S { old }` fails). WI-6b tightens the probe to byte-exact:
+      each follow edit's recorded `(start, end, replacement)` triple maps
+      to a post-image byte offset (original offset plus the net delta of
+      earlier edits) and the post slice there must equal the replacement
+      with ident boundaries — a sibling `new` elsewhere on the same line
+      never satisfies the span. Follow-only entries whose spans all
       verify report `instantiated`; any missing span fails loud with
       `RSMPL_MATCH_CONFLICT`, never a silent downgrade. Same-file follow
       spans verify identically alongside the definition probe.
