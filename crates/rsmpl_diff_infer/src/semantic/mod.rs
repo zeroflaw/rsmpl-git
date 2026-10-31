@@ -20,6 +20,7 @@ mod arg_template;
 mod block_headers;
 mod calls;
 pub(crate) mod chain;
+pub(crate) mod control_template;
 mod deletes;
 pub(crate) mod general_expr;
 mod generalized;
@@ -75,6 +76,7 @@ pub(crate) use methods::{
 };
 pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
+pub(crate) use control_template::try_control_template_sweep;
 pub(crate) use general_expr::try_general_expr_sweep;
 pub(crate) use generalized::{
     try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep,

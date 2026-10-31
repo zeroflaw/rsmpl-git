@@ -32,7 +32,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 /// macro-rename → use-prefix → bare call → call-perm →
 /// call-arg-add →
 /// call-literal → call-arg-template → method-arg-template →
-/// general-expr → call-peel → let-type-add → type-sweep → let-template → untyped-let + pat-swap → sequence → repeat-fold → partial-strip → single-block → literal-frame. Returns the winning semantic section
+/// general-expr → control-template → call-peel → let-type-add → type-sweep → let-template → untyped-let + pat-swap → sequence → repeat-fold → partial-strip → single-block → literal-frame. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -186,6 +186,16 @@ pub(crate) fn run_pair_chain(
         super::try_general_expr_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((general, "general_expr"));
+    }
+    // WI-8b: control-position sweep (guard/arm-body/closure/condition/
+    // iterable/diverge/await-`?` subterms through the WI-6 core, bare
+    // emission + whole-file totality) — after the whole-line general
+    // sweep (those own whole-line expressions; this owns control
+    // fragments no earlier detector parses), before the peel sweep.
+    if let Some(control) =
+        super::try_control_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((control, "control_template"));
     }
     // T441: hetero-arg array-head-peel call migration
     // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);

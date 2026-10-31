@@ -7028,10 +7028,32 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `E0.timeout2`, `&E0` → `&mut E0`). No-delta and multi-hole
    classes stay ordinary. One `# allow=many` hunk (tight original
    range, Section D.5) with diet holes, no declarations. Pre-image
-  totality is the real-pair engine-count check
-  (`template_pair_holds`): the emitted pair must match exactly N
-  subterms in the pre-image — an untouched twin vetoes. Detector
-  name `general_expr`.
+   totality is the real-pair engine-count check
+   (`template_pair_holds`): the emitted pair must match exactly N
+   subterms in the pre-image — an untouched twin vetoes. Detector
+   name `general_expr`.
+  - Control-position sweep (WI-8b): N ≥ 2 `-`/`+` pairs whose changed
+   lines each carry the changed subterm in one uniform single-line
+   control position — match-arm guard (`_ if GUARD => …`), arm body
+   (`PAT => BODY`), closure body (bare `|x| BODY` or a `let` whose
+   init is a closure), `if`/`while` condition, `for` iterable (pattern
+   token-equal per pair), single-expression `let`-`else` diverge
+   (head token-equal per pair), or `await`/`?` base (whole-line or
+   `let`-init spelling, same wrapper both sides) — with all N pairs
+   extracting through the same position kind (mixed positions
+   decline). The subterm columns anti-unify through the WI-6
+   general-expression core (same ≤1-hole discipline, same macro/
+   unsupported vetoes); call-shaped subterms stay ordinary in v1
+   (no `Call`/`MethodCall` variant in the core). Emission is the bare
+   WI-6 template pair (`- E0 > 0` / `+ E0 >= 0`) in one `# allow=many`
+   hunk (tight original range, Section D.5); field-hole templates
+   carry the explicit `# expr E0` declaration diet inference omits
+   for field bases. Totality is the same whole-file real-pair check:
+   an untouched twin anywhere — including the same subterm in a
+   plain body expression — counts N+1 and vetoes to ordinary instead
+   of rewriting the body (position-scoped counting and control
+   frames in emission stay future work). Detector name
+   `control_template`.
   - Literal-frame sweep (WI-7): N ≥ 2 `-`/`+` pairs, each parsing as
   one `syn::Stmt` (expression statements, `let`s, `return`s, `const`/
   `static` items via `Stmt::Item`; header/attr/control lines fail to
