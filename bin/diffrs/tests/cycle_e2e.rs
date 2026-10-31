@@ -278,6 +278,7 @@ const CYCLE_OK: &[&str] = &[
     "110-new-file-move-single",
     "114-delete-single",
     "115-move-evolve-single",
+    "48-token-tree-arg-hole",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -364,10 +365,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "47-call-arg-wrap",
         "t375: single-line arg-wrap re-infers ordinary",
-    ),
-    (
-        "48-token-tree-arg-hole",
-        "nodet: per-arg token-tree hole re-infers as whole-body `...` verbatim sweep (raising declines token-tree holes)",
     ),
     (
         "49-struct-pat-let",

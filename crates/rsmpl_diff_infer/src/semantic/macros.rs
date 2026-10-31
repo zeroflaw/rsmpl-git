@@ -70,10 +70,64 @@ pub(crate) fn try_macro_rename_sweep(
         used_rules,
         &format!("macros_{}_to_{}", flat(&old_path), flat(&new_path)),
     );
+    // WI-17a: rename + hole — one varying stable position across sites
+    // rides a diet hole (`old_m!(E0, 1)` → `new_m!(E0, 1)`) when the
+    // holed pair proves its own real-pair totality (tighter wins). Any
+    // veto (arity, strings, multi-hole, per-site deltas, unmatched twin)
+    // falls back to the verbatim `...` below, whose own probe already
+    // passed above.
+    if let Some((holed_minus, holed_plus)) =
+        rename_hole_candidate(&old_path, &new_path, minuses, pluses)
+    {
+        if crate::totality::template_pair_holds(
+            path,
+            file_old,
+            &holed_minus,
+            &holed_plus,
+            minuses.len(),
+        ) {
+            let mut hunk = crate::emission_header(path, &rule, changed);
+            hunk.push_str("# macro=token_tree\n");
+            hunk.push_str(&format!("- {holed_minus}\n+ {holed_plus}\n"));
+            return Some(hunk);
+        }
+    }
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str("# macro=token_tree\n");
     hunk.push_str(&format!("- {old_path}!(...)\n+ {new_path}!(...)\n"));
     Some(hunk)
+}
+
+/// WI-17a rename + hole candidate: uniform delimiter across all sites
+/// plus [`super::macro_hetero::rename_hole_template`]. `None` for mixed
+/// delimiters (the verbatim `...` matches every delimiter, so it keeps
+/// the mixed cell) or any template veto.
+fn rename_hole_candidate(
+    old_path: &str,
+    new_path: &str,
+    minuses: &[&str],
+    pluses: &[&str],
+) -> Option<(String, String)> {
+    let mut open: Option<char> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let o_mac = parse_macro_expr(m)?;
+        let n_mac = parse_macro_expr(p)?;
+        let o_open = macro_delim_open(&o_mac)?;
+        let n_open = macro_delim_open(&n_mac)?;
+        if o_open != n_open {
+            return None;
+        }
+        if open.as_ref().is_some_and(|o| *o != o_open) {
+            return None;
+        }
+        open = Some(o_open);
+    }
+    let lines: Vec<(&str, &str)> = minuses
+        .iter()
+        .zip(pluses.iter())
+        .map(|(m, p)| (*m, *p))
+        .collect();
+    super::macro_hetero::rename_hole_template(old_path, new_path, open?, &lines)
 }
 
 /// One N-site (N ≥ 2) same-name concrete macro-interior group: the
@@ -974,6 +1028,129 @@ mod tests {
         assert!(
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn macro_rename_hole_fires() {
+        // WI-17a (fixture-48 shape): rename + one varying stable arg
+        // emits the holed pair instead of the verbatim `...` sweep.
+        // The engine replays it byte-exact (validated_live).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_m!(a, 1);\n-    old_m!(b, 1);\n+    new_m!(a, 1);\n+    new_m!(b, 1);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    old_m!(a, 1);\n    old_m!(b, 1);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- old_m!(E0, 1)\n"), "got: {out}");
+        assert!(out.contains("+ new_m!(E0, 1)\n"), "got: {out}");
+        assert!(out.contains("# macro=token_tree\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_rename_hole_twin_vetoes_to_ordinary() {
+        // An untouched `old_m!(c, 1)` twin binds the hole too: the holed
+        // probe counts 3 ≠ 2 and the `...` probe counts 3 ≠ 2, so the
+        // section stays ordinary (no half-holed emission).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_m!(a, 1);\n-    old_m!(b, 1);\n+    new_m!(a, 1);\n+    new_m!(b, 1);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    old_m!(a, 1);\n    old_m!(b, 1);\n    old_m!(c, 1);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn macro_rename_hole_qualified_fires() {
+        // WI-17a qualified leg: the same hole under a shared prefix.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    crate::old_m!(alpha_value, key);\n-    crate::old_m!(beta_value, key);\n+    crate::new_m!(alpha_value, key);\n+    crate::new_m!(beta_value, key);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    crate::old_m!(alpha_value, key);\n    crate::old_m!(beta_value, key);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- crate::old_m!(E0, key)\n"), "got: {out}");
+        assert!(out.contains("+ crate::new_m!(E0, key)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_rename_two_varying_stays_verbatim() {
+        // Multi-hole renames keep the verbatim `...` cell (tighter
+        // emission deferred): still one semantic hunk, no holes.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_m!(alpha_value, first_flag);\n-    old_m!(beta_value, second_flag);\n+    new_m!(alpha_value, first_flag);\n+    new_m!(beta_value, second_flag);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    old_m!(alpha_value, first_flag);\n    old_m!(beta_value, second_flag);\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- old_m!(...)\n"), "got: {out}");
+        assert!(out.contains("+ new_m!(...)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_rename_mixed_delimiter_stays_verbatim() {
+        // Mixed delimiters keep the verbatim cell (one delimiter per
+        // holed template; `...` matches all three, probed).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_m!(a, 1);\n-    old_m![b, 1];\n+    new_m!(a, 1);\n+    new_m![b, 1];\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    old_m!(a, 1);\n    old_m![b, 1];\n}\n",
+        )]);
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- old_m!(...)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn macro_rename_interior_delta_stays_ordinary() {
+        // Rename + per-site body delta is neither the rename sweep
+        // (bodies differ) nor the interior sweep (names differ).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    old_m!(a, 1);\n-    old_m!(b, 1);\n+    new_m!(a, 2);\n+    new_m!(b, 2);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_rule_body_interior_stays_ordinary() {
+        // WI-17b split pin: edits inside `macro_rules!` bodies have no
+        // engine shape (`syn::visit` never enters the token stream), so
+        // two identical in-rule-body pairs stay ordinary. The engine
+        // half + arm-frame emission belong to WI-17b.
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n macro_rules! foo {\n-    ($x:expr) => { inner!(1); };\n-    ($y:expr) => { inner!(1); };\n+    ($x:expr) => { inner!(2); };\n+    ($y:expr) => { inner!(2); };\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "macro_rules! foo {\n    ($x:expr) => { inner!(1); };\n    ($y:expr) => { inner!(1); };\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none(),
+            "rule-body interiors stay ordinary pending WI-17b"
         );
     }
 

@@ -7769,6 +7769,17 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    totality counts every invocation of the exact rendered path (any
   delimiter/body — the `...` pattern matches all; bare twins never
   match a qualified pattern and vice versa, probed).
+  Rename + hole (WI-17a): when the class shares arity ≥ 2 under one
+  uniform delimiter and exactly one top-level argument position varies
+  across sites (rename-clean per site — the path carries the delta,
+  never the args; stable positions token-equal everywhere), that
+  position rides one diet `E{i}` hole beside the concrete stables
+  (`- old_m!(E0, 1)` / `+ new_m!(E0, 1)`, no length gate — the hole
+  names the varying position even for single-char values; strings never
+  hole). Totality is the real-pair probe over the holed pair (tighter
+  wins; any veto — multi-hole, strings, per-site deltas, mixed
+  delimiters, unmatched twin — falls back to the verbatim `...` with
+  its own probe).
 - `macro_rules!` definition + invocation rename (WI-7b): exactly one
   column-0 `macro_rules! Old { … }` → `macro_rules! New { … }` header
   pair plus N ≥ 1 bare `Old!(…)` → `New!(…)` invocation pairs sharing

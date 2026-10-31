@@ -14,8 +14,8 @@
 //! Split from `macros.rs` per the D5 hygiene gate.
 
 use super::macro_parts::{
-    is_string_arg, macro_delim_open, macro_path, macro_raw_args, parse_macro_expr, scan_arg_idents,
-    split_top_spans, trim_range,
+    delim_close, is_string_arg, macro_delim_open, macro_path, macro_raw_args, parse_macro_expr,
+    scan_arg_idents, split_top_spans, trim_range,
 };
 
 /// Cross-site grouping key for one whole-line interior pair: the
@@ -247,10 +247,150 @@ pub(crate) fn hetero_group_template(member_lines: &[(&str, &str)]) -> Option<(St
     ))
 }
 
+/// Rename + hole template (WI-17a): N ≥ 2 rename pairs sharing one
+/// old/new path (`old_m!(a, 1)` → `new_m!(a, 1)` beside
+/// `old_m!(b, 1)` → `new_m!(b, 1)`) where every top-level arg position
+/// is rename-clean per site (minus-group trim-equals plus-group —
+/// any per-site interior delta belongs to the concrete `...` cell,
+/// which covers it) and exactly one position varies across sites
+/// (that position rides one shared diet `E{i}` hole; stable positions
+/// stay concrete in first-site raw spelling, separators verbatim).
+/// Returns `None` when nothing holes (all bodies identical — the
+/// verbatim `...` is tightest), when ≥2 positions vary (multi-hole
+/// deferred, `...` covers), on arity mismatch / split failure /
+/// mixed delimiters (caller checks the delimiter), when the varying
+/// values are strings (opaque positions, WI-9b1), or when a varying
+/// value is no longer than the hole name (byte-win). Same hole-name
+/// freshness discipline as the cross-site template (SPEC 15.7): every
+/// ident in the path and in all arg slices blocks.
+pub(crate) fn rename_hole_template(
+    old_path: &str,
+    new_path: &str,
+    open: char,
+    member_lines: &[(&str, &str)],
+) -> Option<(String, String)> {
+    if member_lines.len() < 2 || old_path == new_path {
+        return None;
+    }
+    let mut members: Vec<(String, Vec<(usize, usize)>)> = Vec::with_capacity(member_lines.len());
+    for (m_line, p_line) in member_lines {
+        let o_mac = parse_macro_expr(m_line)?;
+        let n_mac = parse_macro_expr(p_line)?;
+        if macro_path(&o_mac)? != old_path || macro_path(&n_mac)? != new_path {
+            return None;
+        }
+        if macro_delim_open(&o_mac)? != open || macro_delim_open(&n_mac)? != open {
+            return None;
+        }
+        let m_args = macro_raw_args(m_line)?;
+        let p_args = macro_raw_args(p_line)?;
+        let m_spans = split_top_spans(&m_args)?;
+        let p_spans = split_top_spans(&p_args)?;
+        if m_spans.len() != p_spans.len() || m_spans.is_empty() {
+            return None;
+        }
+        // Rename-clean per site: each minus group trim-equals its plus
+        // group (the path carries the delta, never the args).
+        for ((ms, me), (ps, pe)) in m_spans.iter().zip(p_spans.iter()) {
+            if m_args[*ms..*me].trim() != p_args[*ps..*pe].trim() {
+                return None;
+            }
+        }
+        members.push((m_args, m_spans));
+    }
+    let arity = members[0].1.len();
+    if members.iter().any(|(_, s)| s.len() != arity) {
+        return None;
+    }
+    // Arity ≥ 2: the hole must sit beside at least one stable-concrete
+    // anchor ("the remaining arguments are token-equal across sites").
+    // Single-arg renames keep the verbatim `...` cell.
+    if arity < 2 {
+        return None;
+    }
+    let mut occupied: Vec<String> = scan_arg_idents(old_path);
+    occupied.extend(scan_arg_idents(new_path));
+    for (args, spans) in &members {
+        for (s, e) in spans {
+            occupied.extend(scan_arg_idents(args[*s..*e].trim()));
+        }
+    }
+    let mut next_hole = 0u32;
+    let mut fresh = |used: &mut Vec<String>| loop {
+        let name = if next_hole == 0 {
+            "E0".to_string()
+        } else {
+            format!("E{next_hole}")
+        };
+        next_hole += 1;
+        if !used
+            .iter()
+            .any(|u| u == &name || u.trim_start_matches('$') == name)
+        {
+            used.push(name.clone());
+            return name;
+        }
+    };
+    // Exactly one varying position across sites; the rest token-equal
+    // everywhere (first-site raw spelling is the literal).
+    let mut hole_at: Option<usize> = None;
+    let mut hole_name: Option<String> = None;
+    for j in 0..arity {
+        let first = members[0].0[members[0].1[j].0..members[0].1[j].1].trim();
+        if members
+            .iter()
+            .all(|(a, s)| a[s[j].0..s[j].1].trim() == first)
+        {
+            continue;
+        }
+        if hole_at.is_some() {
+            return None;
+        }
+        if members
+            .iter()
+            .any(|(a, s)| is_string_arg(a[s[j].0..s[j].1].trim()))
+        {
+            return None;
+        }
+        // No length gate (unlike the WI-9b1 hetero passes): the hole
+        // names which position varies — the F10(a) complaint — and the
+        // real-pair probe below carries soundness. Rename sweeps carry
+        // no T375 by design, so a single-char value still holes.
+        let hole = fresh(&mut occupied);
+        hole_at = Some(j);
+        hole_name = Some(hole);
+    }
+    let (hj, hole) = match (hole_at, hole_name) {
+        (Some(j), Some(h)) => (j, h),
+        _ => return None,
+    };
+    let (first_args, first_spans) = &members[0];
+    let mut rebuilt = String::new();
+    let mut cursor = 0;
+    for (j, (s, e)) in first_spans.iter().enumerate() {
+        rebuilt.push_str(&first_args[cursor..*s]);
+        if j == hj {
+            let (ts, te) = trim_range(first_args, *s, *e);
+            rebuilt.push_str(&first_args[*s..ts]);
+            rebuilt.push_str(&hole);
+            rebuilt.push_str(&first_args[te..*e]);
+        } else {
+            rebuilt.push_str(&first_args[*s..*e]);
+        }
+        cursor = *e;
+    }
+    rebuilt.push_str(&first_args[cursor..]);
+    let close = delim_close(open);
+    Some((
+        format!("{old_path}!{open}{rebuilt}{close}"),
+        format!("{new_path}!{open}{rebuilt}{close}"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;
-    use super::{hetero_group_key, hetero_group_template};
+    use super::{hetero_group_key, hetero_group_template, rename_hole_template};
     use std::collections::HashMap;
 
     fn section(path: &str, body: &str) -> String {
@@ -398,5 +538,115 @@ mod tests {
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn rename_hole_fires_single_varying_stable() {
+        // WI-17a (fixture-48 shape): one varying stable position holes,
+        // the uniform literal stays concrete — even single-char values
+        // hole (no length gate; the probe carries soundness).
+        let out = rename_hole_template(
+            "old_m",
+            "new_m",
+            '(',
+            &[
+                ("    old_m!(a, 1);", "    new_m!(a, 1);"),
+                ("    old_m!(b, 1);", "    new_m!(b, 1);"),
+            ],
+        )
+        .expect("must template");
+        assert_eq!(out.0, "old_m!(E0, 1)");
+        assert_eq!(out.1, "new_m!(E0, 1)");
+    }
+
+    #[test]
+    fn rename_hole_qualified_fires() {
+        let out = rename_hole_template(
+            "crate::old_m",
+            "crate::new_m",
+            '(',
+            &[
+                ("    crate::old_m!(x, k);", "    crate::new_m!(x, k);"),
+                ("    crate::old_m!(y, k);", "    crate::new_m!(y, k);"),
+            ],
+        )
+        .expect("must template");
+        assert_eq!(out.0, "crate::old_m!(E0, k)");
+        assert_eq!(out.1, "crate::new_m!(E0, k)");
+    }
+
+    #[test]
+    fn rename_hole_rejects_two_varying() {
+        // Multi-hole renames stay with the verbatim `...` cell.
+        assert!(rename_hole_template(
+            "old_m",
+            "new_m",
+            '(',
+            &[
+                ("    old_m!(a, x);", "    new_m!(a, x);"),
+                ("    old_m!(b, y);", "    new_m!(b, y);"),
+            ],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rename_hole_rejects_identical_bodies() {
+        // Nothing varies — `...` is tightest, no hole to name.
+        assert!(rename_hole_template(
+            "old_m",
+            "new_m",
+            '(',
+            &[
+                ("    old_m!(a, 1);", "    new_m!(a, 1);"),
+                ("    old_m!(a, 1);", "    new_m!(a, 1);"),
+            ],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rename_hole_rejects_string_stable() {
+        // Varying stable strings never hole (opaque positions, WI-9).
+        assert!(rename_hole_template(
+            "old_m",
+            "new_m",
+            '(',
+            &[
+                ("    old_m!(\"aaa\", 1);", "    new_m!(\"aaa\", 1);"),
+                ("    old_m!(\"bbb\", 1);", "    new_m!(\"bbb\", 1);"),
+            ],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rename_hole_rejects_per_site_delta() {
+        // The path carries the delta, never the args: a per-site
+        // interior delta belongs to the concrete `...` cell.
+        assert!(rename_hole_template(
+            "old_m",
+            "new_m",
+            '(',
+            &[
+                ("    old_m!(a, 1);", "    new_m!(a, 2);"),
+                ("    old_m!(b, 1);", "    new_m!(b, 2);"),
+            ],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rename_hole_rejects_arity_mismatch() {
+        assert!(rename_hole_template(
+            "old_m",
+            "new_m",
+            '(',
+            &[
+                ("    old_m!(a, 1);", "    new_m!(a, 1);"),
+                ("    old_m!(b, 1, c);", "    new_m!(b, 1, c);"),
+            ],
+        )
+        .is_none());
     }
 }
