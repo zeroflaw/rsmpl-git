@@ -765,8 +765,10 @@ fn apply_inner(
 
     // WI-1b: plus-instantiation postcondition (SPEC 24.6). Every rewrite
     // hunk's plus template, instantiated with its recorded per-site
-    // bindings, must appear in the post-image (whitespace-normalized
-    // substring). Failures are loud `RSMPL_MATCH_CONFLICT`;
+    // bindings, must appear in the post-image. Rename kinds verify
+    // span-locally (WI-1.1: occurrence elsewhere never counts); other
+    // shapes verify as whitespace-normalized substrings. Failures are
+    // loud `RSMPL_MATCH_CONFLICT`;
     // unverifiable plus shapes (`...` replay, string-bearing templates,
     // unextractable impl names) downgrade to `reparse-only` (honest,
     // never over-claimed).
@@ -791,7 +793,14 @@ fn apply_inner(
                 rh.header.old_start + rh.header.old_len
             );
             let post_text = files.get(&r.file).cloned().unwrap_or_default();
-            match plus_instantiated(&compiled, &rh, &bindings_list, &post_text) {
+            match plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings_list,
+                &post_text,
+                &r.spans,
+                r.matches,
+            ) {
                 Some(true) => {}
                 Some(false) => {
                     let _ = found;

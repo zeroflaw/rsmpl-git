@@ -106,6 +106,14 @@ pub(crate) fn instantiation_error(rule: &str, file: &str, range_desc: &str) -> S
 
 /// WI-1b: check the instantiated plus appears in the post-image.
 ///
+/// Rename kinds (`Fn`, `ItemRename`, `FieldRename`, `VariantRename`,
+/// `UseRename`) verify span-locally (WI-1.1, SPEC 24.6): at least `matches`
+/// reported spans must carry the new ident on their post-image lines.
+/// Occurrence elsewhere in the file never counts. The count (not
+/// all-spans) formulation covers multi-edit sites (attr-strip deletions,
+/// signature-evolution slot edits) where only the ident-bearing spans name
+/// the new ident.
+///
 /// Returns `None` when the plus shape cannot be verified by instantiation
 /// (code-level `...` replay, string-bearing templates where metavars stay
 /// concrete, unextractable impl-method names) — the caller downgrades to
@@ -117,25 +125,37 @@ pub(crate) fn plus_instantiated(
     rh: &rsmpl_patch::RsmplHunk,
     bindings_list: &[HashMap<String, String>],
     post_text: &str,
+    spans: &[(u32, u32)],
+    matches: usize,
 ) -> Option<bool> {
     let post_norm = normalize_ws(post_text);
     let post_canon = canonical_inst(post_text);
     match &compiled.kind {
         PatternKind::Fn { plus_name, .. } => {
             let needle = canonical_inst(&format!("fn{plus_name}"));
-            Some(post_canon.contains(&needle))
+            if spans.is_empty() {
+                let post_canon = canonical_inst(post_text);
+                return Some(post_canon.contains(&needle));
+            }
+            Some(spans_count_canon(post_text, spans, &needle) >= matches.max(1))
         }
-        PatternKind::ItemRename { plus_name, .. } => Some(post_text.contains(plus_name)),
-        // WI-9a: member renames carry the same contains-posture as item
-        // renames (the new ident must appear in the post-image).
-        PatternKind::FieldRename { new, .. } => Some(post_text.contains(new)),
-        PatternKind::VariantRename { new, .. } => Some(post_text.contains(new)),
+        PatternKind::ItemRename { plus_name, .. } => Some(
+            spans_count(post_text, spans, plus_name, |h| post_text.contains(h)) >= matches.max(1),
+        ),
+        // WI-9a: member renames carry the same span-local posture as item
+        // renames (the new ident must appear at the reported spans).
+        PatternKind::FieldRename { new, .. } => {
+            Some(spans_count(post_text, spans, new, |h| post_text.contains(h)) >= matches.max(1))
+        }
+        PatternKind::VariantRename { new, .. } => {
+            Some(spans_count(post_text, spans, new, |h| post_text.contains(h)) >= matches.max(1))
+        }
         PatternKind::UseRename { plus_path, .. } => {
             // Grouped tails (`crate::{new::Deep}`) never contain the full
             // `crate::new` prefix as a substring; the final segment is the
             // renamed anchor the post-image must name.
             let last = plus_path.rsplit("::").next().unwrap_or(plus_path);
-            Some(post_text.contains(last))
+            Some(spans_count(post_text, spans, last, |h| post_text.contains(h)) >= matches.max(1))
         }
         PatternKind::Expr { plus_raw, .. } => {
             if has_code_ellipsis(plus_raw) || plus_raw.contains('"') {
@@ -207,6 +227,56 @@ pub(crate) fn plus_instantiated(
 
 fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// WI-1.1 span-local check: count of reported spans whose post-image lines
+/// contain `needle`. Empty spans fall back to the whole-file `global`
+/// closure (callers without spans keep the old posture, never a new veto).
+fn spans_count(
+    post_text: &str,
+    spans: &[(u32, u32)],
+    needle: &str,
+    global: impl Fn(&str) -> bool,
+) -> usize {
+    if spans.is_empty() {
+        return usize::from(global(needle));
+    }
+    let lines: Vec<&str> = post_text.lines().collect();
+    spans
+        .iter()
+        .filter(|(s, e)| {
+            let s = (*s as usize).saturating_sub(1);
+            let e = (*e as usize).saturating_sub(1);
+            if lines.is_empty() {
+                return false;
+            }
+            let e = e.min(lines.len() - 1);
+            if s >= lines.len() || s > e {
+                return false;
+            }
+            lines[s..=e].join("\n").contains(needle)
+        })
+        .count()
+}
+
+/// Canonical (whitespace-free) variant for `Fn` needles.
+fn spans_count_canon(post_text: &str, spans: &[(u32, u32)], needle: &str) -> usize {
+    let lines: Vec<&str> = post_text.lines().collect();
+    spans
+        .iter()
+        .filter(|(s, e)| {
+            let s = (*s as usize).saturating_sub(1);
+            let e = (*e as usize).saturating_sub(1);
+            if lines.is_empty() {
+                return false;
+            }
+            let e = e.min(lines.len() - 1);
+            if s >= lines.len() || s > e {
+                return false;
+            }
+            canonical_inst(&lines[s..=e].join("\n")).contains(needle)
+        })
+        .count()
 }
 
 /// Canonical form for instantiation comparison: all whitespace removed
@@ -414,12 +484,77 @@ mod tests {
         let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
         // Clean post-image: `fn bar` present.
         assert_eq!(
-            plus_instantiated(&compiled, &rh, &bindings, "fn bar() {}\n"),
+            plus_instantiated(&compiled, &rh, &bindings, "fn bar() {}\n", &[(1, 1)], 1),
             Some(true)
         );
         // Tampered post-image (rewrite reverted): `fn bar` missing.
         assert_eq!(
-            plus_instantiated(&compiled, &rh, &bindings, "fn foo() {}\n"),
+            plus_instantiated(&compiled, &rh, &bindings, "fn foo() {}\n", &[(1, 1)], 1),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn rename_elsewhere_does_not_satisfy_span() {
+        // WI-1.1: a pre-existing same-name item elsewhere never satisfies
+        // a rename whose own span still carries the old name.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n- struct Old\n+ struct New\n";
+        let parsed = rsmpl_patch::parse_patch(patch).unwrap();
+        let rh = match &parsed.files[0].hunks[0] {
+            rsmpl_patch::Hunk::Rsmpl(r) => r.clone(),
+            _ => panic!("expected rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&rh).unwrap();
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        // `New` exists on line 2, but the reported span (line 1) was not
+        // rewritten: must fail.
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "struct Old {}\nstruct New {}\n",
+                &[(1, 1)],
+                1,
+            ),
+            Some(false)
+        );
+        // Span line carries the new name: passes.
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "struct New {}\nstruct New {}\n",
+                &[(1, 1)],
+                1,
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn rename_multi_span_counts_matches() {
+        // WI-1.1 count formulation: an attr-strip rename emits a deletion
+        // span plus the ident span; one ident-bearing span satisfies one
+        // match.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n- struct Old\n+ struct New\n";
+        let parsed = rsmpl_patch::parse_patch(patch).unwrap();
+        let rh = match &parsed.files[0].hunks[0] {
+            rsmpl_patch::Hunk::Rsmpl(r) => r.clone(),
+            _ => panic!("expected rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&rh).unwrap();
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        // Two spans (attr deletion + ident), only the second names `New`.
+        let post = "/// doc\nstruct New {}\n";
+        assert_eq!(
+            plus_instantiated(&compiled, &rh, &bindings, post, &[(1, 1), (2, 2)], 1),
+            Some(true)
+        );
+        // Two matches need two ident-bearing spans.
+        assert_eq!(
+            plus_instantiated(&compiled, &rh, &bindings, post, &[(1, 1), (2, 2)], 2),
             Some(false)
         );
     }

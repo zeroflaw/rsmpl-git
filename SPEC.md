@@ -4445,7 +4445,10 @@ if:
    recorded per-site bindings, present in the post-image
    (whitespace-insensitive, trailing commas ignored, backticks stripped,
    `$`-sigils resolved, string literals and code-level `...` replay
-   excluded as unverifiable). A rewrite that did not land as authored
+   excluded as unverifiable). Rename kinds (`fn`, item, field,
+   variant, use) verify span-locally (WI-1.1): the new ident must
+   appear on the post-image lines of every reported span — occurrence
+   elsewhere in the file never counts. A rewrite that did not land as authored
    (e.g. the post-image still names the old ident) fails loud with
    `RSMPL_MATCH_CONFLICT` (`postcondition: plus pattern did not
    re-match ...`), never a silent `verified`. Unverifiable plus shapes
@@ -6625,7 +6628,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `static`, vis echoed) compress to bare `- kind Old` /
   `+ kind New` pairs. Single indented (method/block-level) and
   single generic-fn lines are excluded (no token win as a slot hunk).
-- Field/variant member rename (WI-9a authored, WI-9b raised, single-file): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same contains-posture as item renames (the new ident must appear in the post-image). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). Shadowed definitions (a second same-named member anywhere), bare-`Old` spellings, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary; cross-file definition+uses intents stay ordinary (future work).
+- Field/variant member rename (WI-9a authored, WI-9b raised, single-file): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). Shadowed definitions (a second same-named member anywhere), bare-`Old` spellings, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary; cross-file definition+uses intents stay ordinary (future work).
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
   every pair is a single-pair item rename above (including the plain
