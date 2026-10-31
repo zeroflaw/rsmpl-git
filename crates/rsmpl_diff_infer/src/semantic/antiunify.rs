@@ -320,8 +320,10 @@ pub(crate) fn parse_untyped_let_full(line: &str) -> Option<(syn::Pat, syn::Expr)
 /// (method-call with varying receiver, bare call with one varying
 /// argument, or binary with one varying side — the shared
 /// [`antiunify_plus_with_hole`] discipline). All-identical line
-/// classes decline (verbatim owns them, T422).
-fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
+/// classes decline (verbatim owns them, T422). WI-8 slice 1 publishes
+/// this core for the whole-section untyped-let detector (previously
+/// reachable only through sequence windows).
+pub(crate) fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
         return None;
     }
@@ -339,6 +341,13 @@ fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, S
         // Preserved per site (SPEC 15.7 hole reuse): the shared `P0`
         // binds per-site-equal text on both sides.
         if tok(&m_pat) != tok(&p_pat) {
+            return None;
+        }
+        // Macro/unsupported inits veto (WI-8): the engine never binds
+        // inside macro bodies, so a template inlining macro text can
+        // only match token-equal — nested-macro classes belong to the
+        // macro-interior detector, never to a whole-line let template.
+        if !init_ok(&m_init) || !init_ok(&p_init) {
             return None;
         }
         pats.push(tok(&m_pat));
@@ -375,6 +384,105 @@ fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, S
     };
     let minus_tpl = format!("let {pat_tpl} = {minus_init_tpl};");
     let plus_tpl = format!("let {pat_tpl} = {plus_init_tpl};");
+    if minus_tpl == plus_tpl {
+        return None;
+    }
+    if !is_let_stmt(&minus_tpl) || !is_let_stmt(&plus_tpl) {
+        return None;
+    }
+    Some((minus_tpl, plus_tpl))
+}
+
+/// WI-8 slice 1 tuple-position swap: N ≥ 2 untyped→untyped `let`
+/// pairs where each minus/plus pattern is an arity-2 tuple with the
+/// same two elements in swapped order (`let (P, Q) = E;` →
+/// `let (Q, P) = E;`), the initializer token-equal per site (a
+/// per-site init delta is an untyped-let template, never guessed
+/// here), and the swap is real per site (no `let (x, x)` self-swap).
+/// Cross-site hetero elements ride `P0`/`P1` (minus-first is `P0`,
+/// minus-second is `P1`, so the plus side replays them swapped);
+/// uniform elements stay concrete (first-site spelling).
+/// All-identical line classes decline (verbatim owns them, T422).
+/// The typed twin (`let (P, Q): T = E;`) stays ordinary.
+pub(crate) fn antiunify_pat_swap(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
+        return None;
+    }
+    let mut firsts: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut seconds: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut init_texts: Vec<String> = Vec::with_capacity(minuses.len());
+    // First-site element nodes for byte-identical uniform spellings
+    // (the `site_spelling` posture shared with the let cores above).
+    let mut first_elems: Option<(syn::Pat, syn::Pat)> = None;
+    let mut first_init: Option<syn::Expr> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (m_pat, m_init) = parse_untyped_let_full(m)?;
+        let (p_pat, p_init) = parse_untyped_let_full(p)?;
+        if tok(&m_init) != tok(&p_init) {
+            return None;
+        }
+        // Macro/unsupported inits veto (WI-8, same posture as the
+        // untyped core above): nested-macro classes belong to the
+        // macro-interior detector.
+        if !init_ok(&m_init) {
+            return None;
+        }
+        let syn::Pat::Tuple(mt) = m_pat else {
+            return None;
+        };
+        let syn::Pat::Tuple(pt) = p_pat else {
+            return None;
+        };
+        if mt.elems.len() != 2 || pt.elems.len() != 2 {
+            return None;
+        }
+        let m0 = tok(&mt.elems[0]);
+        let m1 = tok(&mt.elems[1]);
+        let p0 = tok(&pt.elems[0]);
+        let p1 = tok(&pt.elems[1]);
+        if m0 == m1 || m0 != p1 || m1 != p0 {
+            return None;
+        }
+        if first_elems.is_none() {
+            first_elems = Some((mt.elems[0].clone(), mt.elems[1].clone()));
+            first_init = Some(m_init.clone());
+        }
+        firsts.push(m0);
+        seconds.push(m1);
+        init_texts.push(tok(&m_init));
+    }
+    let first_uniform = firsts.iter().all(|v| *v == firsts[0]);
+    let second_uniform = seconds.iter().all(|v| *v == seconds[0]);
+    let (e0, e1) = first_elems.expect("swap core holds N >= 2");
+    let (h0, h1) = if first_uniform && second_uniform {
+        (
+            site_spelling(minuses[0], &e0, &firsts[0]),
+            site_spelling(minuses[0], &e1, &seconds[0]),
+        )
+    } else if first_uniform {
+        (site_spelling(minuses[0], &e0, &firsts[0]), "P1".to_string())
+    } else if second_uniform {
+        (
+            "P0".to_string(),
+            site_spelling(minuses[0], &e1, &seconds[0]),
+        )
+    } else {
+        ("P0".to_string(), "P1".to_string())
+    };
+    let init_tpl = if init_texts.iter().all(|v| *v == init_texts[0]) {
+        site_spelling(
+            minuses[0],
+            &first_init.expect("swap core holds N >= 2"),
+            &init_texts[0],
+        )
+    } else {
+        "E0".to_string()
+    };
+    let minus_tpl = format!("let ({h0}, {h1}) = {init_tpl};");
+    let plus_tpl = format!("let ({h1}, {h0}) = {init_tpl};");
     if minus_tpl == plus_tpl {
         return None;
     }
@@ -1330,6 +1438,181 @@ mod tests {
             ],
             2,
         );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    fn untyped(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
+        antiunify_untyped_let(minuses, pluses)
+    }
+
+    #[test]
+    fn untyped_some_unwrap_fires() {
+        // WI-8 slice 1 canonical shape: hetero `Some` patterns ride
+        // `P0`, hetero inits ride the `E0` method-receiver hole.
+        let out = untyped(
+            &["let Some(v) = o;", "let Some(w) = p;"],
+            &[
+                "let Some(v) = o.unwrap_or(0);",
+                "let Some(w) = p.unwrap_or(0);",
+            ],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let Some(P0) = E0;".to_string(),
+                "let Some(P0) = E0.unwrap_or(0);".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn untyped_const_block_init_fires() {
+        // WI-8 slice 1: `const` blocks are structural inits (shape
+        // parity gate), so a uniform concrete delta anti-unifies.
+        let out = untyped(
+            &["let v = const { 1 + 2 };", "let w = const { 1 + 2 };"],
+            &["let v = const { 1 + 3 };", "let w = const { 1 + 3 };"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let P0 = const { 1 + 2 };".to_string(),
+                "let P0 = const { 1 + 3 };".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn untyped_infer_init_fires() {
+        // WI-8 slice 1: `_` is a structural init (matches anything),
+        // so a uniform `_` → concrete delta anti-unifies.
+        let out = untyped(&["let v = _;", "let w = _;"], &["let v = 0;", "let w = 0;"]);
+        assert_eq!(
+            out,
+            Some(("let P0 = _;".to_string(), "let P0 = 0;".to_string())),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn untyped_macro_init_vetoes() {
+        // Nested-macro classes belong to the macro-interior detector:
+        // a template inlining macro text would steal them.
+        let out = untyped(
+            &["let a = m!(x);", "let b = m!(y);"],
+            &["let a = m!(z);", "let b = m!(w);"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn untyped_single_vetoes() {
+        let out = untyped(&["let a = x;"], &["let a = x.foo();"]);
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn untyped_all_identical_declines_for_verbatim() {
+        let out = untyped(
+            &["let a = x;", "let a = x;"],
+            &["let a = x.foo();", "let a = x.foo();"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    fn swap(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
+        antiunify_pat_swap(minuses, pluses)
+    }
+
+    #[test]
+    fn pat_swap_hetero_fires() {
+        let out = swap(
+            &["let (x, y) = t;", "let (m, n) = u;"],
+            &["let (y, x) = t;", "let (n, m) = u;"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let (P0, P1) = E0;".to_string(),
+                "let (P1, P0) = E0;".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn pat_swap_repeated_identical_declines_for_verbatim() {
+        // Same swap at both sites: the concrete literal hunk is
+        // tighter than any template (T422).
+        let out = swap(
+            &["let (x, y) = t;", "let (x, y) = t;"],
+            &["let (y, x) = t;", "let (y, x) = t;"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn pat_swap_no_delta_vetoes() {
+        let out = swap(
+            &["let (x, y) = t;", "let (m, n) = u;"],
+            &["let (x, y) = t;", "let (m, n) = u;"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn pat_swap_init_delta_vetoes() {
+        // A per-site init delta is an untyped-let template, never a
+        // swap (the init must be token-equal per site).
+        let out = swap(
+            &["let (x, y) = t;", "let (m, n) = u;"],
+            &["let (y, x) = t2;", "let (n, m) = u2;"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn pat_swap_arity_vetoes() {
+        let out = swap(
+            &["let (x, y, z) = t;", "let (m, n, o) = u;"],
+            &["let (z, y, x) = t;", "let (o, n, m) = u;"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn pat_swap_non_swap_vetoes() {
+        // Same order both sides is not a swap (no delta at all here).
+        let out = swap(
+            &["let (x, y) = t;", "let (m, n) = u;"],
+            &["let (x, y) = t;", "let (m, n) = u;"],
+        );
+        assert_eq!(out, None, "got: {out:?}");
+    }
+
+    #[test]
+    fn pat_swap_half_uniform_pins_positional_holes() {
+        // Minus-first uniform: concrete `x` + `P1`; the plus side
+        // replays them swapped.
+        let out = swap(
+            &["let (x, y) = t;", "let (x, n) = u;"],
+            &["let (y, x) = t;", "let (n, x) = u;"],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let (x, P1) = E0;".to_string(),
+                "let (P1, x) = E0;".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn pat_swap_single_vetoes() {
+        let out = swap(&["let (x, y) = t;"], &["let (y, x) = t;"]);
         assert_eq!(out, None, "got: {out:?}");
     }
 }

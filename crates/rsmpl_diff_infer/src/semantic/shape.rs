@@ -108,6 +108,10 @@ pub(crate) fn supported_expr(e: &syn::Expr) -> bool {
             | syn::Expr::TryBlock(_)
             | syn::Expr::Unsafe(_)
             | syn::Expr::Yield(_)
+            // WI-8 slice 1: `const` blocks (block structural) and `_`
+            // (matches anything, like the engine `Infer` arm).
+            | syn::Expr::Const(_)
+            | syn::Expr::Infer(_)
     )
 }
 
@@ -218,6 +222,9 @@ mod tests {
             "unsafe { x }",
             "yield x",
             "yield",
+            // WI-8 slice 1: const blocks and `_` match structurally.
+            "const { 1 + 2 }",
+            "_",
         ] {
             assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
@@ -228,6 +235,9 @@ mod tests {
     fn init_ok_pins_strict_gate() {
         assert!(init_ok(&expr("compute_first(input)")));
         assert!(init_ok(&expr("x + 1")));
+        // WI-8 slice 1: const blocks and `_` match structurally now.
+        assert!(init_ok(&expr("const { 1 + 2 }")));
+        assert!(init_ok(&expr("_")));
         // Macros and unsupported nodes veto; WI-5b shapes pass.
         assert!(!init_ok(&expr("m!(x)")));
         assert!(init_ok(&expr("match a { _ => b }")));

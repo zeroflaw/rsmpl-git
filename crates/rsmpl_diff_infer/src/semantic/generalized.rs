@@ -12,7 +12,8 @@
 //! per the IMPROVE.md WI-4 detector layout.
 
 use super::antiunify::{
-    antiunify_let_template, antiunify_let_type_add, antiunify_sequence, antiunify_types, TypedSite,
+    antiunify_let_template, antiunify_let_type_add, antiunify_pat_swap, antiunify_sequence,
+    antiunify_types, antiunify_untyped_let, TypedSite,
 };
 use super::unique_rule;
 use quote::ToTokens;
@@ -116,6 +117,67 @@ pub(crate) fn try_let_template_sweep(
         return None;
     }
     let (minus_tpl, plus_tpl) = antiunify_let_template(minuses, pluses)?;
+    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "let_template");
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
+/// N-site (N ≥ 2) untyped joint let-template sweep (WI-8 slice 1):
+/// untyped→untyped `let` pairs with per-site preserved patterns plus
+/// one uniform initializer delta (`let Some(P0) = E0;` →
+/// `let Some(P0) = E0.unwrap_or(0);`, hetero `P0`/`E0` across
+/// sites). The typed core's sibling without ascriptions (disjoint by
+/// construction: this declines any ascribed side; the typed detector
+/// above owns those classes). Uniform concrete deltas
+/// (`let v = const { 1 + 2 };` → `… { 1 + 3 };`,
+/// `let v = _;` → `let v = 0;`) ride the same core — WI-8's
+/// const/infer init support is the `shape.rs` parity gate, not a
+/// second template. Totality is the real-pair engine-count check
+/// (`template_pair_holds`): the emitted minus must match exactly N
+/// untyped lets in the pre-image — an untouched twin vetoes.
+/// Detector name `let_template` (same family as the typed core).
+pub(crate) fn try_untyped_let_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    let (minus_tpl, plus_tpl) = antiunify_untyped_let(minuses, pluses)?;
+    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "let_template");
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
+/// N-site (N ≥ 2) tuple-position swap sweep (WI-8 slice 1):
+/// `let (P0, P1) = E0;` → `let (P1, P0) = E0;` with per-site
+/// preserved inits (a per-site init delta belongs to the untyped
+/// core above, never guessed here). Totality is the same real-pair
+/// engine-count check. Detector name `let_template` (same family).
+pub(crate) fn try_pat_swap_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    let (minus_tpl, plus_tpl) = antiunify_pat_swap(minuses, pluses)?;
     if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
         return None;
     }
@@ -1416,5 +1478,167 @@ mod tests {
             out.contains("+ fn beta(...) -> u32 where T : Clone {"),
             "got: {out}"
         );
+    }
+
+    fn applied_post(patch: &str, pre: &HashMap<String, String>) -> HashMap<String, String> {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+        files
+    }
+
+    // WI-8 slice 1: untyped joint let template (hetero `Some(P0)`
+    // patterns, uniform `E0`-hole method-wrap init delta).
+    const PRE_SOME: &str = "fn a(o: Option<i32>, p: Option<i32>) {\n    let Some(v) = o;\n    let Some(w) = p;\n    let _ = (v, w);\n}\n";
+    const POST_SOME: &str = "fn a(o: Option<i32>, p: Option<i32>) {\n    let Some(v) = o.unwrap_or(0);\n    let Some(w) = p.unwrap_or(0);\n    let _ = (v, w);\n}\n";
+
+    fn some_body() -> String {
+        "@@ -2,2 +2,2 @@\n-    let Some(v) = o;\n-    let Some(w) = p;\n+    let Some(v) = o.unwrap_or(0);\n+    let Some(w) = p.unwrap_or(0);\n"
+            .to_string()
+    }
+
+    #[test]
+    fn untyped_let_some_unwrap_fires_byte_identical() {
+        let raw = section("f.rs", &some_body());
+        let pre = pre_map(&[("f.rs", PRE_SOME)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        assert!(out.contains("- let Some(P0) = E0;\n"), "got: {out}");
+        assert!(
+            out.contains("+ let Some(P0) = E0.unwrap_or(0);\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains("# pat"), "got: {out}");
+        assert!(!out.contains("# expr"), "got: {out}");
+        let files = applied_post(&out, &pre);
+        assert_eq!(
+            files["f.rs"], POST_SOME,
+            "real-apply must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn untyped_let_extra_twin_vetoes() {
+        // Totality: an untouched third `Some` let in the pre-image
+        // would be silently rewritten — the sweep vetoes.
+        let raw = section("f.rs", &some_body());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn a(o: Option<i32>, p: Option<i32>, q: Option<i32>) {\n    let Some(v) = o;\n    let Some(w) = p;\n    let Some(z) = q;\n    let _ = (v, w, z);\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn untyped_let_const_block_fires() {
+        let raw = section(
+            "f.rs",
+            "@@ -2,1 +2,1 @@\n-    let v = const { 1 + 2 };\n+    let v = const { 1 + 3 };\n@@ -5,1 +5,1 @@\n-    let w = const { 1 + 2 };\n+    let w = const { 1 + 3 };\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn f() {\n    let v = const { 1 + 2 };\n}\nfn g() {\n    let w = const { 1 + 2 };\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let P0 = const { 1 + 2 };\n"), "got: {out}");
+        assert!(out.contains("+ let P0 = const { 1 + 3 };\n"), "got: {out}");
+    }
+
+    #[test]
+    fn untyped_let_infer_init_fires() {
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let v = _;\n-    let w = _;\n+    let v = 0;\n+    let w = 0;\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn f() {\n    let v = _;\n    let w = _;\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let P0 = _;\n"), "got: {out}");
+        assert!(out.contains("+ let P0 = 0;\n"), "got: {out}");
+    }
+
+    #[test]
+    fn untyped_let_macro_init_stays_with_macro_detector() {
+        // Nested-macro classes belong to the macro-interior sweep,
+        // never to a whole-line let template.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n-    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_gitrs\")));\n+    let first_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n+    let second_out = Command::new(PathBuf::from(env!(\"CARGO_BIN_EXE_applyrs\")));\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        assert!(
+            !out.contains("let P0"),
+            "untyped-let must decline, got: {out}"
+        );
+        assert!(
+            out.contains("- env!(\"CARGO_BIN_EXE_gitrs\")\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn untyped_let_typed_class_stays_typed() {
+        // Chain precedence: ascribed classes still hit the typed
+        // template first (this detector declines any ascribed side).
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn f() {\n-    let a: i32 = 0;\n-    let b: u32 = 1;\n+    let a: i32 = 0.wrapping_add(1);\n+    let b: u32 = 1.wrapping_add(1);\n }\n",
+        );
+        let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
+        assert!(out.contains("- let P0: T0 = E0;\n"), "got: {out}");
+        assert!(
+            out.contains("+ let P0: T0 = E0.wrapping_add(1);\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn untyped_let_single_stays_ordinary() {
+        // Singles never reach the pair chain (whole-section singles try
+        // item rename only; per-hunk singles likewise).
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n fn f(o: Option<i32>) {\n-    let Some(v) = o;\n+    let Some(v) = o.unwrap_or(0);\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    // WI-8 slice 1: tuple-position swap (`(P0, P1)` → `(P1, P0)`).
+    const PRE_SWAP: &str = "fn a(t: (i32, i32), u: (i32, i32)) {\n    let (x, y) = t;\n    let (m, n) = u;\n    let _ = (x, y, m, n);\n}\n";
+    const POST_SWAP: &str = "fn a(t: (i32, i32), u: (i32, i32)) {\n    let (y, x) = t;\n    let (n, m) = u;\n    let _ = (x, y, m, n);\n}\n";
+
+    fn swap_body() -> String {
+        "@@ -2,2 +2,2 @@\n-    let (x, y) = t;\n-    let (m, n) = u;\n+    let (y, x) = t;\n+    let (n, m) = u;\n"
+            .to_string()
+    }
+
+    #[test]
+    fn pat_swap_fires_byte_identical() {
+        let raw = section("f.rs", &swap_body());
+        let pre = pre_map(&[("f.rs", PRE_SWAP)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        assert!(out.contains("- let (P0, P1) = E0;\n"), "got: {out}");
+        assert!(out.contains("+ let (P1, P0) = E0;\n"), "got: {out}");
+        let files = applied_post(&out, &pre);
+        assert_eq!(
+            files["f.rs"], POST_SWAP,
+            "real-apply must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn pat_swap_extra_twin_vetoes() {
+        // An untouched same-shape tuple let would be silently
+        // rewritten — the sweep vetoes.
+        let raw = section("f.rs", &swap_body());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn a(t: (i32, i32), u: (i32, i32), v: (i32, i32)) {\n    let (x, y) = t;\n    let (m, n) = u;\n    let (p, q) = v;\n    let _ = (x, y, m, n, p, q);\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
     }
 }

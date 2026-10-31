@@ -7136,6 +7136,35 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   engine-count check (`template_pair_holds`): the emitted minus must
   match exactly N typed lets in the pre-image — an untouched twin
   vetoes. Detector name `let_template`.
+- Untyped joint let-template sweep (WI-8 slice 1): the joint template
+  without ascriptions — N ≥ 2 untyped→untyped `let PAT = INIT;` →
+  `let PAT = INIT′;` pairs with per-site preserved patterns plus one
+  uniform initializer delta (uniform concrete rewrite, e.g.
+  `let v = const { 1 + 2 };` → `let v = const { 1 + 3 };` and
+  `let v = _;` → `let v = 0;` — `const` blocks and `_` are structural
+  inits, matched by the engine and admitted by the shape gate; or one
+  `E0` hole with a uniform structural wrapper, e.g.
+  `- let Some(P0) = E0;` / `+ let Some(P0) = E0.unwrap_or(0);`).
+  Guards: no ascription on either side (ascribed classes stay with the
+  joint typed template above — disjoint by construction); no
+  attributes, no `let-else`; macro/unsupported inits veto
+  (nested-macro classes belong to the macro-interior sweep — the
+  engine never binds inside macro bodies); all-identical classes stay
+  for verbatim (T422). Totality is the same real-pair engine-count
+  check. Detector name `let_template` (same family).
+- Tuple-position swap sweep (WI-8 slice 1): N ≥ 2 untyped→untyped
+  `let (P, Q) = E;` → `let (Q, P) = E;` pairs — each minus/plus
+  pattern an arity-2 tuple with the same two elements in swapped order
+  (real swap per site, no `let (x, x)` self-swap), the initializer
+  token-equal per site (a per-site init delta is an untyped-let
+  template, never guessed here). Cross-site hetero elements ride
+  positional holes (`P0` minus-first, `P1` minus-second, replayed
+  swapped; uniform elements stay concrete in first-site spelling);
+  hetero inits ride `E0`, uniform inits stay concrete. Macro/
+  unsupported inits veto, same posture as above. Totality is the same
+  real-pair engine-count check. The typed twin
+  (`let (P, Q): T = E;`) stays ordinary. Detector name `let_template`
+  (same family).
 - Statement-sequence sweep (WI-5c, fourth anti-unification shape): N
   flat `-`/`+` pairs splitting block-major into ≥ 2 blocks × K = 2–4
   `let` statements (each block's changed old lines consecutive — the

@@ -1,5 +1,5 @@
 diff --git src/lib.rs
-@@ -1,1 @@ rule=diet_some
-# sweep
-- let Some(P) = E;
-+ let Some(P) = E.unwrap_or(0);
+@@ -2,5 @@ rule=diet_some
+# allow=many
+- let Some(P0) = E0;
++ let Some(P0) = E0.unwrap_or(0);

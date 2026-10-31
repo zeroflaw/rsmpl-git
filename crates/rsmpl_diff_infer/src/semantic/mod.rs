@@ -77,8 +77,8 @@ pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
 pub(crate) use general_expr::try_general_expr_sweep;
 pub(crate) use generalized::{
-    try_let_sweep, try_let_template_sweep, try_sequence_sweep, try_sig_evolution_sweep,
-    try_type_sweep,
+    try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep,
+    try_sig_evolution_sweep, try_type_sweep, try_untyped_let_sweep,
 };
 pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;

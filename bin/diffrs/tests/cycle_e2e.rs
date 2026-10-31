@@ -271,6 +271,10 @@ const CYCLE_OK: &[&str] = &[
     "88-variant-follow-single",
     "70-call-wrap",
     "60-call-arg-swap",
+    "53-const-block",
+    "56-tuple-pat-swap",
+    "57-some-unwrap",
+    "68-diet-some",
     "110-new-file-move-single",
     "114-delete-single",
     "115-move-evolve-single",
@@ -382,24 +386,12 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "hetero: let-verbatim macro sweep re-infers as sub-line call sweep (different semantic shape; tree legs still close)",
     ),
     (
-        "53-const-block",
-        "nodet: const-block let rewrite re-infers ordinary (no const-block template detector; tree legs still close)",
-    ),
-    (
         "54-raw-addr",
         "t375: single-site raw-addr rewrite re-infers ordinary",
     ),
     (
         "55-infer-wildcard",
-        "nodet: infer-wildcard let rewrite re-infers ordinary (no wildcard-template detector; tree legs still close)",
-    ),
-    (
-        "56-tuple-pat-swap",
-        "nodet: tuple-pat swap re-infers ordinary (raising declines tuple-pat swap; tree legs still close)",
-    ),
-    (
-        "57-some-unwrap",
-        "nodet: some-unwrap let sweep re-infers ordinary (raising declines some-unwrap at 2 sites; tree legs still close)",
+        "t442: hetero concrete inits vs uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole; tree legs still close)",
     ),
     (
         "58-impl-filter",
@@ -432,10 +424,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "67-closure-bump",
         "t375: single-site closure-bump re-infers ordinary",
-    ),
-    (
-        "68-diet-some",
-        "nodet: diet some-unwrap sweep re-infers as two ordinary hunks (raising declines some-unwrap at 2 sites; tree legs still close)",
     ),
     (
         "69-typehole-path",

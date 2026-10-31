@@ -32,7 +32,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 /// macro-rename → use-prefix → bare call → call-perm →
 /// call-arg-add →
 /// call-literal → call-arg-template → method-arg-template →
-/// general-expr → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block → literal-frame. Returns the winning semantic section
+/// general-expr → call-peel → let-type-add → type-sweep → let-template → untyped-let + pat-swap → sequence → repeat-fold → partial-strip → single-block → literal-frame. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -222,6 +222,23 @@ pub(crate) fn run_pair_chain(
         super::try_let_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((joint, "let_template"));
+    }
+    // WI-8 slice 1: untyped joint let template (same as above without
+    // ascriptions — hetero `P0`, uniform or `E0`-hole init incl.
+    // const-block/`_` inits via the shape parity gate) plus the
+    // tuple-position swap (`let (P0, P1) = E0;` →
+    // `let (P1, P0) = E0;`). After the typed template (those own
+    // ascribed classes; this declines any ascribed side), before the
+    // sequence sweep (which owns multi-line windows, never singles).
+    if let Some(untyped) =
+        super::try_untyped_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((untyped, "let_template"));
+    }
+    if let Some(swap) =
+        super::try_pat_swap_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((swap, "let_template"));
     }
     // WI-5c: repeated-block `let` sequences (N ≥ 2 blocks × 2–4 stmts,
     // hetero positions ride holes) — after the single-statement let
