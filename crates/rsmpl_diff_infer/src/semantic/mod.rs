@@ -15,6 +15,7 @@
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
 pub(crate) mod antiunify;
+pub(crate) mod antiunify_types;
 mod arg_template;
 mod block_headers;
 mod calls;
