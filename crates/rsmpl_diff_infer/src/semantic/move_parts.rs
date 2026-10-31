@@ -184,6 +184,22 @@ pub(crate) fn minus_last_cut_sound(
     if follows_blank {
         return following_in_hunk;
     }
+    // WI-18: a source file emptied to zero bytes is a first-class move
+    // source. The minus hunk covers the whole file (BOF..EOF, cut range
+    // from the first body line), so no outside preceding/following line
+    // exists to double-claim: BOF absorbs nothing, and the EOF
+    // preceding-blank absorption lands inside the hunk where
+    // `coalesce_deletes` union-merges the overlapping pure deletes.
+    // Adjacent items absorb nothing at all. Without this gate the
+    // capping loop degrades whole-file collections to a single item
+    // that then loses T375 (fixture 44).
+    if old_start == 1 && lo == 0 {
+        let nlines = file_old.lines().count();
+        let last_file_line = old_start as usize + hi;
+        if last_file_line >= nlines {
+            return true;
+        }
+    }
     if n != 1 {
         return false;
     }
@@ -379,5 +395,50 @@ pub(crate) fn classify(hunk: &HunkParts) -> Option<Side> {
         Some(Side::Plus)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_pair(first: usize, last: usize) -> MovePair {
+        MovePair {
+            minus_hunk_key: (0, 0),
+            plus_hunk_key: (1, 0),
+            item: MoveItem {
+                ident: format!("i{first}"),
+                text: String::new(),
+                lines: Vec::new(),
+                first,
+                last,
+            },
+            plus_first: 0,
+            plus_last: 0,
+            evolved: None,
+        }
+    }
+
+    #[test]
+    fn whole_file_adjacent_multi_cut_is_sound() {
+        // WI-18 (fixture 44): whole-file adjacent items with no blanks
+        // absorb nothing — the multi-cut is sound despite no following
+        // blank.
+        let body: Vec<String> = (0..9).map(|i| format!("-line{i}")).collect();
+        let pairs = vec![test_pair(0, 2), test_pair(3, 5), test_pair(6, 8)];
+        let old = "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n";
+        assert!(minus_last_cut_sound(&body, &pairs, 0, 0, 1, old));
+    }
+
+    #[test]
+    fn partial_adjacent_multi_cut_stays_unsound() {
+        // Same three adjacent items mid-file with kept code after the
+        // range: without a following blank the last cut's absorption is
+        // unproven — the veto stands.
+        let body: Vec<String> = (0..9).map(|i| format!("-line{i}")).collect();
+        let pairs = vec![test_pair(0, 2), test_pair(3, 5), test_pair(6, 8)];
+        let old = "head\nl0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\ntail\n";
+        // Minus hunk starts at file line 2, covers to line 10, tail kept.
+        assert!(!minus_last_cut_sound(&body, &pairs, 0, 0, 2, old));
     }
 }

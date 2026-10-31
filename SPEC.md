@@ -4226,7 +4226,7 @@ A bare `# bind=<Name>` is a scalar capture: it binds exactly one AST object. Com
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is a collection cut only on an item-capture cut hunk (`- I`); on any other shape it is invalid (`RSMPL_CAPTURE_CONFLICT`, same envelope as the shape fences below). Authors who need to move a single item keep the scalar form (separate scalar captures under distinct names).
 
-An ordered collection binds every item matched in scope, in source order (ranges cite the original pre-patch file, never rebased). A paste hunk (`+ Name`) splices all items at its anchor in source order with the Section 20.2 one-blank join; the same collection may be pasted more than once (a copy — scalar fan-out parity). `# optional` with zero matches binds the empty collection, and the paste splices nothing. An evolution paste (a header template instead of the bare name) with a collection capture fails loud with `RSMPL_CAPTURE_CONFLICT` — one header template cannot evolve many items. A collection cut deletes every matched item span; an overlapping ordinary hunk on the same lines fails the patch whole, never partially.
+An ordered collection binds every item matched in scope, in source order (ranges cite the original pre-patch file, never rebased). A paste hunk (`+ Name`) splices all items at its anchor in source order with the Section 20.2 one-blank join; the same collection may be pasted more than once (a copy — scalar fan-out parity). `# optional` with zero matches binds the empty collection, and the paste splices nothing. An evolution paste with a collection capture carries an `N`-hole in the name position (`N`, `new_N`, `N_new`, `pre_N_post` — `N` as a standalone underscore-separated segment, exactly once; `New` stays concrete): each item replays through the template with `N` bound to that item's old ident (`new = pre + old + post`), bodies/attrs/slots replay per item as scalar evolution pastes do. A concrete hole-less template on a collection fails loud with `RSMPL_CAPTURE_CONFLICT` (would rename many items to one name); kind-changing templates fail loud in the scalar splice. A collection cut deletes every matched item span; an overlapping ordinary hunk on the same lines fails the patch whole, never partially. A source file emptied to zero bytes is a first-class move source: its minus hunk covering the whole file (BOF..EOF) is sound for multi-item cuts (no outside preceding/following line to double-claim; `coalesce_deletes` union-merges the overlapping pure deletes).
 
 The five shape violations fail fast with `RSMPL_CAPTURE_CONFLICT` (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout — contrast the missing-capture fences in Section 25.6, which set `suggestion:`):
 
@@ -6217,7 +6217,6 @@ Possible future extensions:
 - conflict markers for semantic patches;
 - automatic import management;
 - semantic move with path rewriting;
-- per-item evolution of collections (one header template cannot evolve many items);
 - explicit edition support (currently rejected, see Section 9.6):
 
 ```text
@@ -7994,11 +7993,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
      token or `impl Trait for` restriction vetoes).
    WI-6 collection cells: one (minus hunk, plus hunk) cell holding ≥3
    distinct moved items that owns every pair of its minus hunk and every
-   paired run of its plus hunk (no fan-out interleave, no split anchors,
-   no evolved pairs) emits one ranged `# allow=many` + `# bind` cut plus
-   one bare `+ Mk` paste (items joined plus-run order, one blank between)
-   when that spelling beats the scalar fan-in under T375, else the cell
-   keeps scalar emission; the absorbed-blank gate above applies unchanged.
+   paired run of its plus hunk (no fan-out interleave, no split anchors)
+   emits one ranged `# allow=many` + `# bind` cut plus one paste (bare
+   `+ Mk` for byte-identical cells; WI-18 `N`-hole template
+   `+ fn new_N(...) { ... }` for evolving cells where every member is
+   abstract-evolved with the same kind/prefix and one uniform
+   `pre_N_post` affix) when that spelling beats the scalar fan-in under
+   T375, else the cell keeps scalar emission; the absorbed-blank gate
+   above applies unchanged, except a source file emptied to zero bytes
+   (minus hunk covering BOF..EOF) is sound for multi-item cuts (WI-18
+   gate: no outside line to double-claim).
      Everything else (other item kinds, attr/body deltas, multi-line
      `fn` headers) stays ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose

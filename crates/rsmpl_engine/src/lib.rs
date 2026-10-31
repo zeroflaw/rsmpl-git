@@ -10,6 +10,7 @@
 
 mod canonical_tree;
 mod capture;
+mod capture_evolve;
 mod crate_graph;
 mod drift;
 mod edits;

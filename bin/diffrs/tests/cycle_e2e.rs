@@ -279,6 +279,8 @@ const CYCLE_OK: &[&str] = &[
     "114-delete-single",
     "115-move-evolve-single",
     "48-token-tree-arg-hole",
+    "44-collection-move",
+    "121-collection-evolve",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -349,10 +351,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "30-trait-sweep",
         "hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)",
-    ),
-    (
-        "44-collection-move",
-        "nodet: collection move re-infers as ordinary add plus paste-less `- I` cut (collection emission declines; tree legs still close)",
     ),
     (
         "45-macro-rules-rename",

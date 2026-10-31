@@ -1,12 +1,16 @@
-//! WI-6 collection move emission (D5 sibling of `moves.rs`).
+//! WI-6 collection move emission (D5 sibling of `moves.rs`) + WI-18
+//! evolving collections.
 //!
 //! A collection cell is one `(minus_hunk, plus_hunk)` cell of `final_pairs`
 //! holding >= 3 distinct moved items that covers every pair of its minus
 //! hunk and every paired run of its plus hunk (no fan-out interleave, no
-//! split anchors, no evolved pairs). The cell emits one ranged
-//! `# allow=many` cut (`- I` binds every in-scope item in source order)
-//! plus one bare `+ Mk` paste when that spelling beats the scalar fan-in
-//! under T375; otherwise the cell keeps scalar emission.
+//! split anchors). Byte-identical cells emit one ranged `# allow=many`
+//! cut plus one bare `+ Mk` paste; evolving cells (WI-18: every member
+//! evolved with the same kind, same verbatim prefix, and one uniform
+//! `pre_N_post` name affix) emit the same cut plus one `N`-hole template
+//! paste (`+ fn new_N(...) { ... }`). The cell emits when that spelling
+//! beats the scalar fan-in under T375; otherwise the cell keeps scalar
+//! emission.
 //!
 //! The rebuild in `moves.rs` is untouched: each cell contributes one
 //! `named` entry per member pair sharing a single cut string, with the
@@ -16,7 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::move_parts::{MovePair, SectionParts};
+use super::move_parts::{EvolvedKind, MovePair, SectionParts};
 
 /// One planned collection cell: the member pair indices into the
 /// `final_pairs` slice handed to [`plan_collections`], plus the concrete
@@ -95,6 +99,10 @@ struct CellDraft {
     cut_start: u32,
     cut_len: u32,
     anchor: u32,
+    /// WI-18: `N`-hole paste body for evolving cells
+    /// (`fn new_N(...) { ... }`); `None` for byte-identical cells
+    /// (bare `+ Mk` paste).
+    template: Option<String>,
 }
 
 impl CellDraft {
@@ -103,8 +111,9 @@ impl CellDraft {
             "@@ -{},{} @@ rule={cut_rule}\n# allow=many\n# bind={bind}\n- I\n",
             self.cut_start, self.cut_len
         );
+        let body = self.template.as_deref().unwrap_or(bind);
         let paste = format!(
-            "@@ -{},0 @@ rule={paste_rule}\n# use={bind}\n+ {bind}\n",
+            "@@ -{},0 @@ rule={paste_rule}\n# use={bind}\n+ {body}\n",
             self.anchor
         );
         PlannedCell {
@@ -123,17 +132,23 @@ fn plan_cell(
     parsed: &[SectionParts],
 ) -> Option<CellDraft> {
     // Distinct item spans; >= 3 items move together (SPEC D.4).
+    // WI-18: cells are either all byte-identical (`evolved: None`) or
+    // all evolved with one uniform kind/prefix/affix (evolving
+    // collection); mixed or divergent cells stay scalar.
     let mut spans: HashSet<(usize, usize)> = HashSet::new();
     for &i in members {
         let p = &final_pairs[i];
-        if p.evolved.is_some() {
-            return None;
-        }
         spans.insert((p.item.first, p.item.last));
     }
     if spans.len() < 3 || spans.len() != members.len() {
         return None;
     }
+    let all_identical = members.iter().all(|&i| final_pairs[i].evolved.is_none());
+    let evolving: Option<String> = if all_identical {
+        None
+    } else {
+        Some(uniform_evolving_template(members, final_pairs)?)
+    };
     let (minus_key, plus_key) = (
         final_pairs[members[0]].minus_hunk_key,
         final_pairs[members[0]].plus_hunk_key,
@@ -162,10 +177,40 @@ fn plan_cell(
     let cut_len = (max_last - min_first + 1) as u32;
     let anchor = parsed[plus_key.0].hunks[plus_key.1].old_start;
     // Scalar spelling (placeholder ids): one tight cut per span (minus
-    // order, as the naming loop emits) plus one paste per pair.
+    // order, as the naming loop emits) plus one paste per pair — bare
+    // pastes for identical cells, concrete templates for evolving
+    // cells (the naming loop emits scalar evolved pastes per pair).
+    // Collection spelling: one cut plus one paste (bare or `N`-hole).
     let mut scalar_bytes = 0usize;
     let mut ordered: Vec<usize> = members.to_vec();
     ordered.sort_by_key(|&i| final_pairs[i].item.first);
+    if let Some(ref tmpl) = evolving {
+        for &i in &ordered {
+            let p = &final_pairs[i];
+            let start = hunk.old_start + p.item.first as u32;
+            let len = (p.item.last - p.item.first + 1) as u32;
+            scalar_bytes += format!("@@ -{start},{len} @@ rule=r0\n# bind=M0\n- I\n").len();
+            let concrete = evolving_concrete_template(tmpl, &p.item.ident, p);
+            scalar_bytes += format!("@@ -{anchor},0 @@ rule=r0\n# use=M0\n+ {concrete}\n").len();
+        }
+        let collection_bytes =
+            format!("@@ -{cut_start},{cut_len} @@ rule=r0\n# allow=many\n# bind=M0\n- I\n").len()
+                + format!("@@ -{anchor},0 @@ rule=r0\n# use=M0\n+ {tmpl}\n").len();
+        let primary = *members
+            .iter()
+            .min_by_key(|&&i| final_pairs[i].plus_first)
+            .unwrap_or(&members[0]);
+        return Some(CellDraft {
+            members: members.to_vec(),
+            primary,
+            scalar_bytes,
+            collection_bytes,
+            cut_start,
+            cut_len,
+            anchor,
+            template: Some(tmpl.clone()),
+        });
+    }
     for &i in &ordered {
         let p = &final_pairs[i];
         let start = hunk.old_start + p.item.first as u32;
@@ -190,7 +235,130 @@ fn plan_cell(
         cut_start,
         cut_len,
         anchor,
+        template: None,
     })
+}
+
+/// WI-18: uniform evolving template for a cell (`None` keeps scalar).
+/// Every member must be abstract-evolved (`template: None`) with the
+/// same kind, same verbatim prefix, same `mut` (statics), and names
+/// following one uniform `pre_N_post` affix around the minus idents.
+/// Returns the `N`-hole paste body (e.g. `fn new_N(...) { ... }`).
+fn uniform_evolving_template(members: &[usize], final_pairs: &[MovePair]) -> Option<String> {
+    let first = &final_pairs[members[0]];
+    let ev0 = first.evolved.as_ref()?;
+    if ev0.template.is_some() {
+        return None;
+    }
+    let kind = ev0.kind;
+    let prefix = ev0.prefix.clone();
+    let is_mut = ev0.static_mut;
+    let mut olds: Vec<(&str, &str)> = Vec::with_capacity(members.len());
+    for &i in members {
+        let p = &final_pairs[i];
+        let ev = p.evolved.as_ref()?;
+        if ev.template.is_some()
+            || ev.kind != kind
+            || ev.prefix != prefix
+            || ev.static_mut != is_mut
+        {
+            return None;
+        }
+        olds.push((p.item.ident.as_str(), ev.name.as_str()));
+    }
+    let (pre, post) = uniform_name_affix(&olds)?;
+    let hole = format!("{pre}N{post}");
+    Some(evolving_template_for(kind, &prefix, &hole, is_mut))
+}
+
+/// WI-18: one uniform `pre`/`post` affix (underscore-bounded, possibly
+/// empty) with `new == pre + old + post` for every `(old, new)` pair.
+/// `None` on any divergent or non-affix pair.
+fn uniform_name_affix(pairs: &[(&str, &str)]) -> Option<(String, String)> {
+    let (old0, new0) = pairs.first()?;
+    for (pre_len, (pre, post)) in candidate_affixes(old0, new0).into_iter().enumerate() {
+        let _ = pre_len;
+        if pairs.iter().all(|(o, n)| *n == format!("{pre}{o}{post}")) {
+            return Some((pre, post));
+        }
+    }
+    None
+}
+
+/// Underscore-bounded splits of `new` around `old`
+/// (`pre == ""` or ends with `_`; `post == ""` or starts with `_`),
+/// shortest-`pre` first (deterministic; the cell intersection below
+/// disambiguates multi-split idents like `a_a`).
+fn candidate_affixes(old: &str, new: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if new.len() < old.len() {
+        return out;
+    }
+    for pre_len in 0..=new.len() - old.len() {
+        let (pre, rest) = new.split_at(pre_len);
+        let (mid, post) = rest.split_at(old.len());
+        if mid != old {
+            continue;
+        }
+        if !pre.is_empty() && !pre.ends_with('_') {
+            continue;
+        }
+        if !post.is_empty() && !post.starts_with('_') {
+            continue;
+        }
+        out.push((pre.to_string(), post.to_string()));
+    }
+    out
+}
+
+/// `N`-hole paste body for `kind` (mirrors the scalar
+/// `evolution_template` family with the hole as the name).
+fn evolving_template_for(kind: EvolvedKind, prefix: &str, hole: &str, is_mut: bool) -> String {
+    match kind {
+        EvolvedKind::Fn => super::move_evolve::evolution_template(prefix, hole),
+        EvolvedKind::Struct => super::move_evolve::struct_evolution_template(prefix, hole),
+        EvolvedKind::Enum => super::move_evolve::enum_evolution_template(prefix, hole),
+        EvolvedKind::Union => super::move_evolve::union_evolution_template(prefix, hole),
+        EvolvedKind::Type => super::move_evolve::type_evolution_template(prefix, hole),
+        EvolvedKind::Const => super::move_evolve::const_evolution_template(prefix, hole),
+        EvolvedKind::Static => super::move_evolve::static_evolution_template(prefix, hole, is_mut),
+        EvolvedKind::Mod => super::move_evolve::mod_evolution_template(prefix, hole),
+        EvolvedKind::Trait => super::move_evolve::trait_evolution_template(prefix, hole),
+    }
+}
+
+/// Concrete scalar paste body for one evolving member (the `N`-hole
+/// template with the hole replaced by that item's new ident) — used
+/// only for the T375 byte comparison; emission reuses the scalar path
+/// in `moves.rs`.
+fn evolving_concrete_template(tmpl: &str, old_ident: &str, p: &MovePair) -> String {
+    let ev = match p.evolved.as_ref() {
+        Some(e) => e,
+        None => return "M0".to_string(),
+    };
+    let (pre, post) = match uniform_name_affix(&[(old_ident, ev.name.as_str())]) {
+        Some(v) => v,
+        None => return ev.name.clone(),
+    };
+    let hole = format!("{pre}N{post}");
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let bytes = tmpl.as_bytes();
+    let hole_b = hole.as_bytes();
+    let mut i = 0;
+    while i + hole_b.len() <= bytes.len() {
+        if &bytes[i..i + hole_b.len()] == hole_b {
+            let before_ok = i == 0 || !is_ident(bytes[i - 1]);
+            let after_ok = i + hole_b.len() >= bytes.len() || !is_ident(bytes[i + hole_b.len()]);
+            if before_ok && after_ok {
+                let mut out = tmpl[..i].to_string();
+                out.push_str(&ev.name);
+                out.push_str(&tmpl[i + hole_b.len()..]);
+                return out;
+            }
+        }
+        i += 1;
+    }
+    ev.name.clone()
 }
 
 #[cfg(test)]
@@ -380,6 +548,8 @@ mod tests {
 
     #[test]
     fn evolved_pair_vetoes_cell() {
+        // Mixed identical + evolved members stay scalar (no uniform
+        // template covers the cell).
         let parsed = vec![
             section(
                 "a.rs",
@@ -408,6 +578,100 @@ mod tests {
             pair((0, 0), (1, 0), "a", 0, 0, 0, 0),
             pair((0, 0), (1, 0), "b", 2, 2, 2, 2),
             p,
+        ];
+        let mut used = Vec::new();
+        let mut seq = 0;
+        assert!(plan_collections(&pairs, &parsed, &mut used, &mut seq).is_empty());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evolved_pair(
+        minus: (usize, usize),
+        plus: (usize, usize),
+        ident: &str,
+        new: &str,
+        first: usize,
+        last: usize,
+        plus_first: usize,
+        plus_last: usize,
+    ) -> MovePair {
+        let mut p = pair(minus, plus, ident, first, last, plus_first, plus_last);
+        p.evolved = Some(crate::semantic::move_parts::EvolvedPair {
+            kind: crate::semantic::move_parts::EvolvedKind::Fn,
+            prefix: String::new(),
+            name: new.to_string(),
+            static_mut: false,
+            template: None,
+        });
+        p
+    }
+
+    #[test]
+    fn evolving_prefix_cell_plans_template() {
+        // WI-18: three uniformly prefixed members plan one evolving
+        // collection (`new_a/b/c` → `new_N` template).
+        let parsed = vec![
+            section(
+                "a.rs",
+                vec![hunk(
+                    2,
+                    &["-fn a() {}", "-", "-fn b() {}", "-", "-fn c() {}"],
+                )],
+            ),
+            section(
+                "b.rs",
+                vec![hunk(
+                    2,
+                    &[
+                        "+fn new_a() {}",
+                        "+",
+                        "+fn new_b() {}",
+                        "+",
+                        "+fn new_c() {}",
+                    ],
+                )],
+            ),
+        ];
+        let pairs = vec![
+            evolved_pair((0, 0), (1, 0), "a", "new_a", 0, 0, 0, 0),
+            evolved_pair((0, 0), (1, 0), "b", "new_b", 2, 2, 2, 2),
+            evolved_pair((0, 0), (1, 0), "c", "new_c", 4, 4, 4, 4),
+        ];
+        let mut used = Vec::new();
+        let mut seq = 0;
+        let cells = plan_collections(&pairs, &parsed, &mut used, &mut seq);
+        assert_eq!(cells.len(), 1, "must plan evolving cell");
+        assert!(
+            cells[0].paste.contains("fn new_N(...)"),
+            "got: {}",
+            cells[0].paste
+        );
+    }
+
+    #[test]
+    fn evolving_divergent_names_stay_scalar() {
+        // Divergent affixes (`new_a`, `b_new`, `c`) share no uniform
+        // template — the cell stays scalar.
+        let parsed = vec![
+            section(
+                "a.rs",
+                vec![hunk(
+                    2,
+                    &["-fn a() {}", "-", "-fn b() {}", "-", "-fn c() {}"],
+                )],
+            ),
+            section(
+                "b.rs",
+                vec![hunk(
+                    2,
+                    &["+fn new_a() {}", "+", "+fn b_new() {}", "+", "+fn c() {}"],
+                )],
+            ),
+        ];
+        let pairs = vec![
+            evolved_pair((0, 0), (1, 0), "a", "new_a", 0, 0, 0, 0),
+            evolved_pair((0, 0), (1, 0), "b", "b_new", 2, 2, 2, 2),
+            evolved_pair((0, 0), (1, 0), "c", "c", 4, 4, 4, 4),
         ];
         let mut used = Vec::new();
         let mut seq = 0;

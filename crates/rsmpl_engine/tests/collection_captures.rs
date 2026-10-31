@@ -1,8 +1,8 @@
 //! WI-6 collection-capture pins: `# bind=` + `# allow=many` on an item
 //! cut binds every in-scope item in source order (SPEC 20.3); a `# use=`
 //! pure-insertion paste splices all items with one blank between
-//! (SPEC 20.2). Evolution pastes with a collection fail loud (one
-//! header template cannot evolve many items).
+//! (SPEC 20.2). Concrete evolution pastes with a collection fail loud;
+//! WI-18 `N`-hole templates (`new_N`) replay per item.
 
 use std::collections::HashMap;
 
@@ -140,6 +140,31 @@ fn collection_evolution_paste_fails_loud() {
     let err = apply_multi(patch, vec![("a.rs", SRC), ("b.rs", "use x;\n")]).unwrap_err();
     assert!(err.contains("RSMPL_CAPTURE_CONFLICT"), "got: {err}");
     assert!(err.contains("collection"), "got: {err}");
+}
+
+#[test]
+fn collection_evolving_prefix_paste_replays_per_item() {
+    // WI-18: an `N`-hole template (`new_N`) renames each captured item.
+    let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,9 @@ rule=cut_helpers\n# allow=many\n# bind=Helpers\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=Helpers\n+ fn new_N(...) { ... }\n";
+    let files = apply_multi(patch, vec![("a.rs", SRC), ("b.rs", "use x;\n")]).unwrap();
+    assert_eq!(files["a.rs"], "fn keep() {}\n", "got: {:?}", files["a.rs"]);
+    assert_eq!(
+        files["b.rs"],
+        "use x;\nfn new_a() {}\n\nfn new_b() {}\n\nfn new_c() {}\n\nfn new_d() {}\n\nfn new_e() {}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn collection_evolving_kind_mismatch_fails_loud() {
+    // A `struct` template over captured `fn` items fails loud.
+    let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,9 @@ rule=cut_helpers\n# allow=many\n# bind=Helpers\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_struct\n# use=Helpers\n+ struct new_N { ... }\n";
+    let err = apply_multi(patch, vec![("a.rs", SRC), ("b.rs", "use x;\n")]).unwrap_err();
+    assert!(
+        err.contains("RSMPL_CAPTURE_CONFLICT") || err.contains("RSMPL_PATTERN_CONFLICT"),
+        "got: {err}"
+    );
 }
 
 #[test]

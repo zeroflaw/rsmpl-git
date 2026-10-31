@@ -1,0 +1,9 @@
+diff --git src/old.rs
+@@ -1,15 @@ rule=cut_all
+# bind=M1
+# allow=many
+- I
+diff --git src/new.rs
+@@ -1,0 @@ rule=paste_new
+# use=M1
++ fn new_N(...) { ... }

@@ -140,19 +140,17 @@ pub(crate) fn paste_capture(
 ) -> Result<(), StructuredError> {
     let (texts, collection) = captures.get_all(target.name, rule, file)?;
     if collection {
-        // WI-6: one header template cannot evolve many items; paste the
-        // bare collection verbatim or fail loud (SPEC 20.3).
-        if target.template.is_some_and(|t| t.trim() != target.name) {
-            return Err(StructuredError::new(
-                ErrorCode::CaptureConflict,
-                "collection captures cannot use evolution pastes (one header template cannot evolve many items)",
-            )
-            .with_rule(rule)
-            .with_file(file)
-            .with_repair(StructuredError::fix_pattern_repair(
-                "use",
-                "paste with a bare `+ Name` (`# use=<Name>`) or move items singly",
-            )));
+        // WI-18: a collection paste is either the bare name (verbatim,
+        // WI-6) or an evolution template carrying an `N`-hole
+        // (`N`/`new_N`/`N_new`/`pre_N_post`); each item replays through
+        // the template with `N` bound per item. Concrete hole-less
+        // templates still fail loud (would duplicate one name).
+        if let Some(t) = target.template {
+            if t.trim() != target.name {
+                return crate::capture_evolve::paste_evolving_collection(
+                    texts, t, target, index, rule, file, edits,
+                );
+            }
         }
         if texts.is_empty() {
             return Ok(());
@@ -277,7 +275,7 @@ pub(crate) fn eval_collection_cut(
 /// `pub mod New { ... }`, or `pub trait New { ... }`). The
 /// template's prefix and new ident replace the capture's header line;
 /// every other line stays byte-verbatim. Returns the spliced item text.
-fn splice_evolved_header(
+pub(crate) fn splice_evolved_header(
     captured: &str,
     template: &str,
     rule: &str,

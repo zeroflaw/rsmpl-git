@@ -38,7 +38,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 | `# scope=file` | search whole file; `@@ -1,1 @@` dummy, no discovery needed (SPEC 17.3); prefer `# sweep` for sweeps |
 | `# optional` | zero matches OK (default: error) |
 | `E` / `T` / `P` / `V Q G W` / `I` / `N` | inferred metavariables — no declaration needed (SPEC 15.8); `N` is the fn-header name hole (binds per-site, replays; `# ident X` declares others) and the bare-pair item hole (`- struct N`, attr evolution only); explicit `# expr E` etc. still legal |
-| `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8); `+ # allow=many` on the cut binds an ordered collection (SPEC 20.3) |
+| `# bind=Name` / `# use=Name` | cut (`- I` + `# bind=`) / paste (`+ Name` + `# use=`) a moved item; `- I` infers `item` (SPEC 15.8); `+ # allow=many` on the cut binds an ordered collection (SPEC 20.3); collection paste with an `N`-hole template (`+ fn new_N(...) { ... }`) evolves each item's name per item (`N`/`new_N`/`N_new`/`pre_N_post`) |
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments; written attr lines are the delta on fn/item/`let` (add/remove/same-length replace, SPEC 14.6); uniform attr deltas over hetero items raise via `attr_sweep` (SPEC D.4) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous (SPEC 13.4) |
 | `# fallback=syntax` | syntactic match when `# symbol` can't resolve (unresolvable seed/dependency/glob); bare `# symbol` verifies against the crate-local index and reports `symbol: resolved` (SPEC 19); with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing (SPEC 14.8) |

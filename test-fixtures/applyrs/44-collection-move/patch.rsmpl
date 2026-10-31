@@ -1,9 +1,9 @@
 diff --git src/old.rs
 @@ -1,9 @@ rule=cut_all
-# bind=H
+# bind=M1
 # allow=many
 - I
 diff --git src/new.rs
 @@ -1,0 @@ rule=paste_all
-# use=H
-+ H
+# use=M1
++ M1
