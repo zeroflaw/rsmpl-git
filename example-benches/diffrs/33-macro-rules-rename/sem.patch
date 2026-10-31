@@ -1,0 +1,10 @@
+diff --git src/lib.rs
+@@ -1,5 @@ rule=rename_old_widget_to_new_widget
+# allow=many
+- macro_rules! old_widget
++ macro_rules! new_widget
+@@ -8,4 @@ rule=rename_old_widget_to_new_widget
+# allow=many
+# macro=token_tree
+- old_widget!(...)
++ new_widget!(...)

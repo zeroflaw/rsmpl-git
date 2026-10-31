@@ -31,6 +31,7 @@ mod plan;
 mod postcheck;
 mod suggest;
 mod use_graph;
+mod use_graph_macro;
 mod use_graph_orphan;
 mod validate;
 

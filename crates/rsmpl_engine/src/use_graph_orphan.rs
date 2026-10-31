@@ -20,11 +20,14 @@ use crate::matcher_item::span_bytes;
 
 /// Report-only orphan collection (never fails loud: unmappable spans are
 /// skipped, never guessed).
+/// `macro_paths` (WI-7b mirror of `use_graph`): also list macro-invocation
+/// paths (`Old!…`) as orphans when the rename is a `macro_rules!` rename.
 pub fn collect_orphans(
     files: &[(String, &syn::File, &str, &LineIndex)],
     old: &str,
     renamed_file: &str,
     renamed: &[(usize, usize)],
+    macro_paths: bool,
 ) -> Vec<crate::OrphanReport> {
     let renamed_hit_in = |path: &str, a: usize, b: usize| {
         path == renamed_file && renamed.iter().any(|(s, e)| a < *e && *s < b)
@@ -33,6 +36,7 @@ pub fn collect_orphans(
     for (path, parsed, original, index) in files {
         let mut collector = Collector {
             old,
+            macro_paths,
             uses: Vec::new(),
             opaque: Vec::new(),
         };
@@ -85,6 +89,7 @@ fn source_line_text(original: &str, index: &LineIndex, line: u32) -> String {
 
 struct Collector<'a> {
     old: &'a str,
+    macro_paths: bool,
     uses: Vec<proc_macro2::Span>,
     opaque: Vec<(u32, String)>,
 }
@@ -199,6 +204,9 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if self.macro_paths {
+            self.push_path_use(&node.path);
+        }
         if tokens_mention(&node.tokens, self.old) {
             self.opaque.push((
                 node.span().start().line as u32,
@@ -229,6 +237,7 @@ mod tests {
             old,
             "src/a.rs",
             &[(a, a + old.len())],
+            false,
         )
     }
 

@@ -26,6 +26,7 @@ mod literal;
 mod macro_enclosing;
 mod macro_hetero;
 mod macro_parts;
+mod macro_rules;
 mod macros;
 mod methods;
 mod move_collection;
@@ -59,6 +60,7 @@ pub(crate) use trait_methods::try_trait_method_rename;
 pub(crate) use arg_template::{try_call_arg_template_sweep, try_method_arg_template_sweep};
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
 pub(crate) use literal::try_call_literal_sweep;
+pub(crate) use macro_rules::try_macro_rules_rename;
 pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};
 pub(crate) use methods::{
     try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
@@ -195,9 +197,18 @@ pub(crate) fn try_item_rename(
 /// Split `fn foo() {`-style header lines into
 /// (vis prefix, kind, ident, suffix). Prefix is `""` or `"pub … "`
 /// (with trailing space); suffix is everything after the ident.
-fn split_item(line: &str) -> Option<(String, String, String, String)> {
+pub(crate) fn split_item(line: &str) -> Option<(String, String, String, String)> {
     const KINDS: &[&str] = &[
-        "fn", "struct", "enum", "trait", "type", "mod", "union", "const", "static",
+        "fn",
+        "struct",
+        "enum",
+        "trait",
+        "type",
+        "mod",
+        "union",
+        "const",
+        "static",
+        "macro_rules!",
     ];
     let trimmed = line.trim_start();
     // Column-0 is enforced by the caller; a trimmed start here only

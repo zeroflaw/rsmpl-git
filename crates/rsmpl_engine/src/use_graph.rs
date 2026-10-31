@@ -53,6 +53,8 @@ pub struct FollowVeto {
 /// (its ident-span edits): a same-named definition overlapping one of them
 /// is the renamed definition itself, any other is shadowing. `fallback`
 /// mirrors `# fallback=syntax` (skip + report instead of veto).
+/// `macro_paths` (WI-7b) also collects macro-invocation paths (`Old!`)
+/// as uses; false otherwise (a struct `Old` must not claim `Old!`).
 pub fn resolve(
     parsed: &syn::File,
     original: &str,
@@ -60,8 +62,9 @@ pub fn resolve(
     old: &str,
     renamed: &[(usize, usize)],
     fallback: bool,
+    macro_paths: bool,
 ) -> Result<FollowOutcome, FollowVeto> {
-    let collector = collect(parsed, old);
+    let collector = collect(parsed, old, macro_paths);
 
     // Byte-map definitions (fail loud on unmappable spans, never guess).
     let mut def_ranges: Vec<(usize, usize, u32, &'static str)> = Vec::new();
@@ -208,6 +211,7 @@ pub fn resolve_workspace<'a>(
     renamed_file: &str,
     renamed: &[(usize, usize)],
     fallback: bool,
+    macro_paths: bool,
 ) -> Result<WorkspaceOutcome, FollowVeto> {
     if files.len() <= 1 {
         // Single-file fast path: the exact WI-6a outcome and messages
@@ -219,7 +223,7 @@ pub fn resolve_workspace<'a>(
                 skipped: Vec::new(),
             });
         };
-        let out = resolve(parsed, original, index, old, renamed, fallback)?;
+        let out = resolve(parsed, original, index, old, renamed, fallback, macro_paths)?;
         let per_file = if out.spans.is_empty() {
             Vec::new()
         } else {
@@ -246,7 +250,7 @@ pub fn resolve_workspace<'a>(
     }
     let mut all: Vec<Collected> = Vec::with_capacity(files.len());
     for (path, parsed, original, _) in files {
-        let c = collect(parsed, old);
+        let c = collect(parsed, old, macro_paths);
         all.push(Collected {
             path: path.clone(),
             original: (*original).to_string(),
@@ -597,9 +601,10 @@ fn points_at_def(prefix: &[String], defpath: &[String]) -> bool {
 }
 
 /// Shared single-file collection behind `resolve` (no behavior change).
-fn collect<'a>(parsed: &'a syn::File, old: &'a str) -> Collector<'a> {
+fn collect<'a>(parsed: &'a syn::File, old: &'a str, macro_paths: bool) -> Collector<'a> {
     let mut collector = Collector {
         old,
+        macro_paths,
         defs: Vec::new(),
         uses: Vec::new(),
         opaque: Vec::new(),
@@ -637,6 +642,10 @@ fn tokens_mention(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
 
 struct Collector<'a> {
     old: &'a str,
+    /// WI-7b: also collect macro-invocation paths (`Old!…`) as uses.
+    /// False for every other rename (a struct `Old` must not claim a
+    /// macro `Old!`, different namespaces).
+    macro_paths: bool,
     /// (span, kind label) definition idents named `old`.
     defs: Vec<(proc_macro2::Span, &'static str)>,
     /// Use-site ident spans named `old`.
@@ -826,6 +835,17 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         visit::visit_item_mod(self, node);
     }
 
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        // WI-7b: `macro_rules! Old` definitions (invocation paths
+        // collect via `visit_macro` under `macro_paths`; bodies opaque).
+        if super::use_graph_macro::is_macro_rules_path(&node.mac.path) {
+            if let Some(ident) = node.ident.as_ref() {
+                self.push_def(ident, "macro_rules");
+            }
+        }
+        visit::visit_item_macro(self, node);
+    }
+
     fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
         // Self-ty and trait-side last segments name the renamed item
         // itself (Rust coherence: `impl Old` implements `Old`), so they
@@ -916,7 +936,11 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        // Token interiors are opaque: no recursion, mention recorded.
+        // WI-7b: invocation paths name the macro under `macro_paths`
+        // only (namespaces differ); bodies stay opaque either way.
+        if self.macro_paths {
+            self.push_path_use(&node.path);
+        }
         if tokens_mention(&node.tokens, self.old) {
             self.opaque.push((
                 node.span().start().line as u32,
@@ -969,17 +993,22 @@ pub(crate) fn follow_uses_workspace(
     if found == 0 {
         return Ok((bindings, no_follow));
     }
-    let (old, new) = match &compiled.kind {
+    let (old, new, macro_paths) = match &compiled.kind {
         PatternKind::Fn {
             minus_name,
             plus_name,
             ..
-        } => (minus_name.clone(), plus_name.clone()),
+        } => (minus_name.clone(), plus_name.clone(), false),
         PatternKind::ItemRename {
             minus_name,
             plus_name,
+            kind,
             ..
-        } => (minus_name.clone(), plus_name.clone()),
+        } => (
+            minus_name.clone(),
+            plus_name.clone(),
+            *kind == rsmpl_pattern::ItemKind::MacroRules,
+        ),
         _ => {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -1016,6 +1045,7 @@ pub(crate) fn follow_uses_workspace(
         def_path,
         &renamed,
         rh.fallback_syntax(),
+        macro_paths,
     )
     .map_err(|veto| {
         StructuredError::new(ErrorCode::SymbolConflict, veto.reason)
@@ -1103,7 +1133,15 @@ mod tests {
         // The renamed definition: byte range of `renamed_site`'s `old`.
         let off = src.find(renamed_site).expect("renamed site must exist");
         let a = off + renamed_site.find(old).expect("old inside site");
-        resolve(&parsed, src, &index, old, &[(a, a + old.len())], fallback)
+        resolve(
+            &parsed,
+            src,
+            &index,
+            old,
+            &[(a, a + old.len())],
+            fallback,
+            false,
+        )
     }
 
     const STRUCT_SRC: &str = "use m::Old;\nstruct Old {\n    field: i32,\n}\nimpl Old {\n    fn make() -> Old {\n        Old { field: 0 }\n    }\n}\nfn f(x: Old) -> Old {\n    let y: Old = Old::make();\n    let z = Old;\n    z\n}\n";
@@ -1247,7 +1285,14 @@ mod tests {
             .1;
         let off = def_src.find(renamed_site).expect("renamed site must exist");
         let a = off + renamed_site.find(old).expect("old inside site");
-        resolve_workspace(&refs, old, renamed_file, &[(a, a + old.len())], fallback)
+        resolve_workspace(
+            &refs,
+            old,
+            renamed_file,
+            &[(a, a + old.len())],
+            fallback,
+            false,
+        )
     }
 
     #[test]

@@ -144,6 +144,24 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             m.attrs.clone(),
             m.span(),
         ),
+        syn::Item::Macro(m) if want == ItemKind::MacroRules => {
+            // `macro_rules! Old { ... }`: the definition name is the
+            // `ident` (not the `macro_rules` path); attribute-style
+            // macros (`my_attr!{...}` in item position) have other
+            // paths and never match (WI-7b sibling predicate).
+            if !super::use_graph_macro::is_macro_rules_path(&m.mac.path) {
+                return;
+            }
+            if let Some(ident) = m.ident.as_ref() {
+                push_candidate(
+                    out,
+                    ident.to_string(),
+                    ident.span(),
+                    m.attrs.clone(),
+                    m.span(),
+                );
+            }
+        }
         syn::Item::Impl(imp) if want == ItemKind::Impl => {
             if let Some(ident) = self_ty_ident(&imp.self_ty) {
                 push_candidate(
@@ -715,5 +733,26 @@ mod tests {
         let err = apply(&drop, "/// Local thing.\nstruct Local;\n").unwrap_err();
         assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
         assert!(err.contains("differ from matched attributes"), "got: {err}");
+    }
+
+    #[test]
+    fn renames_macro_rules_preserving_body_and_attrs() {
+        // WI-7b: `macro_rules!` definitions rename the ident only.
+        let patch = rename_patch("macro_rules! Old", "macro_rules! New", "@@ -1,4 +1,4 @@");
+        let src = "#[macro_export]\nmacro_rules! Old {\n    ($x:expr) => { $x + 1 };\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("macro_rules! New {"), "got: {out}");
+        assert!(out.contains("#[macro_export]"));
+        assert!(out.contains("($x:expr) => { $x + 1 };"));
+        assert!(!out.contains("macro_rules! Old"));
+    }
+
+    #[test]
+    fn macro_rules_distractor_untouched() {
+        let patch = rename_patch("macro_rules! Old", "macro_rules! New", "@@ -1,4 +1,4 @@");
+        let src = "macro_rules! Old {\n    () => {};\n}\nmacro_rules! Other {\n    () => {};\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("macro_rules! New {"), "got: {out}");
+        assert!(out.contains("macro_rules! Other {"), "got: {out}");
     }
 }

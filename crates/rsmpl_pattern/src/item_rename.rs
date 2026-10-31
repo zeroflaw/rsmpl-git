@@ -10,7 +10,8 @@
 //! ```
 //!
 //! Supported kinds: `struct`, `enum`, `trait`, `union`, `type`, `const`,
-//! `static` (plus `mut`), `mod`, `impl` (self-ty only). An optional `...`
+//! `static` (plus `mut`), `mod`, `impl` (self-ty only), `macro_rules!`.
+//! An optional `...`
 //! body suffix (`;`, `{ ... }`, `( ... )`, `= ...;`, `: ... = ...;`) is
 //! accepted and ignored; any other concrete text (generics, fields, types,
 //! values, `where`) is a `PatternConflict` directing the author to the bare
@@ -31,6 +32,7 @@ pub enum ItemKind {
     Static,
     Mod,
     Impl,
+    MacroRules,
 }
 
 impl ItemKind {
@@ -45,6 +47,7 @@ impl ItemKind {
             Self::Static => "static",
             Self::Mod => "mod",
             Self::Impl => "impl",
+            Self::MacroRules => "macro_rules!",
         }
     }
 
@@ -59,6 +62,7 @@ impl ItemKind {
             "static" => Some(Self::Static),
             "mod" => Some(Self::Mod),
             "impl" => Some(Self::Impl),
+            "macro_rules" | "macro_rules!" => Some(Self::MacroRules),
             _ => None,
         }
     }
@@ -300,7 +304,16 @@ pub fn parse_side(text: &str) -> Result<Option<ItemRenameSide>, StructuredError>
     // Kind keyword.
     let mut kind: Option<ItemKind> = None;
     for kw in [
-        "struct", "enum", "trait", "union", "type", "const", "static", "mod", "impl",
+        "struct",
+        "enum",
+        "trait",
+        "union",
+        "type",
+        "const",
+        "static",
+        "mod",
+        "impl",
+        "macro_rules",
     ] {
         if let Some(after) = eat_keyword(s, kw) {
             kind = ItemKind::parse(kw);
@@ -311,11 +324,22 @@ pub fn parse_side(text: &str) -> Result<Option<ItemRenameSide>, StructuredError>
     let Some(kind) = kind else {
         return Ok(None);
     };
+    // `macro_rules!` definitions take the `!` between kind and name
+    // (`macro_rules! Old`); without it the text is a macro invocation
+    // shape, not an item rename — fall through to the macro router.
+    if kind == ItemKind::MacroRules {
+        let t = skip_ws(s);
+        let Some(rest) = t.strip_prefix('!') else {
+            return Ok(None);
+        };
+        s = skip_ws(rest);
+    }
     // Prefix–kind legality (T23a review): `unsafe` is only legal on
     // `trait`/`impl` headers, and `impl` blocks take no visibility.
     // Anything else is invalid Rust — fail fast rather than rename under
     // a meaningless spelling. Kind is `Some` here, so the `unsafe fn` /
-    // `const fn` fallthrough above is unaffected.
+    // `const fn` fallthrough above is unaffected. `macro_rules!`
+    // definitions take no visibility, `unsafe`, or `mut`.
     if saw_unsafe && kind != ItemKind::Trait && kind != ItemKind::Impl {
         return err(format!(
             "`unsafe` is only legal on `trait`/`impl` headers, not `{}` (write the bare `<{}> <Name>` form)",
@@ -323,8 +347,13 @@ pub fn parse_side(text: &str) -> Result<Option<ItemRenameSide>, StructuredError>
             kind.as_str()
         ));
     }
-    if saw_vis && kind == ItemKind::Impl {
-        return err("`impl` blocks take no visibility (write the bare `impl <Name>` form)");
+    if saw_vis && (kind == ItemKind::Impl || kind == ItemKind::MacroRules) {
+        if kind == ItemKind::Impl {
+            return err("`impl` blocks take no visibility (write the bare `impl <Name>` form)");
+        }
+        return err(
+            "`macro_rules!` definitions take no visibility (write the bare `macro_rules! <Name>` form)",
+        );
     }
     // `static mut NAME`.
     if kind == ItemKind::Static {
@@ -453,6 +482,7 @@ mod tests {
         assert_eq!(parse("static Old").0, ItemKind::Static);
         assert_eq!(parse("mod old").0, ItemKind::Mod);
         assert_eq!(parse("impl Old").0, ItemKind::Impl);
+        assert_eq!(parse("macro_rules! Old").0, ItemKind::MacroRules);
     }
 
     #[test]
@@ -555,5 +585,23 @@ mod tests {
         // `auto` + non-`trait` keeps today's fallthrough (no valid Rust
         // shape starts that way).
         assert!(parse_side("auto foo").unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_macro_rules_bang_forms() {
+        // WI-7b: `macro_rules!` definitions route to item rename.
+        assert_eq!(parse("macro_rules! old_widget").1, "old_widget");
+        assert_eq!(parse("macro_rules!old_widget").1, "old_widget");
+        assert_eq!(parse("macro_rules ! old_widget").1, "old_widget");
+        assert_eq!(parse("macro_rules! old_widget { ... }").1, "old_widget");
+        // Missing `!` is not an item shape (falls through to macro).
+        assert!(parse_side("macro_rules old_widget").unwrap().is_none());
+    }
+
+    #[test]
+    fn rejects_macro_rules_prefixes() {
+        // `macro_rules!` takes no visibility or `unsafe`.
+        assert!(parse_side("pub macro_rules! Old").is_err());
+        assert!(parse_side("unsafe macro_rules! Old").is_err());
     }
 }

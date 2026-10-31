@@ -42,6 +42,14 @@ pub(crate) fn run_pair_chain(
     changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<(String, &'static str)> {
+    // WI-7b: `macro_rules!` definition + invocation rename (one def plus
+    // N uses, hetero by construction) — before the slot sweep, which owns
+    // homogeneous header classes and never claims a `macro_rules!` line.
+    if let Some(combined) =
+        super::try_macro_rules_rename(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((combined, "macro_rules_rename"));
+    }
     if let Some(slot) =
         super::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {

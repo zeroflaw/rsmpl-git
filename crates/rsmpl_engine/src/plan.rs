@@ -514,8 +514,7 @@ fn apply_inner(
                     // Follow hunks never carry orphans (uses rewrite there).
                     let orphans = if !rh.follows_uses() && found > 0 {
                         match &compiled.kind {
-                            PatternKind::Fn { minus_name, .. }
-                            | PatternKind::ItemRename { minus_name, .. } => {
+                            PatternKind::Fn { minus_name, .. } => {
                                 let renamed: Vec<(usize, usize)> = file_edits
                                     .get(path)
                                     .map(|v| {
@@ -538,7 +537,40 @@ fn apply_inner(
                                         }
                                     }
                                 }
-                                collect_orphans(&refs, minus_name, path, &renamed)
+                                collect_orphans(&refs, minus_name, path, &renamed, false)
+                            }
+                            PatternKind::ItemRename {
+                                minus_name, kind, ..
+                            } => {
+                                let renamed: Vec<(usize, usize)> = file_edits
+                                    .get(path)
+                                    .map(|v| {
+                                        v[edits_before..].iter().map(|e| (e.start, e.end)).collect()
+                                    })
+                                    .unwrap_or_default();
+                                let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> =
+                                    Vec::new();
+                                let mut paths: Vec<&String> = states.keys().collect();
+                                paths.sort();
+                                for p in paths {
+                                    if let Some(st) = states.get(p) {
+                                        if let Some(parsed) = st.parsed.as_ref() {
+                                            refs.push((
+                                                p.clone(),
+                                                parsed,
+                                                st.original.as_str(),
+                                                &st.index,
+                                            ));
+                                        }
+                                    }
+                                }
+                                collect_orphans(
+                                    &refs,
+                                    minus_name,
+                                    path,
+                                    &renamed,
+                                    *kind == rsmpl_pattern::ItemKind::MacroRules,
+                                )
                             }
                             _ => Vec::new(),
                         }

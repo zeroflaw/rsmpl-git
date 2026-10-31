@@ -1372,7 +1372,7 @@ Examples:
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, or `impl` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `trait`-header context plus a function pair is a trait-method rename (`unsafe trait`/`unsafe impl` headers route identically — the fn-block scan skips block headers despite the `unsafe ` prefix) (same slot planner: `;` declarations and default bodies match, bodies/`;` preserved, explicit `pub` never matches — trait methods carry no visibility — and a `+` side writing it fails fast; the header names the trait ident, otherwise the block is accepted only on range overlap like `impl`); `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, `impl`, or `macro_rules!` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `trait`-header context plus a function pair is a trait-method rename (`unsafe trait`/`unsafe impl` headers route identically — the fn-block scan skips block headers despite the `unsafe ` prefix) (same slot planner: `;` declarations and default bodies match, bodies/`;` preserved, explicit `pub` never matches — trait methods carry no visibility — and a `+` side writing it fails fast; the header names the trait ident, otherwise the block is accepted only on range overlap like `impl`); `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 The trait-method visibility gate above fails fast with `RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`):
 
@@ -2164,11 +2164,12 @@ Supported kinds:
 | `static` | `static Old` | `static mut Old`, `static Old: ... = ...;` |
 | `mod` | `mod old` | `mod old;`, `mod old { ... }` |
 | `impl` | `impl Old` | `impl Old { ... }` (self-ty and trait-side, see below) |
+| `macro_rules!` | `macro_rules! Old` | `macro_rules! Old { ... }` (definition ident only, body preserved verbatim) |
 
 Rules:
 
 - Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error.
-- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. Unlike function slots, there is no slot to evolve, so a *differing* prefix (`pub struct Old` / `struct New`) is a pattern error instead of a silent vis change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
+- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. Unlike function slots, there is no slot to evolve, so a *differing* prefix (`pub struct Old` / `struct New`) is a pattern error instead of a silent vis change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors), and `macro_rules!` definitions take neither visibility nor `unsafe` (`pub macro_rules! Old`, `unsafe macro_rules! Old` are pattern errors). The `!` between `macro_rules` and the name is required (`macro_rules Old` without it is not an item shape). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
 - `auto trait` headers are not supported in v0.1: the author gets a fail-fast pattern error directing to an ordinary hunk (auto traits are never renamed in practice; silently falling through to a no-match would violate Section 2.6).
   The engine reports these rejections verbatim (rule + file lines in text mode; text omits the null range/suggestion lines, JSON carries explicit nulls; suggestion is null throughout):
@@ -4040,7 +4041,10 @@ argument position never matches — concrete positions compare
 textually and never descend). Anything else nested in
 a macro body goes through ordinary hunks — the same one-tool composition
 as §14.9 (no new flags or directives; binding *inside* a token-tree
-argument is rejected, not deferred).
+argument is rejected, not deferred). `macro_rules!` definitions are
+items (Section 14.8), never token-tree invocation patterns: a
+`- macro_rules! Old` / `+ macro_rules! New` pair renames the definition
+ident, while `- Old!(...)` / `+ New!(...)` renames invocations.
 
 Engine-verbatim shape rejections (both exit 2; both carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit nulls):
 
@@ -6957,9 +6961,23 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   (no engine spelling, probed), varying-across-sites hetero body rewrites
   and macro-body-descent interiors (WI-9b2), and divergent new names stay
   ordinary. Pre-image
-  totality counts every invocation of the exact rendered path (any
+   totality counts every invocation of the exact rendered path (any
   delimiter/body — the `...` pattern matches all; bare twins never
   match a qualified pattern and vice versa, probed).
+- `macro_rules!` definition + invocation rename (WI-7b): exactly one
+  column-0 `macro_rules! Old { … }` → `macro_rules! New { … }` header
+  pair plus N ≥ 1 bare `Old!(…)` → `New!(…)` invocation pairs sharing
+  one ident delta → two hunks sharing `rule=rename_Old_to_New`: the
+  definition as a plain item hunk (`- macro_rules! Old` /
+  `+ macro_rules! New`) and the invocations as one `# allow=many`
+  `# macro=token_tree` verbatim sweep (`- Old!(...)` /
+  `+ New!(...)`). Bare invocations only (qualified `crate::Old!`
+  stays ordinary); twin definitions, indented (block-level)
+  definitions, and untouched invocation twins veto to ordinary.
+  Totality is pre-image-proven (one `macro_rules! Old` definition
+  covering its changed line plus `macro_holds` over the invocation
+  subset) plus a scratch-apply probe of the combined emission.
+  Detector name `macro_rules_rename`.
 - Macro-interior sweep (WI-9a): N ≥ 2 `-`/`+` pairs rendering (whole-line
   statements and `let`-init unwraps — the emitted pattern is the bare
   `name!(args)`, never `let`) to one identical same-name pair —
