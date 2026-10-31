@@ -1597,3 +1597,106 @@ fn colon_shapes_still_route_away_from_fields() {
         PatternKind::General { .. } | PatternKind::Expr { .. }
     ));
 }
+
+// WI-12d: match-arm addition compiles under a `match <scrut> {`
+// context line with a single concrete `syn::Arm` plus line.
+#[test]
+fn arm_addition_qualified_fires() {
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,1 @@ rule=r\n  match e {\n+ E::C => 3,\n",
+    );
+    match compile(&h).unwrap().kind {
+        PatternKind::ArmAddition {
+            enum_prefix,
+            variant,
+            arm_raw,
+            scrutinee,
+            ..
+        } => {
+            assert_eq!(enum_prefix.as_deref(), Some("E"));
+            assert_eq!(variant, "C");
+            assert_eq!(arm_raw, "E::C => 3,");
+            assert_eq!(scrutinee, "e");
+        }
+        k => panic!("expected ArmAddition, got {k:?}"),
+    }
+}
+
+#[test]
+fn arm_addition_bare_fires_unprefixed() {
+    // Bare `C => …` (glob-import spelling) records no prefix; the
+    // raising detector owns the `use E::*` anchor proof.
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,1 @@ rule=r\n  match e {\n+ C => 3,\n",
+    );
+    match compile(&h).unwrap().kind {
+        PatternKind::ArmAddition {
+            enum_prefix,
+            variant,
+            scrutinee,
+            ..
+        } => {
+            assert!(enum_prefix.is_none(), "bare arm has no prefix");
+            assert_eq!(variant, "C");
+            assert_eq!(scrutinee, "e");
+        }
+        k => panic!("expected ArmAddition, got {k:?}"),
+    }
+}
+
+#[test]
+fn arm_addition_payload_and_guard_fire() {
+    // Tuple payload and guarded arms share the last-segment rule.
+    for plus in ["E::C(..) => 0,", "E::C if x > 1 => 2,"] {
+        let patch = format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,1 @@ rule=r\n  match e {{\n+ {plus}\n"
+        );
+        match compile(&hunk_of(&patch)).unwrap().kind {
+            PatternKind::ArmAddition { variant, .. } => assert_eq!(variant, "C"),
+            k => panic!("expected ArmAddition for {plus}, got {k:?}"),
+        }
+    }
+}
+
+#[test]
+fn arm_addition_needs_match_context() {
+    // No `match` context line: the arm stays a literal text insertion
+    // (the pre-existing minus-empty spelling), never a misrouted arm.
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,1 @@ rule=r\n+ E::C => 3,\n",
+    );
+    assert!(
+        matches!(compile(&h).unwrap().kind, PatternKind::Insertion { .. }),
+        "contextless arm must stay a literal insertion"
+    );
+}
+
+#[test]
+fn arm_addition_binding_and_wildcard_decline() {
+    // Lowercase bare idents are bindings, `_` is a wildcard — neither
+    // is a variant, so neither routes here.
+    for plus in ["x => 3,", "_ => 3,", "1 => 3,"] {
+        let patch = format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,1 @@ rule=r\n  match e {{\n+ {plus}\n"
+        );
+        let kind = compile(&hunk_of(&patch)).ok().map(|c| c.kind);
+        assert!(
+            !matches!(kind, Some(PatternKind::ArmAddition { .. })),
+            "{plus} must not route to ArmAddition"
+        );
+    }
+}
+
+#[test]
+fn arm_addition_minus_present_declines() {
+    // A minus arm is a pair (evolution/ordinary territory), never a
+    // point insertion.
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,2 +6,2 @@ rule=r\n  match e {\n- E::A => 1,\n+ E::C => 1,\n",
+    );
+    let kind = compile(&h).ok().map(|c| c.kind);
+    assert!(
+        !matches!(kind, Some(PatternKind::ArmAddition { .. })),
+        "pair must not route to ArmAddition"
+    );
+}

@@ -977,6 +977,25 @@ fn compress_section_per_hunk(
         }
         return Some(out);
     }
+    // WI-12d: variant-addition + match-arm follow-through (disjoint
+    // from the field group above, which declines variant defs).
+    // `None` falls through byte-identically below.
+    if let Some(group) = super::try_variant_addition_follow(section, path, file_old, used_rules) {
+        let mut out = prelude;
+        for h in &group {
+            commit_prov(
+                prov,
+                &h.emitted,
+                &h.native,
+                path,
+                &[(h.rule.clone(), h.detector)],
+                &h.changed,
+                file_old,
+            );
+            out.push_str(&h.emitted);
+        }
+        return Some(out);
+    }
     let mut out = prelude;
     let mut compressed_any = false;
     for hunk in &hunks {

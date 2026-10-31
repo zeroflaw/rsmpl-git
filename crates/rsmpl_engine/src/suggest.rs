@@ -35,6 +35,7 @@ pub(crate) fn candidate_preview(
             | PatternKind::VariantPayloadEvolution { .. }
             | PatternKind::FieldAddition { .. }
             | PatternKind::VariantAddition { .. }
+            | PatternKind::ArmAddition { .. }
             | PatternKind::UseRename { .. }
     );
     if kind_specific {

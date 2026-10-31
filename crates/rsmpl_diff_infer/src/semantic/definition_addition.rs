@@ -114,17 +114,18 @@ pub(crate) fn try_definition_addition(
 
 /// WI-12c slice 1: one emitted hunk inside a definition-addition
 /// follow-through group (ordered native order by the caller).
+/// Shared with the WI-12d sibling (`definition_arm_follow`) per D5.
 pub(crate) struct FollowHunk {
     /// Single-hunk text starting at its `@@` line (no `diff --git`).
-    pub emitted: String,
+    pub(crate) emitted: String,
     /// Covered native hunk (for provenance + guard accounting).
-    pub native: String,
+    pub(crate) native: String,
     /// `definition_addition` (def) or `definition_addition_follow`.
-    pub detector: &'static str,
+    pub(crate) detector: &'static str,
     /// Changed old-side lines this hunk covers.
-    pub changed: Vec<usize>,
+    pub(crate) changed: Vec<usize>,
     /// Reserved rule name (`rN`) for this hunk.
-    pub rule: String,
+    pub(crate) rule: String,
 }
 
 /// WI-12c slice 1: field-addition construction follow-through.
@@ -471,7 +472,8 @@ fn norm_tokens(ts: &impl quote::ToTokens) -> String {
 /// Joint scratch-apply probe (T361 for the group): the emitted hunks
 /// apply to `pre` with one match each AND reproduce byte-identically
 /// the native post (applying `section` to `pre`).
-fn joint_reproduces(pre: &str, path: &str, section: &str, hunks: &[FollowHunk]) -> bool {
+/// Shared with the WI-12d sibling per D5.
+pub(crate) fn joint_reproduces(pre: &str, path: &str, section: &str, hunks: &[FollowHunk]) -> bool {
     let mut emission = format!("{}\n", crate::git_header(path));
     for h in hunks {
         emission.push_str(&h.emitted);
@@ -501,7 +503,8 @@ fn joint_reproduces(pre: &str, path: &str, section: &str, hunks: &[FollowHunk]) 
 }
 
 /// `@@ -N,0` insertion point N (`None` for balanced/sweep headers).
-fn insertion_point(hunk: &str) -> Option<usize> {
+/// Shared with the WI-12d sibling per D5.
+pub(crate) fn insertion_point(hunk: &str) -> Option<usize> {
     for line in hunk.lines() {
         if line.starts_with("@@") {
             let first = line.split_whitespace().nth(1)?;
@@ -623,7 +626,8 @@ fn split_field(line: &str) -> Option<(String, &str)> {
 
 /// Leading ident of a variant line (`C`, `C(..)`, `C { .. }`,
 /// `C = ..`). `None` for field lines or empty heads.
-fn variant_ident(line: &str) -> Option<String> {
+/// Shared with the WI-12d sibling per D5.
+pub(crate) fn variant_ident(line: &str) -> Option<String> {
     let mut t = line.trim();
     if let Some(s) = t.strip_suffix(',') {
         t = s.trim_end();

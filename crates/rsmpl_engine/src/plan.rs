@@ -1048,6 +1048,14 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
+        PatternKind::ArmAddition { .. } => matcher_member_evo::apply_match_arm_addition_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,

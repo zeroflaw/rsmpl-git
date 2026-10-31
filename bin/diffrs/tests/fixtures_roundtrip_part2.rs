@@ -656,9 +656,72 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             !semantic.contains("..Default::default()"),
             "untouched rest site must not appear, got: {semantic}"
         );
-    } else if name == "112-variant-add-construction-ordinary" {
-        // WI-12c slice-1 boundary (WI-12d owns it): variant addition
-        // compresses the definition alone; the pure-insertion match
+    } else if name == "112-variant-add-arm-follow-fires" {
+        // WI-12d: variant addition + qualified match-arm follow-through
+        // (def hunk + per-site concrete ranged arm hunk).
+        assert!(
+            semantic.contains("  enum E {"),
+            "variant header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ C,"),
+            "variant plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1") && semantic.contains("rule=r2"),
+            "def + arm carry rules, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("  match e {"),
+            "arm context must name the match, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ E::C => 3,"),
+            "qualified arm must raise, got: {semantic}"
+        );
+    } else if name == "113-variant-add-glob-bare-fires" {
+        // WI-12d: `use E::*` anchors the bare `C => 3,` arm to the
+        // added variant — def hunk + bare concrete ranged arm hunk.
+        assert!(
+            semantic.contains("  enum E {"),
+            "variant header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ C,"),
+            "variant plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1") && semantic.contains("rule=r2"),
+            "def + arm carry rules, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ C => 3,"),
+            "bare arm must raise verbatim, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("E::C"),
+            "glob-anchored arm stays bare, got: {semantic}"
+        );
+    } else if name == "114-variant-add-two-match-fires" {
+        // WI-12d: hetero arm bodies ride per-site concrete (never
+        // holes) across two matches.
+        assert!(
+            semantic.contains("rule=r1")
+                && semantic.contains("rule=r2")
+                && semantic.contains("rule=r3"),
+            "def + 2 arms carry rules, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ E::C => 3,"),
+            "first hetero body stays per-site, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ E::C => 30,"),
+            "second hetero body stays per-site, got: {semantic}"
+        );
+    } else if name == "115-variant-add-unanchored-bare-ordinary" {
+        // WI-12d boundary: a bare arm with no `use E::*` glob in scope
+        // declines the group — the definition still fires alone and the
         // arm stays ordinary.
         assert!(
             semantic.contains("  enum E {"),
@@ -673,12 +736,12 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "def addition must carry a rule, got: {semantic}"
         );
         assert!(
-            semantic.contains("+        E::C => 3,") || semantic.contains("+ E::C => 3,"),
-            "arm insertion stays ordinary, got: {semantic}"
+            semantic.contains("+        C => 3,") || semantic.contains("+C => 3,"),
+            "unanchored arm stays ordinary, got: {semantic}"
         );
         assert!(
             !semantic.contains("rule=r2"),
-            "no follow hunk in slice 1, got: {semantic}"
+            "no follow hunk without a glob anchor, got: {semantic}"
         );
     }
 }

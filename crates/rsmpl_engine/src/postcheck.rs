@@ -584,6 +584,7 @@ pub(crate) fn plus_instantiated_parsed(
         | PatternKind::ItemCapture { .. }
         | PatternKind::FieldAddition { .. }
         | PatternKind::VariantAddition { .. }
+        | PatternKind::ArmAddition { .. }
         | PatternKind::Raw { .. } => None,
     }
 }

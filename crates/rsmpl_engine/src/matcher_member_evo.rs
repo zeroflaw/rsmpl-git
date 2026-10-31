@@ -879,13 +879,198 @@ pub fn apply_variant_addition_hunk(
     Ok((matched, empties))
 }
 
+/// Apply a match-arm addition hunk (WI-12d): point-insert one
+/// concrete `E::C => body,` arm line (plus its attr lines) inside a
+/// `match <scrut> {`.
+///
+/// Ranged-only in v1: the point (`@@ -N,1 @@` old_start) must lie
+/// strictly inside the innermost `match` lacking an arm for the
+/// variant (`container_start <= N < container_end`), and that match's
+/// scrutinee must equal the context scrutinee token-for-token. An
+/// already-present arm (qualified or bare, guarded or not —
+/// last-segment naming) skips the site (0 matches). Sweep/file-scope
+/// is rejected loud: a sweep would plant the arm into matches on
+/// other enums. Insertion lands before the closing brace; a brace
+/// sharing its line with other code vetoes (0 matches) rather than
+/// splicing mid-line.
+pub fn apply_match_arm_addition_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    let (variant, arm_raw, scrutinee, plus_attrs) = match &compiled.kind {
+        PatternKind::ArmAddition {
+            variant,
+            arm_raw,
+            scrutinee,
+            plus_attrs,
+            ..
+        } => (
+            variant.clone(),
+            arm_raw.clone(),
+            scrutinee.clone(),
+            plus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected match-arm addition pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    if hunk.scope() == Scope::File {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "match-arm insertion is ranged-only in v1 (a sweep would plant the arm into matches on other enums); write `@@ -N,1 @@` citing the line before the insertion point, or use an ordinary hunk".to_string(),
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "arm-addition",
+            "write `@@ -N,1 @@` with a `match <scrut> {` context line and one `+ <arm>,` line, or use an ordinary hunk",
+        )));
+    }
+    struct MatchProbe {
+        start: u32,
+        end: u32,
+        scrutinee: String,
+        arm_names: Vec<String>,
+    }
+    struct Probe {
+        out: Vec<MatchProbe>,
+    }
+    impl<'ast> Visit<'ast> for Probe {
+        fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+            let mut arm_names = Vec::new();
+            for arm in &node.arms {
+                // A lone ident parses as `Pat::Ident` (binding position)
+                // — a bare uppercase arm is the glob-import spelling of
+                // a unit variant and counts as present.
+                if let syn::Pat::Ident(pi) = &arm.pat {
+                    if pi.by_ref.is_none() && pi.mutability.is_none() && pi.subpat.is_none() {
+                        arm_names.push(pi.ident.to_string());
+                        continue;
+                    }
+                }
+                let path = match &arm.pat {
+                    syn::Pat::Path(pp) if pp.qself.is_none() => Some(&pp.path),
+                    syn::Pat::TupleStruct(ps) => Some(&ps.path),
+                    syn::Pat::Struct(ps) => Some(&ps.path),
+                    _ => None,
+                };
+                if let Some(p) = path {
+                    if let Some(last) = p.segments.last() {
+                        arm_names.push(last.ident.to_string());
+                    }
+                }
+            }
+            self.out.push(MatchProbe {
+                start: node.span().start().line as u32,
+                end: node.span().end().line as u32,
+                scrutinee: {
+                    let e = &*node.expr;
+                    quote::quote!(#e)
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                },
+                arm_names,
+            });
+            visit::visit_expr_match(self, node);
+        }
+    }
+    // Expression-position matches (`let x = match …`) are `Expr`, not
+    // `Item`: walk every expression via a file-level visitor that
+    // routes matches through the probe (nested matches recurse via
+    // `visit_expr_match` above).
+    struct FileWalk {
+        probe: Probe,
+    }
+    impl<'ast> Visit<'ast> for FileWalk {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Match(m) = node {
+                self.probe.visit_expr_match(m);
+            } else {
+                visit::visit_expr(self, node);
+            }
+        }
+    }
+    let mut walk = FileWalk {
+        probe: Probe { out: Vec::new() },
+    };
+    for it in &parsed.items {
+        walk.visit_item(it);
+    }
+    let point = hunk.header.old_start;
+    // The point names one match: the innermost spanning it. It must
+    // lack the variant (an inner dup vetoes even when an outer match
+    // lacks it — the point pins the inner scope) and its scrutinee
+    // must agree exactly.
+    let mut inner: Option<(u32, u32)> = None;
+    let mut best_start = 0u32;
+    for c in &walk.probe.out {
+        if c.start <= point && point < c.end && c.start >= best_start {
+            best_start = c.start;
+            inner = Some((c.start, c.end));
+        }
+    }
+    let Some((cstart, cend)) = inner else {
+        return Ok((0, Vec::new()));
+    };
+    let found_match = walk
+        .probe
+        .out
+        .iter()
+        .find(|c| c.start == cstart && c.end == cend);
+    let Some(found_match) = found_match else {
+        return Ok((0, Vec::new()));
+    };
+    if found_match.arm_names.iter().any(|a| a == &variant) {
+        return Ok((0, Vec::new()));
+    }
+    if found_match.scrutinee != scrutinee {
+        return Ok((0, Vec::new()));
+    }
+    // The closing brace must own its line; anything else vetoes
+    // rather than splicing mid-line.
+    let close = original.lines().nth(cend as usize - 1).unwrap_or("");
+    if !matches!(close.trim(), "}" | "}," | "};") {
+        return Ok((0, Vec::new()));
+    }
+    let mut member = arm_raw.trim().to_string();
+    if !member.ends_with(',') && !member.ends_with(';') {
+        member.push(',');
+    }
+    let render = |indent: &str| -> String {
+        let mut t = String::new();
+        for a in &plus_attrs {
+            t.push_str(indent);
+            t.push_str(a.trim());
+            t.push('\n');
+        }
+        t.push_str(indent);
+        t.push_str(&member);
+        t.push('\n');
+        t
+    };
+    let at = index
+        .line_start(cend)
+        .ok_or_else(|| range_err(&rule, cend))?;
+    let indent = member_indent(original, cstart, cend);
+    edits.push(TextEdit::new(at, at, render(&indent)).with_label("addition"));
+    Ok((1, vec![HashMap::new()]))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::super::RuleSemantics;
 
-    fn apply_report(
+    pub(super) fn apply_report(
         patch_text: &str,
         file_text: &str,
     ) -> Result<(String, crate::ApplyReport), String> {
@@ -900,7 +1085,7 @@ mod tests {
         Ok((files["src/lib.rs"].clone(), report))
     }
 
-    fn apply(patch_text: &str, file_text: &str) -> Result<String, String> {
+    pub(super) fn apply(patch_text: &str, file_text: &str) -> Result<String, String> {
         apply_report(patch_text, file_text).map(|(s, _)| s)
     }
 
@@ -1181,5 +1366,117 @@ mod tests {
             out.contains("    Contained,\n    File,\n    Exact,"),
             "got: {out:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod arm_addition_tests {
+    use super::tests::{apply, apply_report};
+
+    const ARM_PRE: &str =
+        "enum E {\n    A,\n}\n\nfn f(e: E) -> u32 {\n    match e {\n        E::A => 1,\n    }\n}\n";
+
+    fn arm_patch(point: u32, context: &str, plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -{point},1 +{point},1 @@ rule=arm\n{context}\n+ {plus}\n"
+        )
+    }
+
+    #[test]
+    fn arm_appends_before_closing_brace() {
+        let patch = arm_patch(6, "  match e {", "E::C => 3,");
+        let (out, report) = apply_report(&patch, ARM_PRE).unwrap();
+        assert!(
+            out.contains("        E::A => 1,\n        E::C => 3,\n    }"),
+            "got: {out:?}"
+        );
+        assert_eq!(report.rules[0].matches, 1);
+        assert_eq!(
+            report.rules[0].semantics,
+            super::super::RuleSemantics::ReparseOnly
+        );
+    }
+
+    #[test]
+    fn arm_bare_fires() {
+        let patch = arm_patch(6, "  match e {", "C => 3,");
+        let (out, _) = apply_report(&patch, ARM_PRE).unwrap();
+        assert!(out.contains("        C => 3,\n"), "got: {out:?}");
+    }
+
+    #[test]
+    fn arm_dup_vetoes() {
+        // The variant arm is already present (bare or qualified —
+        // last-segment naming): 0 matches, loud conflict.
+        for pre in [
+            "enum E {\n    A,\n}\n\nfn f(e: E) -> u32 {\n    match e {\n        E::A => 1,\n        E::C => 9,\n    }\n}\n",
+            "enum E {\n    A,\n}\n\nfn f(e: E) -> u32 {\n    match e {\n        E::A => 1,\n        C => 9,\n    }\n}\n",
+        ] {
+            let patch = arm_patch(6, "  match e {", "E::C => 3,");
+            let err = apply(&patch, pre).unwrap_err();
+            assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn arm_scrutinee_mismatch_vetoes() {
+        // The point sits in `match e`, but the context claims
+        // `match other` — no silent cross-match splice.
+        let patch = arm_patch(6, "  match other {", "E::C => 3,");
+        let err = apply(&patch, ARM_PRE).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn arm_lands_in_innermost_match() {
+        let pre = "fn f(e: E) -> u32 {\n    match e {\n        E::A => match e {\n            E::A => 1,\n        },\n    }\n}\n";
+        // Point 4 is the inner arm line; both matches share the
+        // scrutinee, so only innermost-wins keeps this precise.
+        let patch = arm_patch(4, "  match e {", "E::C => 2,");
+        let (out, _) = apply_report(&patch, pre).unwrap();
+        assert!(
+            out.contains("            E::A => 1,\n            E::C => 2,\n"),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn arm_inner_dup_blocks_outer_fallthrough() {
+        // The inner match already covers C: the point names the inner
+        // scope, so no edit lands in the outer match either.
+        let pre = "fn f(e: E) -> u32 {\n    match e {\n        E::A => match e {\n            E::C => 1,\n        },\n    }\n}\n";
+        let patch = arm_patch(4, "  match e {", "E::C => 2,");
+        let err = apply(&patch, pre).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn arm_let_bound_match_fires() {
+        // `match` as a `let` tail (`};` close) inserts before the brace.
+        let pre =
+            "fn f(e: E) -> u32 {\n    let x = match e {\n        E::A => 1,\n    };\n    x\n}\n";
+        let patch = arm_patch(3, "  match e {", "E::C => 3,");
+        let (out, _) = apply_report(&patch, pre).unwrap();
+        assert!(
+            out.contains("        E::A => 1,\n        E::C => 3,\n    };"),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn arm_sweep_rejects_loud() {
+        // File-scope would plant the arm into matches on other enums:
+        // fail fast with a template, never a broad rewrite.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=arm\n# sweep\n  match e {\n+ E::C => 3,\n";
+        let err = apply(patch, ARM_PRE).unwrap_err();
+        assert!(err.contains("ranged-only"), "got: {err}");
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn arm_outside_any_match_vetoes() {
+        let patch = arm_patch(1, "  match e {", "E::C => 3,");
+        let err = apply(&patch, ARM_PRE).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 }

@@ -190,6 +190,24 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Match-arm addition (`match <scrut> {` context + `+ E::C => body,`):
+    /// a point insertion inside the match. The arm is concrete text
+    /// (`syn::Arm`-validated, never a metavariable hole); the path
+    /// names the variant with an optional enum prefix (`E::C` or bare
+    /// `C` under a `use …E::*` glob). Ranged-only in v1 (a sweep
+    /// would plant the arm into matches on other enums).
+    /// `# follow=uses` is rejected (C17). Reports `reparse-only`.
+    ArmAddition {
+        /// Enum prefix from a qualified arm path (`E` in `E::C`);
+        /// `None` for bare `C` arms.
+        enum_prefix: Option<String>,
+        variant: String,
+        arm_raw: String,
+        /// Token-normalised scrutinee from the `match` context line.
+        scrutinee: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -521,9 +539,12 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // WI-12b: member additions name concrete items (field `b`, variant
     // `C`) — the plus ident is not a metavariable hole, so the
     // unbound-plus gate never fires for them (concrete-only v1).
+    // WI-12d: match-arm additions are likewise concrete (`syn::Arm`).
     if matches!(
         &kind,
-        PatternKind::FieldAddition { .. } | PatternKind::VariantAddition { .. }
+        PatternKind::FieldAddition { .. }
+            | PatternKind::VariantAddition { .. }
+            | PatternKind::ArmAddition { .. }
     ) {
         unbound_plus.clear();
     }
@@ -585,6 +606,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
             PatternKind::FieldAddition { .. } => "field addition",
             PatternKind::VariantAddition { .. } => "variant addition",
+            PatternKind::ArmAddition { .. } => "match-arm addition",
             PatternKind::UseRename { .. } => "use-path",
             PatternKind::ItemCapture { .. } => "item-capture",
             PatternKind::Insertion { .. } => "insertion",

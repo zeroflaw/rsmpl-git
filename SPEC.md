@@ -2516,13 +2516,15 @@ Rules:
 - Variant-payload evolution is `enum E {` context + one of three same-shape pairs with concrete preserved variant name: tuple payloads `Old(A, …)` / `Old(B, …)` (same arity, per-position type templates sharing one binding set under SPEC 15.7), struct payloads `Old { f: A, … }` / `Old { f: B, … }` (same field names in order, per-field type templates), or discriminants `Old = D0` / `Old = D1` (a general-expr template). Payload and discriminant never evolve together (one hunk per region, or an ordinary hunk). A bare `Old` / `New` pair stays a variant rename; call-shaped pairs without the header stay calls.
 - A name-changing "evolution" fails fast: same RHS on both sides points at the bare `<kind> <Name>` rename pair; differing RHS on both sides never combines rename + evolution (write a rename hunk plus an evolution hunk, or an ordinary hunk).
 - Classification is shape-first: sides without `=` (bare `type Old`) fall through to the item-rename classifier untouched; `const { … }` block expressions are never definitions. Member pairs without their container header fall through (field pairs to the member-rename missing-header error; call-shaped and discriminant pairs to the call/general classifiers). Leading `#[...]`/doc lines are the member's own attributes (SPEC 14.6 mirror laws: plus-side additions and differing sets fail fast; matching sites carry them).
-- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Member addition kinds (`FieldAddition`, `VariantAddition`) reject it likewise (an insertion renames nothing). Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict); pure insertions report `reparse-only`.
+- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Member addition kinds (`FieldAddition`, `VariantAddition`, `ArmAddition`) reject it likewise (an insertion renames nothing). Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict); pure insertions report `reparse-only`.
 - Out of scope in v0.1: generic-param/`where` evolution on aliases and fields, and value conversion at use sites.
 
 Member-addition authoring (WI-12b slice 1) reuses the member-evolution
 header+member spelling with an empty minus member set: the container
 header (`struct S {` / `enum E {`) is context and the single `+`
-member line is the point insertion.
+member line is the point insertion. Match-arm addition (WI-12d) is the
+same spelling over a `match <scrut> {` context line: empty minus, one
+`+` arm line (`syn::Arm`-validated, never a metavariable hole).
 
 ```diff
 @@ -2,0 +3 @@ rule=add_field
@@ -2536,6 +2538,12 @@ member line is the point insertion.
 + C(i32),
 ```
 
+```diff
+@@ -6,1 @@ rule=add_arm
+  match e {
++ E::C => 3,
+```
+
 Rules: the minus side must be empty (any minus member belongs to
 evolution/rename/ordinary); the plus side must be exactly one
 field/variant line (two-plus lines stay ordinary); the container
@@ -2546,7 +2554,16 @@ strictly inside the container); `# sweep` inserts before the closing
 brace of every matching container lacking the member (already-present
 members skip the site). An already-present member is 0 matches, never
 an overwrite. Attr lines on the plus member ride alongside (SPEC 14.6
-attach discipline); `# follow=uses` is rejected (C17).
+attach discipline); `# follow=uses` is rejected (C17). Match-arm
+rules: the arm path names the variant by last segment with an
+optional single-segment enum prefix (`E::C` or bare `C`; longer paths
+need symbol resolution and decline, a lowercase bare ident is a
+binding and declines); the context scrutinee must equal the target
+match's scrutinee token-for-token; insertion lands before the closing
+brace of the innermost spanning match (a brace sharing its line with
+other code vetoes); arm additions are ranged-only in v1 (a sweep
+would plant the arm into matches on other enums and fails fast with a
+template).
 
 ### 14.9 Use-path prefix renames
 
@@ -7095,9 +7112,27 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   hunks must apply with one match each AND reproduce byte-identically
   the native post. Guard is the precision guard scaled per emitted
   hunk (semantic ≤ ordinary + 16 × hunks). Variant/match-arm
-  follow-through (`+ E::C => …` pure-insertion arms) is WI-12d and
-  stays ordinary here. Detector names `definition_addition` (def
+  follow-through is the next bullet. Detector names `definition_addition` (def
   hunk) and `definition_addition_follow` (construction hunks).
+- Definition-addition variant/match-arm follow-through (WI-12d):
+  a file section holding exactly one pure-insertion *variant* addition
+  (the bullet above) plus K ≥ 1 pure-insertion arm hunks (`-M,0` with
+  one `+ <arm>,` line) whose arms name the added variant compresses to
+  the definition hunk plus K per-site concrete ranged arm hunks
+  (`@@ -M,1 @@` + `  match <scrut> {` + `+ <arm>,`). Each arm's path
+  must name the variant: a qualified prefix must equal the definition
+  enum (`E::C`), or a bare `C` needs a `use …E::*` glob line in the
+  pre-image (unanchored bare arms decline the group). Hetero bodies
+  ride per-site concrete. Any balanced pair, second insertion, variant
+  mismatch, unanchored bare, or unrelated hunk declines the whole
+  group (all-or-nothing — the per-hunk fallback still compresses the
+  definition insertion alone). Totality is the joint scratch-apply
+  byte-compare probe and the guard is the scaled precision guard
+  (`≤ ordinary + 16 × hunks`). Emission always appends before the
+  closing brace (native arms sorted into the middle decline via the
+  probe); cross-file arms stay ordinary. Detector names
+  `definition_addition` (def hunk) and `definition_addition_follow`
+  (arm hunks).
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated) differing in

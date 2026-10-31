@@ -412,6 +412,14 @@ pub(crate) fn classify(
     if let Some(add) = crate::pattern_member_evo::classify_member_addition(m, p, c, table)? {
         return Ok(add);
     }
+    // Match-arm addition (WI-12d): minus-empty plus-single arm under
+    // a `match <scrut> {` context line. After member addition (which
+    // owns struct/enum headers) and before evolution (which needs a
+    // struct/enum header and returns `None` without one — order keeps
+    // both byte-identical outside match contexts).
+    if let Some(add) = crate::pattern_member_evo::classify_match_arm_addition(m, p, c, table)? {
+        return Ok(add);
+    }
     if let Some(evo) = crate::pattern_member_evo::classify_member_evolution(m, p, c, table)? {
         return Ok(evo);
     }

@@ -916,3 +916,155 @@ pub(crate) fn classify_member_addition(
     }
     Ok(None)
 }
+
+// ---------------------------------------------------------------------------
+// Match-arm addition (WI-12d)
+// ---------------------------------------------------------------------------
+
+/// Classify match-arm addition: minus-empty plus-single under a
+/// `match <scrut> {` context line, the plus line parsing as a
+/// `syn::Arm` whose pattern names a variant (last path segment,
+/// optional single-segment enum prefix).
+///
+/// Called after `classify_member_addition` (which owns minus-empty
+/// shapes under struct/enum headers). Returns `Ok(None)` for every
+/// non-arm shape — including malformed arms inside a match context,
+/// which stay ordinary/`Insertion` rather than erroring here (the
+/// fallthrough keeps today's errors byte-identical).
+pub(crate) fn classify_match_arm_addition(
+    minus_raw: &str,
+    plus_raw: &str,
+    context_raw: &str,
+    _table: &MetavarTable,
+) -> Result<Option<PatternKind>, StructuredError> {
+    // Like member containers, the `match <scrut> {` header lives in
+    // the minus/plus texts (context lines ride both sides): strip it
+    // before the minus-empty gate, mirroring `strip_container_headers`.
+    let minus_stripped = strip_match_headers(minus_raw);
+    let plus_stripped = strip_match_headers(plus_raw);
+    let (minus_attrs, minus_pair) = crate::pattern_general::split_leading_attrs(&minus_stripped);
+    let (plus_attrs, plus_pair) = crate::pattern_general::split_leading_attrs(&plus_stripped);
+    // Addition owns minus-empty shapes only; anything with a minus
+    // arm (or minus attrs) belongs elsewhere.
+    if !minus_attrs.is_empty() || !minus_pair.trim().is_empty() {
+        return Ok(None);
+    }
+    let plus_pair = plus_pair.trim().to_string();
+    if plus_pair.is_empty() || plus_pair.lines().count() != 1 {
+        return Ok(None);
+    }
+    let Some(scrutinee) = match_context_scrutinee(context_raw) else {
+        return Ok(None);
+    };
+    let arm: syn::Arm = match syn::parse_str(&plus_pair) {
+        Ok(a) => a,
+        Err(_) => return Ok(None),
+    };
+    let Some((prefix, variant)) = arm_variant(&arm) else {
+        return Ok(None);
+    };
+    Ok(Some(PatternKind::ArmAddition {
+        enum_prefix: prefix,
+        variant,
+        arm_raw: plus_pair,
+        scrutinee,
+        minus_attrs: Vec::new(),
+        plus_attrs,
+    }))
+}
+
+/// Drop `match <scrut> {` header lines (the arm-addition context
+/// spelling) from a minus/plus text, keeping arm lines and attrs.
+fn strip_match_headers(text: &str) -> String {
+    text.lines()
+        .filter(|l| match_context_scrutinee(l).is_none())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// First `match <scrut> {` context line, scrutinee token-normalised.
+/// `None` when no context line opens a match.
+fn match_context_scrutinee(context_raw: &str) -> Option<String> {
+    for line in context_raw.lines() {
+        let t = line.trim();
+        if !t.starts_with("match") || !t.ends_with('{') {
+            continue;
+        }
+        // `match <scrut> {` closes to `match <scrut> {}` (empty arms
+        // parse; only the scrutinee is read).
+        let probe = format!("{t}}}");
+        if let Ok(syn::Expr::Match(m)) = syn::parse_str::<syn::Expr>(&probe) {
+            return Some(norm_arm_expr(&m.expr));
+        }
+    }
+    None
+}
+
+/// The variant an arm pattern names: last path segment plus the
+/// optional single-segment enum prefix (`E::C` → (`E`, `C`);
+/// bare `C` → (`None`, `C`)). Tuple/struct payloads share the path
+/// rule. Multi-segment paths (`a::E::C`) need symbol resolution
+/// (WI-16) and decline; leading-`::` and `qself` decline likewise.
+/// Bare patterns must start uppercase — a lowercase bare ident is a
+/// binding (`x => …`), not a variant.
+fn arm_variant(arm: &syn::Arm) -> Option<(Option<String>, String)> {
+    // A lone ident parses as `Pat::Ident` (binding position), not
+    // `Pat::Path`: a bare uppercase arm (`C => …`) is the glob-import
+    // spelling of a unit variant; a lowercase one is a catch-all
+    // binding and declines.
+    if let syn::Pat::Ident(pi) = &arm.pat {
+        if pi.by_ref.is_some() || pi.mutability.is_some() || pi.subpat.is_some() {
+            return None;
+        }
+        let name = pi.ident.to_string();
+        if !is_member_ident(&name) || !starts_upper(&name) {
+            return None;
+        }
+        return Some((None, name));
+    }
+    let path = match &arm.pat {
+        syn::Pat::Path(pp) => {
+            if pp.qself.is_some() {
+                return None;
+            }
+            &pp.path
+        }
+        syn::Pat::TupleStruct(ps) => &ps.path,
+        syn::Pat::Struct(ps) => &ps.path,
+        _ => return None,
+    };
+    if path.leading_colon.is_some() {
+        return None;
+    }
+    let last = path.segments.last()?.ident.to_string();
+    if !is_member_ident(&last) || !starts_upper(&last) {
+        return None;
+    }
+    match path.segments.len() {
+        1 => Some((None, last)),
+        2 => {
+            let first = path.segments.first()?.ident.to_string();
+            if !is_member_ident(&first) {
+                return None;
+            }
+            Some((Some(first), last))
+        }
+        _ => None,
+    }
+}
+
+fn starts_upper(s: &str) -> bool {
+    s.strip_prefix("r#")
+        .unwrap_or(s)
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
+}
+
+fn norm_arm_expr(e: &syn::Expr) -> String {
+    quote::quote!(#e)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
