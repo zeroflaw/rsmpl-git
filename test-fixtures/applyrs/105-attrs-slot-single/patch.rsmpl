@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,7 @@ rule=sweep_attrs
+# allow=many
+- V Q fn foo G (...) W {
++ V Q fn baz G (...) W {
+      ...
+  }

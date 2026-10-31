@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -5,3 @@ rule=rename_calls
+# allow=many
+- foo(E0)
++ bar(E0)

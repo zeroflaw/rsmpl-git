@@ -541,6 +541,42 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "100-call-sweep-single",
         "t375: single-site call-sweep rewrite re-infers ordinary",
     ),
+    (
+        "102-use-rename-single",
+        "t375: single-site use-rename rewrite re-infers ordinary",
+    ),
+    (
+        "103-legacy-single",
+        "t375: single-site legacy rewrite re-infers ordinary",
+    ),
+    (
+        "104-symbol-single",
+        "t375: single-site symbol rewrite re-infers ordinary",
+    ),
+    (
+        "105-attrs-slot-single",
+        "t375: single-site attrs slot rewrite re-infers ordinary",
+    ),
+    (
+        "106-repeat-fold-single",
+        "t375: single-site repeat-fold rewrite re-infers ordinary",
+    ),
+    (
+        "107-sequence-single",
+        "t375: single-site sequence rewrite re-infers ordinary",
+    ),
+    (
+        "108-impl-sweep-single",
+        "t375: single-site impl-sweep rewrite re-infers ordinary",
+    ),
+    (
+        "109-rename-calls-single",
+        "t375: single-site rename-calls rewrite re-infers ordinary",
+    ),
+    (
+        "110-new-file-move-single",
+        "t375: single-item new-file move re-infers ordinary",
+    ),
 ];
 
 /// Load the fixture pre-image: repo-relative path → file text.

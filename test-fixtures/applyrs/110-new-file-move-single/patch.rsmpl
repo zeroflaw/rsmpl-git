@@ -1,0 +1,11 @@
+diff --git src/old.rs
+@@ -2,11 @@ rule=move_parse_pair
+# bind=M1
+- I
+diff --git src/new.rs
+new file mode 100644
+--- /dev/null
++++ b/src/new.rs
+@@ -0,0 @@ rule=paste_parse_pair
+# use=M1
++ M1

@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,3 @@ rule=sweep_legacy
+# allow=many
+- legacy(E0)
++ modern(E0)

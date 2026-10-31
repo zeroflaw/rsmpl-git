@@ -1,0 +1,4 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=paste_orphan
+# use=M1
++ M1

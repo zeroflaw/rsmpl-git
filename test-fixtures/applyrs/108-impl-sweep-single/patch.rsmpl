@@ -1,0 +1,10 @@
+diff --git src/lib.rs
+@@ -1,6 @@ rule=r1
+# allow=many
+  impl A {
+      ...
+-     V Q fn old_name G (...) W {
++     V Q fn new_name G (...) W {
+          ...
+      }
+  }

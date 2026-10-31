@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,4 @@ rule=r1
+# allow=many
+# repeat
+- Box::new(E0)
++ E0
