@@ -2697,12 +2697,22 @@ rename.
 context + `fn old` → `fn new`) rewrites the trait declaration plus
 every trait-proven `impl <Trait> for <Self>` definition of the same
 name — each impl `fn` ident rewritten and labelled `rename` in
-`span_labels` (`matches` counts the trait declaration). Inherent
-`impl S { fn old }` defs never claim (different item → `shadowed`
-evidence); call sites are untouched in v1 (ordinary hunks own them).
-Without follow, leftover trait-proven impl defs report as orphans
-(`off-target`). Inherent-`impl` headers and same-name evolutions keep
-the C17 rejection.
+`span_labels` (`matches` counts the trait declaration) — plus anchored
+call sites (WI-21): `recv.old()` where the WI-14 anchor order proves
+the receiver names a domain self type (fn-signature params, `let x: C`
+annotations, `let x = S { … }` literal inits, `self` inside a domain
+`impl S` or inside the defining `trait Tr` default body), and `S::old`
+tails where `S` names a domain self type (or the trait itself), plus
+`<S as Tr>::old` qself tails naming the trait. Bare `old` is not method
+syntax (ignored); call/literal/composite bases (`make().old()`) never
+claim; unrelated `X::old` tails are ignored outright. Unproven method
+receivers are `shadowed` (another item defines `old`) or `off-target`
+evidence — never a veto. Inherent `impl S { fn old }` and other-trait
+`impl <Other> for _ { fn old }` defs never claim (different items →
+`shadowed` evidence). Without follow, leftover trait-proven impl defs
+and anchored call sites report as orphans (`off-target`, unproven
+`shadowed`, macro `macro-hidden`). Inherent-`impl` headers and same-name
+evolutions keep the C17 rejection.
 
 Associated-item evolution (WI-26) keeps the name and rewrites only
 the RHS/default span under the same header: `type Item = Vec<T>;` →
