@@ -2597,9 +2597,30 @@ explicitly falls through to methods; evolution is checked before
 rename — same-name RHS deltas route to evolution, name deltas to
 rename). A pair without a `trait T {` / `impl … {` context line falls
 through untouched (free `type`/`const` pairs stay item renames /
-definition evolutions). `# follow=uses` is rejected on renames (C17,
-definition only in v1; follow lands in WI-27). Rename verification is
-span-local ident equality at the reported spans (`instantiated`).
+definition evolutions). Rename verification is span-local ident
+equality at the reported spans (`instantiated`).
+
+`# follow=uses` on an assoc rename (WI-27) rewrites the container-proven
+use tails and nothing else — in expression, type, and pattern positions:
+`Self::Old` inside a domain impl block (a header-matching block, or an
+`impl Tr for S` block when the renamed trait is `Tr`; `Self::Old`
+inside the matching `trait Tr` block itself likewise), `S::Old` /
+`Tr::Old` naming the domain self type / trait (any leading prefix is
+preserved; trailing tails such as `S::Old::default()` keep their tail),
+`<S as Tr>::Old` naming the trait explicitly, and `use C::Old` leaves
+under the same container rule (`use Self::Old` names the module, never
+the type). Only the trailing `Old` ident span is replaced. A second
+trait — or, for `const`, an inherent impl — defining the same assoc
+name vetoes only its own blocks: sites enclosed in (or naming) those
+blocks are skipped with reason `shadowed` while provable sites still
+rewrite (never a whole-run failure, with or without
+`# fallback=syntax`). Macro-token / attribute interiors mentioning
+`old` are opaque: veto without fallback, skip with `macro-hidden` under
+it (scalar/member parity). Bare `Old` is not assoc syntax and is
+ignored outright. Without follow, the same claim walk reports every
+left-behind site as an orphan (`off-target`, macro interiors
+`macro-hidden`). Follow-only file extras are `reparse-only` by
+construction; the definition probe covers the rename.
 
 Associated-item evolution (WI-26) keeps the name and rewrites only
 the RHS/default span under the same header: `type Item = Vec<T>;` →
@@ -2611,9 +2632,8 @@ must carry an RHS/default (a bare decl carries nothing to evolve);
 one-sided defaults and preserved-region mismatches fail loud.
 `# follow=uses` is rejected (C17, definition only). Verification is
 structural plus re-match at the reported spans (`instantiated`).
-Out of scope in v1: `Self::`/`S::`/`<S as Tr>::` follow (WI-27),
-raising (WI-28), and inherent-`impl` domain distinctions beyond
-header equality.
+Out of scope in v1: raising (WI-28), and inherent-`impl` domain
+distinctions beyond header equality.
 
 ### 14.9 Use-path prefix renames
 
@@ -3851,7 +3871,7 @@ case where an ordinary hunk cannot express the edit.
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
-| C17 | `# follow=uses` on any shape other than a fn, item, field, or variant rename hunk (WI-6a, WI-9a, WI-13 slice 1; evolution, member-addition, and assoc kinds included) | `` `# follow=uses` is only supported on fn, item, field, and variant rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
+| C17 | `# follow=uses` on any shape other than a fn, item, field, variant, or assoc rename hunk (WI-6a, WI-9a, WI-27; evolution, member-addition, and assoc-evolution kinds included) | `` `# follow=uses` is only supported on fn, item, field, variant, and assoc rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites or per-argument holes (WI-7a: one hole per top-level comma-separated argument), or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |

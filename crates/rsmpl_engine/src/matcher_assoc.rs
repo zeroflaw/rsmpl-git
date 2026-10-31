@@ -696,12 +696,138 @@ mod tests {
         assert!(apply(&p, "trait Other {\n    type Item;\n}\n").is_err());
     }
 
+    fn apply_files(
+        patch_text: &str,
+        entries: &[(&str, &str)],
+    ) -> Result<(HashMap<String, String>, crate::ApplyReport), String> {
+        let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
+        let mut files = HashMap::new();
+        for (path, text) in entries {
+            files.insert(path.to_string(), text.to_string());
+        }
+        let report = crate::apply_patch_to_tree(&mut files, &patch).map_err(|e| e.render())?;
+        Ok((files, report))
+    }
+
+    const FOLLOW_SRC: &str = "trait Tr {\n    type Item;\n    fn make() -> Self::Item;\n}\nstruct S;\nimpl Tr for S {\n    type Item = u8;\n    fn make() -> Self::Item {\n        Self::Item::default()\n    }\n}\nfn get(x: S::Item) -> S::Item {\n    x\n}\nfn q(y: <S as Tr>::Item) -> Tr::Item {\n    y\n}\n";
+
+    fn follow_patch() -> String {
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,16 +1,16 @@ rule=r\n# follow=uses\n  trait Tr {\n- type Item;\n+ type Output;\n"
+            .to_string()
+    }
+
     #[test]
-    fn follow_rejects_loud() {
-        let mut p = patch("trait Tr {", "type Item;", "type Output;");
-        p = p.replace("rule=r", "rule=r\n# follow=uses");
-        let err = apply(&p, "trait Tr {\n    type Item;\n}\n").unwrap_err();
-        assert!(err.contains("follow=uses"), "got: {err}");
+    fn follow_rewrites_domain_uses() {
+        let (files, report) = apply_files(&follow_patch(), &[("src/lib.rs", FOLLOW_SRC)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("type Output;"), "got: {out}");
+        assert!(out.contains("fn make() -> Self::Output;"), "got: {out}");
+        assert!(out.contains("fn make() -> Self::Output {"), "got: {out}");
+        assert!(out.contains("Self::Output::default()"), "got: {out}");
+        assert!(
+            out.contains("fn get(x: S::Output) -> S::Output {"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("fn q(y: <S as Tr>::Output) -> Tr::Output {"),
+            "got: {out}"
+        );
+        assert!(!out.contains("::Item"), "got: {out}");
+        assert!(!out.contains("type Item;"), "got: {out}");
+        // `impl Tr for S` keeps its own `type Item` (definition-only:
+        // a second hunk owns it), only the use tails rewrite.
+        assert!(out.contains("type Item = u8;"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+    }
+
+    #[test]
+    fn follow_cross_file() {
+        let (files, report) = apply_files(
+            "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@ rule=r\n# follow=uses\n  trait Tr {\n- type Item;\n+ type Output;\n",
+            &[
+                ("src/a.rs", "trait Tr {\n    type Item;\n}\n"),
+                (
+                    "src/b.rs",
+                    "struct S;\nimpl Tr for S {\n    type Item = u8;\n    fn make() -> Self::Item {\n        1\n    }\n}\n",
+                ),
+            ],
+        )
+        .unwrap();
+        assert!(files["src/a.rs"].contains("type Output;"));
+        assert!(files["src/b.rs"].contains("fn make() -> Self::Output {"));
+        assert_eq!(report.rules.len(), 2);
+        assert_eq!(report.rules[1].file, "src/b.rs");
+    }
+
+    #[test]
+    fn follow_shadowed_block_skips_green() {
+        let src = "trait Tr {\n    type Item;\n}\nstruct S;\nimpl Tr for S {\n    type Item = u8;\n    fn make() -> Self::Item {\n        1\n    }\n}\ntrait Other {\n    type Item;\n}\nstruct T;\nimpl Other for T {\n    type Item = u16;\n    fn make() -> Self::Item {\n        2\n    }\n}\n";
+        let (files, report) = apply_files(&follow_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        // Other's block untouched: decl + its Self:: use stay.
+        assert!(
+            out.contains("trait Other {\n    type Item;\n}"),
+            "got: {out}"
+        );
+        assert!(out.contains("type Item = u16;"), "got: {out}");
+        assert_eq!(out.matches("Self::Item").count(), 1, "got: {out}");
+        // Tr's own sites rewrote.
+        assert!(out.contains("Self::Output"), "got: {out}");
+        let details = &report.rules[0].follow_skipped_details;
+        assert!(
+            details.iter().any(|d| d.reason == "shadowed"),
+            "got: {details:?}"
+        );
+    }
+
+    #[test]
+    fn follow_inherent_impl_const() {
+        let src =
+            "struct S;\nimpl S {\n    const MAX: i32 = 10;\n}\nfn f() -> i32 {\n    S::MAX\n}\n";
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,7 +1,7 @@ rule=r\n# follow=uses\n  impl S {\n- const MAX: i32 = 10;\n+ const LIMIT: i32 = 10;\n"
+            .to_string();
+        let (files, _) = apply_files(&p, &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("const LIMIT: i32 = 10;"), "got: {out}");
+        assert!(out.contains("S::LIMIT"), "got: {out}");
+        assert!(!out.contains("MAX"), "got: {out}");
+    }
+
+    #[test]
+    fn no_follow_lists_self_orphans() {
+        let p = patch("trait Tr {", "type Item;", "type Output;")
+            .replace("@@ -1,3 +1,3 @@", "@@ -1,4 +1,4 @@");
+        let (files, report) = apply_files(&p, &[("src/lib.rs", FOLLOW_SRC)]).unwrap();
+        assert!(files["src/lib.rs"].contains("type Output;"));
+        let orphans = &report.rules[0].orphans;
+        assert!(
+            orphans.iter().any(|o| o.text.contains("Self::Item")),
+            "got: {orphans:?}"
+        );
+        assert!(
+            orphans.iter().all(|o| o.reason == "off-target"),
+            "got: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn follow_macro_hidden_veto_and_skip() {
+        let src = "trait Tr {\n    type Item;\n}\nmacro_rules! m {\n    () => { let _ = (0 as Tr::Item); };\n}\n";
+        let base = patch("trait Tr {", "type Item;", "type Output;");
+        let p = base.replace("rule=r", "rule=r\n# follow=uses");
+        let err = apply(&p, src).unwrap_err();
+        assert!(err.contains("macro"), "got: {err}");
+        let p = p.replace("# follow=uses", "# follow=uses\n# fallback=syntax");
+        let (files, report) = apply_files(&p, &[("src/lib.rs", src)]).unwrap();
+        assert!(files["src/lib.rs"].contains("type Output;"));
+        let details = &report.rules[0].follow_skipped_details;
+        assert!(
+            details.iter().any(|d| d.reason == "macro-hidden"),
+            "got: {details:?}"
+        );
     }
 
     #[test]

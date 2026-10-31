@@ -1037,8 +1037,10 @@ pub(crate) fn follow_uses_workspace(
         return Ok((bindings, no_follow, Vec::new()));
     }
     // WI-9a: member renames follow through the member collector (which
-    // claims only `E::Old` paths / `.old` + `S`-anchored labels); every
-    // other shape keeps the scalar resolver.
+    // claims only `E::Old`-spelled paths / `.old` + `S`-anchored labels);
+    // WI-27: assoc renames follow through the assoc collector (which
+    // claims only container-proven `Self::`/`S::`/`Tr::`/qself tails);
+    // every other shape keeps the scalar resolver.
     enum FollowTarget {
         Scalar {
             macro_paths: bool,
@@ -1046,6 +1048,11 @@ pub(crate) fn follow_uses_workspace(
         Member {
             kind: crate::use_graph_member::MemberKind,
             container: String,
+        },
+        Assoc {
+            impl_header: String,
+            want_trait: bool,
+            is_type: bool,
         },
     }
     let (old, new, target) = match &compiled.kind {
@@ -1096,17 +1103,33 @@ pub(crate) fn follow_uses_workspace(
                 container: enum_name.clone(),
             },
         ),
+        PatternKind::AssocRename {
+            impl_header,
+            want_trait,
+            is_type,
+            minus_name,
+            plus_name,
+            ..
+        } => (
+            minus_name.clone(),
+            plus_name.clone(),
+            FollowTarget::Assoc {
+                impl_header: impl_header.clone(),
+                want_trait: *want_trait,
+                is_type: *is_type,
+            },
+        ),
         _ => {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
-                "# follow=uses is only supported on fn, item, field, and variant rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+                "# follow=uses is only supported on fn, item, field, variant, and assoc rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
             )
             .with_rule(rh.rule_name())
             .with_file(def_path)
-            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename")
+            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename")
             .with_repair(StructuredError::fix_pattern_repair(
                 "C17",
-                "remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename",
+                "remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename",
             )));
         }
     };
@@ -1185,6 +1208,63 @@ pub(crate) fn follow_uses_workspace(
                         edits
                             .into_iter()
                             .map(|e| (e.start, e.end, e.replacement))
+                            .collect(),
+                    )
+                })
+                .collect();
+            (per_file, outcome.skipped)
+        }
+        FollowTarget::Assoc {
+            impl_header,
+            want_trait,
+            is_type,
+        } => {
+            let domain =
+                crate::use_graph_assoc::assoc_domain(impl_header, *want_trait, *is_type, &old);
+            let Some(domain) = domain else {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "assoc follow header does not parse as a `trait`/`impl` block header",
+                )
+                .with_rule(rh.rule_name())
+                .with_file(def_path)
+                .with_suggestion("copy the block header verbatim from the file")
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "assoc",
+                    "copy the `trait T {` or `impl ... {` header verbatim from the file",
+                )));
+            };
+            let Some(filter) = rsmpl_pattern::parse_impl_header(impl_header) else {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "assoc follow header does not parse as a `trait`/`impl` block header",
+                )
+                .with_rule(rh.rule_name())
+                .with_file(def_path)
+                .with_suggestion("copy the block header verbatim from the file")
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "assoc",
+                    "copy the `trait T {` or `impl ... {` header verbatim from the file",
+                )));
+            };
+            let outcome = crate::use_graph_assoc::resolve_assoc_workspace(
+                &refs,
+                &domain,
+                &filter,
+                def_path,
+                &renamed,
+                rh.fallback_syntax(),
+            )
+            .map_err(veto_to_err)?;
+            let per_file = outcome
+                .per_file
+                .into_iter()
+                .map(|(f, spans)| {
+                    (
+                        f,
+                        spans
+                            .into_iter()
+                            .map(|(a, b)| (a, b, new.clone()))
                             .collect(),
                     )
                 })
