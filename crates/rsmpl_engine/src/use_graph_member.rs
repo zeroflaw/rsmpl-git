@@ -21,6 +21,7 @@
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
+use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::LineIndex;
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
@@ -48,8 +49,8 @@ pub(crate) struct MemberWorkspaceOutcome {
     /// Path → ident edits, sorted by path; entries exist only for files
     /// with ≥1 edit.
     pub per_file: Vec<(String, Vec<MemberEdit>)>,
-    /// `path:line`-qualified notes for sites left untouched under fallback.
-    pub skipped: Vec<String>,
+    /// WI-2 structured skips for sites left untouched under fallback.
+    pub skipped: Vec<FollowSkip>,
 }
 
 /// Resolve member use sites across every loaded `.rs` file.
@@ -164,7 +165,7 @@ pub(crate) fn resolve_member_workspace(
     per_file.sort_by(|a, b| a.0.cmp(&b.0));
     let use_sites: usize = per_file.iter().map(|(_, s)| s.len()).sum();
 
-    let mut skipped: Vec<String> = Vec::new();
+    let mut skipped: Vec<FollowSkip> = Vec::new();
     if !shadow.is_empty() {
         if !fallback {
             let d = shadow[0];
@@ -176,9 +177,14 @@ pub(crate) fn resolve_member_workspace(
             });
         }
         for d in &shadow {
-            skipped.push(format!(
-                "{}:{}: shadowed definition of `{old}` ({}::{old}); {use_sites} use sites left untouched",
-                d.path, d.line, d.container,
+            skipped.push(FollowSkip::new(
+                format!(
+                    "{}:{}: shadowed definition of `{old}` ({}::{old}); {use_sites} use sites left untouched",
+                    d.path, d.line, d.container,
+                ),
+                &d.path,
+                d.line,
+                skip_reason::SHADOWED,
             ));
         }
         per_file.clear();
@@ -193,8 +199,18 @@ pub(crate) fn resolve_member_workspace(
             });
         }
         for (path, line, ctx) in &opaque {
-            skipped.push(format!(
-                "{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"
+            // Bare-`Old` spellings are a possible second-hop import; macro
+            // interiors stay macro-hidden. Both are opaque either way.
+            let code = if ctx.contains("bare `Old`") {
+                skip_reason::SECOND_HOP
+            } else {
+                skip_reason::MACRO_HIDDEN
+            };
+            skipped.push(FollowSkip::new(
+                format!("{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"),
+                path,
+                *line,
+                code,
             ));
         }
         if shadow.is_empty() {
@@ -225,7 +241,9 @@ pub(crate) fn collect_member_orphans(
     for (path, parsed, original, index) in files {
         let mut collector = MemberCollector::new(kind, container, old);
         collector.visit_file(parsed);
-        let mut lines: Vec<u32> = Vec::new();
+        // WI-2 reasons mirror the scalar collector: provable and bare
+        // spellings are `off-target`, opaque interiors `macro-hidden`.
+        let mut lines: Vec<(u32, &'static str)> = Vec::new();
         for use_site in &collector.uses {
             let line = use_site.span.start().line as u32;
             let Some((a, b)) = span_bytes(original, index, use_site.span) else {
@@ -237,23 +255,24 @@ pub(crate) fn collect_member_orphans(
             if renamed_hit_in(path, a, b) {
                 continue;
             }
-            lines.push(line);
+            lines.push((line, "off-target"));
         }
         if kind == MemberKind::Variant {
             for span in &collector.bare {
-                lines.push(span.start().line as u32);
+                lines.push((span.start().line as u32, "off-target"));
             }
         }
         for (line, _) in &collector.opaque {
-            lines.push(*line);
+            lines.push((*line, "macro-hidden"));
         }
         lines.sort_unstable();
         lines.dedup();
-        for line in lines {
+        for (line, reason) in lines {
             out.push(crate::OrphanReport {
                 file: (*path).clone(),
                 line,
                 text: source_line_text(original, index, line),
+                reason: reason.to_string(),
             });
         }
     }

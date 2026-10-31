@@ -12,6 +12,7 @@ mod canonical_tree;
 mod capture;
 mod drift;
 mod edits;
+mod follow_reasons;
 mod lines;
 mod matcher_expr;
 mod matcher_expr_subst;
@@ -90,12 +91,22 @@ pub struct RuleReport {
     /// one span per rewritten use site, so `spans.len() >= matches` there
     /// (`matches` counts definitions). Insertions report `[anchor, anchor]`.
     pub spans: Vec<(u32, u32)>,
+    /// WI-2 span edit labels, parallel to `spans` (`None` = unlabeled).
+    /// Multi-edit rules (signature evolution, follow-augmented hunks) tag
+    /// each span (`generics`/`params`/`return`/`rename`/`follow`);
+    /// single-edit rules leave every entry `None` (omitted from JSON).
+    pub span_labels: Vec<Option<String>>,
     /// Per-site evidence (WI-2b, SPEC D.2): one entry per emitted edit in
     /// span order; empty for shapes that bind nothing (omitted from JSON).
     pub sites: Vec<SiteReport>,
     /// `# fallback=syntax` skip notes from `# follow=uses` hunks (SPEC
     /// 14.8): `; `-joined, present only when sites were skipped.
     pub follow_skipped: Option<String>,
+    /// WI-2 structured skip evidence (SPEC D.2, 14.8): one entry per
+    /// skipped site (`file`, 1-based `line`, `reason` code), sorted by
+    /// file/line and deduped. Additive beside `follow_skipped` (WI-20
+    /// owns the string's removal); empty when nothing was skipped.
+    pub follow_skipped_details: Vec<FollowSkipReport>,
     /// Report-only orphan evidence (WI-7c, SPEC 14.8): same-name uses a
     /// definition-only rename leaves behind. Never fails the run.
     pub orphans: Vec<OrphanReport>,
@@ -103,13 +114,28 @@ pub struct RuleReport {
     pub semantics: RuleSemantics,
 }
 
+/// WI-2 structured skip evidence (SPEC D.2, 14.8): the file/line the
+/// `follow_skipped` prose names, plus the machine `reason` code
+/// (`shadowed` | `glob-reexport` | `second-hop` | `macro-hidden` |
+/// `off-target`). File-level skips (unparseable files) report `line: 1`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FollowSkipReport {
+    pub file: String,
+    pub line: u32,
+    pub reason: String,
+}
+
 /// One orphaned use site (WI-7c): repo-relative `file`, 1-based `line`,
-/// and the trimmed source `text` of that line.
+/// and the trimmed source `text` of that line. WI-2 `reason` is one of
+/// `off-target` (names `old`, left because the rename is definition-only)
+/// or `macro-hidden` (macro/attribute/`qself` interiors the resolver
+/// cannot attribute).
 #[derive(Debug, Clone, Default)]
 pub struct OrphanReport {
     pub file: String,
     pub line: u32,
     pub text: String,
+    pub reason: String,
 }
 
 /// One emitted edit's evidence (WI-2b): its span plus its own bindings,

@@ -218,7 +218,7 @@ fn apply_candidates(
             )
             .with_rule(&rule));
         }
-        edits.push(TextEdit::new(a, b, new.to_string()));
+        edits.push(TextEdit::new(a, b, new.to_string()).with_label("rename"));
         if hunk.attrs_policy() == AttrsPolicy::Strip && !c.member_attrs.is_empty() {
             let start = index
                 .line_start(c.attr_start_line)

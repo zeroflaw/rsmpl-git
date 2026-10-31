@@ -340,8 +340,10 @@ fn apply_inner(
                         file: path.clone(),
                         matches: 1,
                         spans: vec![(sl, el)],
+                        span_labels: Vec::new(),
                         sites: Vec::new(),
                         follow_skipped: None,
+                        follow_skipped_details: Vec::new(),
                         orphans: Vec::new(),
                         semantics: RuleSemantics::ReparseOnly,
                     },
@@ -458,7 +460,7 @@ fn apply_inner(
                     // WI-6b1 workspace follow before spans: def-file spans
                     // cover definition + same-file uses (SPEC 14.8), and
                     // other files' uses land in their own edit lists.
-                    let (follow_bindings, extra_reports) = if rh.follows_uses() {
+                    let (follow_bindings, extra_reports, follow_details) = if rh.follows_uses() {
                         follow_uses_workspace(
                             rh,
                             &compiled,
@@ -470,12 +472,16 @@ fn apply_inner(
                             found,
                         )?
                     } else {
-                        (HashMap::new(), Vec::new())
+                        (HashMap::new(), Vec::new(), Vec::new())
                     };
-                    let spans = {
+                    let (spans, span_labels) = {
                         let state = states.get(path).expect("file state");
                         let edits = file_edits.get(path).expect("file state");
-                        edit_spans(&state.index, &edits[edits_before..])
+                        let new_edits = &edits[edits_before..];
+                        (
+                            edit_spans(&state.index, new_edits),
+                            crate::edits::edit_span_labels(new_edits),
+                        )
                     };
                     // A non-insertion hunk carrying `# use=` has no v0.1 meaning.
                     if !rh.uses().is_empty()
@@ -663,8 +669,10 @@ fn apply_inner(
                             file: path.clone(),
                             matches: found,
                             spans,
+                            span_labels,
                             sites,
                             follow_skipped,
+                            follow_skipped_details: follow_details,
                             orphans,
                             semantics: provisional,
                         },
@@ -677,8 +685,10 @@ fn apply_inner(
                     // is sorted at the source.
                     // WI-1b: follow-only extras are conservatively
                     // reparse-only (the definition probe covers the rename;
-                    // per-use plus shapes differ).
+                    // per-use plus shapes differ). Every extra span is a
+                    // rewritten use site: WI-2 `follow` label throughout.
                     for (file, matches, spans) in extra_reports {
+                        let span_labels = vec![Some("follow".to_string()); spans.len()];
                         rule_order.push((
                             (sec_idx, hunk_idx),
                             RuleReport {
@@ -686,8 +696,10 @@ fn apply_inner(
                                 file,
                                 matches,
                                 spans,
+                                span_labels,
                                 sites: Vec::new(),
                                 follow_skipped: None,
+                                follow_skipped_details: Vec::new(),
                                 orphans: Vec::new(),
                                 semantics: RuleSemantics::ReparseOnly,
                             },

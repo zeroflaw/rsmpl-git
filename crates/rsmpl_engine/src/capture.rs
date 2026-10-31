@@ -207,8 +207,10 @@ pub(crate) fn eval_empty_collection_cut(
         file: file.to_string(),
         matches: 0,
         spans: Vec::new(),
+        span_labels: Vec::new(),
         sites: Vec::new(),
         follow_skipped: None,
+        follow_skipped_details: Vec::new(),
         orphans: Vec::new(),
         semantics: RuleSemantics::ReparseOnly,
     })
@@ -255,8 +257,10 @@ pub(crate) fn eval_collection_cut(
         file: path.to_string(),
         matches: spans.len(),
         spans,
+        span_labels: Vec::new(),
         sites: Vec::new(),
         follow_skipped: None,
+        follow_skipped_details: Vec::new(),
         orphans: Vec::new(),
         semantics: RuleSemantics::ReparseOnly,
     })

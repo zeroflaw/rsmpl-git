@@ -28,6 +28,7 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::edits::{edit_spans, TextEdit};
+use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::{FileState, LineIndex};
 use crate::matcher_item::span_bytes;
 
@@ -36,8 +37,9 @@ use crate::matcher_item::span_bytes;
 pub struct FollowOutcome {
     /// Ident byte ranges (`original[a..b] == old`), sorted, deduped.
     pub spans: Vec<(usize, usize)>,
-    /// `line N: ...` notes for sites left untouched under fallback.
-    pub skipped: Vec<String>,
+    /// WI-2 structured skips for sites left untouched under fallback
+    /// (prose `note` preserved beside the assertable triple).
+    pub skipped: Vec<FollowSkip>,
 }
 
 /// A fail-loud veto: the first unprovable site (no `# fallback=syntax`).
@@ -110,7 +112,7 @@ pub fn resolve(
     spans.sort_unstable();
     spans.dedup();
 
-    let mut skipped: Vec<String> = Vec::new();
+    let mut skipped: Vec<FollowSkip> = Vec::new();
     if !shadow.is_empty() {
         // Every remaining use is ambiguous (which definition does it name?),
         // so under fallback all use rewriting is skipped, not just the
@@ -124,9 +126,13 @@ pub fn resolve(
             });
         }
         for (line, kind) in &shadow {
-            skipped.push(format!(
-                "line {line}: shadowed definition of `{old}` ({kind}); {} use sites left untouched",
-                spans.len()
+            skipped.push(FollowSkip::same_file(
+                format!(
+                    "line {line}: shadowed definition of `{old}` ({kind}); {} use sites left untouched",
+                    spans.len()
+                ),
+                *line,
+                skip_reason::SHADOWED,
             ));
         }
         spans.clear();
@@ -141,8 +147,10 @@ pub fn resolve(
             });
         }
         for (line, ctx) in &collector.opaque {
-            skipped.push(format!(
-                "line {line}: use of `{old}` inside {ctx} left untouched (opaque)"
+            skipped.push(FollowSkip::same_file(
+                format!("line {line}: use of `{old}` inside {ctx} left untouched (opaque)"),
+                *line,
+                skip_reason::MACRO_HIDDEN,
             ));
         }
     }
@@ -156,9 +164,13 @@ pub fn resolve(
             });
         }
         for line in &collector.globs {
-            skipped.push(format!(
-                "line {line}: glob import left untouched (opaque); {} use sites left untouched",
-                spans.len()
+            skipped.push(FollowSkip::same_file(
+                format!(
+                    "line {line}: glob import left untouched (opaque); {} use sites left untouched",
+                    spans.len()
+                ),
+                *line,
+                skip_reason::GLOB_REEXPORT,
             ));
         }
         spans.clear();
@@ -201,8 +213,8 @@ pub struct WorkspaceOutcome {
     /// Path → ident byte ranges (`original[a..b] == old`), sorted/deduped.
     /// Entries exist only for files with ≥1 rewrite span.
     pub per_file: Vec<(String, Vec<(usize, usize)>)>,
-    /// `path:line`-qualified notes for sites left untouched under fallback.
-    pub skipped: Vec<String>,
+    /// WI-2 structured skips for sites left untouched under fallback.
+    pub skipped: Vec<FollowSkip>,
 }
 
 pub fn resolve_workspace<'a>(
@@ -341,7 +353,7 @@ pub fn resolve_workspace<'a>(
     per_file.sort_by(|a, b| a.0.cmp(&b.0));
     let use_sites: usize = per_file.iter().map(|(_, s)| s.len()).sum();
 
-    let mut skipped: Vec<String> = Vec::new();
+    let mut skipped: Vec<FollowSkip> = Vec::new();
     if !shadow.is_empty() {
         if !fallback {
             let d = shadow[0];
@@ -353,9 +365,14 @@ pub fn resolve_workspace<'a>(
             });
         }
         for d in &shadow {
-            skipped.push(format!(
-                "{}:{}: shadowed definition of `{old}` ({}); {use_sites} use sites left untouched",
-                d.path, d.line, d.kind,
+            skipped.push(FollowSkip::new(
+                format!(
+                    "{}:{}: shadowed definition of `{old}` ({}); {use_sites} use sites left untouched",
+                    d.path, d.line, d.kind,
+                ),
+                &d.path,
+                d.line,
+                skip_reason::SHADOWED,
             ));
         }
         per_file.clear();
@@ -379,8 +396,11 @@ pub fn resolve_workspace<'a>(
             });
         }
         for (path, line, ctx) in &opaque {
-            skipped.push(format!(
-                "{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"
+            skipped.push(FollowSkip::new(
+                format!("{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"),
+                path,
+                *line,
+                skip_reason::MACRO_HIDDEN,
             ));
         }
         if !shadow.is_empty() {
@@ -417,8 +437,13 @@ pub fn resolve_workspace<'a>(
         }
         for (path, line) in &globbed {
             per_file.retain(|(p, _)| p != path);
-            skipped.push(format!(
-                "{path}:{line}: glob import left untouched (opaque); use sites in this file left untouched"
+            skipped.push(FollowSkip::new(
+                format!(
+                    "{path}:{line}: glob import left untouched (opaque); use sites in this file left untouched"
+                ),
+                path,
+                *line,
+                skip_reason::GLOB_REEXPORT,
             ));
         }
     }
@@ -440,7 +465,7 @@ pub fn resolve_workspace<'a>(
         })
         .collect();
     let mut hop_first: Option<String> = None;
-    let mut hop_notes: Vec<String> = Vec::new();
+    let mut hop_notes: Vec<FollowSkip> = Vec::new();
     for c in &all {
         if c.path == renamed_file {
             continue;
@@ -459,7 +484,7 @@ pub fn resolve_workspace<'a>(
                     prefix.iter().any(|s| s == m)
                 }
             });
-            let (reason, note) = match via {
+            let (reason, note, code) = match via {
                 Some((_, m)) => (
                     format!(
                         "re-export of `{old}` at {}:{line} goes through re-exporting module `{m}` (second re-export hop): cannot tell which item each use names",
@@ -469,6 +494,7 @@ pub fn resolve_workspace<'a>(
                         "{}:{line}: second re-export hop of `{old}` through `{m}` left untouched; {use_sites} use sites left untouched",
                         c.path,
                     ),
+                    skip_reason::SECOND_HOP,
                 ),
                 None => {
                     let expected = if defpath.is_empty() {
@@ -485,13 +511,14 @@ pub fn resolve_workspace<'a>(
                             "{}:{line}: off-target re-export of `{old}` left untouched; {use_sites} use sites left untouched",
                             c.path,
                         ),
+                        skip_reason::OFF_TARGET,
                     )
                 }
             };
             if hop_first.is_none() {
                 hop_first = Some(reason);
             }
-            hop_notes.push(note);
+            hop_notes.push(FollowSkip::new(note, &c.path, *line, code));
         }
     }
     for c in &all {
@@ -539,7 +566,12 @@ pub fn resolve_workspace<'a>(
                 if hop_first.is_none() {
                     hop_first = Some(reason);
                 }
-                hop_notes.push(note);
+                hop_notes.push(FollowSkip::new(
+                    note,
+                    &c.path,
+                    *line,
+                    skip_reason::GLOB_REEXPORT,
+                ));
             }
         }
     }
@@ -970,16 +1002,24 @@ pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>)>;
 /// Resolved follow edits per file: (path, [(start, end, replacement)]).
 type ResolvedUses = Vec<(String, Vec<(usize, usize, String)>)>;
 
+/// WI-2 follow-workspace outcome: extra bindings (`follow_skipped` when
+/// `# fallback=syntax` left sites untouched), the follow-only entries,
+/// and the structured skip details (SPEC D.2).
+pub(crate) type FollowWorkspaceOutcome = (
+    HashMap<String, String>,
+    FollowExtras,
+    Vec<crate::FollowSkipReport>,
+);
+
 /// WI-6b1 `# follow=uses` workspace step (SPEC 14.8): after the definition
 /// rewrite, resolve use sites across every loaded `.rs` file (unique-
 /// definition fast path) and append their ident-span edits under the same
 /// rule. Zero new def edits (optional zero-match) means nothing to follow
 /// — a no-op, never a veto.
 ///
-/// Returns extra bindings (`follow_skipped` when `# fallback=syntax` left
-/// sites untouched) plus the follow-only entries. The caller reports the
-/// definition file as usual and each extra entry as its own `RuleReport`
-/// with the same rule name (SPEC D.2).
+/// The caller reports the definition file as usual and
+/// each extra entry as its own `RuleReport` with the same rule name
+/// (SPEC D.2).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn follow_uses_workspace(
     rh: &rsmpl_patch::RsmplHunk,
@@ -990,11 +1030,11 @@ pub(crate) fn follow_uses_workspace(
     def_path: &str,
     edits_before: usize,
     found: usize,
-) -> Result<(HashMap<String, String>, FollowExtras), StructuredError> {
+) -> Result<FollowWorkspaceOutcome, StructuredError> {
     let mut bindings = HashMap::new();
     let no_follow: FollowExtras = Vec::new();
     if found == 0 {
-        return Ok((bindings, no_follow));
+        return Ok((bindings, no_follow, Vec::new()));
     }
     // WI-9a: member renames follow through the member collector (which
     // claims only `E::Old` paths / `.old` + `S`-anchored labels); every
@@ -1098,7 +1138,7 @@ pub(crate) fn follow_uses_workspace(
     // Normalized edits per file. The scalar resolver rewrites every
     // span to `new`; the member resolver carries its own replacements
     // (shorthand expansion).
-    let (per_file, skipped_from_resolve): (ResolvedUses, Vec<String>) = match &target {
+    let (per_file, skipped_from_resolve): (ResolvedUses, Vec<FollowSkip>) = match &target {
         FollowTarget::Scalar { macro_paths } => {
             let outcome = resolve_workspace(
                 &refs,
@@ -1186,13 +1226,14 @@ pub(crate) fn follow_uses_workspace(
         .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
     }
     // Append use-span edits per file; record pre-push lengths so extra
-    // reports span exactly the pushed edits.
+    // reports span exactly the pushed edits. Follow use-site edits carry
+    // the WI-2 `follow` span label (evidence only).
     let mut before_lens: HashMap<String, usize> = HashMap::new();
     for (f, edits) in &per_file {
         before_lens.insert(f.clone(), file_edits.get(f).map(|v| v.len()).unwrap_or(0));
         let vec = file_edits.get_mut(f).expect("workspace file state");
         for (a, b, replacement) in edits {
-            vec.push(TextEdit::new(*a, *b, replacement.clone()));
+            vec.push(TextEdit::new(*a, *b, replacement.clone()).with_label("follow"));
         }
     }
     let mut extras: FollowExtras = Vec::new();
@@ -1212,14 +1253,20 @@ pub(crate) fn follow_uses_workspace(
     extras.sort_by(|a, b| a.0.cmp(&b.0));
     let mut skipped = outcome.skipped;
     for path in &tripwire {
-        skipped.push(format!(
-            "{path}: unparseable file left untouched (may name `{old}`)"
+        skipped.push(FollowSkip::whole_file(
+            format!("{path}: unparseable file left untouched (may name `{old}`)"),
+            path,
+            skip_reason::MACRO_HIDDEN,
         ));
     }
     if !skipped.is_empty() {
-        bindings.insert("follow_skipped".to_string(), skipped.join("; "));
+        bindings.insert(
+            "follow_skipped".to_string(),
+            FollowSkip::notes(&skipped).join("; "),
+        );
     }
-    Ok((bindings, extras))
+    let details = FollowSkip::details(&skipped, def_path);
+    Ok((bindings, extras, details))
 }
 #[cfg(test)]
 mod tests {
@@ -1319,7 +1366,7 @@ mod tests {
         let out = resolve_for_test(src, "Old", "pub struct Old", true).unwrap();
         assert!(out.spans.is_empty(), "all uses ambiguous: {:?}", out.spans);
         assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
-        assert!(out.skipped[0].contains("use sites left untouched"));
+        assert!(out.skipped[0].note.contains("use sites left untouched"));
     }
 
     #[test]
@@ -1438,7 +1485,11 @@ mod tests {
         let out = workspace_for_test(&files, "Old", "a.rs", "struct Old", true).unwrap();
         assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
         assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
-        assert!(out.skipped[0].contains("b.rs"), "got: {:?}", out.skipped);
+        assert!(
+            out.skipped[0].note.contains("b.rs"),
+            "got: {:?}",
+            out.skipped
+        );
     }
 
     #[test]
@@ -1461,7 +1512,11 @@ mod tests {
             .expect("b.rs entry");
         assert_eq!(b.1.len(), 2, "per_file: {:?}", out.per_file);
         assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
-        assert!(out.skipped[0].contains("b.rs"), "got: {:?}", out.skipped);
+        assert!(
+            out.skipped[0].note.contains("b.rs"),
+            "got: {:?}",
+            out.skipped
+        );
     }
 
     #[test]
@@ -1494,7 +1549,7 @@ mod tests {
             .expect("clean file still rewrites");
         assert_eq!(c.1.len(), 2, "per_file: {:?}", out.per_file);
         assert!(
-            out.skipped.iter().any(|s| s.contains("b.rs")),
+            out.skipped.iter().any(|s| s.note.contains("b.rs")),
             "got: {:?}",
             out.skipped
         );
@@ -1595,7 +1650,7 @@ mod tests {
         assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
         assert_eq!(out.skipped.len(), 1, "got: {:?}", out.skipped);
         assert!(
-            out.skipped[0].contains("src/b.rs"),
+            out.skipped[0].note.contains("src/b.rs"),
             "got: {:?}",
             out.skipped
         );
@@ -1616,7 +1671,7 @@ mod tests {
         let out = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", true).unwrap();
         assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
         assert!(
-            out.skipped.iter().any(|s| s.contains("src/c.rs")),
+            out.skipped.iter().any(|s| s.note.contains("src/c.rs")),
             "got: {:?}",
             out.skipped
         );
@@ -1657,7 +1712,7 @@ mod tests {
         let out = workspace_for_test(&files, "Old", "src/a.rs", "struct Old", true).unwrap();
         assert!(out.per_file.is_empty(), "got: {:?}", out.per_file);
         assert!(
-            out.skipped.iter().any(|s| s.contains("src/b.rs")),
+            out.skipped.iter().any(|s| s.note.contains("src/b.rs")),
             "got: {:?}",
             out.skipped
         );

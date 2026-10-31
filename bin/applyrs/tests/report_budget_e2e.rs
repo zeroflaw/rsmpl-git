@@ -1,11 +1,13 @@
-//! WI-2b follow-up: absolute report-budget pin on a multi-KB realistic report.
+//! WI-2 recomputed absolute report-budget pin on a multi-KB report.
 //!
 //! Replaces the old "≤15% growth" relative bound (unachievable on sub-KB
 //! reports, never normative) with the SPEC D.2 absolute budget:
 //! overhead (bytes beyond the reported `diff`) ≤
-//! `200 + 150·F + 150·R + 90·S` (WI-2b: 20 B per span + ~70 B per site
-//! evidence). The fixture is deliberately multi-KB
-//! (12 files × 10 call sites) so the pin applies where it matters.
+//! `200 + 150·F + 175·R + 90·S + 110·C` (WI-2: 20 B per span + ~70 B per
+//! site evidence + ~91 B measured per cut `binding_meta` digest, pinned
+//! at 110). The fixture is deliberately multi-KB (12 files × 10 call
+//! sites) so the pin applies where it matters; it carries zero cuts
+//! (C = 0 — short bindings), so digests add nothing here.
 
 mod common;
 use common::*;
@@ -60,10 +62,21 @@ fn json_report_overhead_within_absolute_budget() {
     assert_eq!(f, 12, "got: {v}");
     assert_eq!(r, 12, "got: {v}");
     assert_eq!(s, 120, "got: {v}");
-    let budget = 200 + 150 * f + 150 * r + 90 * s;
+    // WI-2: C = cut binding values carrying `binding_meta` digests
+    // (zero here — short bindings never cut — so the term is inert on
+    // this fixture and pins the no-digest shape byte-stable).
+    let c: usize = rules
+        .iter()
+        .map(|e| {
+            e.get("bindings_truncated_chars")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0) as usize
+        })
+        .sum();
+    let budget = 200 + 150 * f + 175 * r + 90 * s + 110 * c;
     assert!(
         overhead <= budget,
-        "overhead {overhead} B exceeds budget {budget} B (F={f} R={r} S={s}): {v}"
+        "overhead {overhead} B exceeds budget {budget} B (F={f} R={r} S={s} C={c}): {v}"
     );
     // Token bounds still hold per entry (WI-2c v2: `sites` is the only
     // bindings evidence; first-site `bindings` removed).

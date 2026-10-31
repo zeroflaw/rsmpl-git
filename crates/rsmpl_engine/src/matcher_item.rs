@@ -392,7 +392,7 @@ pub fn apply_item_rename_hunk(
             )
             .with_rule(&rule));
         }
-        edits.push(TextEdit::new(a, b, plus_name.clone()));
+        edits.push(TextEdit::new(a, b, plus_name.clone()).with_label("rename"));
         // `# attrs=strip`: delete attribute lines above the item.
         if hunk.attrs_policy() == AttrsPolicy::Strip && !c.attrs.is_empty() {
             let start = index

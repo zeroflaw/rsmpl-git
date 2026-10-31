@@ -2326,17 +2326,34 @@ different nested module.
 
 Orphan evidence (WI-7c): every definition-only fn/item rename runs the
 same syntactic index in report-only mode. The JSON rule entry gains
-`orphans: [{file, line, text}]` (one entry per stale-use line, sorted by
-`file`/`line`, `text` is the trimmed source line) plus
+`orphans: [{file, line, reason, text}]` (one entry per stale-use line,
+sorted by `file`/`line`, `text` is the trimmed source line) plus
 `orphans_truncated` when more than 8 lines name the old ident (each
 `text` truncated to 80 chars with a trailing `…` when cut) plus
 `orphans_truncated_chars` counting cut texts (absent when zero). Opaque macro/attribute/`qself` lines
 count as orphans; unparseable files are excluded (the tripwire above
 owns them). `--check` stays green — the rename may be intentional —
-and text mode prints one `orphans:` stderr line. With `--verify build`
+and text mode prints one `orphans:` stderr line with each entry as
+`file:line [reason]: text`. With `--verify build`
 the first diagnostic names the first orphan `file:line` alongside the
 `applied` flag. A `# follow=uses` hunk never carries `orphans` (its
 uses rewrite; `follow_skipped` owns that signal).
+
+Skip and orphan reason vocabulary (WI-2): every structured skip and
+every orphan carries a machine `reason`, one of `shadowed` (another
+container defines the same name, so no site is provable), `glob-reexport`
+(a `use …::*` glob may import a different `old`), `second-hop` (a
+re-export chain passes through a second re-exporter), `macro-hidden`
+(macro/attribute/`qself` interiors the resolver cannot attribute, or
+an unsearchable workspace file), `off-target` (names `old` but sits
+outside any rewritten hunk: a re-export that does not point at our
+definition, or a use left behind by a definition-only rename). JSON
+`follow_skipped_details: [{file, line, reason}]` sits additive beside
+the historical `follow_skipped` prose string (WI-20 owns the string's
+removal); text mode prints one `follow-skipped: {file}:{line}:{reason}`
+stderr line per skip. Whole-file skips (unparseable workspace files)
+report `line: 0` — every real line is 1-based, so 0 unambiguously means
+whole-file.
 
 Out of scope in v0.1: non-`.rs` files are never searched; symlinked
 files/dirs are skipped; a workspace `.rs` file that does not parse trips a
@@ -2388,7 +2405,7 @@ Rules:
 
 - Fields: `.old` member accesses, struct-literal labels (`S { old: v }`), and struct-pattern labels (`S { old: p }`) whose path names `S` (last segment equality, plus `Self`-spelled paths inside an `impl` of `S`). Shorthand labels expand keeping the local binding: `S { old }` rewrites to `S { new: old }`. Unprovable `.old` accesses on unknown receivers cannot exist under the unique-definition rule — any second `old` field (same or different container) vetoes first. Method idents named `old` and tuple `.0` accesses never match and never veto (different namespaces).
 - Variants: expression/pattern paths spelling `E::Old` (any leading prefix, plus `Self::Old` inside an `impl` of `E`) and `use …::E::Old` import segments. Bare `Old` (possibly import-spelled via `use E::Old` or a glob) never rewrites: it is opaque — veto without fallback, skip + report with it. `qself` paths and macro interiors mentioning the member name are opaque like scalar renames (veto/skip, never guessed).
-- Orphan evidence mirrors scalar renames: a definition-only member rename lists every provable use line (plus bare-`Old` spellings and macro mentions for variants) as `orphans` while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped` owns that signal).
+- Orphan evidence mirrors scalar renames: a definition-only member rename lists every provable use line (plus bare-`Old` spellings and macro mentions for variants) as `orphans` (each with its WI-2 `reason`) while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped` owns that signal, each with its WI-2 `reason` in `follow_skipped_details`).
 
 Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, cross-file definition+uses intents (each raised section is one file), multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename`, SPEC D.4; everything else stays ordinary).
 
@@ -6098,11 +6115,26 @@ prints one JSON object to stdout:
   (an empty map plus a zero count carries no evidence). A
   `# follow=uses` hunk with skipped sites carries hunk-level (no span)
   `follow_skipped`: the `; `-joined skip notes (absent when no site
-  was skipped). Values truncate at 80 chars (a cut value carries a
+  was skipped), plus WI-2 `follow_skipped_details: [{file, line,
+  reason}]` beside it (the string's removal rides the WI-20 version
+  bump; text mode prints one `follow-skipped: {file}:{line}:{reason}`
+  line per skip). Values truncate at 80 chars (a cut value carries a
   trailing `…` so a truncated binding is never mistaken for a complete
   one) and entries at 8 (sorted order) per site; `sites_truncated` sums
   omitted entries across sites (absent when zero) and
-  `bindings_truncated_chars` counts cut values (absent when zero), so
+  `bindings_truncated_chars` counts cut values (absent when zero). A
+  cut value's site entry additionally gains `binding_meta: {name: {len,
+  sha256}}` (`len` = full chars, `sha256` = hex of the full bytes;
+  absent when nothing was cut), so cross-site binding equality is
+  assertable without re-reading the file; `applyrs --bindings full`
+  (also via `gitrs apply`) lifts the 80-char cut for that run only
+  (no truncation, no meta keys — the token-expensive path), and any
+  other `--bindings` value is an `RSMPL_IO_CONFLICT` usage error.
+  Multi-edit rules whose spans carry slot evidence gain `span_edits`
+  (parallel to `spans`: one of `generics`/`params`/`return`/`rename`/
+  `follow` per slot, `null` for unlabeled slots; omitted for
+  single-edit rules, so identical spans like three `[1,1]`s stay
+  distinguishable), so
   the report stays within an absolute byte budget while an over-broad
   hunk still shows its extra span before apply. Budget (bytes beyond
   the reported `diff` string, `--diff-max-lines 0`): fixed envelope
@@ -6110,9 +6142,11 @@ prints one JSON object to stdout:
   `post_sha` dominates) + ≈135 B per `rules[]` entry (single-span,
   no bindings; includes the `semantics` word) + ≈90 B per span (`[s,e]` plus per-site `{span,
   bindings}` evidence — that growth is evidence, not overhead) + at most
-  8×83 B per binding site (80 chars plus the 3-byte `…` marker when cut). Operational pin:
-  overhead ≤ `200 + 150·F + 175·R + 90·S` bytes (`F` = files,
-  `R` = rules, `S` = total spans). There is deliberately no relative
+  8×83 B per binding site (80 chars plus the 3-byte `…` marker when cut)
+  + ≈110 B per cut value (the `binding_meta` digest; measured ≈91 B,
+  pinned at 110). Operational pin:
+  overhead ≤ `200 + 150·F + 175·R + 90·S + 110·C` bytes (`F` = files,
+  `R` = rules, `S` = total spans, `C` = cut values). There is deliberately no relative
   % bound: a sub-KB report can exceed any % while staying within
   bytes, and a multi-KB report is where the pin applies.
 - `files` lists per-file `{path, added, removed, post_sha}` computed from
@@ -6145,12 +6179,15 @@ prints one JSON object to stdout:
   entry (both `--check` and apply); JSON mode carries the evidence in
   the payload only. Additive within `version: 3`.
 - Per-rule `orphans` reports definition-only rename fallout
-  (Section 14.8): `[{file, line, text}]` plus `orphans_truncated`
+  (Section 14.8): `[{file, line, reason, text}]` (`reason` is the WI-2
+  vocabulary: `off-target` for uses left behind, `macro-hidden` for
+  opaque interiors) plus `orphans_truncated`
   when more than 8 lines name the old ident (each `text` truncated to
-  80 chars with a trailing `…` when cut) plus `orphans_truncated_chars`
+  80 chars with a trailing `…` when cut; `--bindings full` lifts the cut
+  here too) plus `orphans_truncated_chars`
   counting cut texts (absent when zero); absent when no use names the
    old ident. Additive within `version: 3` (like the other per-rule
-   evidence keys; `version: 2` added them within v2).
+  evidence keys; `version: 2` added them within v2).
 - `version` is the JSON report schema version (`3` = this contract:
   `checked.semantics` word (`verified`|`partial`), per-rule `semantics`
   words; `v2` had boolean `semantics`, `v1` had boolean `check`,

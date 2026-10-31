@@ -41,7 +41,10 @@ pub fn collect_orphans(
             opaque: Vec::new(),
         };
         collector.visit_file(parsed);
-        let mut lines: Vec<u32> = Vec::new();
+        // WI-2 reasons: provable uses name `old` but sit outside any
+        // rewritten hunk (`off-target`); macro/attribute/`qself`
+        // interiors are un-attributable (`macro-hidden`).
+        let mut lines: Vec<(u32, &'static str)> = Vec::new();
         for span in &collector.uses {
             let line = span.start().line as u32;
             let Some((a, b)) = span_bytes(original, index, *span) else {
@@ -53,18 +56,19 @@ pub fn collect_orphans(
             if renamed_hit_in(path, a, b) {
                 continue;
             }
-            lines.push(line);
+            lines.push((line, "off-target"));
         }
         for (line, _) in &collector.opaque {
-            lines.push(*line);
+            lines.push((*line, "macro-hidden"));
         }
         lines.sort_unstable();
         lines.dedup();
-        for line in lines {
+        for (line, reason) in lines {
             out.push(crate::OrphanReport {
                 file: (*path).clone(),
                 line,
                 text: source_line_text(original, index, line),
+                reason: reason.to_string(),
             });
         }
     }

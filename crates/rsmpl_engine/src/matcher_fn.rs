@@ -580,7 +580,7 @@ pub(crate) fn plan_sig_edits(
             )
             .with_rule(rule));
         }
-        edits.push(TextEdit::new(start, end, plus_name.to_string()));
+        edits.push(TextEdit::new(start, end, plus_name.to_string()).with_label("rename"));
     }
 
     // ---- Visibility. ----
@@ -692,14 +692,17 @@ pub(crate) fn plan_sig_edits(
                 (Some((a, b)), Some(want)) => {
                     let want_c = compact_slot(&want);
                     if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&want_c) {
-                        edits.push(TextEdit::new(a, b, want_c));
+                        edits.push(TextEdit::new(a, b, want_c).with_label("generics"));
                     }
                 }
                 (Some((a, b)), None) => {
-                    edits.push(TextEdit::new(a, b, String::new()));
+                    edits.push(TextEdit::new(a, b, String::new()).with_label("generics"));
                 }
                 (None, Some(want)) => {
-                    edits.push(TextEdit::new(ident_off, ident_off, compact_slot(&want)));
+                    edits.push(
+                        TextEdit::new(ident_off, ident_off, compact_slot(&want))
+                            .with_label("generics"),
+                    );
                 }
                 (None, None) => {}
             }
@@ -715,7 +718,7 @@ pub(crate) fn plan_sig_edits(
         let (a, b) = params_inner_bytes(index, sig)
             .ok_or_else(|| range_err(sig.paren_token.span.open().start().line as u32))?;
         if norm_list_slot(original.get(a..b).unwrap_or("")) != norm_list_slot(want) {
-            edits.push(TextEdit::new(a, b, compact_slot(want)));
+            edits.push(TextEdit::new(a, b, compact_slot(want)).with_label("params"));
         }
     }
     // ---- Return type. ----
@@ -737,11 +740,10 @@ pub(crate) fn plan_sig_edits(
             // the minus side named a concrete return type.
             if minus_r.is_some() {
                 if let Some((a, b)) = cur {
-                    edits.push(TextEdit::new(
-                        a,
-                        swallow_one_space(original, b),
-                        String::new(),
-                    ));
+                    edits.push(
+                        TextEdit::new(a, swallow_one_space(original, b), String::new())
+                            .with_label("return"),
+                    );
                 }
             }
         } else if minus_r.as_deref().map(norm_slot) != plus_r.as_deref().map(norm_slot) {
@@ -749,26 +751,24 @@ pub(crate) fn plan_sig_edits(
                 (Some((a, b)), Some(want)) => {
                     let rep = format!("-> {}", compact_slot(&want));
                     if norm_slot(original.get(a..b).unwrap_or("")) != norm_slot(&rep) {
-                        edits.push(TextEdit::new(a, b, rep));
+                        edits.push(TextEdit::new(a, b, rep).with_label("return"));
                     }
                 }
                 (Some((a, b)), None) => {
-                    edits.push(TextEdit::new(
-                        a,
-                        swallow_one_space(original, b),
-                        String::new(),
-                    ));
+                    edits.push(
+                        TextEdit::new(a, swallow_one_space(original, b), String::new())
+                            .with_label("return"),
+                    );
                 }
                 (None, Some(want)) => {
                     let close_end = sig.paren_token.span.close().end();
                     let anchor = index
                         .offset(close_end.line as u32, close_end.column)
                         .ok_or_else(|| range_err(close_end.line as u32))?;
-                    edits.push(TextEdit::new(
-                        anchor,
-                        anchor,
-                        format!(" -> {}", compact_slot(&want)),
-                    ));
+                    edits.push(
+                        TextEdit::new(anchor, anchor, format!(" -> {}", compact_slot(&want)))
+                            .with_label("return"),
+                    );
                 }
                 (None, None) => {}
             }

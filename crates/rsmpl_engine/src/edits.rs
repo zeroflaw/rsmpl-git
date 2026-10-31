@@ -5,11 +5,16 @@ use rsmpl_patch::{ErrorCode, StructuredError};
 use crate::lines::LineIndex;
 
 /// A replacement of `original[start..end]` with `replacement`.
+///
+/// WI-2 `label` names the slot for multi-edit rules (`generics`/`params`/
+/// `return`/`rename`/`follow`); `None` everywhere else. Labels never
+/// affect application or overlap checks — evidence only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
     pub start: usize,
     pub end: usize,
     pub replacement: String,
+    pub label: Option<&'static str>,
 }
 
 impl TextEdit {
@@ -19,7 +24,13 @@ impl TextEdit {
             start,
             end,
             replacement,
+            label: None,
         }
+    }
+
+    pub fn with_label(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
     }
 
     pub fn is_insertion(&self) -> bool {
@@ -202,6 +213,15 @@ pub(crate) fn edit_spans(index: &LineIndex, new_edits: &[TextEdit]) -> Vec<(u32,
             };
             (s, en)
         })
+        .collect()
+}
+
+/// WI-2 span edit labels for one hunk's new edits, parallel to
+/// `edit_spans` (position `i` labels the edit `edit_spans` spans).
+pub(crate) fn edit_span_labels(new_edits: &[TextEdit]) -> Vec<Option<String>> {
+    new_edits
+        .iter()
+        .map(|e| e.label.map(str::to_string))
         .collect()
 }
 
