@@ -205,6 +205,55 @@ pub(crate) fn edit_spans(index: &LineIndex, new_edits: &[TextEdit]) -> Vec<(u32,
         .collect()
 }
 
+/// Translate original-source line spans to post-image coordinates.
+///
+/// Rewrites that change line counts (a 6-line `if` collapsing to one
+/// line, a call wrapping to four) shift every later site in the file,
+/// so original spans miss their output in the post-image. The shift for
+/// a span starting at original line `s` is the net newline delta of all
+/// edits ending at or before line `s`'s start (boundary insertions at the
+/// line start materialize above the line, so they count). Span lengths
+/// are preserved; callers extend windows for template growth. Spans past
+/// EOF map with the full-file shift (slicing clamps handle the rest).
+pub(crate) fn translate_spans_to_post(
+    original: &str,
+    index: &LineIndex,
+    edits: &[TextEdit],
+    spans: &[(u32, u32)],
+) -> Vec<(u32, u32)> {
+    // Newline deltas sorted by original start; disjoint-or-same-point by
+    // construction (overlap gates), so a prefix sum over end positions
+    // is order-independent.
+    let mut deltas: Vec<(usize, i64)> = edits
+        .iter()
+        .map(|e| {
+            let orig_nl = original
+                .get(e.start..e.end)
+                .map(|s| s.matches('\n').count())
+                .unwrap_or(0) as i64;
+            let repl_nl = e.replacement.matches('\n').count() as i64;
+            (e.end, repl_nl - orig_nl)
+        })
+        .collect();
+    deltas.sort_unstable();
+    spans
+        .iter()
+        .map(|(s, e)| {
+            let boundary = index.line_start(*s).unwrap_or(original.len());
+            let mut shift: i64 = 0;
+            for (end, d) in &deltas {
+                if *end <= boundary {
+                    shift += *d;
+                } else {
+                    break;
+                }
+            }
+            let ps = (*s as i64 + shift).max(1) as u32;
+            let len = e.saturating_sub(*s) + 1;
+            (ps, ps + len - 1)
+        })
+        .collect()
+}
 /// Reject incompatible overlapping edits (SPEC 10.6, 23.5).
 ///
 /// Same-point insertions are allowed (deterministic stable order, document

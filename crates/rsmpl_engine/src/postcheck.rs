@@ -8,10 +8,16 @@
 //!   hunk that matched must have at least one byte-changing definition
 //!   edit. A sweep claims every site in scope; a sweep that changes
 //!   nothing (e.g. `foo(E) -> foo(E)`) is a loud `RSMPL_MATCH_CONFLICT`.
-//! - plus-instantiation gate (WI-1b): every rewrite hunk's plus template,
-//!   instantiated with its recorded per-site bindings, must appear in the
-//!   post-image. A rewrite that did not land as authored fails loud as
-//!   `RSMPL_MATCH_CONFLICT`.
+//! - plus-instantiation gate (WI-1b, WI-1.2): every rewrite hunk's plus
+//!   template, instantiated with its recorded per-site bindings, must
+//!   appear in the post-image *at the reported spans* (SPEC 24.6).
+//!   Rename kinds verify the new ident on the span lines (WI-1.1);
+//!   `Expr`/`General`/`Macro` verify the instantiated plus inside the
+//!   span windows — string literals compare as literals, code-level
+//!   `...` tails verify as ordered fragments ("absorbed tail present
+//!   verbatim") — and `ImplContext` verifies `fn {name}` span-locally.
+//!   Occurrence elsewhere in the file never counts. A rewrite that did
+//!   not land as authored fails loud as `RSMPL_MATCH_CONFLICT`.
 //!
 //! Deliberately NOT a "minus must be zero in the post-image" check:
 //! widening rewrites legitimately re-match their own output (`let P: T =
@@ -104,22 +110,34 @@ pub(crate) fn instantiation_error(rule: &str, file: &str, range_desc: &str) -> S
     )
 }
 
-/// WI-1b: check the instantiated plus appears in the post-image.
+/// WI-1b/WI-1.2: check the instantiated plus appears in the post-image
+/// *at the reported spans*.
+///
+/// `spans` are post-image coordinates here: the caller translates the
+/// reported original-source spans via `translate_spans_to_post` (a
+/// line-changing rewrite shifts every later site in the file, so
+/// original spans miss their output).
 ///
 /// Rename kinds (`Fn`, `ItemRename`, `FieldRename`, `VariantRename`,
-/// `UseRename`) verify span-locally (WI-1.1, SPEC 24.6): at least `matches`
+/// `UseRename`) verify span-locally (WI-1.1): at least `matches`
 /// reported spans must carry the new ident on their post-image lines.
 /// Occurrence elsewhere in the file never counts. The count (not
 /// all-spans) formulation covers multi-edit sites (attr-strip deletions,
 /// signature-evolution slot edits) where only the ident-bearing spans name
 /// the new ident.
 ///
-/// Returns `None` when the plus shape cannot be verified by instantiation
-/// (code-level `...` replay, string-bearing templates where metavars stay
-/// concrete, unextractable impl-method names) — the caller downgrades to
-/// `reparse-only` (honest, never over-claimed). Otherwise `Some(true)`
-/// when every site's instantiated template is found (whitespace
-/// normalized), `Some(false)` when any is missing.
+/// `Expr`/`General`/`Macro` verify span-locally too (WI-1.2): every
+/// recorded binding's instantiated plus must appear inside at least one
+/// reported span's adaptive window. String literals compare as literals
+/// inside the instantiated text (no abstention); code-level `...` tails
+/// verify as ordered fragments (the absorbed tail is present verbatim).
+/// `ImplContext` counts spans whose lines name `fn {name}`.
+///
+/// Returns `None` when the plus shape cannot be verified (insertions,
+/// cuts, pastes, `Raw`, unextractable impl-method names) — the caller
+/// downgrades to `reparse-only` (honest, never over-claimed). Otherwise
+/// `Some(true)` when every site's instantiated template is found at its
+/// spans, `Some(false)` when any is missing.
 pub(crate) fn plus_instantiated(
     compiled: &rsmpl_pattern::CompiledPattern,
     rh: &rsmpl_patch::RsmplHunk,
@@ -128,8 +146,6 @@ pub(crate) fn plus_instantiated(
     spans: &[(u32, u32)],
     matches: usize,
 ) -> Option<bool> {
-    let post_norm = normalize_ws(post_text);
-    let post_canon = canonical_inst(post_text);
     match &compiled.kind {
         PatternKind::Fn { plus_name, .. } => {
             let needle = canonical_inst(&format!("fn{plus_name}"));
@@ -157,67 +173,32 @@ pub(crate) fn plus_instantiated(
             let last = plus_path.rsplit("::").next().unwrap_or(plus_path);
             Some(spans_count(post_text, spans, last, |h| post_text.contains(h)) >= matches.max(1))
         }
-        PatternKind::Expr { plus_raw, .. } => {
-            if has_code_ellipsis(plus_raw) || plus_raw.contains('"') {
-                return None;
-            }
-            // Concrete plus (no bindings): the template itself must appear
-            // (backticks stripped: `` `E` `` emits concrete `E`).
-            if bindings_list.iter().all(|m| m.is_empty()) {
-                return Some(post_canon.contains(&canonical_inst(&strip_backticks(plus_raw))));
-            }
-            for m in bindings_list {
-                if m.is_empty() {
-                    continue;
-                }
-                let inst = strip_backticks(&substitute_plus(plus_raw, m));
-                let ci = canonical_inst(&inst);
-                if !post_canon.contains(&ci) {
-                    return Some(false);
-                }
-            }
-            Some(true)
-        }
-        PatternKind::General { plus_body, .. } => {
-            if has_code_ellipsis(plus_body) || plus_body.contains('"') {
-                return None;
-            }
-            if bindings_list.iter().all(|m| m.is_empty()) {
-                return Some(post_canon.contains(&canonical_inst(&strip_backticks(plus_body))));
-            }
-            for m in bindings_list {
-                if m.is_empty() {
-                    continue;
-                }
-                let inst = strip_backticks(&substitute_plus(plus_body, m));
-                if !post_canon.contains(&canonical_inst(&inst)) {
-                    return Some(false);
-                }
-            }
-            Some(true)
-        }
-        PatternKind::Macro { plus_raw, .. } => {
-            if has_code_ellipsis(plus_raw) || plus_raw.contains('"') {
-                return None;
-            }
-            if bindings_list.iter().all(|m| m.is_empty()) {
-                return Some(post_canon.contains(&canonical_inst(&strip_backticks(plus_raw))));
-            }
-            for m in bindings_list {
-                if m.is_empty() {
-                    continue;
-                }
-                let inst = strip_backticks(&substitute_plus(plus_raw, m));
-                if !post_canon.contains(&canonical_inst(&inst)) {
-                    return Some(false);
-                }
-            }
-            Some(true)
-        }
+        PatternKind::Expr { plus_raw, .. } => Some(verify_instantiated_at_spans(
+            plus_raw,
+            bindings_list,
+            post_text,
+            spans,
+        )),
+        PatternKind::General { plus_body, .. } => Some(verify_instantiated_at_spans(
+            plus_body,
+            bindings_list,
+            post_text,
+            spans,
+        )),
+        PatternKind::Macro { plus_raw, .. } => Some(verify_instantiated_at_spans(
+            plus_raw,
+            bindings_list,
+            post_text,
+            spans,
+        )),
         PatternKind::ImplContext { .. } => {
             let name = plus_fn_name(rh)?;
             let needle = normalize_ws(&format!("fn {name}"));
-            Some(post_norm.contains(&needle))
+            if spans.is_empty() {
+                let post_norm = normalize_ws(post_text);
+                return Some(post_norm.contains(&needle));
+            }
+            Some(spans_count_normalized(post_text, spans, &needle) >= matches.max(1))
         }
         PatternKind::Insertion { .. }
         | PatternKind::ItemCapture { .. }
@@ -259,6 +240,144 @@ fn spans_count(
         .count()
 }
 
+/// WI-1.2 span-local check for `Expr`/`General`/`Macro` plus shapes.
+///
+/// Every non-empty recorded binding's instantiated plus (substitute +
+/// backtick-strip, exactly as the engine emits) must appear inside at
+/// least one reported span's adaptive window; all-empty bindings check
+/// the concrete template. String literals compare as literals inside the
+/// instantiated text; code-level `...` tails verify as ordered fragments.
+/// Empty spans fall back to the whole post-image (callers without spans
+/// keep the old posture, never a new veto).
+fn verify_instantiated_at_spans(
+    plus_raw: &str,
+    bindings_list: &[HashMap<String, String>],
+    post_text: &str,
+    spans: &[(u32, u32)],
+) -> bool {
+    if spans.is_empty() {
+        let hay = canonical_inst(post_text);
+        let check = |m: &HashMap<String, String>| {
+            let inst = strip_backticks(&substitute_plus(plus_raw, m));
+            fragments_present(&hay, &inst)
+        };
+        if bindings_list.iter().all(|m| m.is_empty()) {
+            return check(&HashMap::new());
+        }
+        return bindings_list.iter().filter(|m| !m.is_empty()).all(check);
+    }
+    let windows: Vec<String> = {
+        let lines: Vec<&str> = post_text.lines().collect();
+        spans
+            .iter()
+            .map(|(s, e)| {
+                let inst_lines = plus_raw.lines().count().max(1);
+                span_window_canon(&lines, *s, *e, inst_lines)
+            })
+            .collect()
+    };
+    let check = |m: &HashMap<String, String>| {
+        let inst = strip_backticks(&substitute_plus(plus_raw, m));
+        windows.iter().any(|w| fragments_present(w, &inst))
+    };
+    if bindings_list.iter().all(|m| m.is_empty()) {
+        return check(&HashMap::new());
+    }
+    bindings_list.iter().filter(|m| !m.is_empty()).all(check)
+}
+
+/// Adaptive post-image window for one reported (post-image) span.
+///
+/// The window starts at `s` and covers `max(span_len, min_lines)` lines,
+/// clamped to EOF. `min_lines` is the instantiated template's line count:
+/// a wrapping rewrite's emitted output is at most template-shaped plus
+/// the original span's own lines, so the site's output is always covered.
+fn span_window_canon(lines: &[&str], s: u32, e: u32, min_lines: usize) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let start = (s as usize).saturating_sub(1).min(lines.len() - 1);
+    let span_len = (e as usize).saturating_sub(s as usize) + 1;
+    let len = span_len.max(min_lines);
+    let end = (start + len).min(lines.len());
+    canonical_inst(&lines[start..end].join("\n"))
+}
+
+/// Ordered-fragment check for an instantiated plus against one
+/// canonical window: split the needle on code-level `...` (string-aware,
+/// so `"a...b"` never splits), canonicalise each fragment, and require
+/// every non-empty fragment present in order. A needle with no concrete
+/// fragment is vacuously true (nothing concrete to verify; the reparse
+/// gate still ran).
+fn fragments_present(window_canon: &str, needle_raw: &str) -> bool {
+    let mut rest = window_canon;
+    for frag in split_code_ellipsis(needle_raw) {
+        let frag = canonical_inst(&frag);
+        if frag.is_empty() {
+            continue;
+        }
+        if let Some(pos) = rest.find(&frag) {
+            rest = &rest[pos + frag.len()..];
+            continue;
+        }
+        // T157 replay rule: an empty `...` remainder swallows its
+        // adjacent comma (`bar(1)` from `bar(E, ...)`), so a fragment
+        // with a replay-adjacent comma also matches with one comma
+        // removed (suffix first: the `...` sat on that side; prefix
+        // covers leading `...`). A lone-`,` fragment is vacuous — both
+        // remainders were empty and both commas legitimately vanished.
+        let stripped = frag.strip_suffix(',').or_else(|| frag.strip_prefix(','));
+        match stripped {
+            None => return false,
+            Some("") => continue,
+            Some(s) => match rest.find(s) {
+                Some(pos) => rest = &rest[pos + s.len()..],
+                None => return false,
+            },
+        }
+    }
+    true
+}
+
+/// Split on `...` outside string literals (backslash escapes honoured).
+fn split_code_ellipsis(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let mut in_str = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_str {
+            cur.push(c);
+            if c == '\\' && i + 1 < chars.len() {
+                cur.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '.' && i + 2 < chars.len() && chars[i + 1] == '.' && chars[i + 2] == '.' {
+            parts.push(std::mem::take(&mut cur));
+            i += 3;
+            continue;
+        }
+        cur.push(c);
+        i += 1;
+    }
+    parts.push(cur);
+    parts
+}
 /// Canonical (whitespace-free) variant for `Fn` needles.
 fn spans_count_canon(post_text: &str, spans: &[(u32, u32)], needle: &str) -> usize {
     let lines: Vec<&str> = post_text.lines().collect();
@@ -279,6 +398,27 @@ fn spans_count_canon(post_text: &str, spans: &[(u32, u32)], needle: &str) -> usi
         .count()
 }
 
+/// Whitespace-normalized variant for `ImplContext` needles (`fn name`
+/// with single spaces).
+fn spans_count_normalized(post_text: &str, spans: &[(u32, u32)], needle: &str) -> usize {
+    let lines: Vec<&str> = post_text.lines().collect();
+    spans
+        .iter()
+        .filter(|(s, e)| {
+            let s = (*s as usize).saturating_sub(1);
+            let e = (*e as usize).saturating_sub(1);
+            if lines.is_empty() {
+                return false;
+            }
+            let e = e.min(lines.len() - 1);
+            if s >= lines.len() || s > e {
+                return false;
+            }
+            normalize_ws(&lines[s..=e].join("\n")).contains(needle)
+        })
+        .count()
+}
+
 /// Canonical form for instantiation comparison: all whitespace removed
 /// with trailing commas before closers stripped (`(2,)` → `(2)`), so
 /// engine-preserved separators and template-vs-output line wrapping do
@@ -286,35 +426,6 @@ fn spans_count_canon(post_text: &str, spans: &[(u32, u32)], needle: &str) -> usi
 fn canonical_inst(s: &str) -> String {
     let n: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     n.replace(",)", ")").replace(",]", "]").replace(",}", "}")
-}
-
-/// True when `...` appears outside string literals (code-level replay).
-fn has_code_ellipsis(s: &str) -> bool {
-    strip_strings(s).contains("...")
-}
-
-fn strip_strings(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    let mut in_str = false;
-    while let Some(c) = chars.next() {
-        if in_str {
-            if c == '\\' {
-                chars.next();
-                continue;
-            }
-            if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        if c == '"' {
-            in_str = true;
-            continue;
-        }
-        out.push(c);
-    }
-    out
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -555,6 +666,174 @@ mod tests {
         // Two matches need two ident-bearing spans.
         assert_eq!(
             plus_instantiated(&compiled, &rh, &bindings, post, &[(1, 1), (2, 2)], 2),
+            Some(false)
+        );
+    }
+
+    fn compile_first_rh(patch: &str) -> (rsmpl_patch::RsmplHunk, rsmpl_pattern::CompiledPattern) {
+        let parsed = rsmpl_patch::parse_patch(patch).unwrap();
+        let rh = match &parsed.files[0].hunks[0] {
+            rsmpl_patch::Hunk::Rsmpl(r) => r.clone(),
+            _ => panic!("expected rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&rh).unwrap();
+        (rh, compiled)
+    }
+
+    fn bindings1(pairs: &[(&str, &str)]) -> Vec<HashMap<String, String>> {
+        vec![pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()]
+    }
+
+    #[test]
+    fn string_plus_fires_at_span_and_fails_when_tampered() {
+        // WI-1.2 (F1 probe): `+ bar(E, "hi")` verifies structurally at
+        // its span — strings compare as literals, no abstention — and an
+        // instantiation occurring elsewhere never satisfies the span.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E, \"hi\")\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "x")]);
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    bar(x, \"hi\");\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        // Span reverted; the same instantiation on another line does not
+        // count.
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    foo(x);\n}\nfn g() {\n    bar(x, \"hi\");\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn ellipsis_tail_verifies_fragments_at_span() {
+        // WI-1.2: `+ bar(E, ...)` verifies as ordered fragments (the
+        // absorbed tail is present verbatim), span-locally.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E, ...)\n+ bar(E, ...)\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "x")]);
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    bar(x, y);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        // Reverted span; fragments complete on another line do not count.
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    foo(x, y);\n}\nfn g() {\n    bar(x, y);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn hetero_bindings_each_need_a_span() {
+        // WI-1.2: every recorded binding's instantiation must appear at
+        // the reported spans; one reverted site fails the run.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E, \"hi\")\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings: Vec<HashMap<String, String>> = vec![
+            [("E".to_string(), "x".to_string())].into_iter().collect(),
+            [("E".to_string(), "y".to_string())].into_iter().collect(),
+        ];
+        let post = "fn f() {\n    bar(x, \"hi\");\n}\nfn g() {\n    bar(y, \"hi\");\n}\n";
+        assert_eq!(
+            plus_instantiated(&compiled, &rh, &bindings, post, &[(2, 2), (5, 5)], 2),
+            Some(true)
+        );
+        let reverted = "fn f() {\n    bar(x, \"hi\");\n}\nfn g() {\n    foo(y);\n}\n";
+        assert_eq!(
+            plus_instantiated(&compiled, &rh, &bindings, reverted, &[(2, 2), (5, 5)], 2),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn empty_remainder_swallows_comma_in_fragments() {
+        // WI-1.2 + T157: `+ bar(E, ...)` with an empty absorbed
+        // remainder emits `bar(1)` (comma swallowed); the fragment
+        // `bar(1,` still verifies.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E, ...)\n+ bar(E, ...)\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "1")]);
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn a() {\n    bar(1);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn a() {\n    bar(1, 2, 3);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn impl_context_is_span_local() {
+        // WI-1.2: `fn {name}` must appear at a reported span; a
+        // same-name method elsewhere never satisfies the hunk.
+        let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep_impl\n# scope=file\n# allow=many\n# lang=rust\n  impl A {\n      ...\n-     fn old_name(...) {\n+     fn new_name(...) {\n          ...\n      }\n  }\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "impl A {\n    fn new_name(&self) -> i32 {\n        1\n    }\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "impl A {\n    fn old_name(&self) -> i32 {\n        1\n    }\n}\nfn new_name() {}\n",
+                &[(2, 2)],
+                1,
+            ),
             Some(false)
         );
     }

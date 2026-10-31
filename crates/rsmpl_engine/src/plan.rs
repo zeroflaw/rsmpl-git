@@ -17,7 +17,9 @@ use rsmpl_patch::{Directive, ErrorCode, Hunk, Patch, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
 
 use crate::capture::{paste_capture, CaptureStore, PasteTarget};
-use crate::edits::{apply_edits, check_overlaps, coalesce_deletes, edit_spans, TextEdit};
+use crate::edits::{
+    apply_edits, check_overlaps, coalesce_deletes, edit_spans, translate_spans_to_post, TextEdit,
+};
 use crate::lines::{FileState, LineIndex};
 use crate::postcheck::{
     instantiation_error, is_rewrite_kind, noop_sweep_error, plus_instantiated,
@@ -166,6 +168,10 @@ fn apply_inner(
     let mut captures = CaptureStore::default();
     // Per-file edit lists, built across pass 1 (cuts) and pass 2 (rest).
     let mut file_edits: HashMap<String, Vec<TextEdit>> = HashMap::new();
+    // WI-1.2: materialized per-file edits (post-coalesce), retained so
+    // the plus-instantiation postcondition can translate reported
+    // original-source spans to post-image coordinates.
+    let mut full_edits: HashMap<String, Vec<TextEdit>> = HashMap::new();
     // T249: same-anchor capture-paste edit indices per file, in document
     // order. Used after pass 2 to join multi-pastes with one blank line.
     let mut paste_marks: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
@@ -746,6 +752,7 @@ fn apply_inner(
         // other overlap pair still fails in `check_overlaps` below.
         let edits = coalesce_deletes(edits);
         check_overlaps(&edits, path)?;
+        full_edits.insert(path.clone(), edits.clone());
         // WI-2c: materialization is a pure function of original + the
         // recorded edits (byte-identity outside spans holds by
         // construction, SPEC 24.6); the trust gates are reparse +
@@ -763,15 +770,18 @@ fn apply_inner(
         files.insert(path.clone(), updated);
     }
 
-    // WI-1b: plus-instantiation postcondition (SPEC 24.6). Every rewrite
-    // hunk's plus template, instantiated with its recorded per-site
-    // bindings, must appear in the post-image. Rename kinds verify
-    // span-locally (WI-1.1: occurrence elsewhere never counts); other
-    // shapes verify as whitespace-normalized substrings. Failures are
-    // loud `RSMPL_MATCH_CONFLICT`;
-    // unverifiable plus shapes (`...` replay, string-bearing templates,
-    // unextractable impl names) downgrade to `reparse-only` (honest,
-    // never over-claimed).
+    // WI-1b/WI-1.2: plus-instantiation postcondition (SPEC 24.6). Every
+    // rewrite hunk's plus template, instantiated with its recorded
+    // per-site bindings, must appear in the post-image at the reported
+    // spans (translated to post-image coordinates: line-changing
+    // rewrites shift later sites). Renames verify the new ident on the
+    // span lines (WI-1.1); Expr/General/Macro verify the instantiated
+    // plus inside the span windows — strings as literals, `...` as
+    // ordered fragments — and ImplContext verifies `fn {name}`
+    // span-locally (WI-1.2). Occurrence elsewhere never counts.
+    // Failures are loud `RSMPL_MATCH_CONFLICT`; unverifiable plus shapes
+    // (insertions, cuts, `Raw`, unextractable impl names) downgrade to
+    // `reparse-only` (honest, never over-claimed).
     // `probe_pending` and the provisional `instantiated|postcondition`
     // entries are both in document order, so zip in order.
     {
@@ -793,12 +803,27 @@ fn apply_inner(
                 rh.header.old_start + rh.header.old_len
             );
             let post_text = files.get(&r.file).cloned().unwrap_or_default();
+            // WI-1.2: `r.spans` are original-source lines; line-changing
+            // rewrites shift later sites, so translate to post-image
+            // coordinates before the span-local check. The report keeps
+            // original spans (SPEC D.2); only the check moves.
+            let post_spans: Vec<(u32, u32)> = states
+                .get(&r.file)
+                .map(|st| {
+                    translate_spans_to_post(
+                        &st.original,
+                        &st.index,
+                        full_edits.get(&r.file).map(Vec::as_slice).unwrap_or(&[]),
+                        &r.spans,
+                    )
+                })
+                .unwrap_or_else(|| r.spans.clone());
             match plus_instantiated(
                 &compiled,
                 &rh,
                 &bindings_list,
                 &post_text,
-                &r.spans,
+                &post_spans,
                 r.matches,
             ) {
                 Some(true) => {}
