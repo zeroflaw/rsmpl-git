@@ -32,6 +32,7 @@ cargo install --path bin/diffrs
 `gitrs apply` invokes the sibling `applyrs` binary (and `gitrs diff`
 the sibling `diffrs`), so keep both on `PATH`; a release build places
 them together in `target/release/`.
+Dev loop: build all three together via `tools/build.sh` — a single `-p gitrs` / `--bin <one>` leaves the re-execed sibling stale.
 
 Requires `git` on `PATH` for the check/apply step (the CLI shells out to
 `git apply`); without it that step fails with ``failed to run `git apply`
