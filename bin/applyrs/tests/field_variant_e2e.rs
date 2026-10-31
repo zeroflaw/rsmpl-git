@@ -2,11 +2,9 @@
 //! (SPEC 13.4, 14.8).
 //!
 //! A `struct S {` (resp. `enum E {`) context header plus a member pair
-//! rewrites the member ident span only. `# follow=uses` completes the
-//! rename at `S`-anchored labels / `.old` accesses (fields) and
-//! `E::Old` paths (variants); definition-only patches leave orphan
-//! evidence while `--check` stays green. Shadowing vetoes loud without
-//! `# fallback=syntax`, skips + reports with it.
+//! WI-14 anchored posture: sibling same-named members never veto.
+//! Proven receivers rewrite; unproven sites are `shadowed`/`off-target`
+//! evidence; bare `Old` needs a `use E::*` glob anchor.
 
 mod common;
 use common::*;
@@ -77,22 +75,20 @@ fn field_definition_only_reports_orphans_and_stays_green() {
 }
 
 #[test]
-fn field_shadowed_definition_vetoes_then_skips_with_fallback() {
+fn field_sibling_definition_becomes_shadowed_evidence() {
+    // WI-14: a sibling same-named field never vetoes. The definition
+    // hunk always applies; the unanchored `t.old` site is `shadowed`
+    // evidence while the anchored `s.old` site rewrites — green
+    // without `# fallback=syntax`.
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
-        "struct S {\n    old: u32,\n}\nstruct T {\n    old: bool,\n}\nfn f(s: S) -> u32 {\n    s.old\n}\n",
+        "struct S {\n    old: u32,\n}\nstruct T {\n    old: bool,\n}\nfn f(s: S, t: T) -> u32 {\n    s.old + if t.old { 1 } else { 0 }\n}\n",
     );
-    let out = run_stdin(dir.path(), FIELD_PATCH, &["--check"]);
-    assert!(!out.status.success(), "veto expected");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(stderr.contains("RSMPL_SYMBOL_CONFLICT"), "got: {stderr}");
-    assert!(stderr.contains("shadowed"), "got: {stderr}");
-    let patch = FIELD_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
     let out = run_stdin(
         dir.path(),
-        &patch,
+        FIELD_PATCH,
         &["--format", "json", "--diff-max-lines", "0", "--check"],
     );
     assert!(
@@ -102,7 +98,25 @@ fn field_shadowed_definition_vetoes_then_skips_with_fallback() {
     );
     let v = json_of(&out);
     let skipped = v["rules"][0]["follow_skipped"].as_str().unwrap();
-    assert!(skipped.contains("shadowed"), "got: {v}");
+    assert!(skipped.contains("t"), "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"].as_array().unwrap();
+    assert!(
+        details.iter().any(|d| d["reason"] == "shadowed"),
+        "got: {v}"
+    );
+    let out = run_stdin(dir.path(), FIELD_PATCH, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("new: u32,"), "def renamed, got:\n{got}");
+    assert!(
+        got.contains("s.new"),
+        "anchored site rewritten, got:\n{got}"
+    );
+    assert!(got.contains("t.old"), "sibling site untouched, got:\n{got}");
 }
 
 const VARIANT_BEFORE: &str = "enum E {\n    Old(u32),\n    Keep,\n}\nuse crate::E::Old;\nfn f(e: E) -> u32 {\n    let a = E::Old(1);\n    match e {\n        E::Old(v) => v,\n        E::Keep => 0,\n    }\n}\n";
@@ -154,23 +168,18 @@ fn variant_definition_only_reports_orphans() {
 
 #[test]
 fn variant_bare_spelling_is_opaque_under_follow() {
-    // `use E::Old;` + bare `Old(2)`: the bare spelling may be
-    // import-spelled, so it never rewrites — veto without fallback,
-    // skip + report with it.
+    // WI-14: `use E::Old;` + bare `Old`: the bare spelling needs a
+    // `use E::*` glob anchor, so without it the site is `second-hop`
+    // evidence — green with or without fallback (never a veto).
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
         "enum E {\n    Old,\n    Keep,\n}\nuse E::Old;\nfn f() -> E {\n    Old\n}\n",
     );
-    let out = run_stdin(dir.path(), VARIANT_PATCH, &["--check"]);
-    assert!(!out.status.success(), "veto expected");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(stderr.contains("RSMPL_SYMBOL_CONFLICT"), "got: {stderr}");
-    let patch = VARIANT_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
     let out = run_stdin(
         dir.path(),
-        &patch,
+        VARIANT_PATCH,
         &["--format", "json", "--diff-max-lines", "0", "--check"],
     );
     assert!(
@@ -181,10 +190,32 @@ fn variant_bare_spelling_is_opaque_under_follow() {
     let v = json_of(&out);
     let skipped = v["rules"][0]["follow_skipped"].as_str().unwrap();
     assert!(skipped.contains("bare"), "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"].as_array().unwrap();
+    assert!(
+        details.iter().any(|d| d["reason"] == "second-hop"),
+        "got: {v}"
+    );
+    // Glob anchor proves the bare site: it rewrites.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "enum E {\n    Old,\n    Keep,\n}\nuse E::*;\nfn f() -> E {\n    Old\n}\n",
+    );
+    let out = run_stdin(dir.path(), VARIANT_PATCH, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("New,"), "def renamed, got:\n{got}");
 }
 
 #[test]
-fn variant_shadowed_definition_vetoes() {
+fn variant_sibling_definition_never_vetoes() {
+    // WI-14: a sibling same-named variant never vetoes. The `E::Old`
+    // definition renames cleanly; the `F::Old` definition is untouched.
     let dir = init_repo();
     write(
         dir.path(),
@@ -193,7 +224,18 @@ fn variant_shadowed_definition_vetoes() {
     );
     let patch = "diff --git src/lib.rs\n@@ -1,3 @@ rule=rename_variant\n# follow=uses\n  enum E {\n- Old\n+ New\n";
     let out = run_stdin(dir.path(), patch, &["--check"]);
-    assert!(!out.status.success(), "veto expected");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(stderr.contains("shadowed"), "got: {stderr}");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("New,"), "E::Old renamed, got:\n{got}");
+    assert!(got.contains("enum F"), "F untouched, got:\n{got}");
 }

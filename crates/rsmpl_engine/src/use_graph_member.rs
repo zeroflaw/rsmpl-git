@@ -8,15 +8,18 @@
 //! accesses plus `S`-anchored literal/pattern labels. Field accesses and
 //! method idents are different namespaces and never cross-claim.
 //!
-//! Precision-first (SPEC 2.6, D3), mirroring the scalar posture:
-//! unique-definition workspace rule — a second same-named member
-//! definition anywhere vetoes loud without `# fallback=syntax` (every
-//! remaining use is ambiguous), or clears all use rewriting with
-//! per-site skip notes when fallback is set. Anything the syntactic
-//! walk cannot prove (bare `Old` that may be import-spelled, `qself`
-//! paths, macro interiors mentioning the member name) is opaque: veto
-//! without fallback, skip-with-report with it. Method idents and tuple
-//! `.0` accesses never match and never veto.
+//! WI-14 anchored posture (SPEC 2.6, D3, D8): a second same-named member
+//! definition never vetoes the run — the definition hunk always applies.
+//! Each candidate site is classified by its strongest anchor: literal-path
+//! (`S { … }` labels, `E::Old` tails), signature (`fn f(a: A)` params),
+//! annotation (`let x: A`, `let x = S { … }`, `self` in `impl S`, all
+//! flow-ordered with rebinding). Proven sites rewrite; everything else
+//! same-name is `follow_skipped` evidence (`shadowed` when another
+//! container defines the name, else `off-target`) — never a run failure.
+//! Bare `Old` needs a `use …::E::*` glob anchor, else it is `second-hop`
+//! evidence. Truly opaque sites (macro interiors, `qself` paths) still
+//! veto without `# fallback=syntax` and skip with it (scalar parity).
+//! Method idents and tuple `.0` accesses never match and never veto.
 
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
@@ -25,6 +28,7 @@ use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::LineIndex;
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
+use crate::use_graph_anchor::{field_root, AnchorIndex};
 
 /// Which member shape is being followed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +77,6 @@ pub(crate) fn resolve_member_workspace(
     // spans, never guess).
     struct DefHit {
         path: String,
-        line: u32,
-        container: String,
         a: usize,
         b: usize,
     }
@@ -82,17 +84,15 @@ pub(crate) fn resolve_member_workspace(
     for (path, parsed, original, index) in files {
         let mut collector = MemberCollector::new(kind, container, old);
         collector.visit_file(parsed);
-        for (span, def_container) in &collector.defs {
-            let line = span.start().line as u32;
+        for (span, _def_container) in &collector.defs {
             match span_bytes(original, index, *span) {
                 Some((a, b)) => def_hits.push(DefHit {
                     path: path.clone(),
-                    line,
-                    container: def_container.clone(),
                     a,
                     b,
                 }),
                 None => {
+                    let line = span.start().line as u32;
                     return Err(FollowVeto {
                         reason: format!(
                             "definition of `{container}::{old}` at {path}:{line} maps outside the file"
@@ -109,22 +109,62 @@ pub(crate) fn resolve_member_workspace(
         .iter()
         .filter(|d| !renamed_hit_in(&d.path, d.a, d.b))
         .collect();
+    let has_shadow = !shadow.is_empty();
 
-    // Map + verify use spans per file.
+    // Map + verify use spans per file (WI-14 anchored).
     let mut per_file: Vec<(String, Vec<MemberEdit>)> = Vec::new();
     let mut opaque: Vec<(String, u32, String)> = Vec::new();
+    let mut skipped: Vec<FollowSkip> = Vec::new();
     for (path, parsed, original, index) in files {
         let mut collector = MemberCollector::new(kind, container, old);
         collector.visit_file(parsed);
         for (line, ctx) in &collector.opaque {
             opaque.push((path.clone(), *line, ctx.clone()));
         }
-        // Bare-`Old` (possibly import-spelled) variant mentions are
-        // unprovable: never edits, opaque notes like macro interiors.
+        let anchors = AnchorIndex::for_file(parsed);
+        // Bare-`Old` variant mentions need a `use …::E::*` glob anchor
+        // (WI-14): proven with the anchor, `second-hop` evidence without.
         if kind == MemberKind::Variant {
             for span in &collector.bare {
                 let line = span.start().line as u32;
-                opaque.push((path.clone(), line, "a bare `Old` spelling".to_string()));
+                if anchors.has_glob_anchor(container) {
+                    let Some((a, b)) = span_bytes(original, index, *span) else {
+                        return Err(FollowVeto {
+                            reason: format!(
+                                "use of `{old}` at {path}:{line} maps outside the file"
+                            ),
+                        });
+                    };
+                    if renamed_hit_in(path, a, b) {
+                        continue;
+                    }
+                    // Bare edits carry the plain replacement (merged with
+                    // the label/path edits below).
+                    match per_file.iter_mut().find(|(p, _)| p == path) {
+                        Some((_, existing)) => existing.push(MemberEdit {
+                            start: a,
+                            end: b,
+                            replacement: new.to_string(),
+                        }),
+                        None => per_file.push((
+                            (*path).clone(),
+                            vec![MemberEdit {
+                                start: a,
+                                end: b,
+                                replacement: new.to_string(),
+                            }],
+                        )),
+                    };
+                } else {
+                    skipped.push(FollowSkip::new(
+                        format!(
+                            "{path}:{line}: bare `{old}` spelling left untouched (needs `use {container}::*` to prove it names `{container}::{old}`)"
+                        ),
+                        path,
+                        line,
+                        skip_reason::SECOND_HOP,
+                    ));
+                }
             }
         }
         let mut edits: Vec<MemberEdit> = Vec::new();
@@ -143,6 +183,35 @@ pub(crate) fn resolve_member_workspace(
             if renamed_hit_in(path, a, b) {
                 continue;
             }
+            // WI-14 anchor gate for field accesses (literal-path labels
+            // and variant tails carry `receiver: None` and stay proven).
+            if kind == MemberKind::Field {
+                if let Some(root) = use_site.receiver.as_deref() {
+                    let proven = if root == "self" {
+                        anchors.self_type_at(line).is_some_and(|s| s == container)
+                    } else {
+                        anchors
+                            .anchor_of(root, line)
+                            .is_some_and(|s| s == container)
+                    };
+                    if !proven {
+                        let code = if has_shadow {
+                            skip_reason::SHADOWED
+                        } else {
+                            skip_reason::OFF_TARGET
+                        };
+                        skipped.push(FollowSkip::new(
+                            format!(
+                                "{path}:{line}: unanchored `{old}` access left untouched (receiver `{root}` does not prove `{container}`)"
+                            ),
+                            path,
+                            line,
+                            code,
+                        ));
+                        continue;
+                    }
+                }
+            }
             // Shorthand labels keep the local binding: `S { old }`
             // → `S { new: old }`.
             let replacement = if use_site.shorthand {
@@ -159,36 +228,23 @@ pub(crate) fn resolve_member_workspace(
         edits.sort_by_key(|e| (e.start, e.end));
         edits.dedup_by(|a, b| a.start == b.start && a.end == b.end);
         if !edits.is_empty() {
-            per_file.push((path.clone(), edits));
+            // Merge with any bare-`Old` edits already recorded above.
+            match per_file.iter_mut().find(|(p, _)| p == path) {
+                Some((_, existing)) => {
+                    existing.extend(edits);
+                    existing.sort_by_key(|e| (e.start, e.end));
+                    existing.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+                }
+                None => per_file.push((path.clone(), edits)),
+            }
         }
     }
     per_file.sort_by(|a, b| a.0.cmp(&b.0));
-    let use_sites: usize = per_file.iter().map(|(_, s)| s.len()).sum();
 
-    let mut skipped: Vec<FollowSkip> = Vec::new();
-    if !shadow.is_empty() {
-        if !fallback {
-            let d = shadow[0];
-            return Err(FollowVeto {
-                reason: format!(
-                    "shadowed definition of `{old}` ({}::{}) at {}:{}: cannot tell which definition each use names ({use_sites} use sites workspace-wide)",
-                    d.container, old, d.path, d.line,
-                ),
-            });
-        }
-        for d in &shadow {
-            skipped.push(FollowSkip::new(
-                format!(
-                    "{}:{}: shadowed definition of `{old}` ({}::{old}); {use_sites} use sites left untouched",
-                    d.path, d.line, d.container,
-                ),
-                &d.path,
-                d.line,
-                skip_reason::SHADOWED,
-            ));
-        }
-        per_file.clear();
-    }
+    // WI-14: shadow definitions never veto (D8). The definition hunk
+    // always applies; unproven sites above are already `shadowed` /
+    // `off-target` evidence. `use_sites` counts only rewritten sites.
+    let _use_sites: usize = per_file.iter().map(|(_, s)| s.len()).sum();
     opaque.sort();
     opaque.dedup();
     if !opaque.is_empty() {
@@ -213,9 +269,9 @@ pub(crate) fn resolve_member_workspace(
                 code,
             ));
         }
-        if shadow.is_empty() {
-            // Opaque sites were never collected as edits; provable sites
-            // still rewrite. The notes are the report.
+        if has_shadow {
+            // Shadow definitions are evidence, never a veto (D8): the
+            // per-site skips above already name them.
         }
     }
     Ok(MemberWorkspaceOutcome { per_file, skipped })
@@ -238,11 +294,20 @@ pub(crate) fn collect_member_orphans(
         path == renamed_file && renamed.iter().any(|(s, e)| a < *e && *s < b)
     };
     let mut out: Vec<crate::OrphanReport> = Vec::new();
+    // WI-14: orphan reasons mirror the follow classifier (one classifier,
+    // two consumers). Shadow = another container defines the name.
+    let has_shadow = files.iter().any(|(_, parsed, _, _)| {
+        let mut census = MemberCollector::new(kind, container, old);
+        census.visit_file(parsed);
+        census.defs.iter().any(|(_, c)| c != container)
+    });
     for (path, parsed, original, index) in files {
         let mut collector = MemberCollector::new(kind, container, old);
         collector.visit_file(parsed);
-        // WI-2 reasons mirror the scalar collector: provable and bare
-        // spellings are `off-target`, opaque interiors `macro-hidden`.
+        let anchors = AnchorIndex::for_file(parsed);
+        // WI-14 anchored orphans: proven accesses are `off-target`;
+        // unproven are `shadowed` (sibling defines the name) or
+        // `off-target`; bare-without-glob is `second-hop`.
         let mut lines: Vec<(u32, &'static str)> = Vec::new();
         for use_site in &collector.uses {
             let line = use_site.span.start().line as u32;
@@ -255,11 +320,35 @@ pub(crate) fn collect_member_orphans(
             if renamed_hit_in(path, a, b) {
                 continue;
             }
+            if kind == MemberKind::Field {
+                if let Some(root) = use_site.receiver.as_deref() {
+                    let proven = if root == "self" {
+                        anchors.self_type_at(line).is_some_and(|s| s == container)
+                    } else {
+                        anchors
+                            .anchor_of(root, line)
+                            .is_some_and(|s| s == container)
+                    };
+                    if proven {
+                        lines.push((line, "off-target"));
+                    } else if has_shadow {
+                        lines.push((line, "shadowed"));
+                    } else {
+                        lines.push((line, "off-target"));
+                    }
+                    continue;
+                }
+            }
             lines.push((line, "off-target"));
         }
         if kind == MemberKind::Variant {
             for span in &collector.bare {
-                lines.push((span.start().line as u32, "off-target"));
+                let line = span.start().line as u32;
+                if anchors.has_glob_anchor(container) {
+                    lines.push((line, "off-target"));
+                } else {
+                    lines.push((line, "second-hop"));
+                }
             }
         }
         for (line, _) in &collector.opaque {
@@ -301,6 +390,11 @@ struct MemberUse {
     span: proc_macro2::Span,
     text: String,
     shorthand: bool,
+    /// Field-access receiver root (`Some("a")` in `a.old`,
+    /// `Some("self")`, `Some("")` for unprovable bases like calls);
+    /// `None` for literal-path sites (struct labels, variant tails)
+    /// that need no anchor.
+    receiver: Option<String>,
 }
 
 struct MemberCollector<'a> {
@@ -383,6 +477,7 @@ impl<'a> MemberCollector<'a> {
             span,
             text,
             shorthand,
+            receiver: None,
         });
     }
 
@@ -454,7 +549,17 @@ impl<'ast> Visit<'ast> for MemberCollector<'_> {
         if self.kind == MemberKind::Field {
             if let syn::Member::Named(ident) = &node.member {
                 if self.is_old(ident) {
-                    self.push_plain_use(ident.span());
+                    // WI-14: record the receiver root for anchor
+                    // classification. `Some("")` marks an unprovable
+                    // base (call/literal result — never claims);
+                    // literal-path labels keep `None` (proven).
+                    let receiver = Some(field_root(&node.base).unwrap_or_default());
+                    self.uses.push(MemberUse {
+                        span: ident.span(),
+                        text: self.old.to_string(),
+                        shorthand: false,
+                        receiver,
+                    });
                 }
             }
         }

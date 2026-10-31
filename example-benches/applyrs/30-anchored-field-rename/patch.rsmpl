@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,4 @@ rule=rename_timeout
+# follow=uses
+  struct DatabaseConnection {
+- timeout: u32
++ latency: u32

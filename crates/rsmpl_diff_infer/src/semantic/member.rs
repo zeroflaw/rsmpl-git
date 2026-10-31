@@ -11,9 +11,10 @@
 //! the pre-image and the post tree must show exactly the native plus
 //! lines at the changed sites with every other line byte-identical. An
 //! untouched twin the follow would rewrite fails the unchanged-leg; a
-//! missed site fails the plus-leg; an opaque site (bare-`Old`, macro,
-//! qself) or a shadowed definition fails at apply time (the engine
-//! vetoes loud). `None` pre-image declines (the container is unprovable
+//! missed site fails the plus-leg; an opaque site (macro, qself) fails
+//! at apply time without fallback (WI-14: sibling definitions and
+//! unanchored uses never veto — the probe reproduces exactly the
+//! anchored follow). `None` pre-image declines (the container is unprovable
 //! without it). Cross-file def+uses intents stay ordinary (future work).
 
 use super::{item_emission_header, unique_rule};
@@ -305,9 +306,9 @@ fn contains_ident(haystack: &str, needle: &str) -> bool {
 }
 
 /// The `struct S` whose field `old` spans 1-based `site`, or `None`
-/// when there is not exactly one struct carrying `old` (a second
-/// same-named field anywhere vetoes — the authored follow would veto
-/// loud) or the site names no field.
+/// when the site names no field. WI-14: sibling same-named fields no
+/// longer veto (the anchored follow classifies per-site); the def site
+/// must still resolve to exactly one container.
 fn struct_of_field(pre: &str, old: &str, site: usize) -> Option<String> {
     let file: syn::File = syn::parse_str(pre).ok()?;
     let mut at_site: Vec<String> = Vec::new();
@@ -348,14 +349,14 @@ fn struct_of_field(pre: &str, old: &str, site: usize) -> Option<String> {
         }
     }
     walk(&file.items, old, site, &mut at_site, &mut carriers);
-    if carriers != 1 || at_site.len() != 1 {
+    if carriers < 1 || at_site.len() != 1 {
         return None;
     }
     at_site.into_iter().next()
 }
 
 /// The `enum E` whose variant `old` spans 1-based `site`, or `None`
-/// under the same uniqueness rule as [`struct_of_field`].
+/// under the same WI-14 rule as [`struct_of_field`].
 fn enum_of_variant(pre: &str, old: &str, site: usize) -> Option<String> {
     let file: syn::File = syn::parse_str(pre).ok()?;
     let mut at_site: Vec<String> = Vec::new();
@@ -394,7 +395,7 @@ fn enum_of_variant(pre: &str, old: &str, site: usize) -> Option<String> {
         }
     }
     walk(&file.items, old, site, &mut at_site, &mut carriers);
-    if carriers != 1 || at_site.len() != 1 {
+    if carriers < 1 || at_site.len() != 1 {
         return None;
     }
     at_site.into_iter().next()

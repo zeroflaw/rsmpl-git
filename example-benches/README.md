@@ -48,6 +48,7 @@ below).
 | 27-fn-bound-rewrite | 1 hunk rewrites `Box<dyn Fn(T) -> u8>`→`Box<dyn Fn(T) -> String>` over 4 hetero-input sites (WI-6d: diet `T` infers, uniform output delta, raising via `type_sweep`) | 105 B / 5 ln | 507 B / 15 ln | 79% |
 | 28-macro-let-sweep | 1 hunk rewrites a verbatim-macro `let` (`format!(..)`) over 4 sites (WI-2a arm, WI-2b bench) | 114 B / 5 ln | 379 B / 15 ln | 70% |
 | 29-vis-sweep | 1 hunk adds `pub` to 4 hetero-named fns, `N` hole (WI-9) | 95 B / 7 ln | 755 B / 15 ln | 87% |
+| 30-anchored-field-rename | 1 hunk renames `A::timeout`→`latency` with anchored follow, sibling `B::timeout` untouched (WI-14) | 127 B / 6 ln | 387 B / 11 ln | 67% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even

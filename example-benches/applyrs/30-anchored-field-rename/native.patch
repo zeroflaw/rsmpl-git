@@ -1,0 +1,11 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2 +2 @@
+-    timeout: u32,
++    latency: u32,
+@@ -10,2 +10,2 @@
+-    let lit = DatabaseConnection { timeout: 30, retries: 3 };
+-    a.timeout + lit.timeout + if b.timeout { 1 } else { 0 }
++    let lit = DatabaseConnection { latency: 30, retries: 3 };
++    a.latency + lit.latency + if b.timeout { 1 } else { 0 }
