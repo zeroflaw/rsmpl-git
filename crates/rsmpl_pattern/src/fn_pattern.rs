@@ -238,6 +238,9 @@ fn unterminated_sig(slot: &str) -> String {
 ///
 /// Metavariable names for `V/Q/G/W` slots are supplied by the caller from
 /// directives (visibility/qualifier_list/generic_params/where_clause kinds).
+/// WI-5: `ident_metas` carries `# ident` names plus the inferred `N` hole;
+/// a bare `N` in name position is always a hole (diet form).
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 pub fn parse_fn_pattern(
     text: &str,
@@ -246,6 +249,7 @@ pub fn parse_fn_pattern(
     generic_metas: &[String],
     where_metas: &[String],
     type_metas: &[String],
+    ident_metas: &[String],
     returns_none: bool,
 ) -> Result<FnPattern, StructuredError> {
     // Every gate keys a concrete `fix_pattern` template (code
@@ -396,12 +400,18 @@ pub fn parse_fn_pattern(
             "write `fn <name>(...) { ... }` with the function name after `fn`",
         ));
     }
-    let name = if generic_metas.contains(&toks[i])
-        || vis_metas.contains(&toks[i])
-        || qual_metas.contains(&toks[i])
-        || where_metas.contains(&toks[i])
+    // Name. WI-5: `N` is the diet name hole (binds any ident, replays on
+    // plus); `# ident X` declares any other name as a hole in this position.
+    // Sigiled `$X` strips to `X` for the comparison and the stored name.
+    let bare_name = toks[i].trim_start_matches('$').to_string();
+    let name = if generic_metas.iter().any(|m| m == &bare_name)
+        || vis_metas.iter().any(|m| m == &bare_name)
+        || qual_metas.iter().any(|m| m == &bare_name)
+        || where_metas.iter().any(|m| m == &bare_name)
+        || ident_metas.iter().any(|m| m == &bare_name)
+        || bare_name == "N"
     {
-        NamePat::Meta(toks[i].clone())
+        NamePat::Meta(bare_name)
     } else {
         NamePat::Concrete(toks[i].clone())
     };
@@ -744,7 +754,7 @@ mod tests {
     use super::*;
 
     fn parse(t: &str) -> FnPattern {
-        parse_fn_pattern(t, &[], &[], &[], &[], &[], false).unwrap()
+        parse_fn_pattern(t, &[], &[], &[], &[], &[], &[], false).unwrap()
     }
 
     #[test]
@@ -756,6 +766,41 @@ mod tests {
         assert_eq!(p.generics, GenericPat::Absent);
         assert!(p.params_ellipsis);
         assert!(p.body_ellipsis);
+    }
+
+    #[test]
+    fn diet_n_is_name_hole() {
+        // WI-5: bare `N` in name position parses as a hole even with no
+        // declaration; any other name stays concrete.
+        assert_eq!(parse("fn N(...) { ... }").name, NamePat::Meta("N".into()));
+        assert_eq!(
+            parse("fn foo(...) { ... }").name,
+            NamePat::Concrete("foo".into())
+        );
+        // Terse diet lines share the rule.
+        assert_eq!(parse("fn N").name, NamePat::Meta("N".into()));
+    }
+
+    #[test]
+    fn explicit_ident_declares_name_hole() {
+        // WI-5 explicit: `# ident Foo` makes `Foo` a hole in name position.
+        let p = parse_fn_pattern(
+            "fn Foo(...) { ... }",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &["Foo".to_string()],
+            false,
+        )
+        .unwrap();
+        assert_eq!(p.name, NamePat::Meta("Foo".into()));
+        // Without the declaration the same spelling is concrete.
+        assert_eq!(
+            parse("fn Foo(...) { ... }").name,
+            NamePat::Concrete("Foo".into())
+        );
     }
 
     #[test]
@@ -865,7 +910,7 @@ mod tests {
             "fn foo(T, ..., c: i32) { ... }",
             "fn foo(c: i32, ...) { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("must stand alone"), "unexpected: {err}");
@@ -885,6 +930,7 @@ mod tests {
         // never verified; bodies are always preserved.
         let err = parse_fn_pattern(
             "fn foo(...) { ..., foo(); }",
+            &[],
             &[],
             &[],
             &[],
@@ -910,6 +956,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             false,
         )
         .unwrap_err()
@@ -917,6 +964,7 @@ mod tests {
         assert!(err.contains("block comments"), "unexpected: {err}");
         let err = parse_fn_pattern(
             "/** Multi\nline. */\nfn foo(...) { ... }",
+            &[],
             &[],
             &[],
             &[],
@@ -930,6 +978,7 @@ mod tests {
         // Single-line block doc normalizes and parses (T156).
         let pat = parse_fn_pattern(
             "/** Block doc. */\nfn foo(...) { ... }",
+            &[],
             &[],
             &[],
             &[],
@@ -951,7 +1000,7 @@ mod tests {
             "fn foo<T, ...>(...) { ... }",
             "fn foo<..., T>(...) { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("generic parameter"), "unexpected: {err}");
@@ -960,7 +1009,7 @@ mod tests {
             "fn bar(...) -> ... { ... }",
             "fn bar(...) -> ... where T: Clone { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("return type"), "unexpected: {err}");
@@ -970,7 +1019,7 @@ mod tests {
             "fn foo<T>(...) where T: Clone, ... { ... }",
             "fn foo<T>(...) where ..., T: Clone { ... }",
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("where clause"), "unexpected: {err}");
@@ -991,6 +1040,7 @@ mod tests {
             &["G".into()],
             &[],
             &[],
+            &[],
             false,
         )
         .unwrap();
@@ -1001,6 +1051,7 @@ mod tests {
             &[],
             &[],
             &["W".into()],
+            &[],
             &[],
             false,
         )
@@ -1017,7 +1068,7 @@ mod tests {
             ("fn rtest(...) -> i32\n...\n}", "`->` return type"),
             ("fn wtest<T>(...)\nwhere T: Clone\n...\n}", "`where` clause"),
         ] {
-            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], false)
+            let err = parse_fn_pattern(shape, &[], &[], &[], &[], &[], &[], false)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("missing its opening"), "unexpected: {err}");
@@ -1025,9 +1076,18 @@ mod tests {
         }
         // Terminated `...` slots still hit the T161 content gates; `;`
         // declarations and bare `W`-meta tails still parse.
-        let err = parse_fn_pattern("fn bar(...) -> ... { ... }", &[], &[], &[], &[], &[], false)
-            .unwrap_err()
-            .to_string();
+        let err = parse_fn_pattern(
+            "fn bar(...) -> ... { ... }",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("return type"), "unexpected: {err}");
         assert!(parse("fn foo(...) -> i32;").body_ellipsis);
         let w = parse_fn_pattern(
@@ -1036,6 +1096,7 @@ mod tests {
             &[],
             &["G".into()],
             &["W".into()],
+            &[],
             &[],
             false,
         )

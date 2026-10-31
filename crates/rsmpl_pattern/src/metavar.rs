@@ -72,6 +72,21 @@ impl MetavarTable {
         self.kinds.get(name).copied()
     }
 
+    /// WI-5: `# ident` names for the fn-header name hole, plus the diet
+    /// `N` (always a hole in name position, even with no declaration).
+    pub fn ident_slot_metas(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .declared
+            .iter()
+            .filter(|(k, _)| *k == MetavarKind::Ident)
+            .map(|(_, n)| n.clone())
+            .collect();
+        if !out.iter().any(|n| n == "N") {
+            out.push("N".to_string());
+        }
+        out
+    }
+
     /// Names appearing more than once in declaration are fine (same kind);
     /// this returns names bound in a pattern string (bare `$`-aware scan).
     pub fn bound_in_text(&self, text: &str) -> HashSet<String> {

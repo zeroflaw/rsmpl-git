@@ -180,6 +180,18 @@ pub(crate) fn plus_instantiated_parsed(
     match &compiled.kind {
         PatternKind::Fn { plus_name, .. } => {
             let needle = plus_name.trim();
+            // WI-5: a name-hole plus (`$N`) carries no concrete ident —
+            // verify the evolved slots structurally at each span instead
+            // of searching for the hole spelling as text.
+            if crate::postcheck_namehole::plus_name_is_hole(compiled, needle) {
+                let (parsed, index) = match (post_parsed, post_index) {
+                    (Some(p), Some(i)) => (p, i),
+                    _ => return None,
+                };
+                return crate::postcheck_namehole::verify_fn_plus_slots(
+                    rh, compiled, parsed, post_text, index, spans, matches,
+                );
+            }
             match post_parsed {
                 Some(parsed) => {
                     let defs = collect_def_idents(parsed);
@@ -320,6 +332,17 @@ pub(crate) fn plus_instantiated_parsed(
         }
         PatternKind::ImplContext { .. } => {
             let name = plus_fn_name(rh)?;
+            // WI-5: a name-hole method (`N`) verifies by slots, like free
+            // name holes — the `fn N` needle never occurs as text.
+            if crate::postcheck_namehole::plus_name_is_hole(compiled, &name) {
+                let (parsed, index) = match (post_parsed, post_index) {
+                    (Some(p), Some(i)) => (p, i),
+                    _ => return None,
+                };
+                return crate::postcheck_namehole::verify_fn_plus_slots(
+                    rh, compiled, parsed, post_text, index, spans, matches,
+                );
+            }
             match post_parsed {
                 Some(parsed) => {
                     let defs = collect_def_idents(parsed);

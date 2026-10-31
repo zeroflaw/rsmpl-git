@@ -167,6 +167,8 @@ pub(crate) fn minus_fn_pattern(
     compiled: &CompiledPattern,
 ) -> Result<FnPattern, StructuredError> {
     let (vis, qual, gen, wh, ty) = slot_metas(compiled);
+    // WI-5: name-hole list (diet `N` + `# ident`) beside the slot metas.
+    let ident = compiled.table.ident_slot_metas();
     // Rebuild full minus text (removals + context) as the pattern crate does.
     let full: String = hunk
         .lines
@@ -181,7 +183,16 @@ pub(crate) fn minus_fn_pattern(
         }
         _ => full,
     };
-    rsmpl_pattern::parse_fn_pattern(&block, &vis, &qual, &gen, &wh, &ty, hunk.returns_none())
+    rsmpl_pattern::parse_fn_pattern(
+        &block,
+        &vis,
+        &qual,
+        &gen,
+        &wh,
+        &ty,
+        &ident,
+        hunk.returns_none(),
+    )
 }
 
 /// Extract the first function block from text that may be prefixed by
@@ -310,6 +321,16 @@ pub(crate) fn slot_metas(compiled: &CompiledPattern) -> SlotMetas {
         }
     }
     (vis, qual, gen, wh, ty)
+}
+
+/// WI-5: true when a `$`-prefixed fn name is a name hole (the stripped
+/// name is declared as `# ident`), as opposed to a concrete name or the
+/// historic slot-meta quirk. Concrete names never count (`$`-less).
+pub(crate) fn is_ident_hole(compiled: &CompiledPattern, minus_name: &str) -> bool {
+    let Some(bare) = minus_name.strip_prefix('$') else {
+        return false;
+    };
+    compiled.table.kind_of(bare) == Some(rsmpl_patch::MetavarKind::Ident)
 }
 
 /// Byte range of `span` in the original text, or `None` when the span
@@ -544,9 +565,12 @@ pub(crate) fn minus_matches_strict(
 /// - plus explicit text differing from target: insert/replace/delete.
 ///
 /// `minus_name`/`plus_name` carry the `$Meta` convention (`$Name` means
-/// "keep original"). Returns the edits (possibly only the name edit).
+/// "keep original"). `name_hole` (WI-5: the `$`-name is an `# ident`
+/// hole) records an already-conforming site as a byte-identical name
+/// edit instead of no edit, so multi-site sweeps report every matched
+/// site in `spans` (and the sweep change gate sees all-conforming
+/// sweeps). Returns the edits (possibly only the name edit).
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
 pub(crate) fn plan_sig_edits(
     vis: &syn::Visibility,
     sig: &syn::Signature,
@@ -557,6 +581,7 @@ pub(crate) fn plan_sig_edits(
     original: &str,
     index: &LineIndex,
     rule: &str,
+    name_hole: bool,
 ) -> Result<Vec<TextEdit>, StructuredError> {
     let mut edits = Vec::new();
     let range_err = |line: u32| {
@@ -849,6 +874,25 @@ pub(crate) fn plan_sig_edits(
         }
     }
 
+    // WI-5: a name-hole site no slot rewrote is already in the plus
+    // state — record the preserved name as a byte-identical edit so the
+    // site counts in `spans`/`matches` (contributes no diff lines; an
+    // all-conforming sweep trips the sweep change gate instead of
+    // vanishing).
+    if name_hole && edits.is_empty() {
+        let ns = sig.ident.span();
+        let (sl, sc, el, ec) = (
+            ns.start().line as u32,
+            ns.start().column,
+            ns.end().line as u32,
+            ns.end().column,
+        );
+        let start = index.offset(sl, sc).ok_or_else(|| range_err(sl))?;
+        let end = index.offset(el, ec).ok_or_else(|| range_err(el))?;
+        let cur = original.get(start..end).unwrap_or("").to_string();
+        edits.push(TextEdit::new(start, end, cur).with_label("rename"));
+    }
+
     Ok(edits)
 }
 
@@ -885,8 +929,10 @@ pub fn apply_fn_hunk(
         .collect::<Vec<_>>()
         .join("\n");
     let (vis, qual, gen, wh, ty) = slot_metas(compiled);
-    let plus_pat = rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, &ty, false)
-        .map_err(|e| e.with_rule(&rule))?;
+    let ident = compiled.table.ident_slot_metas();
+    let plus_pat =
+        rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, &ty, &ident, false)
+            .map_err(|e| e.with_rule(&rule))?;
 
     // Bodies are preserved, never rewritten: both sides must be `...`
     // (or `;`). A concrete body would be silently ignored, so fail fast.
@@ -986,6 +1032,9 @@ pub fn apply_fn_hunk(
         }
         // Signature evolution: name plus any explicitly changed slots.
         // Plus name may be `$Meta` (abstracted) meaning "keep original".
+        // WI-5: a `$`-name that is an `# ident` hole reports
+        // already-conforming sites with a byte-identical name edit.
+        let name_hole = is_ident_hole(compiled, &minus_name);
         let mut new_edits = plan_sig_edits(
             &c.item.vis,
             &c.item.sig,
@@ -996,6 +1045,7 @@ pub fn apply_fn_hunk(
             original,
             index,
             &rule,
+            name_hole,
         )?;
         edits.append(&mut new_edits);
         // `# attrs=strip`: delete attribute lines above the fn item.

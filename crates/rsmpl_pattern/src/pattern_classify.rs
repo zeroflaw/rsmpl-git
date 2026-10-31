@@ -422,6 +422,9 @@ pub(crate) fn classify(
     // Function patterns (minus starts with fn-ish, possibly with vis/attrs).
     if looks_like_fn(m, table) && looks_like_fn(p, table) {
         let (vis_metas, qual_metas, gen_metas, where_metas, type_metas) = slot_metas(table);
+        // WI-5: the name-hole list lives beside the slot metas (diet `N`
+        // plus any `# ident` declaration).
+        let ident_metas = table.ident_slot_metas();
         let minus_fn = parse_fn_pattern(
             &first_fn_block(m),
             &vis_metas,
@@ -429,6 +432,7 @@ pub(crate) fn classify(
             &gen_metas,
             &where_metas,
             &type_metas,
+            &ident_metas,
             hunk.returns_none(),
         )?;
         let plus_fn = parse_fn_pattern(
@@ -438,6 +442,7 @@ pub(crate) fn classify(
             &gen_metas,
             &where_metas,
             &type_metas,
+            &ident_metas,
             false,
         )?;
         // WI-1b: terse rename is both-sides-or-neither. A terse minus with

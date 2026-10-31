@@ -191,7 +191,7 @@ pub fn infer_table(
     // Single-token item capture (`- I` alone).
     assign_item_capture(&mut kinds, &masked_minus, root)?;
     // Fn-header slots.
-    assign_fn_slots(&mut kinds, &masked_minus, &masked_plus)?;
+    assign_fn_slots(&mut kinds, &masked_minus, &masked_plus, &base)?;
     // Let shapes.
     assign_let_slots(&mut kinds, &masked_minus, &masked_plus, root)?;
     // Call/method/macro shapes (expr).
@@ -316,7 +316,7 @@ fn infer_sigiled(
         kinds.insert(name.clone(), HashSet::new());
     }
     assign_item_capture_sigiled(&mut kinds, &masked_minus, root)?;
-    assign_fn_slots(&mut kinds, &masked_minus, &masked_plus)?;
+    assign_fn_slots(&mut kinds, &masked_minus, &masked_plus, &base)?;
     assign_let_slots(&mut kinds, &masked_minus, &masked_plus, root)?;
     assign_call_slots(&mut kinds, &masked_minus, &masked_plus, &base)?;
     assign_general_fallback(&mut kinds, &masked_minus, &masked_plus, root, &base)?;
@@ -329,7 +329,23 @@ pub(crate) fn add_kind(
     kind: MetavarKind,
 ) {
     if is_candidate(name) {
-        if let Some(set) = kinds.get_mut(name) {
+        // WI-5: a bare `N` infers only as the fn-name hole (`Ident`, added
+        // by the fn-name assigner below) or as a type hole in type
+        // positions (`Type` — pinned by the T145 turbofish diet test, so
+        // `foo::<N>(E)` keeps binding). Everywhere else it stays a
+        // literal ident (diet stability: `foo(N)` / `let N = E` keep
+        // meaning the literal `N`). Explicit declarations still bind
+        // (the declaration itself lives in `base.kinds` — inference just
+        // refuses to invent a further kind).
+        let bare = name.trim_start_matches('$');
+        if bare == "N" && kind != MetavarKind::Ident && kind != MetavarKind::Type {
+            return;
+        }
+        // `kinds` keys are bare names; sigiled `$N` strips to `N`.
+        let key = bare.to_string();
+        if let Some(set) = kinds.get_mut(&key) {
+            set.insert(kind);
+        } else if let Some(set) = kinds.get_mut(name) {
             set.insert(kind);
         }
     }
@@ -474,6 +490,7 @@ fn assign_fn_slots(
     kinds: &mut HashMap<String, HashSet<MetavarKind>>,
     masked_minus: &str,
     masked_plus: &str,
+    base: &MetavarTable,
 ) -> Result<(), StructuredError> {
     for text in [masked_minus, masked_plus] {
         if !fn_like(text) {
@@ -542,7 +559,18 @@ fn assign_fn_slots(
             }
             _ => {}
         }
-        // Name is concrete (rename ident); skip it.
+        // WI-5 name hole: `N` binds the fn name per site (diet), and any
+        // `# ident X` name binds in this position when declared. Any other
+        // name stays concrete (rename ident).
+        if let Some(name_tok) = toks.get(fn_pos + 1) {
+            let bare = name_tok.trim_start_matches('$').to_string();
+            if kinds.contains_key(&bare)
+                && is_candidate(&bare)
+                && (bare == "N" || base.kind_of(&bare) == Some(MetavarKind::Ident))
+            {
+                add_kind(kinds, &bare, MetavarKind::Ident);
+            }
+        }
         // `G` between name and `(`.
         if let Some(name_pos) = Some(fn_pos + 1).filter(|p| *p < toks.len()) {
             let after_name = name_pos + 1;
@@ -1585,5 +1613,52 @@ mod tests {
         assert_eq!(infer_method_dot("foo(a.b(c))"), None);
         // `(a.b).c(d)`: inner dot is nested, outer dot splits.
         assert_eq!(infer_method_dot("(a.b).c(d)"), Some("(a.b)".len()));
+    }
+
+    #[test]
+    fn bare_n_in_fn_name_infers_ident() {
+        // WI-5 diet: `N` in fn name position is the name hole.
+        let t = infer("fn N(...) { ... }", "pub fn N(...) { ... }");
+        assert_eq!(t.kind_of("N"), Some(MetavarKind::Ident));
+    }
+
+    #[test]
+    fn explicit_ident_declares_name_hole() {
+        // WI-5 explicit: `# ident Foo` makes `Foo` a hole in name position.
+        let b = base(vec![Directive::MetaVar {
+            kind: MetavarKind::Ident,
+            names: vec!["Foo".to_string()],
+        }]);
+        let t = infer_table(b, "fn Foo(...) { ... }", "pub fn Foo(...) { ... }", None).unwrap();
+        assert_eq!(t.kind_of("Foo"), Some(MetavarKind::Ident));
+    }
+
+    #[test]
+    fn bare_n_elsewhere_stays_literal() {
+        // WI-5: diet `N` outside name/type positions never infers — call
+        // args, let inits, and method callees keep meaning the literal `N`.
+        assert_eq!(infer("foo(N)", "bar(N)").kind_of("N"), None);
+        assert_eq!(infer("let x = N;", "let x = N;").kind_of("N"), None);
+        assert_eq!(infer("E.N()", "E.M()").kind_of("N"), None);
+    }
+
+    #[test]
+    fn bare_n_in_type_position_still_infers_type() {
+        // T145 pin survives WI-5: turbofish/type-arg `N` is a type hole
+        // (diet `# type N`), so `foo::<N>(E)` keeps binding.
+        let t = infer("foo::<N>(E)", "bar::<N>(E)");
+        assert_eq!(t.kind_of("N"), Some(MetavarKind::Type));
+    }
+
+    #[test]
+    fn sigiled_name_hole() {
+        // Sigiled mode: bare `N` is literal even in name position; `$N`
+        // is the hole.
+        let b = base(vec![Directive::SigiledMetavars(true)]);
+        let t = infer_table(b, "fn N(...) { ... }", "pub fn N(...) { ... }", None).unwrap();
+        assert_eq!(t.kind_of("N"), None);
+        let b2 = base(vec![Directive::SigiledMetavars(true)]);
+        let t2 = infer_table(b2, "fn $N(...) { ... }", "pub fn $N(...) { ... }", None).unwrap();
+        assert_eq!(t2.kind_of("N"), Some(MetavarKind::Ident));
     }
 }

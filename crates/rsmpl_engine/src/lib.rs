@@ -33,6 +33,7 @@ mod matcher_use;
 mod ordinary;
 mod plan;
 mod postcheck;
+mod postcheck_namehole;
 mod suggest;
 mod use_graph;
 mod use_graph_macro;

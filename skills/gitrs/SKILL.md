@@ -42,7 +42,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 | `# repeat` | fold nested same-rule matches bottom-up (call + general-expr shapes; name args with `# expr`, `...` bodies stay verbatim) |
 | `# optional` | zero matches OK (default: error) |
 | `# sweep` | fused file sweep; dummy `@@ -1,1 @@`, no discovery |
-| `E` / `T` / `P` / `V Q G W` / `I` | inferred (no declaration; SPEC 15.8) |
+| `E` / `T` / `P` / `V Q G W` / `I` / `N` | inferred (no declaration; SPEC 15.8); `N` is the fn-header name hole (binds per-site, replays; `# ident X` declares others) |
 | `# bind=N` / `# use=N` | cut (`- I` + `# bind`) / paste (`+ N` + `# use`); `I` infers `item` |
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments; write `#[...]` on its own diff line (single-line `#[a] let x = E;` never matches) |
 | `# root=item\|expr\|stmt\|type` | force parse context |

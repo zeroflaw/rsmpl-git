@@ -97,6 +97,7 @@ pub fn apply_impl_context_hunk(
         // functions, via the shared planner).
         let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
         let (pvis, pqual, pgen, pwh, pty) = slot_metas(compiled);
+        let pident = compiled.table.ident_slot_metas();
         let full_plus_all: String = hunk
             .lines
             .iter()
@@ -111,6 +112,7 @@ pub fn apply_impl_context_hunk(
             &pgen,
             &pwh,
             &pty,
+            &pident,
             false,
         )
         .map_err(|e| e.with_rule(&rule))?;
@@ -228,6 +230,9 @@ pub fn apply_impl_context_hunk(
                 continue;
             }
             // Signature evolution: name plus any explicitly changed slots.
+            // WI-5: name holes report already-conforming methods with a
+            // byte-identical name edit (same posture as free functions).
+            let name_hole = crate::matcher_fn::is_ident_hole(compiled, &minus_name);
             let mut new_edits = plan_sig_edits(
                 vis,
                 sig,
@@ -238,6 +243,7 @@ pub fn apply_impl_context_hunk(
                 original,
                 index,
                 &rule,
+                name_hole,
             )?;
             edits.append(&mut new_edits);
             matched += 1;

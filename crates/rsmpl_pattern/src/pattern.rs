@@ -346,6 +346,60 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         root.as_deref(),
     )?;
 
+    // WI-5 C20: a name hole (`N` / `# ident X`) never binds in
+    // call/method/macro callee positions (and never a qualified path
+    // segment). Those spellings keep their backtick/literal rules; the
+    // hole lives in fn-header name position only (SPEC 15.8). Callee
+    // text carries `__RSMPL_{name}` placeholders (every declared name
+    // is substituted), so the check runs on placeholder tokens —
+    // whole-token, so `__RSMPL_N` never matches inside `__RSMPL_N2`.
+    {
+        let ident_names: Vec<String> = table
+            .declared
+            .iter()
+            .filter(|(k, _)| *k == MetavarKind::Ident)
+            .map(|(_, n)| n.clone())
+            .collect();
+        if !ident_names.is_empty() {
+            let ph_tokens = |s: &str| -> Vec<String> {
+                s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .map(|t| t.to_string())
+                    .collect()
+            };
+            let hole_in = |s: &str| -> Option<String> {
+                let toks = ph_tokens(s);
+                ident_names.iter().find_map(|n| {
+                    let ph = format!("__RSMPL_{n}");
+                    toks.iter().any(|t| t == &ph).then(|| n.clone())
+                })
+            };
+            let misplaced: Option<String> = match &kind {
+                PatternKind::Expr {
+                    minus:
+                        ExprPatternKind::Call { callee, .. }
+                        | ExprPatternKind::Macro { name: callee, .. },
+                    ..
+                } => hole_in(callee),
+                PatternKind::Expr {
+                    minus: ExprPatternKind::MethodCall { method, .. },
+                    ..
+                } => hole_in(method),
+                _ => None,
+            };
+            if let Some(bad) = misplaced {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!(
+                        "`{bad}` is a name hole (`# ident` / diet `N`); it only binds in fn-header name position — write the call/method callee literally (or `` `{bad}` `` to match the literal ident, SPEC 15.8)"
+                    ),
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "C20",
+                    "write the call/method callee literally, or use a fn-header name-hole pattern",
+                )));
+            }
+        }
+    }
     // WI-8 slice 9: an evolution paste is verbatim plus-side text
     // spliced under a capture, never a match pattern — its idents
     // (`T`, `Vec`, ...) are not metavariable holes, so the unbound-plus

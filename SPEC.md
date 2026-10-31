@@ -1588,6 +1588,39 @@ fail fast with a repair needle (write the bare pair, or spell both sides
 long). A terse side paired with a long side fails fast the same way —
 slot evolution needs the long form on both sides.
 
+#### 14.1.2 Name holes
+
+A bare `N` in the name position of a function pattern is a name hole: it
+binds the site's ident text per site and replays the bound name on the
+plus side while the written slots evolve around it — so one hunk evolves
+headers across differently-named functions:
+
+```diff
+@@ -1,1 @@ rule=add_pub
+# sweep
+- V Q fn N(...) {
++ pub fn N(...) {
+      ...
+  }
+```
+
+`# ident X` declares any other name as a hole in this position
+(`- V Q fn Foo(...)` / `+ pub fn Foo(...)` with `# ident Foo`); diet `N`
+needs no declaration. Slot strictness is unchanged: the minus side's
+written slots must still match (concrete `fn N<T>(...)` requires exactly
+`<T>`), and the same no-op discipline applies — a site already in the
+plus state is reported with a byte-identical `rename`-labeled edit that
+contributes no diff lines, and a sweep where every site already conforms
+fails loud through the sweep change gate (Section 24.6). A plus-side `N`
+with no minus-side `N` is unbound (`fix_pattern`, code `unbound`).
+
+Method positions share the spelling: an `impl`/`trait`-context hunk
+(Section 13.4) may write `fn N(...)` for the method name with the same
+bind-and-replay semantics. `N` never binds qualified paths and never
+appears in call/method callee positions (Section 18.6 C20); to match a
+literal ident spelled `N`, write the concrete name (call shapes match
+literally there).
+
 ### 14.2 Function slots
 
 A Rust function item is modeled as these slots:
@@ -2093,7 +2126,7 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 
 | Slot | `-` matches target when | `+` effect when different from `-` |
 |---|---|---|
-| name | equal, or `$Meta` binds any | replaced with the `+` name (`$Meta` preserves) |
+| name | equal, or `$Meta` binds any, or the `N` / `# ident` name hole (Section 15.8) binds any | replaced with the `+` name (`$Meta` and name holes preserve) |
 | visibility | absent requires inherited; concrete requires normalized equality; `V` matches any | insert/replace/delete `pub…` (`V` on `+` preserves) |
 | qualifiers | same set (with `extern "ABI"`); `Q` matches any | insert/replace/delete qualifier run |
 | generics | absent requires none; concrete requires normalized equality; `G` matches any; angle text containing `...` is a pattern error | insert after name / replace `<…>` / delete |
@@ -2584,11 +2617,14 @@ Implemented in v0.1 (fail fast on anything else):
 | `block` | block expression or function body (structural) |
 | `macro` | macro path/name |
 | `token_tree` | macro token tree or token sequence |
+| `ident` | WI-5 name hole: a function-header name (binds the site ident, replays it on the plus side; Section 14.1.2) |
 
 Rejected in v0.1 with `RSMPL_PATTERN_CONFLICT`: `identifier`, `path`,
 `lifetime`, `field`, `attributes`. These parse as declarations but have
 no kind-specific engine binding — an agent authoring `# lifetime L`
 pays tokens for a lifetime match that can never happen (Section 2.6).
+(`ident` is the implemented name-hole kind above; `identifier` stays
+rejected — write `# ident`, Section 15.8.)
 `# attributes A` is rejected the same way: v0.1 has no attribute-list
 abstraction, so write the `#[...]` lines literally on both sides to
 constrain them, or omit them (attributes are preserved by default,
@@ -2935,6 +2971,8 @@ Kind by position:
 | Position | Inferred kind |
 |---|---|
 | `- I` alone (single-token minus) | `item` (`# root=` forces `type`/`expr`/`stmt` for that token) |
+| fn-header name `N` (bare, free or method position) | `ident` (the WI-5 name hole: binds the site ident, replays it) |
+| fn-header declared `# ident X` in name position | `ident` |
 | fn-header `G` (between name and `(`) | `generic_params` |
 | fn-header `W` (after params/return) | `where_clause` |
 | fn-header `-> T` (single preserved return) | `type` (only when `T` occurs on both sides; one-sided `-> String` stays a concrete literal) |
@@ -2947,6 +2985,15 @@ Kind by position:
 
 Rules:
 
+- A bare `N` outside the fn-header name position never infers a new
+  kind: in call/method and `let`/general expression positions it stays
+  the literal ident `N`, while in type-argument and return positions the
+  pre-existing diet type inference still applies (`foo::<N>(E)` binds
+  `N` as `# type N`, T145). Explicit declarations always bind
+  (`# expr N` + `foo(N)` is an expression hole); inference just refuses
+  to invent a second kind beside `ident`.
+- A name hole never binds in call/method callee positions (Section
+  18.6 C20) and never binds qualified paths.
 - Backtick quoting is unchanged: `` `E` `` is always the literal token
   and never infers. String literals and attribute/doc-comment lines
   never infer either.
@@ -3635,6 +3682,7 @@ case where an ordinary hunk cannot express the edit.
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites or per-argument holes (WI-7a: one hole per top-level comma-separated argument), or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
+| C20 | a name hole (`N` / `# ident X`) in a call/method/macro callee position (WI-5) | `` `N` is a name hole (`# ident` / diet `N`); it only binds in fn-header name position — write the call/method callee literally (or `` `N` `` to match the literal ident, SPEC 15.8) `` with `` `N` `` the offending hole name (code `RSMPL_PATTERN_CONFLICT`, repair `fix_pattern` code `C20`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -3669,7 +3717,7 @@ Envelope: all twelve live C-table rejections above fail with
 null `range:`/`suggestion:` lines, JSON carries explicit `range: null` /
 `suggestion: null`) -- except C11/C12, which carry the set suggestion
 (like the Section 14.6 pair they share strings with). C2 is closed by
-WI-5a (now a firing shape, pinned end to end) and no longer fails; C19 is the WI-2b macro-hole/`Verbatim` gate.
+WI-5a (now a firing shape, pinned end to end) and no longer fails; C19 is the WI-2b macro-hole/`Verbatim` gate; C20 is the WI-5 name-hole callee gate.
 
 #### Match-time silent rejections (surface as `no match found`)
 
@@ -6390,7 +6438,7 @@ prints one JSON object to stdout:
 - `# foo=bar` suggests nothing although `foo` is distance 2 from `root`).
 - Value suggestions over the closed sets are ungated (`# scope=files` →
 - `# scope=file`); a far miss lists every legal spelling instead.
-- Pattern-shape (18.6 C-table): `{"action":"fix_pattern","code":"C1"-"C18",
+- Pattern-shape (18.6 C-table): `{"action":"fix_pattern","code":"C1"-"C20",
 - "write_instead":"<SPEC 18.6 text>"}` — `code` is the C-table row, `write_instead`
 - the exact diagnostic telling the agent what to write instead (mechanical:
 - replace the rejected spelling with `write_instead`, retry). Gates outside

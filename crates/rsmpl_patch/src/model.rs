@@ -153,6 +153,7 @@ pub enum MetavarKind {
     Identifier,
     Path,
     Symbol,
+    Ident,
     Expr,
     Stmt,
     Item,
@@ -175,6 +176,7 @@ impl MetavarKind {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "identifier" => Some(Self::Identifier),
+            "ident" => Some(Self::Ident),
             "path" => Some(Self::Path),
             "symbol" => Some(Self::Symbol),
             "expr" => Some(Self::Expr),
@@ -200,6 +202,7 @@ impl MetavarKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Identifier => "identifier",
+            Self::Ident => "ident",
             Self::Path => "path",
             Self::Symbol => "symbol",
             Self::Expr => "expr",
