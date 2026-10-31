@@ -8477,8 +8477,8 @@ stripping is deliberate. Equalities per origin close the contract:
   equality is owed where the inferred side is deliberately ordinary
   or precision-shaped against a differently-spelled authoring.
 
-Corpus in scope: all applyrs fixtures (41), all diffrs fixtures
-(60), all example benches, plus the history_e2e pins. Out of scope
+Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
+(116), all example benches, plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

@@ -106,6 +106,9 @@ fn fixtures_apply_through_binary() {
 fn no_rust_file_exceeds_2000_lines() {
     // T469: enforce over tracked files (`git ls-files`) so untracked
     // scratch never trips the gate and fixtures/benches stay covered.
+    // WI-20: intentional 10000-line scale fixture excluded by path;
+    // all other tracked .rs stay under the gate.
+    const SCALE_FIXTURE: &str = "example-benches/applyrs/44-scale-postcheck-deep/repo/src/lib.rs";
     let root = workspace_root();
     let out = Command::new("git")
         .arg("-C")
@@ -124,6 +127,9 @@ fn no_rust_file_exceeds_2000_lines() {
     files.sort_unstable();
     let mut over = Vec::new();
     for rel in files {
+        if rel == SCALE_FIXTURE {
+            continue;
+        }
         let p = root.join(rel);
         let lines = fs::read_to_string(&p).unwrap().lines().count();
         if lines > 2000 {
