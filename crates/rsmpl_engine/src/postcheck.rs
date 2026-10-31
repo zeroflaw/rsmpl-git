@@ -808,6 +808,161 @@ mod tests {
     }
 
     #[test]
+    fn general_fires_at_span_and_fails_when_tampered() {
+        // WI-1.3: General shapes verify span-locally like Expr — the
+        // instantiated plus must sit inside a reported span's window.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n# expr E\n- E + 1\n+ E + 2\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "x")]);
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    x + 2;\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        // Span reverted; the same instantiation elsewhere never counts.
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    x + 1;\n}\nfn g() {\n    x + 2;\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn macro_fires_at_span_and_fails_when_tampered() {
+        // WI-1.3: Macro token-tree shapes verify span-locally; `...`
+        // verifies as ordered fragments around the absorbed args.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# macro=token_tree\n- old_mac!(...)\n+ new_mac!(...)\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    new_mac!(1);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    old_mac!(1);\n}\nfn g() {\n    new_mac!(1);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn field_rename_elsewhere_veto() {
+        // WI-1.3: the new field ident must sit at a reported span; a
+        // same-name field elsewhere never satisfies the hunk.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 @@ rule=r\n  struct S {\n- old: u32\n+ new: u32\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "struct S {\n    new: u32,\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "struct S {\n    old: u32,\n}\nstruct T {\n    new: u32,\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn variant_rename_elsewhere_veto() {
+        // WI-1.3: same span-local posture for enum variants.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 @@ rule=r\n  enum E {\n- Old\n+ New\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "enum E {\n    New,\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "enum E {\n    Old,\n}\nstruct New;\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn use_rename_elsewhere_veto() {
+        // WI-1.3: the renamed use-path segment must sit at a reported
+        // span; the same segment on another line never counts.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=u\n- use crate::old\n+ use crate::new\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings: Vec<HashMap<String, String>> = vec![HashMap::new()];
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "use crate::new::Thing;\n",
+                &[(1, 1)],
+                1,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "use crate::old::Thing;\nuse crate::new::Other;\n",
+                &[(1, 1)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn impl_context_is_span_local() {
         // WI-1.2: `fn {name}` must appear at a reported span; a
         // same-name method elsewhere never satisfies the hunk.
