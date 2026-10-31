@@ -7,7 +7,6 @@
 //! `enum Old` → `pub enum New`, `union Old` → `pub union New`,
 //! `type Old` → `pub type New`,
 //! `const Old` → `pub const New`,
-//! `const Old` → `pub const New`,
 //! `static Old` → `pub static New`,
 //! `mod old` → `pub mod new`,
 //! `trait Old` → `pub trait New` in a new
