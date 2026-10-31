@@ -1070,11 +1070,13 @@ fn apply_rsmpl_hunk(
 
 /// WI-10b drift retry (SPEC 10.8): re-run the same matcher with scope
 /// overridden to `File`, keeping the edits. Succeeds only when the
-/// file-wide run yields exactly one match whose span the hunk's body
-/// context anchors satisfy (leading/trailing ` ` lines in order, see
-/// `drift`). Probe errors, zero matches, multiple matches, missing
-/// anchors, or an unsatisfied candidate all yield `None` — the caller
-/// keeps the original zero-match error (never a too-many or a guess).
+/// file-wide run yields exactly one match. Anchored tier: the hunk's body
+/// context anchors (leading/trailing ` ` lines in order, see `drift`) must
+/// also agree with the single candidate. Pattern-anchored tier (WI-4): a
+/// terse hunk with no anchors drifts on uniqueness + disjointness alone.
+/// Probe errors, zero matches, multiple matches, disjointness failure, or
+/// an unsatisfied anchored candidate all yield `None` — the caller keeps
+/// the original zero-match error (never a too-many or a guess).
 fn try_drift_apply(
     state: &FileState,
     path: &str,
@@ -1083,9 +1085,6 @@ fn try_drift_apply(
     captures: &CaptureStore,
 ) -> Option<crate::drift::DriftOutcome> {
     let (leading, trailing) = crate::drift::drift_anchors(rh);
-    if leading.is_empty() && trailing.is_empty() {
-        return None;
-    }
     let mut wide_hunk = rh.clone();
     wide_hunk.directives.push(Directive::Scope(Scope::File));
     let mut probe_edits = Vec::new();

@@ -1,12 +1,14 @@
-//! Anchor fallback for stale ranged hunks (WI-10b, SPEC 10.8).
+//! Stale-range fallback for ranged hunks (SPEC 10.8; WI-10b anchored tier,
+//! WI-4 pattern-anchored tier).
 //!
 //! When a ranged semantic hunk finds zero matches in its cited range, the
-//! planner retries once with file scope, anchored by the hunk's body
-//! context (` `) lines: leading context (before the first `-`/`+` line)
-//! must occur in order in the lines just before the single file-wide
-//! candidate, trailing context (after the last `-`/`+` line) in order in
-//! the lines just after it. Exactly one anchored candidate applies with
-//! `drift` evidence; zero or more than one keeps the original conflict.
+//! planner retries once with file scope. Anchored tier: the hunk's body
+//! context (` `) lines anchor the single file-wide candidate (leading in
+//! order in the lines just before it, trailing in order just after it).
+//! Pattern-anchored tier (WI-4): a terse hunk with no body context drifts
+//! on the pattern's uniqueness + disjointness alone. Exactly one candidate
+//! applies with `drift` evidence; zero or more than one keeps the original
+//! conflict. Anchors present must agree — disagreement fails.
 //!
 //! Anchors are trimmed-literal (never fuzzy); patterns still match
 //! semantically. `# scope=file` / sweep hunks never drift (no locality

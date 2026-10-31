@@ -666,10 +666,11 @@ mod tests {
     #[test]
     fn scope_modes_gate_matches() {
         let patch = rename_patch("struct Old", "struct New", "@@ -1,1 +1,1 @@");
-        // Item spans lines 3-5; anchor-only range on line 1 misses.
+        // WI-4: terse hunk cites line 1 while the item lives on line 3 —
+        // pattern-anchored drift applies it (uniqueness + disjointness).
         let src = "fn a() {}\nfn b() {}\nstruct Old;\n";
-        let err = apply(&patch, src).unwrap_err();
-        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("struct New;"), "got: {out}");
     }
 
     #[test]
