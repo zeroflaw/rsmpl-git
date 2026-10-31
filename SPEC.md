@@ -904,7 +904,7 @@ Example:
 + New(...)
 ```
 
-The engine must verify that `Old` resolves to `crate::old_api` before rewriting it. In v0.1 there is no semantic environment, so every symbol hunk needs `# fallback=syntax` (exact full-path text match, Section 19.3); without it the hunk fails with `RSMPL_SYMBOL_CONFLICT`.
+The engine must verify that `Old` resolves to `crate::old_api` before rewriting it. Resolution is crate-local from `syn` alone (Section 19.3): seeded `crate::` paths must name a definition in the indexed crate (file/inline `mod` nesting, `self`/`super`, one-hop `pub use` re-exports with cycle cut; glob imports are opaque). A bare `# symbol` hunk whose seed resolves rewrites only the sites that resolve to the same definition (a same-text vendored copy stays untouched); without it the hunk fails with `RSMPL_SYMBOL_CONFLICT`. `# fallback=syntax` keeps the exact full-path text match with no resolution.
 
 ### 9.6 Directive parsing
 
@@ -3889,7 +3889,7 @@ case where an ordinary hunk cannot express the edit.
 | C10 | leading `#[...]` attributes on a non-`let` shape | `` leading attributes are only supported on `let` statement patterns in v1 `` |
 | C11 | `+` side writes attributes the `-` side did not match (outside the Preserve add delta: minus empty plus non-empty under `# attrs=preserve` adds, on fn/item/`let` shapes) | `replacement writes attributes the pattern did not match; write the same attributes in the `-` pattern or drop them` (suggestion: `` mirror the `#[...]` lines in `-` and `+`, or use `# attrs=strip` ``) |
 | C12 | `+` attributes differ from matched `-` attributes (outside the Preserve remove/same-length-replace delta under `# attrs=preserve`, on fn/item/`let` shapes) | `replacement attributes differ from matched attributes; v1 refuses ambiguous attribute merges` (same suggestion as C11) |
-| C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk (no semantic environment in v0.1) | `` symbol `<Name>` could not be resolved (no semantic environment in v0.1) `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` add `# fallback=syntax` to allow syntactic matching ``). Only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
+| C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk whose seeded path resolves to no definition in this crate | `` symbol `<Name>` (`<path>`) resolves to no definition in this crate `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` write the concrete path `<path>` in the pattern, or add `# fallback=syntax` to allow syntactic matching ``, repair `add_directive` `# fallback=syntax`). Only minus-side seeds must resolve (plus-only seeds name the rewrite target, which the crate may not define yet); only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
 | C17 | `# follow=uses` on any shape other than a fn, item, field, variant, or assoc rename hunk (WI-6a, WI-9a, WI-27; evolution, member-addition, and assoc-evolution kinds included) | `` `# follow=uses` is only supported on fn, item, field, variant, and assoc rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
@@ -3988,17 +3988,19 @@ The engine must:
 
 ### 19.3 Required semantic environment
 
-Symbol resolution may require:
+Symbol resolution is crate-local from `syn` alone (no build, no cargo):
 
-- Cargo workspace information;
-- module graph;
-- dependencies;
-- feature flags;
-- macro expansion;
-- Rust edition;
-- `cfg` configuration.
+- module graph: file paths (`src/foo.rs` → `crate::foo`,
+  `src/foo/mod.rs` → `crate::foo`) plus inline `mod` nesting;
+- item definitions per module (`fn`/`struct`/`enum`/`trait`/`type`/
+  `const`/`static`/`mod`/`macro_rules!`);
+- `use` imports (first-segment substitution; glob imports are opaque)
+  and `pub use` re-exports (one hop each, chains followed while proven,
+  cycles cut).
 
-If the semantic environment is unavailable, the engine must fail unless the hunk explicitly allows fallback.
+If the seeded path is outside the crate (`std::`, dependencies) or
+resolves to no definition, the engine must fail unless the hunk
+explicitly allows fallback.
 
 Fallback directive:
 
@@ -4006,11 +4008,30 @@ Fallback directive:
 # fallback=syntax
 ```
 
-In v0.1 `fallback=syntax` is the only supported path: there is no semantic environment, so the engine always matches syntactically and rejects symbol hunks without the fallback line. Matching is exact full-path text equality — a bare `old_api(...)` call site does not match `# symbol Old=crate::old_api`. For plain renames prefer a concrete path pattern (it is also the canonical spelling: tree-aware comparison per D.5 normalizes symbol hunks to it) (`- crate::old_api(E)` / `+ crate::new_api(E)`), which matches identically with fewer directives. `# symbol` in any other shape is rejected at C14 (SPEC 18.6).
-A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic in v0.1) — except on a `# follow=uses` hunk, where it is the WI-6a skip switch (Section 14.8).
+A bare `# symbol` hunk verifies: every minus-side seed must resolve to
+a definition in the indexed crate, and each matched call/qualified
+site's spelled path must resolve to that same definition — sites that
+spell a different definition with the same text (a vendored submodule
+copy, a shadowing import) do not match and are never rewritten.
+Resolution also proves short spellings: a bare `old_api(...)` site with
+`use crate::old_api;` matches `# symbol Old=crate::old_api`. Plus-only
+seeds (`New` in `Old` → `New`) are never required to resolve — they name
+the rewrite target, which the crate may not define yet. With
+`# fallback=syntax` the engine matches exact full-path text with no
+resolution (byte-identical to the old behavior): a bare `old_api(...)`
+call site does not match `# symbol Old=crate::old_api`. The report
+carries a per-rule `symbol` key (`"resolved"` when the hook verified,
+`"syntax"` when fallback carried the hunk; absent on non-symbol hunks).
+For plain renames prefer a concrete path pattern (it is also the
+canonical spelling: tree-aware comparison per D.5 normalizes fallback
+symbol hunks to it) (`- crate::old_api(E)` / `+ crate::new_api(E)`),
+which matches identically with fewer directives; raising never emits
+`# symbol` (SPEC D.4). `# symbol` in any other shape is rejected at C14
+(SPEC 18.6).
+A lone `# fallback=syntax` with no `# symbol` is rejected: it constrains nothing (matching is already syntactic without resolution) — except on a `# follow=uses` hunk, where it is the WI-6a skip switch (Section 14.8).
 
-A sole symbol ident carrying explicit turbofish (`Old::<u8>(E)` with `# symbol Old=crate::old_api`) expands to the seeded path and binds the turbofish args structurally (SPEC 18.6 R3); a placeholder hole (`Old::<T>(E)` with `# type T`) binds likewise, and tree-aware comparison per D.5 diet-renames the declared hole to the inferred `T` spelling. Other symbol spellings keep exact-path behavior.
-> **v0.1 implementation note:** syntactic fallback compares the full path text exactly (e.g. `crate::old_api` matches only callees spelled `crate::old_api` — not bare `old_api`, not `other::old_api`). Symbol hunks without `# fallback=syntax` are rejected because v0.1 has no semantic environment. No resolver integration (rust-analyzer / cargo metadata) is planned for v0.1; revisit only with a dogfood case where exact-path matching blocks a real rename.
+A sole symbol ident carrying explicit turbofish (`Old::<u8>(E)` with `# symbol Old=crate::old_api`) expands to the seeded path and binds the turbofish args structurally (SPEC 18.6 R3); a placeholder hole (`Old::<T>(E)` with `# type T`) binds likewise, and tree-aware comparison per D.5 diet-renames the declared hole to the inferred `T` spelling. Other symbol spellings keep exact-path behavior. Turbofish sites require exact seed-text spelling (resolved widening covers plain calls; turbofish keeps the text gate with the seed still verified).
+> **Implementation note:** dependency/`std::` paths, glob-imported names, and macro-defined items are unresolvable by construction (stated, never guessed). No rust-analyzer / cargo-metadata integration: syntactic anchors plus this crate-local graph buy the provable majority of the trust at text cost.
 
 ---
 
@@ -5210,14 +5231,16 @@ naming the same exit.
 
 ### 25.5 Symbol conflict
 
-Symbol resolution failed. In v0.1 there is no semantic environment, so every symbol hunk needs `# fallback=syntax` (Section 19.3); without it the hunk fails with `RSMPL_SYMBOL_CONFLICT`:
+Symbol resolution failed. A bare `# symbol` hunk verifies its
+minus-side seeds against the crate-local index (Section 19.3); a seed
+that resolves to no definition fails with `RSMPL_SYMBOL_CONFLICT`:
 
 ```text
 RSMPL_SYMBOL_CONFLICT
 rule: rename_symbol_calls
 file: src/lib.rs
-reason: symbol `Old` could not be resolved (no semantic environment in v0.1)
-suggestion: add `# fallback=syntax` to allow syntactic matching
+reason: symbol `Old` (`crate::old_api`) resolves to no definition in this crate
+suggestion: write the concrete path `crate::old_api` in the pattern, or add `# fallback=syntax` to allow syntactic matching
 ```
  
 `Old` is the declared `# symbol Old=...` metavariable name (backticked in the reason). Envelope (exit 2): text carries `rule:`/`file:` lines plus the reason and a set `suggestion:` line (the null `range:` is omitted — no `old_range:` line); the JSON envelope carries `rule`/`file` set, `range: null`, and the same set suggestion. Suggestion is set in both envelopes here, unlike the suggestion-null C14/C15 rows (the `use a call-shape hunk ...` tail there is part of `reason:`).
@@ -6466,10 +6489,14 @@ prints one JSON object to stdout:
   other `--bindings` value is an `RSMPL_IO_CONFLICT` usage error.
   Multi-edit rules whose spans carry slot evidence gain `span_edits`
   (parallel to `spans`: one of `generics`/`params`/`return`/`rename`/
-  `follow` per slot, `null` for unlabeled slots; omitted for
-  single-edit rules, so identical spans like three `[1,1]`s stay
-  distinguishable), so
-  the report stays within an absolute byte budget while an over-broad
+   `follow` per slot, `null` for unlabeled slots; omitted for
+   single-edit rules, so identical spans like three `[1,1]`s stay
+   distinguishable). Symbol hunks gain `symbol` (`"resolved"` when the
+   Section 19.3 hook verified the seeds, `"syntax"` when
+   `# fallback=syntax` carried the match; absent on non-symbol hunks),
+   additive within `version: 3`, so an agent can require `"resolved"`
+   for API renames, so
+   the report stays within an absolute byte budget while an over-broad
   hunk still shows its extra span before apply. Budget (bytes beyond
   the reported `diff` string, `--diff-max-lines 0`): fixed envelope
   ≈90 B (`checked` + keys) + ≈80 B per `files[]` entry (64-hex

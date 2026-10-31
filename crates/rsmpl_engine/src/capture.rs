@@ -213,6 +213,7 @@ pub(crate) fn eval_empty_collection_cut(
         follow_skipped_details: Vec::new(),
         orphans: Vec::new(),
         semantics: RuleSemantics::ReparseOnly,
+        symbol: None,
     })
 }
 
@@ -263,6 +264,7 @@ pub(crate) fn eval_collection_cut(
         follow_skipped_details: Vec::new(),
         orphans: Vec::new(),
         semantics: RuleSemantics::ReparseOnly,
+        symbol: None,
     })
 }
 

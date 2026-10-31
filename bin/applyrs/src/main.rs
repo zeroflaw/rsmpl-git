@@ -386,6 +386,10 @@ fn run() -> Result<(), CliError> {
     let needs_workspace = patch.files.iter().flat_map(|s| &s.hunks).any(|h| match h {
         rsmpl_patch::Hunk::Rsmpl(rh) => {
             rh.follows_uses()
+                || rh
+                    .directives
+                    .iter()
+                    .any(|d| matches!(d, rsmpl_patch::Directive::Symbol { .. }))
                 || matches!(
                     rsmpl_pattern::compile(rh).map(|c| c.kind),
                     Ok(rsmpl_pattern::PatternKind::Fn { .. }
@@ -715,6 +719,11 @@ fn run() -> Result<(), CliError> {
                     "rule": r.rule, "file": r.file, "matches": r.matches, "spans": r.spans.iter().map(|(s, e)| serde_json::json!([s, e])).collect::<Vec<_>>(),
                     "semantics": r.semantics.as_str(),
                 });
+                // WI-16: symbol resolution mode, additive beside
+                // `semantics` (absent on non-symbol hunks).
+                if let Some(symbol) = &r.symbol {
+                    entry["symbol"] = serde_json::json!(symbol);
+                }
                 // WI-2b/2c: per-site evidence, one entry per emitted edit
                 // in span order. Omitted when no site binds (renames,
                 // insertions, deletes, use-prefix carry no evidence).

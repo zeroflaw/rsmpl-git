@@ -619,108 +619,9 @@ fn plus_body_lines(plus_body: &str) -> Vec<String> {
         .collect()
 }
 
-/// WI-1.5 synthetic plus-as-minus hunk: the recorded plus side,
-/// compiled with the same compiler that compiled the minus. Metavar
-/// declarations (`# expr E`, `# lang=rust`, `# repeat`, `# fallback`,
-/// …) are preserved; the discovery posture is forced to file-scope
-/// `# allow=many` so every plus occurrence in the post-image is found.
-/// `optional`/ranged postures never carry over (a missing plus match
-/// must fail, never pass by abstention).
-fn plus_pattern_hunk(rh: &rsmpl_patch::RsmplHunk, plus_lines: &[String]) -> rsmpl_patch::RsmplHunk {
-    let mut directives = Vec::new();
-    for d in &rh.directives {
-        match d {
-            rsmpl_patch::Directive::Allow(_)
-            | rsmpl_patch::Directive::Scope(_)
-            | rsmpl_patch::Directive::Optional(_) => {}
-            _ => directives.push(d.clone()),
-        }
-    }
-    directives.push(rsmpl_patch::Directive::Allow(Allow::Many));
-    directives.push(rsmpl_patch::Directive::Scope(Scope::File));
-    let mut lines = Vec::with_capacity(plus_lines.len() * 2);
-    for t in plus_lines {
-        lines.push(rsmpl_patch::BodyLine {
-            prefix: '-',
-            text: t.clone(),
-        });
-        lines.push(rsmpl_patch::BodyLine {
-            prefix: '+',
-            text: t.clone(),
-        });
-    }
-    let header = rsmpl_patch::HunkHeader {
-        old_start: 1,
-        old_len: 1,
-        new_start: 1,
-        new_len: 1,
-        new_elided: true,
-        rule: rh.header.rule.clone(),
-        raw_tail: String::new(),
-    };
-    rsmpl_patch::RsmplHunk {
-        header,
-        directives,
-        raw_directives: Vec::new(),
-        lines,
-    }
-}
-
-/// WI-11b synthetic plus-as-minus hunk with a container header as context:
-/// the header rides as ` ` lines (the classifier needs it to scope the
-/// pair), the pair as `-`/`+` lines. Discovery is file-scope
-/// `# allow=many` like `plus_pattern_hunk`; `optional`/ranged postures
-/// never carry over.
-fn plus_pattern_hunk_with_context(
-    rh: &rsmpl_patch::RsmplHunk,
-    context_lines: &[String],
-    pair_lines: &[String],
-) -> rsmpl_patch::RsmplHunk {
-    let mut directives = Vec::new();
-    for d in &rh.directives {
-        match d {
-            rsmpl_patch::Directive::Allow(_)
-            | rsmpl_patch::Directive::Scope(_)
-            | rsmpl_patch::Directive::Optional(_) => {}
-            _ => directives.push(d.clone()),
-        }
-    }
-    directives.push(rsmpl_patch::Directive::Allow(Allow::Many));
-    directives.push(rsmpl_patch::Directive::Scope(Scope::File));
-    let mut lines = Vec::with_capacity(context_lines.len() + pair_lines.len() * 2);
-    for t in context_lines {
-        lines.push(rsmpl_patch::BodyLine {
-            prefix: ' ',
-            text: t.clone(),
-        });
-    }
-    for t in pair_lines {
-        lines.push(rsmpl_patch::BodyLine {
-            prefix: '-',
-            text: t.clone(),
-        });
-        lines.push(rsmpl_patch::BodyLine {
-            prefix: '+',
-            text: t.clone(),
-        });
-    }
-    let header = rsmpl_patch::HunkHeader {
-        old_start: 1,
-        old_len: 1,
-        new_start: 1,
-        new_len: 1,
-        new_elided: true,
-        rule: rh.header.rule.clone(),
-        raw_tail: String::new(),
-    };
-    rsmpl_patch::RsmplHunk {
-        header,
-        directives,
-        raw_directives: Vec::new(),
-        lines,
-    }
-}
-
+/// WI-1.5 synthetic plus-as-minus hunks live in `postcheck_synth.rs`
+/// (D5 sibling); the plus gate below calls back in. See that module for
+/// the constructor discipline (posture forcing, WI-16 fallback injection).
 /// True when the line opens a `struct`/`enum`/`trait`/`impl` container
 /// header (the WI-11b member-evolution and WI-26 assoc-evolution
 /// contexts). Same parse discipline as the classifier: complete with
@@ -816,9 +717,13 @@ pub(crate) fn verify_plus_pattern_at_spans(
     // container header — it rides as context, not as a `-`/`+` pair
     // (the classifier needs it to scope the pair that follows).
     let synth = if plus_lines.len() >= 2 && is_member_container_header(&plus_lines[0]) {
-        plus_pattern_hunk_with_context(rh, &plus_lines[..1], &plus_lines[1..])
+        crate::postcheck_synth::plus_pattern_hunk_with_context(
+            rh,
+            &plus_lines[..1],
+            &plus_lines[1..],
+        )
     } else {
-        plus_pattern_hunk(rh, plus_lines)
+        crate::postcheck_synth::plus_pattern_hunk(rh, plus_lines)
     };
     let plus_compiled = rsmpl_pattern::compile(&synth).ok()?;
     let mut throwaway: Vec<TextEdit> = Vec::new();

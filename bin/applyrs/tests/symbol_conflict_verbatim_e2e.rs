@@ -11,8 +11,8 @@
 mod common;
 use common::*;
 
-const REASON: &str = "symbol `Old` could not be resolved (no semantic environment in v0.1)";
-const SUGGESTION: &str = "add `# fallback=syntax` to allow syntactic matching";
+const REASON: &str = "resolves to no definition in this crate";
+const SUGGESTION: &str = "or add `# fallback=syntax` to allow syntactic matching";
 
 fn patch() -> &'static str {
     "diff --git a.rs\n@@ -1,1 @@ rule=symtest\n# scope=file\n# allow=many\n# symbol Old=crate::foo\n# expr E\n- Old(E)\n+ new_api(E)\n"
@@ -39,7 +39,7 @@ fn symbol_without_fallback_text_envelope_verbatim() {
     assert!(stderr.contains("file: a.rs"), "got: {stderr}");
     assert!(stderr.contains(REASON), "got: {stderr}");
     assert!(
-        stderr.contains("suggestion: add `# fallback=syntax` to allow syntactic matching"),
+        stderr.contains("suggestion: write the concrete path"),
         "got: {stderr}"
     );
     assert!(
@@ -72,12 +72,12 @@ fn symbol_without_fallback_json_envelope_verbatim() {
     assert_eq!(v["error"]["file"], serde_json::json!("a.rs"), "got: {v}");
     assert_eq!(
         v["error"]["reason"],
-        serde_json::json!("symbol `Old` could not be resolved (no semantic environment in v0.1)"),
+        serde_json::json!("symbol `Old` (`crate::foo`) resolves to no definition in this crate"),
         "got: {v}"
     );
     assert_eq!(
         v["error"]["suggestion"],
-        serde_json::json!("add `# fallback=syntax` to allow syntactic matching"),
+        serde_json::json!("write the concrete path `crate::foo` in the pattern, or add `# fallback=syntax` to allow syntactic matching"),
         "got: {v}"
     );
     assert_eq!(v["error"]["range"], serde_json::Value::Null, "got: {v}");
@@ -108,13 +108,11 @@ fn symbol_without_fallback_apply_mode_leaves_worktree_untouched() {
 fn spec_25_5_carries_symbol_conflict_envelope() {
     let spec = std::fs::read_to_string(workspace_root().join("SPEC.md")).unwrap();
     assert!(
-        spec.contains(
-            "reason: symbol `Old` could not be resolved (no semantic environment in v0.1)"
-        ),
+        spec.contains("resolves to no definition in this crate"),
         "25.5 reason fence drifted"
     );
     assert!(
-        spec.contains("suggestion: add `# fallback=syntax` to allow syntactic matching"),
+        spec.contains("or add `# fallback=syntax` to allow syntactic matching"),
         "25.5 suggestion fence drifted"
     );
     assert!(

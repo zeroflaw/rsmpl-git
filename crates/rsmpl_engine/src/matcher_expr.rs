@@ -388,6 +388,22 @@ pub fn apply_expr_hunk(
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
 ) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    apply_expr_hunk_with_graph(parsed, original, index, hunk, compiled, edits, None)
+}
+
+/// WI-16: call-hunk entry with optional crate-graph resolution.
+/// `symbol_graph` is `(graph, file_path)`; `Some` only when the hunk
+/// carries `# symbol` without `# fallback=syntax`. With fallback (or no
+/// symbols) the graph is unused and matching stays byte-identical.
+pub fn apply_expr_hunk_with_graph(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
     let (minus, plus_raw, _ph, _lits, _has_path) = match &compiled.kind {
         PatternKind::Expr {
             minus,
@@ -445,20 +461,79 @@ pub fn apply_expr_hunk(
     }
 
     // Symbol gate (SPEC 19.3): without a semantic environment, fail unless
-    // `# fallback=syntax` is set.
+    // `# fallback=syntax` is set. WI-16: with a crate graph, a bare
+    // `# symbol` hunk verifies each seed against the index instead.
     let fallback_syntax = hunk
         .directives
         .iter()
         .any(|d| matches!(d, rsmpl_patch::Directive::FallbackSyntax(true)));
-    for sym in compiled.table.symbols.keys() {
-        if !fallback_syntax {
-            return Err(StructuredError::new(
-                ErrorCode::SymbolConflict,
-                format!("symbol `{sym}` could not be resolved (no semantic environment in v0.1)"),
-            )
-            .with_rule(&rule)
-            .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
-            .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
+    // WI-16: seed canonicals when resolving (seed -> crate::... definition).
+    let mut seed_canons: HashMap<String, String> = HashMap::new();
+    if !compiled.table.symbols.is_empty() && !fallback_syntax {
+        match symbol_graph {
+            None => {
+                // No index (engine-direct call without workspace): every
+                // bare symbol hunk fails as before (the CLI always loads
+                // the workspace for such patches).
+                if let Some(sym) = compiled.table.symbols.keys().next() {
+                    return Err(StructuredError::new(
+                        ErrorCode::SymbolConflict,
+                        format!("symbol `{sym}` could not be resolved (no semantic environment in v0.1)"),
+                    )
+                    .with_rule(&rule)
+                    .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
+                    .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
+                }
+            }
+            Some((graph, _file)) => {
+                // WI-16: only minus-side symbols name a definition that
+                // must exist. Plus-only seeds (`New` in `Old` -> `New`)
+                // name the rewrite target, which the crate may not
+                // define yet — requiring them to resolve would reject
+                // every rename that introduces a new name.
+                let minus_text: String = hunk
+                    .lines
+                    .iter()
+                    .filter(|l| l.prefix == '-')
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for (name, seed) in &compiled.table.symbols {
+                    if !mentions_symbol(&minus_text, name) {
+                        continue;
+                    }
+                    match graph.resolve_seed(seed) {
+                        Some(canon) => {
+                            seed_canons.insert(name.clone(), canon);
+                        }
+                        None => {
+                            return Err(StructuredError::new(
+                                ErrorCode::SymbolConflict,
+                                format!("symbol `{name}` (`{seed}`) resolves to no definition in this crate"),
+                            )
+                            .with_rule(&rule)
+                            .with_suggestion(format!("write the concrete path `{seed}` in the pattern, or add `# fallback=syntax` to allow syntactic matching"))
+                            .with_repair(StructuredError::add_directive_repair(
+                                "# fallback=syntax",
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        for sym in compiled.table.symbols.keys() {
+            if !fallback_syntax {
+                return Err(StructuredError::new(
+                    ErrorCode::SymbolConflict,
+                    format!(
+                        "symbol `{sym}` could not be resolved (no semantic environment in v0.1)"
+                    ),
+                )
+                .with_rule(&rule)
+                .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
+                .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
+            }
         }
     }
 
@@ -496,8 +571,14 @@ pub fn apply_expr_hunk(
         ) {
             continue;
         }
-        let (mut bindings, remainders) = match match_candidate(minus, cand, compiled, &reverse_map)
-        {
+        let (mut bindings, remainders) = match match_candidate(
+            minus,
+            cand,
+            compiled,
+            &reverse_map,
+            symbol_graph,
+            &seed_canons,
+        ) {
             Some(b) => b,
             None => continue,
         };
@@ -563,6 +644,8 @@ fn match_candidate(
     cand: &Candidate<'_>,
     compiled: &CompiledPattern,
     reverse_map: &HashMap<String, String>,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
+    seed_canons: &HashMap<String, String>,
 ) -> Option<(HashMap<String, String>, Vec<String>)> {
     let mut bindings: HashMap<String, String> = HashMap::new();
     // Seed symbol bindings (symbols are pre-bound to their path).
@@ -573,7 +656,14 @@ fn match_candidate(
     let ok = match minus {
         ExprPatternKind::Call { callee, args } => {
             !cand.is_method
-                && match_callee(callee, cand, compiled, &mut bindings)
+                && match_callee(
+                    callee,
+                    cand,
+                    compiled,
+                    &mut bindings,
+                    symbol_graph,
+                    seed_canons,
+                )
                 && match_args(
                     args,
                     &cand.arg_texts,
@@ -708,10 +798,12 @@ fn rewrite_nested(
         {
             continue;
         }
-        let (mut bindings, remainders) = match match_candidate(minus, cand, compiled, reverse_map) {
-            Some(b) => b,
-            None => continue,
-        };
+        let empty_canons: HashMap<String, String> = HashMap::new();
+        let (mut bindings, remainders) =
+            match match_candidate(minus, cand, compiled, reverse_map, None, &empty_canons) {
+                Some(b) => b,
+                None => continue,
+            };
         for &(s, e) in &accepted {
             let overlap = cand.start < e && s < cand.end;
             let nested = (s <= cand.start && cand.end <= e) || (cand.start <= s && e <= cand.end);
@@ -752,6 +844,33 @@ fn build_reverse_map(compiled: &CompiledPattern) -> HashMap<String, String> {
     m
 }
 
+/// WI-16: true when `name` occurs as a bare ident token in `text`
+/// (backtick-quoted literals count — `` `Old` `` still names the symbol).
+fn mentions_symbol(text: &str, name: &str) -> bool {
+    if name.is_empty() || text.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i < text.len() {
+        if let Some(rest) = text[i..].strip_prefix(name) {
+            let before_ok = i == 0
+                || !text[..i]
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            let after_ok = rest
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    false
+}
+
 /// Match the callee path pattern against target segments. A declared
 /// metavariable binds the whole path text; a symbol name additionally requires
 /// full-path text equality with the seeded symbol path (exact syntactic
@@ -763,6 +882,8 @@ fn match_callee(
     cand: &Candidate<'_>,
     compiled: &CompiledPattern,
     bindings: &mut HashMap<String, String>,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
+    seed_canons: &HashMap<String, String>,
 ) -> bool {
     let reverse_map = build_reverse_map(compiled);
     // T145: a pattern callee carrying a real turbofish (`::<…>` on a
@@ -791,6 +912,18 @@ fn match_callee(
     // entry is treated as concrete (shouldn't happen).
     if let Some(orig) = reverse_map.get(callee) {
         if let Some(sym_path) = compiled.table.symbols.get(orig) {
+            // WI-16 resolved path: both seed and site resolve through the
+            // crate graph and must name the same definition. `qself`
+            // sites are opaque (never resolved).
+            if let (Some((graph, file)), Some(want_canon)) = (symbol_graph, seed_canons.get(orig)) {
+                if cand.qself.is_some() {
+                    return false;
+                }
+                match graph.resolve_call(file, cand.leading, &cand.callee_segments) {
+                    Some(got_canon) => return got_canon == *want_canon,
+                    None => return false,
+                }
+            }
             let want_last = sym_path.rsplit("::").next().unwrap_or(sym_path);
             let got_last = target_segments.last().map(|s| s.as_str()).unwrap_or("");
             if got_last != want_last {

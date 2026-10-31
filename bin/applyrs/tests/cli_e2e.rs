@@ -296,7 +296,7 @@ fn symbol_without_fallback_json_envelope() {
         v["error"]["reason"]
             .as_str()
             .unwrap()
-            .contains("no semantic environment in v0.1"),
+            .contains("resolves to no definition in this crate"),
         "got: {v}"
     );
     assert!(

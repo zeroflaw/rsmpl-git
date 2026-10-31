@@ -1054,7 +1054,7 @@ mod tests {
                 patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# symbol Old=crate::old_api\n# expr E\n- Old(E)\n+ crate::new_api(E)\n",
                 file: "fn a() {\n    crate::old_api(1);\n}\n",
                 code: "RSMPL_SYMBOL_CONFLICT",
-                reason: "symbol `Old` could not be resolved (no semantic environment in v0.1)",
+                reason: "resolves to no definition in this crate",
                 suggestion: Some("add `# fallback=syntax` to allow syntactic matching"),
             },
             // C14: `# symbol` in a general shape fails even with fallback

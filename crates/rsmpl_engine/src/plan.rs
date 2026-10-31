@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use rsmpl_patch::{Directive, ErrorCode, Hunk, Patch, Scope, StructuredError};
+use rsmpl_patch::{ErrorCode, Hunk, Patch, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
 
 use crate::capture::{paste_capture, CaptureStore, PasteTarget};
@@ -86,6 +86,9 @@ fn apply_inner(
         ),
         Hunk::Ordinary(_) => false,
     });
+    // WI-16: a bare `# symbol` hunk verifies against the crate graph,
+    // which needs the same workspace search as follow/orphans.
+    let patch_has_symbol = crate::plan_symbol::patch_has_symbol(patch);
     let mut states: HashMap<String, FileState> = HashMap::new();
     // Files that look like Rust but do not parse: the follow step applies
     // the `raw_mentions` tripwire (veto/skip when the text names `old`).
@@ -136,7 +139,7 @@ fn apply_inner(
             },
         );
     }
-    if patch_has_follow || patch_has_rename {
+    if patch_has_follow || patch_has_rename || patch_has_symbol {
         // Workspace file set: every other loaded `.rs` file is searchable.
         // Parsed files join `states` (empty edit lists below); unparseable
         // ones are recorded for the follow-step tripwire. Non-`.rs` files
@@ -165,6 +168,11 @@ fn apply_inner(
             }
         }
     }
+
+    // WI-16: crate graph over the pre-image snapshot (only when a
+    // bare `# symbol` hunk needs verification; zero cost otherwise).
+    let symbol_graph: Option<crate::CrateGraph> =
+        patch_has_symbol.then(|| crate::plan_symbol::build_symbol_graph(&states));
 
     // T348: every section shares original coordinates — validate all
     // sections per path, not just the first (duplicate-path sections
@@ -356,6 +364,7 @@ fn apply_inner(
                         follow_skipped_details: Vec::new(),
                         orphans: Vec::new(),
                         semantics: RuleSemantics::ReparseOnly,
+                        symbol: None,
                     },
                 ));
             }
@@ -401,8 +410,16 @@ fn apply_inner(
                         let state = states.get(path).expect("file state");
                         let edits = file_edits.get_mut(path).expect("file state");
                         // Definition matching only; follow runs below.
-                        apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
-                            .map_err(|e| e.with_file(path))?
+                        apply_rsmpl_hunk(
+                            state,
+                            path,
+                            rh,
+                            &compiled,
+                            &captures,
+                            edits,
+                            symbol_graph.as_ref(),
+                        )
+                        .map_err(|e| e.with_file(path))?
                     };
                     // WI-10b drift fallback (SPEC 10.8): a stale cited range
                     // retries once file-scoped, anchored by the hunk's body
@@ -412,9 +429,14 @@ fn apply_inner(
                     // anything else keeps the original zero-match error.
                     if found == 0 && crate::drift::is_drift_eligible(rh, &compiled) {
                         let state = states.get(path).expect("file state");
-                        if let Some(outcome) =
-                            try_drift_apply(state, path, rh, &compiled, &captures)
-                        {
+                        if let Some(outcome) = crate::drift::try_drift_apply(
+                            state,
+                            path,
+                            rh,
+                            &compiled,
+                            &captures,
+                            symbol_graph.as_ref(),
+                        ) {
                             let edits = file_edits.get_mut(path).expect("file state");
                             edits.extend(outcome.edits);
                             found = 1;
@@ -522,7 +544,14 @@ fn apply_inner(
                     // by the probe itself.
                     let wide = if found == 0 && !rh.is_optional() && rh.scope() != Scope::File {
                         let state = states.get(path).expect("file state");
-                        probe_whole_file(state, path, rh, &compiled, &captures)
+                        crate::drift::probe_whole_file(
+                            state,
+                            path,
+                            rh,
+                            &compiled,
+                            &captures,
+                            symbol_graph.as_ref(),
+                        )
                     } else {
                         None
                     };
@@ -714,6 +743,7 @@ fn apply_inner(
                             follow_skipped_details: follow_details,
                             orphans,
                             semantics: provisional,
+                            symbol: crate::plan_symbol::symbol_mode(rh, &compiled),
                         },
                     ));
                     // WI-6b1: one follow-only entry per non-definition file
@@ -741,6 +771,7 @@ fn apply_inner(
                                 follow_skipped_details: Vec::new(),
                                 orphans: Vec::new(),
                                 semantics: RuleSemantics::ReparseOnly,
+                                symbol: None,
                             },
                         ));
                     }
@@ -995,13 +1026,14 @@ fn assoc_orphans(
     crate::use_graph_assoc::collect_assoc_orphans(&refs, &domain, &filter, path, &renamed)
 }
 
-fn apply_rsmpl_hunk(
+pub(crate) fn apply_rsmpl_hunk(
     state: &FileState,
     path: &str,
     rh: &rsmpl_patch::RsmplHunk,
     compiled: &rsmpl_pattern::CompiledPattern,
     captures: &CaptureStore,
     edits: &mut Vec<TextEdit>,
+    symbol_graph: Option<&crate::CrateGraph>,
 ) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
     let rule = rh.rule_name();
     let parsed = state.parsed.as_ref().expect(
@@ -1033,13 +1065,14 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
-        PatternKind::Expr { .. } => matcher_expr::apply_expr_hunk(
+        PatternKind::Expr { .. } => matcher_expr::apply_expr_hunk_with_graph(
             parsed,
             &state.original,
             &state.index,
             rh,
             compiled,
             edits,
+            symbol_graph.map(|g| (g, path)),
         ),
         PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
             parsed,
@@ -1217,102 +1250,8 @@ fn apply_rsmpl_hunk(
     }
 }
 
-/// WI-10b drift retry (SPEC 10.8): re-run the same matcher with scope
-/// overridden to `File`, keeping the edits. Succeeds only when the
-/// file-wide run yields exactly one match. Anchored tier: the hunk's body
-/// context anchors (leading/trailing ` ` lines in order, see `drift`) must
-/// also agree with the single candidate. Pattern-anchored tier (WI-4): a
-/// terse hunk with no anchors drifts on uniqueness + disjointness alone.
-/// Probe errors, zero matches, multiple matches, disjointness failure, or
-/// an unsatisfied anchored candidate all yield `None` — the caller keeps
-/// the original zero-match error (never a too-many or a guess).
-fn try_drift_apply(
-    state: &FileState,
-    path: &str,
-    rh: &rsmpl_patch::RsmplHunk,
-    compiled: &rsmpl_pattern::CompiledPattern,
-    captures: &CaptureStore,
-) -> Option<crate::drift::DriftOutcome> {
-    let (leading, trailing) = crate::drift::drift_anchors(rh);
-    let mut wide_hunk = rh.clone();
-    wide_hunk.directives.push(Directive::Scope(Scope::File));
-    let mut probe_edits = Vec::new();
-    let (n, bindings) = apply_rsmpl_hunk(
-        state,
-        path,
-        &wide_hunk,
-        compiled,
-        captures,
-        &mut probe_edits,
-    )
-    .ok()?;
-    if n != 1 {
-        return None;
-    }
-    let spans = edit_spans(&state.index, &probe_edits);
-    let actual = crate::drift::bounding_box(&spans)?;
-    // SPEC 10.8: the stale range must share no line with the drifted
-    // item — an overlapping range is a scope/filter statement about
-    // that item (SPEC 17.3), not line drift.
-    let cited = (
-        rh.header.old_start,
-        rh.header.old_start + rh.header.old_len.saturating_sub(1),
-    );
-    let region = state
-        .parsed
-        .as_ref()
-        .and_then(|p| crate::drift::enclosing_top_item_span(p, actual))
-        .unwrap_or(actual);
-    if !crate::drift::cited_is_disjoint(cited, region) {
-        return None;
-    }
-    let file_lines: Vec<&str> = state.original.lines().collect();
-    if !crate::drift::anchors_satisfied(&file_lines, actual, &leading, &trailing) {
-        return None;
-    }
-    Some(crate::drift::DriftOutcome {
-        edits: probe_edits,
-        bindings,
-        actual,
-    })
-}
-
-/// T62 whole-file probe: re-run the same matcher with scope overridden to
-/// `File` and count matches without keeping edits.
-///
-/// Returns `None` when the probe itself errors (keep the original error's
-/// generic hint) or the hunk kind is not probe-eligible: insertions use
-/// anchors rather than pattern search, and `Raw` shapes never reach here
-/// (rejected before dispatch). The probe fires only on the zero-match
-/// path, so the happy path pays no extra matching cost.
-fn probe_whole_file(
-    state: &FileState,
-    path: &str,
-    rh: &rsmpl_patch::RsmplHunk,
-    compiled: &rsmpl_pattern::CompiledPattern,
-    captures: &CaptureStore,
-) -> Option<usize> {
-    if matches!(
-        &compiled.kind,
-        PatternKind::Insertion { .. } | PatternKind::Raw { .. }
-    ) {
-        return None;
-    }
-    let mut wide_hunk = rh.clone();
-    wide_hunk.directives.push(Directive::Scope(Scope::File));
-    let mut probe_edits = Vec::new();
-    apply_rsmpl_hunk(
-        state,
-        path,
-        &wide_hunk,
-        compiled,
-        captures,
-        &mut probe_edits,
-    )
-    .ok()
-    .map(|(n, _)| n)
-}
-
+/// WI-10b drift retry + T62 probe live in `drift.rs` (D5 sibling); the
+/// planner calls back in via `apply_rsmpl_hunk` above.
 pub(crate) fn range_err(rule: &str, file: &str, line: u32) -> StructuredError {
     StructuredError::new(
         ErrorCode::RangeConflict,

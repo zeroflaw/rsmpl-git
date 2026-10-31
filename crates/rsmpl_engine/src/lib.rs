@@ -10,6 +10,7 @@
 
 mod canonical_tree;
 mod capture;
+mod crate_graph;
 mod drift;
 mod edits;
 mod follow_reasons;
@@ -36,10 +37,12 @@ mod matcher_use;
 mod matcher_value;
 mod ordinary;
 mod plan;
+mod plan_symbol;
 mod postcheck;
 mod postcheck_assoc;
 mod postcheck_attr;
 mod postcheck_namehole;
+mod postcheck_synth;
 mod suggest;
 mod use_graph;
 mod use_graph_anchor;
@@ -55,6 +58,7 @@ use rsmpl_patch::Patch;
 use rsmpl_patch::StructuredError;
 
 pub use canonical_tree::canonicalize_with_tree;
+pub use crate_graph::CrateGraph;
 pub use edits::{apply_edits, TextEdit};
 pub use lines::LineIndex;
 pub use ordinary::ordinary_hunk_edits;
@@ -121,6 +125,10 @@ pub struct RuleReport {
     pub orphans: Vec<OrphanReport>,
     /// WI-1b: which postcondition verified this rule (SPEC 24.6, D.2).
     pub semantics: RuleSemantics,
+    /// WI-16: symbol resolution mode (`"resolved"` when a no-fallback
+    /// `# symbol` hunk verified against the crate graph, `"syntax"`
+    /// when `# fallback=syntax` carried it; absent otherwise).
+    pub symbol: Option<String>,
 }
 
 /// WI-2 structured skip evidence (SPEC D.2, 14.8): the file/line the

@@ -182,6 +182,100 @@ pub(crate) fn cited_is_disjoint(cited: (u32, u32), region: (u32, u32)) -> bool {
     cited.1 < region.0 || cited.0 > region.1
 }
 
+/// WI-10b drift retry (SPEC 10.8): re-run the same matcher with scope
+/// overridden to `File`, keeping the edits. Moved from `plan.rs` per
+/// the D5 size gate (the planner calls back in via
+/// `crate::plan::apply_rsmpl_hunk`).
+pub(crate) fn try_drift_apply(
+    state: &crate::lines::FileState,
+    path: &str,
+    rh: &RsmplHunk,
+    compiled: &CompiledPattern,
+    captures: &crate::capture::CaptureStore,
+    symbol_graph: Option<&crate::CrateGraph>,
+) -> Option<DriftOutcome> {
+    let (leading, trailing) = drift_anchors(rh);
+    let mut wide_hunk = rh.clone();
+    wide_hunk
+        .directives
+        .push(rsmpl_patch::Directive::Scope(Scope::File));
+    let mut probe_edits = Vec::new();
+    let (n, bindings) = crate::plan::apply_rsmpl_hunk(
+        state,
+        path,
+        &wide_hunk,
+        compiled,
+        captures,
+        &mut probe_edits,
+        symbol_graph,
+    )
+    .ok()?;
+    if n != 1 {
+        return None;
+    }
+    let spans = crate::edits::edit_spans(&state.index, &probe_edits);
+    let actual = bounding_box(&spans)?;
+    // SPEC 10.8: the stale range must share no line with the drifted
+    // item — an overlapping range is a scope/filter statement about
+    // that item (SPEC 17.3), not line drift.
+    let cited = (
+        rh.header.old_start,
+        rh.header.old_start + rh.header.old_len.saturating_sub(1),
+    );
+    let region = state
+        .parsed
+        .as_ref()
+        .and_then(|p| enclosing_top_item_span(p, actual))
+        .unwrap_or(actual);
+    if !cited_is_disjoint(cited, region) {
+        return None;
+    }
+    let file_lines: Vec<&str> = state.original.lines().collect();
+    if !anchors_satisfied(&file_lines, actual, &leading, &trailing) {
+        return None;
+    }
+    Some(DriftOutcome {
+        edits: probe_edits,
+        bindings,
+        actual,
+    })
+}
+
+/// T62 whole-file probe: re-run the same matcher with scope overridden to
+/// `File` and count matches without keeping edits. Moved from `plan.rs`
+/// per the D5 size gate.
+pub(crate) fn probe_whole_file(
+    state: &crate::lines::FileState,
+    path: &str,
+    rh: &RsmplHunk,
+    compiled: &CompiledPattern,
+    captures: &crate::capture::CaptureStore,
+    symbol_graph: Option<&crate::CrateGraph>,
+) -> Option<usize> {
+    if matches!(
+        &compiled.kind,
+        PatternKind::Insertion { .. } | PatternKind::Raw { .. }
+    ) {
+        return None;
+    }
+    let mut wide_hunk = rh.clone();
+    wide_hunk
+        .directives
+        .push(rsmpl_patch::Directive::Scope(Scope::File));
+    let mut probe_edits = Vec::new();
+    crate::plan::apply_rsmpl_hunk(
+        state,
+        path,
+        &wide_hunk,
+        compiled,
+        captures,
+        &mut probe_edits,
+        symbol_graph,
+    )
+    .ok()
+    .map(|(n, _)| n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
