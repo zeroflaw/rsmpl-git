@@ -49,15 +49,20 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
-    // Compressing selections (T359 `&`-receiver strip; T375 guard
-    // demoted the T341/T349 single-rename rows below to zero semantic
-    // — their hunks cost more than the ordinary lines — but the rows
-    // stay as convert + round-trip regression coverage).
+    // Compressing selections (T359 `&`-receiver strip; WI-19 precision
+    // guard re-promoted the demoted single-rename rows — definition
+    // shapes fire at a bounded cost — while genuinely sweep-shaped
+    // singles stay ordinary; the rows below stay as convert +
+    // round-trip regression coverage either way).
     Case {
         commit: "7cfa9f0b625d351c83cfc7366664fb60d913f91b",
         rev: None,
         root: false,
-        expect_sem: 0,
+        // WI-19: five single-site fn renames (long names, each hunk
+        // costlier than its ordinary hunk) now clear the precision
+        // guard — definition shapes fire at a bounded cost, strict
+        // T375 no longer demotes them to zero semantic.
+        expect_sem: 5,
     },
     Case {
         commit: "b57d0f2c3a77a18326dc2612b0eb8c2e28f229bb",
@@ -71,15 +76,17 @@ const CASES: &[Case] = &[
         // byte-identical round-trip).
         // T466: +1 nested `impl CliError::inspect_usage` removal (leading
         // blank rides ordinary ahead of the shrunk semantic range).
-        expect_sem: 9,
+        // WI-19: +1 move-cut hunk (`- I` collection cut, move family
+        // under the precision guard).
+        expect_sem: 10,
     },
     Case {
         commit: "12d70c6b4e3d027f22f52316243f05989afd6d55",
         rev: None,
         root: false,
-        // T375: four long-name test-fn renames, each semantic hunk
-        // costlier than its ordinary hunk — zero semantic by design.
-        expect_sem: 0,
+        // WI-19: four single-site test-fn renames now clear the precision
+        // guard (were zero semantic under strict T375).
+        expect_sem: 4,
     },
     // T359 `&`-receiver strip: 5 files of `&R.join("")` -> `R` sites
     // (bare arg-position lines + `write(...)`-nested) compress to 5 hunks.

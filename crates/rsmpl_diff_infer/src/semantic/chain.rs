@@ -598,17 +598,21 @@ pub(crate) fn compress_section(
     // T411: old-side changed lines for the line-aware opaque veto.
     let changed = crate::totality::changed_old_lines(section);
     if whole && minuses.len() == 1 {
-        // Single pair: fn/item rename only (a lone call rewrite has
-        // no token win over the ordinary hunk; a lone heterogeneous
-        // fn header likewise costs more as a slot hunk than ordinary).
+        // Single pair: fn/item rename under the precision guard
+        // (`guard_for("item_rename") == Precision`: the engine
+        // re-verifies the plus at its span, so a bounded byte cost
+        // prices the proof, not the win). A lone call rewrite stays
+        // strict T375 below; a lone heterogeneous fn header likewise
+        // (slot sweep covers the multi-site case).
         if let Some(rename) =
             super::try_item_rename(minuses[0], pluses[0], path, file_old, &changed, used_rules)
         {
+            debug_assert_eq!(super::guard_for("item_rename"), super::Guard::Precision);
             // WI-7a: rename sections re-emit under the preserved
-            // prelude; the T375 guard compares the final bytes.
+            // prelude; the precision guard compares the final bytes.
             if let Some(prelude) = &rename_prelude {
                 if let Some(final_text) = reheader_rename(&rename, prelude) {
-                    if final_text.len() < section.len() {
+                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
                         push_section_prov(
                             prov,
                             &final_text,
@@ -626,7 +630,7 @@ pub(crate) fn compress_section(
                 } else {
                     used_rules.truncate(checkpoint);
                 }
-            } else if rename.len() < section.len() {
+            } else if rename.len() <= section.len() + super::PRECISION_GUARD {
                 push_section_prov(
                     prov,
                     &rename,
@@ -644,8 +648,8 @@ pub(crate) fn compress_section(
             }
         }
         // WI-12 slice 1: single-definition evolution under the precision
-        // guard (`semantic <= ordinary + 16`) — the only N=1 shape the
-        // pair chain owns. Strict T375 would price every lone RHS edit
+        // guard (`semantic <= ordinary + 16`) — beside the item-rename
+        // single above. Strict T375 would price every lone RHS edit
         // above its ordinary hunk; the guard prices the proof instead.
         let evo_checkpoint = used_rules.len();
         if let Some((evo, detector)) = super::try_definition_evolution_sweep(
@@ -866,6 +870,55 @@ pub(crate) fn compress_section(
             return Some(part);
         } else {
             used_rules.truncate(part_checkpoint);
+        }
+    }
+    // WI-19 partial partition: the all-or-nothing path above declines
+    // mixed sections (one unclaimable pair vetoes); when ≥1 hunk is
+    // fully claimable the section still compresses hunk by hunk with
+    // the rest left ordinary verbatim in the same section (per-hunk
+    // ranges are disjoint, SPEC 10.6). Hunk atomicity is kept: a mixed
+    // native hunk stays ordinary whole (the per-hunk fallback below
+    // owns it). Scaled precision guard (`semantic <= ordinary + 16 *
+    // claimed`, `guard_for` Precision for `item_rename`); provenance
+    // shape as above.
+    let partial_checkpoint = used_rules.len();
+    if let Some((partial, n_claimed)) =
+        super::partial::try_partial_partition_section(section, path, file_old, used_rules)
+    {
+        let allow = super::PRECISION_GUARD.saturating_mul(n_claimed.max(1));
+        if let Some(prelude) = &rename_prelude {
+            if let Some(final_text) = reheader_rename(&partial, prelude) {
+                if final_text.len() <= section.len() + allow {
+                    push_section_prov(
+                        prov,
+                        &final_text,
+                        section,
+                        path,
+                        "item_rename",
+                        &changed,
+                        file_old,
+                        partial_checkpoint,
+                        used_rules,
+                    );
+                    return Some(final_text);
+                }
+            }
+            used_rules.truncate(partial_checkpoint);
+        } else if partial.len() <= section.len() + allow {
+            push_section_prov(
+                prov,
+                &partial,
+                section,
+                path,
+                "item_rename",
+                &changed,
+                file_old,
+                partial_checkpoint,
+                used_rules,
+            );
+            return Some(partial);
+        } else {
+            used_rules.truncate(partial_checkpoint);
         }
     }
     let mut verb_fired: Vec<(String, &'static str)> = Vec::new();
@@ -1331,22 +1384,31 @@ mod tests {
     }
 
     #[test]
-    fn partition_section_declines_tiny_structs() {
-        // -U0 tiny structs: per-pair semantic overhead beats the shared
-        // header saving, so section T375 declines (per-hunk singles lose
-        // too) — the section stays ordinary.
+    fn partition_section_fires_tiny_structs_under_precision() {
+        // WI-19: -U0 tiny structs no longer decline under strict T375 —
+        // definition-shape singles clear the scaled precision guard
+        // (`semantic <= ordinary + 16 * claimed`). Full partition still
+        // declines (strict), partial fires with the same bytes.
         let tiny = "struct Old1 {\n    x: i32,\n}\nstruct Old2 {\n    x: i32,\n}\nstruct Old3 {\n    x: i32,\n}\n";
         let section = "diff --git a/g.rs b/g.rs\n--- a/g.rs\n+++ b/g.rs\n@@ -1 +1 @@\n-struct Old1 {\n+struct New1 {\n@@ -4 +4 @@\n-struct Old2 {\n+struct New2 {\n@@ -7 +7 @@\n-struct Old3 {\n+struct New3 {\n";
         let mut pre = HashMap::new();
         pre.insert("g.rs".to_string(), tiny.to_string());
         let mut used = Vec::new();
         let mut prov = Vec::new();
-        assert!(
-            compress_section(section, &mut used, &pre, &mut prov).is_none(),
-            "T375 must decline"
+        let out = compress_section(section, &mut used, &pre, &mut prov)
+            .expect("precision guard must fire");
+        assert_eq!(out.matches("rule=").count(), 3, "got:\n{out}");
+        assert!(prov.iter().all(|p| p.detector == "item_rename"), "{prov:?}");
+        let mut files = pre.clone();
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["g.rs"],
+            "struct New1 {\n    x: i32,\n}\nstruct New2 {\n    x: i32,\n}\nstruct New3 {\n    x: i32,\n}\n"
         );
-        assert!(used.is_empty());
-        assert!(prov.is_empty());
     }
 
     #[test]
@@ -1354,6 +1416,8 @@ mod tests {
         // One hunk, three pairs: two renames plus one ordinary edit — the
         // edit vetoes partition, the chain declines hetero pairs, and the
         // per-hunk fallback declines the mixed hunk: fully ordinary.
+        // WI-19 partial keeps this posture: a single mixed hunk never
+        // splits (pinned at the function level below too).
         let pre = "const OLD_A: usize = 1001;\nconst OLD_B: usize = 1002;\nlet x = 1;\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1,3 @@\n-const OLD_A: usize = 1001;\n-const OLD_B: usize = 1002;\n-let x = 1;\n+const NEW_A: usize = 1001;\n+const NEW_B: usize = 1002;\n+let x = 2;\n";
         let mut files = HashMap::new();
@@ -1363,5 +1427,15 @@ mod tests {
         assert!(compress_section(section, &mut used, &files, &mut prov).is_none());
         assert!(used.is_empty());
         assert!(prov.is_empty());
+        // Function level: the same single mixed hunk declines partial too.
+        let mut used = Vec::new();
+        assert!(super::super::partial::try_partial_partition_section(
+            section,
+            "f.rs",
+            Some(pre),
+            &mut used
+        )
+        .is_none());
+        assert!(used.is_empty());
     }
 }

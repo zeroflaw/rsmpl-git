@@ -333,7 +333,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "14-item-rename",
-        "hetero: 9 pairs re-infer as 1 semantic + 7 ordinary (WI-8 partition declines: the impl Printable-for-Old double-delta pair defeats atomicity)",
+        "partial (WI-19): struct/enum/const/trait re-infer as precision singles; mod+Helper hunk stays atomic-ordinary (nested item unclaimable), impl headers stay ordinary (no single-impl detector, slice 2), double-delta ordinary",
     ),
     (
         "18-general-expr",
@@ -354,7 +354,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "45-macro-rules-rename",
-        "t375: single def + single use re-infer ordinary each",
+        "partial (WI-19): def re-infers as precision item_rename single, use stays ordinary (no single-use macro detector, slice 2); S groups them with follow",
     ),
     (
         "46-fn-follow",
@@ -374,7 +374,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "51-drift-stale-range",
-        "t375: drift-applied single-site rename re-infers as terse ordinary (drift is apply-only; S′ cites the actual range)",
+        "partial (WI-19): drift-applied single-site rename re-infers as precision item_rename single at the actual range; S cites the stale range (drift is apply-only evidence, S′ cites actual)",
     ),
     (
         "52-macro-verbatim",

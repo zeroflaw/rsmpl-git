@@ -7134,6 +7134,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   guard applies (the combined section must beat the ordinary section);
   a losing partition falls back to the per-hunk path. Detector name
   `item_rename`.
+- Partial partition (WI-19): the all-or-nothing gate above is kept
+  per native hunk, not per section. When ≥ 1 hunk is fully claimable
+  (every pair in it a single-pair item rename under the same
+  duplicate/totality gates) and ≥ 1 hunk is not, the section emits the
+  claimed hunks as semantic per-pair hunks and keeps the rest ordinary
+  verbatim in the same file section (hunk ranges are disjoint, so
+  mixing is sound under Section 10.6). A single mixed native hunk
+  never splits — it stays ordinary whole, owned by the per-hunk
+  fallback. Guard is the scaled precision guard (semantic ≤ ordinary
+  + 16 × claimed pairs). Detector name `item_rename`.
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/
@@ -8125,16 +8135,30 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —
-`diffrs` never emits an unparseable patch. Token-win guard (T375):
-a semantic hunk is kept only when byte-smaller (bytes proxy tokens)
-than the ordinary hunk(s) it replaces — whole-section candidates
-against the whole section, per-hunk candidates against their hunk
-(prelude shared either way; ties stay ordinary); a losing shape
-falls back to ordinary (whole-section losers still retry per hunk),
-so short singles and tiny sweeps never cost more than the
-passthrough (no fixed line threshold — the comparison is bytes, so a
-vetoed move minus side may still ride a `delete_items` sweep firing
-on the same minus run). Every output therefore
+`diffrs` never emits an unparseable patch. Two byte guards price
+competing risks (WI-19, one decision point:
+`rsmpl_diff_infer::semantic::guard_for`). Sweep shapes (calls,
+methods, `general_expr`, `control_template`, verbatim, macro
+interiors — any minus pattern that could match wider than the diff)
+keep strict T375: a semantic hunk is kept only when byte-smaller
+(bytes proxy tokens, and bytes proxy over-match risk) than the
+ordinary hunk(s) it replaces — whole-section candidates against the
+whole section, per-hunk candidates against their hunk (prelude shared
+either way; ties stay ordinary). Definition shapes (`item_rename`,
+`member_rename`, `assoc_rename`, `macro_rules_rename`,
+slot/sig/header evolution singles, definition evolution/addition,
+`delete`, `move`, `mod_rename`, `item_intent` — every detector whose
+plus the WI-1 postcondition re-verifies at its spans) fire under the
+precision guard: semantic ≤ ordinary + 16 bytes (per hunk; partial
+partition scales the allowance by claimed pairs, `+ 16 × claimed`).
+The 16-byte constant is the price of the `diff --git` + `@@ … rule=`
++ pattern lines the ordinary form does not carry — a pinned SPEC
+constant, never a tunable discovered in code. A losing shape falls
+back to ordinary (whole-section losers still retry per hunk), so
+sweep singles and tiny sweeps never cost more than the passthrough
+(no fixed line threshold — the comparison is bytes, so a vetoed move
+minus side may still ride a `delete_items` sweep firing on the same
+minus run). Every output therefore
 parses by construction; the pinned shapes additionally round-trip
 through `applyrs --check` against the pre-change tree. Semantic
 validity beyond the pinned shapes is best-effort: verify with the
@@ -8277,11 +8301,13 @@ stripping is deliberate. Equalities per origin close the contract:
   `canonicalize_with_tree(S′) == canonicalize_with_tree(S)` under the
   pre-image, and one further iteration is a fixed point
   (`S″ == S′` byte-identical).
-- Semantic → native → semantic, single-site demoted by the T375
-  byte-win guard (defined equality, not an exclusion): the tree legs
-  hold and one further iteration is a fixed point (`S″ == S′`
-  byte-identical); no canonical equality is owed, since the inferred
-  side is deliberately ordinary.
+- Semantic → native → semantic, single-site under the WI-19 guards
+  (defined equality, not an exclusion): sweep singles stay ordinary
+  under strict T375 while definition-shape singles re-infer under the
+  precision guard — either way the tree legs hold and one further
+  iteration is a fixed point (`S″ == S′` byte-identical); no canonical
+  equality is owed where the inferred side is deliberately ordinary
+  or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (41), all diffrs fixtures
 (60), all example benches, plus the history_e2e pins. Out of scope
@@ -8292,19 +8318,23 @@ cycle must still be tree-lossless).
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes under the defined
 single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
-`19`, `21`, `22`); heterogeneous sites no template fires on stay
+`19`, `21`, `22` — definition-shape singles among them fire under
+the WI-19 precision guard wherever the single-pair gates admit them;
+impl/return-carrying/vis-carrying fn singles and def-only member
+singles still need their slice-2 detectors); heterogeneous sites no template fires on stay
   ordinary (`12` header+let mixed single block — v1 fuses pure let
   runs only (WI-5d `single_block`); mixed runs stay ordinary as a
   permanent non-goal — no sub-hunk partition and no header+body joint
   shape, so the mixed re-diff stays mixed by construction (WI-5d-follow
   probe: 0/2473); `14` divergent single-file renames whose
-  deltas never share one intent — 8 of 9 pairs are partition-claimable
-  but the `impl Printable for Old` → `impl Labeled for New` double-delta
-  pair defeats pair-partition atomicity (WI-8), so the section stays
-  ordinary apart from the lone per-hunk const single that still wins
-  its own byte-win guard (1 semantic + 7 ordinary); all-single-delta
+  deltas never share one intent — struct/enum/const/trait re-infer as
+  WI-19 precision singles while the `mod`+nested-`Helper` hunk stays
+  atomic-ordinary, `impl` headers stay ordinary (no single-impl
+  detector yet), and the `impl Printable for Old` →
+  `impl Labeled for New` double-delta pair stays ordinary (4 semantic
+  + 5 ordinary under WI-19 partial partition; all-single-delta
   multi-rename sections compress pair by pair instead (diffrs fixture
-  `98-partition-fires`, canonically lossless), `30` trait-side-only decl/def
+  `98-partition-fires`, canonically lossless)), `30` trait-side-only decl/def
   pairs (ordinary by design — no impl side shares the intent; mixed
   trait+impl classes raise via `trait_method_rename`, WI-4b); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only

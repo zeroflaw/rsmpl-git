@@ -417,24 +417,27 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
-    } else if name == "99-partition-atomicity-stays-ordinary" {
-        // WI-8 atomicity: 7 renames plus one ordinary field edit stay
-        // fully ordinary (never half-semantic).
-        assert!(
-            !semantic.contains("rule="),
-            "mixed section must stay ordinary, got: {semantic}"
+    } else if name == "99-partition-partial-mixed" {
+        // WI-19 partial partition: 6 rename hunks compress (definition
+        // shapes under the precision guard) while the mixed hunk
+        // (`struct OldA` rename + `x: i32` → `u32` type edit in one
+        // native hunk) stays ordinary whole — hunk atomicity kept,
+        // section never half-claims within a hunk.
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            6,
+            "six rename hunks must raise, got: {semantic}"
         );
         assert!(
-            semantic.contains("+    x: u32,\n"),
-            "edit line must be preserved, got: {semantic}"
+            semantic.contains("- struct OldB\n"),
+            "rename hunks must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("-struct OldA {\n-    x: i32,\n+struct NewA {\n+    x: u32,\n"),
+            "mixed hunk must stay ordinary verbatim, got: {semantic}"
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
-        let normalized = normalize_native(native_input);
-        assert!(
-            semantic == normalized,
-            "[{name}] ordinary passthrough must equal normalized native"
-        );
     } else if name == "100-field-rename-fires" {
         // WI-9b: 1 field definition + 5 use lines compress to the
         // definition hunk with `# follow=uses`; the harness checks the

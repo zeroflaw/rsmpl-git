@@ -447,8 +447,10 @@ pub(crate) fn compress_balanced_pair_body(
     }
     let checkpoint = used_rules.len();
     // WI-12 slice 1: single-definition evolution under the precision
-    // guard (`body <= hunk + 16`). Singles otherwise stay ordinary
-    // (T375) except whole-arg permutation (WI-6 slice 2 posture).
+    // guard (`body <= hunk + 16`). WI-19: single item renames ride the
+    // same guard (`guard_for("item_rename") == Precision`). Other
+    // singles stay ordinary (T375) except whole-arg permutation (WI-6
+    // slice 2 posture).
     if minuses.len() == 1 {
         if let Some((evo, detector)) = semantic::try_definition_evolution_sweep(
             minuses, pluses, path, file_old, changed, used_rules,
@@ -461,10 +463,11 @@ pub(crate) fn compress_balanced_pair_body(
         }
     }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
-        // Single pairs stay ordinary (T375) except whole-arg permutation:
-        // subterm-counted multi-site swaps owe canonical-losslessness,
-        // and the ordinary view cannot prove the permutation. Every other
-        // single-pair posture is untouched (WI-6 slice 2).
+        // Single pairs: item rename under the precision guard (the
+        // engine re-verifies the plus at its span), whole-arg
+        // permutation under strict T375 (subterm-counted multi-site
+        // swaps owe canonical-losslessness). Every other single-pair
+        // posture is untouched (WI-6 slice 2).
         semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
             .map(|f| (f, "item_rename"))
             .or_else(|| {
@@ -477,7 +480,20 @@ pub(crate) fn compress_balanced_pair_body(
     match full {
         Some((f, detector)) => {
             let body = f.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() < hunk_len {
+            // WI-19: singles consult `guard_for` (precision for
+            // definition shapes, strict for sweeps); multi-pair
+            // sections keep strict T375 exactly as before.
+            let wins = if minuses.len() == 1 {
+                match semantic::guard_for(detector) {
+                    semantic::Guard::Precision => {
+                        body.len() <= hunk_len + semantic::PRECISION_GUARD
+                    }
+                    semantic::Guard::Strict => body.len() < hunk_len,
+                }
+            } else {
+                body.len() < hunk_len
+            };
+            if wins {
                 Some((body.to_string(), detector))
             } else {
                 used_rules.truncate(checkpoint);
@@ -494,6 +510,28 @@ pub(crate) fn compress_balanced_pair_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn section(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+    }
 
     const TEXT_SECTION: &str = "diff --git a/f.rs b/f.rs\nindex 1..2 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
     const TEXT_STRIPPED: &str = "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-a\n+b\n";
@@ -1390,5 +1428,49 @@ mod tests {
             out.rsmpl
         );
         rsmpl_patch::parse_patch(&out.rsmpl).expect("verbatim let hunk must parse");
+    }
+    #[test]
+    fn single_item_rename_fires_under_precision_guard() {
+        // WI-19: a lone tiny rename costs more than its ordinary hunk
+        // (strict T375 declines) but clears `ordinary + 16`.
+        let raw = section("f.rs", "@@ -1 +1 @@\n-struct Old {\n+struct New {\n");
+        let pre = pre_map(&[("f.rs", "struct Old {\n}\n")]);
+        let out = semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("single rename must fire under precision guard");
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+        assert!(out.contains("+ struct New"), "got:\n{out}");
+        validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn single_sweep_stays_strict_t375() {
+        // WI-19: a lone sweep-shaped edit keeps strict T375 even when it
+        // would clear the precision bound — bytes proxy over-match risk.
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(a);\n+    foo(a, 1);\n");
+        let pre = pre_map(&[("f.rs", "fn m() {\n    foo(a);\n}\n")]);
+        assert!(
+            semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+            "lone call-wrap must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn single_item_rename_overhead_is_bounded() {
+        // WI-19: rule names are positional (`rN`, SPEC 9.3 diet), so a
+        // single item rename's overhead over its ordinary hunk is the
+        // header delta plus terse-pattern savings — bounded by a small
+        // constant, far inside the precision backstop. Pin the shape:
+        // long idents must not change the verdict (fires either way).
+        let old = format!("Old{}", "A".repeat(60));
+        let new = format!("New{}", "A".repeat(60));
+        let raw = section(
+            "f.rs",
+            &format!("@@ -1 +1 @@\n-struct {old} {{\n+struct {new} {{\n"),
+        );
+        let pre = pre_map(&[("f.rs", &format!("struct {old} {{\n}}\n"))]);
+        let out = semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("long-name single must fire like the short one");
+        assert!(out.contains(&format!("- struct {old}")), "got:\n{out}");
+        validated_live(&out, &pre);
     }
 }

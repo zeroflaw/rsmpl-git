@@ -30,6 +30,7 @@ mod deletes;
 pub(crate) mod general_expr;
 mod generalized;
 pub(crate) mod group;
+pub(crate) mod guard;
 pub(crate) mod header_evolution;
 mod literal;
 mod literal_frame;
@@ -49,6 +50,7 @@ mod move_pair_evolve;
 mod move_parts;
 mod move_scan;
 mod moves;
+pub(crate) mod partial;
 mod pat_template;
 mod paths;
 mod peel;
@@ -101,6 +103,8 @@ pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
 pub(crate) use single_block::try_single_block_sweep;
+
+pub(crate) use guard::{guard_for, Guard};
 
 /// Try to compress binary-stripped `sections` (one full
 /// `diff --git …` section each) into semantic hunks. Returns the
