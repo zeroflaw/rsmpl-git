@@ -116,10 +116,12 @@ tree (T361: `--check` is blind to sweep over-match) — failing
 conversions become pins there.
 
 `--format` picks text vs JSON; `--diff-max-lines N` (`0` omits) trims the
-preview only — `--check`/apply/`--output` always use the full 0-context
-lowering (still appliable via `git apply --unidiff-zero`). Exit `0` clean,
+preview only — `--check`/apply always use the full 0-context lowering
+(still appliable via `git apply --unidiff-zero`); `--context N` renders
+the reported/`--output` diff with N context lines so it applies under
+vanilla `git apply` (same post-tree either way). Exit `0` clean,
 `2` patch error (`RSMPL_*`/`GIT_*` + suggestion). Full envelope contract:
-SPEC D.2/D.2.3; history: SPEC D.1.
+SPEC D.2/D.2.2/D.2.3; history: SPEC D.1.
 
 ## Token savings
 

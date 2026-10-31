@@ -108,10 +108,73 @@ fn main() {
 }
 
 /// Re-exec the sibling `binary` with `rest`, propagating its exit code.
+///
+/// WI-10a handshake: unless the sibling path came from a `GITRS_*_BIN`
+/// test-double override (which skips the check), the sibling's
+/// `--version` must equal this dispatcher's `CARGO_PKG_VERSION` before
+/// re-exec. A skew fails loud with `RSMPL_IO_CONFLICT` naming both
+/// versions instead of silently running mixed semantics.
 fn invoke(binary: &str, rest: &[String], args: &[String]) -> ! {
     let bin = sibling(binary);
+    let overridden = {
+        let env_key = format!("GITRS_{}_BIN", binary.to_uppercase());
+        std::env::var_os(&env_key).is_some_and(|p| !p.as_os_str().is_empty())
+    };
+    if !overridden {
+        match sibling_version(&bin) {
+            Some(v) if v == env!("CARGO_PKG_VERSION") => {}
+            Some(v) => fail(
+                &format!(
+                    "sibling version skew: gitrs {} but {} {v} (rebuild the workspace so all binaries match)",
+                    env!("CARGO_PKG_VERSION"),
+                    bin.display()
+                ),
+                args,
+            ),
+            None => fail(
+                &format!(
+                    "cannot verify {} version (ran `{}` with `--version`)",
+                    bin.display(),
+                    bin.display()
+                ),
+                args,
+            ),
+        }
+    }
     match std::process::Command::new(&bin).args(rest).status() {
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),
         Err(e) => fail(&format!("cannot run {}: {e}", bin.display()), args),
+    }
+}
+
+/// Last whitespace token of `<sibling> --version` output
+/// (`applyrs 0.1.0` → `0.1.0`), or `None` when the sibling cannot be
+/// queried. Pure helper so the token parse is unit-pinned.
+fn parse_sibling_version(output: &str) -> Option<String> {
+    output.split_whitespace().last().map(str::to_string)
+}
+
+fn sibling_version(bin: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_sibling_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_sibling_version;
+
+    #[test]
+    fn version_token_is_last_word() {
+        assert_eq!(
+            parse_sibling_version("applyrs 0.1.0\n"),
+            Some("0.1.0".to_string())
+        );
+        assert_eq!(parse_sibling_version(""), None);
     }
 }

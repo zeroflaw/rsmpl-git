@@ -1303,16 +1303,20 @@ fn json_lowering_is_zero_context_stats_stay_exact() {
 }
 
 #[test]
-fn context_flag_is_gone() {
-    // T128: `--context` was removed; the lowering is always 0-context.
+fn context_flag_is_presentation_only() {
+    // WI-10a: `--context N` is back as presentation-only (T128 removal
+    // reversed): the verified lowering stays 0-context, N only renders
+    // context around the same changes.
     let out = Command::new(binary()).arg("--help").output().unwrap();
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(!help.contains("--context"), "got: {help}");
-    // Passing it is now a clap usage error (exit 2; enveloped in json
-    // mode since T26, pinned in `usage_envelope_e2e.rs`).
+    assert!(help.contains("--context"), "got: {help}");
     let dir = init_repo();
-    write(dir.path(), "src/lib.rs", "fn a() {\n    foo(1);\n}\n");
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn a() {\n    foo(1);\n    foo(2);\n}\n",
+    );
     let patch_file = dir.path().join("change.rsmpl");
     fs::write(&patch_file, two_call_patch()).unwrap();
     let out = run(
@@ -1325,7 +1329,11 @@ fn context_flag_is_gone() {
             "0",
         ],
     );
-    assert!(!out.status.success(), "removed flag must fail");
+    assert!(
+        out.status.success(),
+        "context 0 must check clean, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

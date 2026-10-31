@@ -220,7 +220,10 @@ fn unresolvable_rev_fails_fast() {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty(), "got: {:?}", out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(stderr.contains("error:"), "got: {stderr}");
+    // WI-10a: text errors render the shared StructuredError block (same
+    // convention as applyrs), not the old `error: …` line.
+    assert!(stderr.contains("RSMPL_IO_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("reason:"), "got: {stderr}");
 }
 // T246 session 20 (T389): default `core.quotepath=true` C-quotes
 // non-ASCII names in both `diff --git` headers and `??` status lines;

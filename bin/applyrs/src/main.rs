@@ -70,6 +70,13 @@ struct Cli {
     #[arg(long, value_name = "N")]
     diff_max_lines: Option<usize>,
 
+    /// Presentation context lines for the reported/`--output` diff
+    /// (default 0, SPEC D.2.2). `--check`/apply always verify the
+    /// 0-context lowering; N only renders context around the same
+    /// changes so `--output` artifacts apply with vanilla `git apply`.
+    #[arg(long, default_value_t = 0)]
+    context: usize,
+
     /// Report format: text or json (default text).
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
@@ -363,159 +370,213 @@ fn run() -> Result<(), CliError> {
         rsmpl_engine::apply_patch_to_tree(&mut updated, &patch).map_err(CliError::Structured)?;
 
     // Lower to a concrete Git patch (SPEC 26.2): only changed files, no RSmPL.
-    // The lowering is always 0-context (SPEC D.2.2): minimal tokens by
-    // default, still appliable via the `--unidiff-zero` wrapper below.
-    // Per-file stats are computed from the full old/new contents so they stay
-    // exact even when the *reported* diff is truncated/omitted (SPEC D.2.1).
+    // The verified lowering is always 0-context (SPEC D.2.2): minimal tokens
+    // by default, still appliable via the `--unidiff-zero` wrapper below.
+    // `--context N` additionally renders the same changes with N context
+    // lines for the reported/`--output` diff (vanilla-`git apply`
+    // compatible); `--check`, apply, and verification always use the
+    // 0-context lowering. Per-file stats are computed from the full
+    // old/new contents so they stay exact under any report budget (D.2.1).
     // `changed` follows patch section order (`order`); WI-6b1 cross-file
     // follow rewrites may spill into workspace extras, lowered after.
-    let mut changed: Vec<(String, usize, usize, String)> = Vec::new();
-    let mut sections = Vec::new();
-    for rel in &order {
-        let old = &originals[rel];
-        let new = &updated[rel];
-        // T377: rename sections lower back to `rename from/to`
-        // (seeded from old-side content, so the diff spans the move).
-        // Runs first -- including the content-equal case, where the
-        // ladder below would emit nothing (silent drop).
-        if let Some(old_rel) = rename_from.get(rel) {
-            let modes = section_modes(&patch, rel);
-            let (om, nm) = match &modes {
-                Some((o, n)) => (Some(o.as_str()), Some(n.as_str())),
-                None => (None, None),
-            };
-            let section =
-                rsmpl_git::unified_diff_for_rename_with_context(old_rel, rel, old, new, om, nm, 0);
-            let (added, removed) = rsmpl_git::file_line_stats(old, new);
-            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
-            sections.push(section);
-            continue;
-        }
-        // Created files (missing before the patch) lower with `new file
-        // mode` headers so `git apply` creates them (SPEC 27.6); an
-        // existing-but-empty file keeps the ordinary headers.
-        // Deleted files (input targets `/dev/null`, engine emptied the
-        // content) lower with `deleted file mode` headers so `git apply`
-        // removes them instead of truncating (T350); an ordinary
-        // all-minus hunk truncates and keeps the file.
-        // T357: same-path delete+create pair (git's file<->symlink
-        // typechange shape). When the declared modes differ, lower as
-        // the pair so `git apply` swaps the type; same-type pairs
-        // stay a single plain modify (minimal tokens).
-        if !is_new.contains(rel) {
-            let has_delete = patch
-                .files
-                .iter()
-                .any(|s| s.target_path == *rel && s.is_deleted_file);
-            let create_mode = patch
-                .files
-                .iter()
-                .find(|s| s.target_path == *rel && s.is_new_file)
-                .and_then(|s| {
-                    s.metadata
-                        .iter()
-                        .find_map(|m| m.strip_prefix("new file mode "))
-                })
-                .filter(|m| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit()));
-            if has_delete && create_mode.is_some() {
-                let new_mode = create_mode.unwrap_or("100644");
-                let old_symlink = is_symlink.contains(rel);
-                let new_symlink = new_mode == "120000";
-                if old_symlink != new_symlink {
-                    let pair = rsmpl_git::unified_diff_for_typechange_with_context(
-                        rel,
-                        old,
-                        new,
-                        old_symlink,
-                        new_mode,
-                        0,
-                    );
-                    if !pair.is_empty() {
-                        let (added, removed) = rsmpl_git::file_line_stats(old, new);
-                        changed.push((rel.clone(), added, removed, post_sha_hex(new)));
-                        sections.extend(pair);
-                    }
-                    continue;
-                }
-            }
-        }
-        let section = if is_new.contains(rel) {
-            // Honor the author's declared `new file mode` (T355):
-            // `diffrs` emits `120000` for symlink creates; anything
-            // else (or absent) stays the `100644` default.
-            let mode = patch
-                .files
-                .iter()
-                .find(|s| s.target_path == *rel)
-                .and_then(|s| {
-                    s.metadata
-                        .iter()
-                        .find_map(|m| m.strip_prefix("new file mode "))
-                })
-                .filter(|m| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit()))
-                .unwrap_or("100644");
-            rsmpl_git::unified_diff_for_new_file_with_context(rel, new, 0, mode)
-        } else if patch
-            .files
-            .iter()
-            .any(|s| s.target_path == *rel && s.is_deleted_file)
-            && new.is_empty()
-        {
-            rsmpl_git::unified_diff_for_deleted_file_with_context(
-                rel,
-                old,
-                0,
-                is_symlink.contains(rel),
-            )
-        } else {
-            // T364: carry `old mode`/`new mode` into the lowering. A
-            // content change that also flips the mode keeps both; a pure
-            // mode change (old == new) lowers as a headers-only flip
-            // section (exactly what real git emits) instead of today's
-            // silent drop.
-            let content = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0);
-            match (content, section_modes(&patch, rel)) {
-                (Some(s), Some((old_mode, new_mode))) => {
-                    Some(rsmpl_git::with_mode_lines(&s, &old_mode, &new_mode))
-                }
-                (None, Some((old_mode, new_mode))) => {
-                    Some(rsmpl_git::mode_change_section(rel, &old_mode, &new_mode))
-                }
-                (content, None) => content,
-            }
-        };
-        if let Some(s) = section {
-            let (added, removed) = rsmpl_git::file_line_stats(old, new);
-            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
-            sections.push(s);
-        }
-    }
-    // WI-6b1: changed workspace extras (cross-file `# follow=uses`
-    // rewrites in files the patch never targeted) lower as plain content
-    // modifies — regular files by construction, never renames/modes.
-    for rel in &extra_order {
-        let old = &originals[rel];
-        let new = &updated[rel];
-        if old == new {
-            continue;
-        }
-        if let Some(s) = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, 0) {
-            let (added, removed) = rsmpl_git::file_line_stats(old, new);
-            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
-            sections.push(s);
-        }
-    }
-    let lowered = rsmpl_git::assemble_patch(sections);
-    // `--diff-max-lines` only bounds the *reported* diff. `--check`,
-    // `--output` and apply always use the full `lowered` diff.
-    let (reported, diff_truncated) = reported_diff(&lowered, cli.diff_max_lines);
-    let total_lines = lowered.lines().count();
+    let (changed, lowered) = lower_tree(
+        &patch,
+        &originals,
+        &updated,
+        &order,
+        &extra_order,
+        &rename_from,
+        &is_new,
+        &is_symlink,
+        0,
+    );
+    // Presentation rendering: same contents, N context lines around each
+    // change. Stats are context-independent (`file_line_stats`), so only
+    // the diff text is rebuilt.
+    let displayed = if cli.context == 0 {
+        lowered.clone()
+    } else {
+        lower_tree(
+            &patch,
+            &originals,
+            &updated,
+            &order,
+            &extra_order,
+            &rename_from,
+            &is_new,
+            &is_symlink,
+            cli.context,
+        )
+        .1
+    };
+    // `--diff-max-lines` only bounds the *reported* diff. `--check` and
+    // apply always use the full 0-context `lowered` diff; `--output`
+    // saves the full `displayed` diff (SPEC D.2.2).
+    let (reported, diff_truncated) = reported_diff(&displayed, cli.diff_max_lines);
+    let total_lines = displayed.lines().count();
 
-    // `--output` saves the full lowering for review/debugging. It is written
-    // before `--check` runs, so a failing `--check` still leaves the full
-    // appliable diff on disk (SPEC D.2.3). An empty lowering writes nothing:
+    // WI-10a: render the in-memory post-images as a concrete Git patch
+    // (SPEC 26.2) with `context` context lines. Stats are
+    // context-independent (`file_line_stats`), so only the diff text
+    // varies with the radius.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_tree(
+        patch: &rsmpl_patch::Patch,
+        originals: &HashMap<String, String>,
+        updated: &HashMap<String, String>,
+        order: &[String],
+        extra_order: &[String],
+        rename_from: &HashMap<String, String>,
+        is_new: &std::collections::HashSet<String>,
+        is_symlink: &std::collections::HashSet<String>,
+        context: usize,
+    ) -> (Vec<(String, usize, usize, String)>, String) {
+        let mut changed: Vec<(String, usize, usize, String)> = Vec::new();
+        let mut sections = Vec::new();
+        for rel in order {
+            let old = &originals[rel];
+            let new = &updated[rel];
+            // T377: rename sections lower back to `rename from/to`
+            // (seeded from old-side content, so the diff spans the move).
+            // Runs first -- including the content-equal case, where the
+            // ladder below would emit nothing (silent drop).
+            if let Some(old_rel) = rename_from.get(rel) {
+                let modes = section_modes(patch, rel);
+                let (om, nm) = match &modes {
+                    Some((o, n)) => (Some(o.as_str()), Some(n.as_str())),
+                    None => (None, None),
+                };
+                let section = rsmpl_git::unified_diff_for_rename_with_context(
+                    old_rel, rel, old, new, om, nm, context,
+                );
+                let (added, removed) = rsmpl_git::file_line_stats(old, new);
+                changed.push((rel.clone(), added, removed, post_sha_hex(new)));
+                sections.push(section);
+                continue;
+            }
+            // Created files (missing before the patch) lower with `new file
+            // mode` headers so `git apply` creates them (SPEC 27.6); an
+            // existing-but-empty file keeps the ordinary headers.
+            // Deleted files (input targets `/dev/null`, engine emptied the
+            // content) lower with `deleted file mode` headers so `git apply`
+            // removes them instead of truncating (T350); an ordinary
+            // all-minus hunk truncates and keeps the file.
+            // T357: same-path delete+create pair (git's file<->symlink
+            // typechange shape). When the declared modes differ, lower as
+            // the pair so `git apply` swaps the type; same-type pairs
+            // stay a single plain modify (minimal tokens).
+            if !is_new.contains(rel) {
+                let has_delete = patch
+                    .files
+                    .iter()
+                    .any(|s| s.target_path == *rel && s.is_deleted_file);
+                let create_mode = patch
+                    .files
+                    .iter()
+                    .find(|s| s.target_path == *rel && s.is_new_file)
+                    .and_then(|s| {
+                        s.metadata
+                            .iter()
+                            .find_map(|m| m.strip_prefix("new file mode "))
+                    })
+                    .filter(|m| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit()));
+                if has_delete && create_mode.is_some() {
+                    let new_mode = create_mode.unwrap_or("100644");
+                    let old_symlink = is_symlink.contains(rel);
+                    let new_symlink = new_mode == "120000";
+                    if old_symlink != new_symlink {
+                        let pair = rsmpl_git::unified_diff_for_typechange_with_context(
+                            rel,
+                            old,
+                            new,
+                            old_symlink,
+                            new_mode,
+                            context,
+                        );
+                        if !pair.is_empty() {
+                            let (added, removed) = rsmpl_git::file_line_stats(old, new);
+                            changed.push((rel.clone(), added, removed, post_sha_hex(new)));
+                            sections.extend(pair);
+                        }
+                        continue;
+                    }
+                }
+            }
+            let section = if is_new.contains(rel) {
+                // Honor the author's declared `new file mode` (T355):
+                // `diffrs` emits `120000` for symlink creates; anything
+                // else (or absent) stays the `100644` default.
+                let mode = patch
+                    .files
+                    .iter()
+                    .find(|s| s.target_path == *rel)
+                    .and_then(|s| {
+                        s.metadata
+                            .iter()
+                            .find_map(|m| m.strip_prefix("new file mode "))
+                    })
+                    .filter(|m| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit()))
+                    .unwrap_or("100644");
+                rsmpl_git::unified_diff_for_new_file_with_context(rel, new, context, mode)
+            } else if patch
+                .files
+                .iter()
+                .any(|s| s.target_path == *rel && s.is_deleted_file)
+                && new.is_empty()
+            {
+                rsmpl_git::unified_diff_for_deleted_file_with_context(
+                    rel,
+                    old,
+                    context,
+                    is_symlink.contains(rel),
+                )
+            } else {
+                // T364: carry `old mode`/`new mode` into the lowering. A
+                // content change that also flips the mode keeps both; a pure
+                // mode change (old == new) lowers as a headers-only flip
+                // section (exactly what real git emits) instead of today's
+                // silent drop.
+                let content = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, context);
+                match (content, section_modes(patch, rel)) {
+                    (Some(s), Some((old_mode, new_mode))) => {
+                        Some(rsmpl_git::with_mode_lines(&s, &old_mode, &new_mode))
+                    }
+                    (None, Some((old_mode, new_mode))) => {
+                        Some(rsmpl_git::mode_change_section(rel, &old_mode, &new_mode))
+                    }
+                    (content, None) => content,
+                }
+            };
+            if let Some(s) = section {
+                let (added, removed) = rsmpl_git::file_line_stats(old, new);
+                changed.push((rel.clone(), added, removed, post_sha_hex(new)));
+                sections.push(s);
+            }
+        }
+        // WI-6b1: changed workspace extras (cross-file `# follow=uses`
+        // rewrites in files the patch never targeted) lower as plain content
+        // modifies — regular files by construction, never renames/modes.
+        for rel in extra_order {
+            let old = &originals[rel];
+            let new = &updated[rel];
+            if old == new {
+                continue;
+            }
+            if let Some(s) = rsmpl_git::unified_diff_for_file_with_context(rel, old, new, context) {
+                let (added, removed) = rsmpl_git::file_line_stats(old, new);
+                changed.push((rel.clone(), added, removed, post_sha_hex(new)));
+                sections.push(s);
+            }
+        }
+        let lowered = rsmpl_git::assemble_patch(sections);
+        (changed, lowered)
+    } // fn lower_tree
+
+    // `--output` saves the full `displayed` diff for review/debugging. It is
+    // written before `--check` runs, so a failing `--check` still leaves the
+    // full appliable diff on disk (SPEC D.2.3). An empty diff writes nothing:
     // no changes means no file (SPEC D.2.3).
-    if lowered.trim().is_empty() {
+    if displayed.trim().is_empty() {
         // Mirror invariant (SPEC D.2.3): `--output` reflects the current
         // lowering, so an empty lowering removes a stale file left by a
         // previous run instead of leaving a phantom diff behind. No
@@ -548,7 +609,7 @@ fn run() -> Result<(), CliError> {
                 })?;
             }
         }
-        std::fs::write(out, &lowered).map_err(|e| {
+        std::fs::write(out, &displayed).map_err(|e| {
             CliError::io_file(
                 format!("cannot write {}: {e}", out.display()),
                 &out.to_string_lossy(),

@@ -364,7 +364,7 @@ fn json_envelope_shape() {
     let out = run(dir.path(), &["--format", "json"]);
     assert_eq!(out.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(v["version"], serde_json::json!(1));
+    assert_eq!(v["version"], serde_json::json!(2));
     assert_eq!(
         v["files"],
         serde_json::json!([{"path": "src/lib.rs"}]),
@@ -383,6 +383,65 @@ fn bad_repo_fails_with_envelope() {
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["error"]["code"], serde_json::json!("RSMPL_IO_CONFLICT"));
     assert!(v["error"]["rule"].is_null());
+}
+
+// WI-10a: a two-dot range resolves its pre-image base to the left side,
+// so the detector stays `proven: true` (the range string itself never
+// resolves in `git show`); the JSON envelope is v2 with the full
+// applyrs error key set.
+#[test]
+fn rev_range_resolves_pre_image_proven() {
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "f.rs",
+        "fn old_name(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n    1\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "f.rs",
+        "fn new_name(first_argument: VeryLongTypeName, second_argument: AnotherLongTypeName) {\n    1\n}\n",
+    );
+    commit_all(dir.path());
+
+    let out = run(dir.path(), &["HEAD~1..HEAD", "--format", "json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["version"], serde_json::json!(2), "got: {v}");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert!(!hunks.is_empty(), "got: {v}");
+    assert!(
+        hunks.iter().all(|h| h["proven"] == serde_json::json!(true)),
+        "got: {v}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !stderr.contains("downgraded to section-visible"),
+        "unexpected downgrade warning: {stderr}"
+    );
+}
+
+// WI-10a: diffrs error JSON carries the same key set as applyrs
+// (`code/rule/file/range/reason/suggestion/repair` via StructuredError).
+#[test]
+fn error_envelope_carries_applyrs_key_set() {
+    let out = run(Path::new("/nonexistent-diffrs-repo"), &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["version"], serde_json::json!(2));
+    let err = &v["error"];
+    for key in [
+        "code",
+        "rule",
+        "file",
+        "range",
+        "reason",
+        "suggestion",
+        "repair",
+    ] {
+        assert!(err.get(key).is_some(), "missing key {key}: {v}");
+    }
 }
 
 // T341: a whole-file fn rename (identical body, one ident delta)

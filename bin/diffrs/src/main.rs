@@ -20,9 +20,12 @@
 //! everything else through as ordinary hunks. The output always parses as RSmPL-Git and
 //! round-trips through `applyrs --check` against the pre-change tree.
 
+#![allow(clippy::result_large_err)]
+
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
+use rsmpl_patch::{ErrorCode, StructuredError};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 enum Format {
@@ -56,37 +59,30 @@ struct Cli {
 }
 
 enum CliError {
-    Message(String),
+    Structured(StructuredError),
 }
 
 impl CliError {
     fn msg(message: impl Into<String>) -> Self {
-        Self::Message(message.into())
+        Self::Structured(
+            StructuredError::new(ErrorCode::IoConflict, message)
+                .with_suggestion("run `diffrs --help` for usage"),
+        )
     }
 }
 
 fn main() {
     if let Err(e) = run() {
         match e {
-            CliError::Message(m) => {
+            CliError::Structured(s) => {
                 if wants_json() {
-                    // Stdout-only JSON envelope, same family as
-                    // `applyrs` (SPEC D.2); text mode keeps stderr.
-                    let payload = serde_json::json!({
-                        "version": 1,
-                        "error": {
-                            "code": "RSMPL_IO_CONFLICT",
-                            "rule": null,
-                            "file": null,
-                            "range": null,
-                            "reason": m,
-                            "suggestion": "run `diffrs --help` for usage",
-                            "repair": null,
-                        }
-                    });
+                    // Stdout-only JSON envelope, same error object as
+                    // `applyrs` via `StructuredError` (SPEC D.2, v2);
+                    // text mode keeps stderr.
+                    let payload = serde_json::json!({"version": 2, "error": s.to_json()});
                     println!("{payload}");
                 } else {
-                    eprintln!("error: {m}");
+                    eprintln!("{}", s.render());
                 }
             }
         }
@@ -148,10 +144,18 @@ fn run() -> Result<(), CliError> {
     for skipped in &patch.skipped_untracked_dirs {
         eprintln!("warning: {skipped}: untracked directory skipped in semantic patch");
     }
+    // WI-10a: a staged/rev conversion whose base lacks a changed `.rs`
+    // file silently ran section-visible totality before — name the
+    // downgrade so agents know `proven: false` entries are guesses.
+    for downgraded in &patch.proven_downgraded {
+        eprintln!(
+            "warning: {downgraded}: no pre-image at the rev base; provenance downgraded to section-visible"
+        );
+    }
 
     if cli.format == Format::Json {
         let payload = serde_json::json!({
-            "version": 1,
+            "version": 2,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
             "hunks": patch.hunks.iter().map(|h| serde_json::json!({

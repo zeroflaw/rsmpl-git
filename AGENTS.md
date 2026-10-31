@@ -146,8 +146,8 @@ the full diff before `--check` runs; on an empty lowering it removes a
 stale file at that path, else creates nothing (mirror, SPEC D.2.3);
 truncated stdout is review-only, never pipe it to `git apply` (SPEC D.2.3);
 `--diff-max-lines N` (`0` omits) bounds only the reported diff while
-`--check`/`--output`/apply use the full lowering (SPEC D.2.1); the lowering
-itself is always 0-context, still appliable (SPEC D.2.2, SPEC 26.1).
+`--check`/`--output`/apply use the full lowering (SPEC D.2.1); verified lowering
+is always 0-context, `--context N` renders reported/`--output` for vanilla `git apply` (D.2.2).
 
 ## Errors: code → fix (SPEC 25)
 

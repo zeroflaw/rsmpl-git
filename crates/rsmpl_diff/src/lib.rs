@@ -28,22 +28,28 @@ pub enum DiffError {
 /// hunks apply against — the index blob for pending worktree diffs
 /// (`git show :path`, exact whether or not the index is layered), the
 /// `rev` blob for staged and rev diffs. Fetch failures omit the entry
-/// (that section falls back to section-visible evidence).
+/// (that section falls back to section-visible evidence); the omitted
+/// paths return alongside so the caller can warn that `proven`
+/// downgraded (WI-10a).
 fn pre_images(
     repo: &Path,
     staged: bool,
     rev: Option<&str>,
     files: &[String],
     raw: &str,
-) -> HashMap<String, String> {
+) -> (HashMap<String, String>, Vec<String>) {
     // Index blob (`:path`) for pending worktree diffs — exact whether or
-    // not the index is layered; the `rev` blob otherwise.
+    // not the index is layered; the `rev` blob otherwise. A revision
+    // *range* (`A..B` / `A...B`) diffs against its endpoints, but the
+    // hunks apply against the left (`A`) side — `git show A..B:path`
+    // never resolves, so the base is the range's left side (WI-10a).
     let base = if staged || rev.is_some() {
-        rev.unwrap_or("HEAD").to_string()
+        rev_base(rev.unwrap_or("HEAD"))
     } else {
         String::new()
     };
     let mut out = HashMap::new();
+    let mut missing = Vec::new();
     for path in files {
         if !path.ends_with(".rs") {
             continue;
@@ -103,8 +109,26 @@ fn pre_images(
             }
         }
         flush_rename(&mut rename_old, &mut rename_new);
+        // WI-10a: a staged/rev conversion fetches every changed `.rs`
+        // file from a base blob that must exist — a miss means the
+        // section silently downgrades to section-visible totality, so
+        // the caller warns. Pending worktree conversions (`base` empty)
+        // skip this: untracked files have no index blob by construction.
+        if !base.is_empty() && !out.contains_key(path) && !missing.contains(path) {
+            missing.push(path.clone());
+        }
     }
-    out
+    (out, missing)
+}
+
+/// WI-10a: pre-image base for staged/rev conversions. A revision range
+/// (`A..B` / `A...B`) diffs endpoint-vs-endpoint, but raised hunks
+/// apply against the left side — the range string itself never
+/// resolves in `git show`, so the base is the text before the first
+/// `..` (`...` included: split on `..` covers both spellings).
+/// A single rev (or bare `HEAD`) is its own base.
+fn rev_base(rev: &str) -> String {
+    rev.split("..").next().unwrap_or(rev).to_string()
 }
 
 /// A validated RSmPL-Git patch covering the pending native changes.
@@ -125,6 +149,10 @@ pub struct CompressedPatch {
     /// WI-2 per-hunk provenance (one entry per emitted semantic hunk;
     /// empty when fully ordinary), backing `diffrs --format json`.
     pub hunks: Vec<HunkProvenance>,
+    /// WI-10a: changed `.rs` paths with no pre-image in a staged/rev
+    /// conversion (the binary warns: `proven` downgraded to
+    /// section-visible). Empty for pending worktree conversions.
+    pub proven_downgraded: Vec<String>,
 }
 
 pub fn compress(
@@ -138,7 +166,7 @@ pub fn compress(
         rev: rev.map(str::to_string),
     };
     let collected: CollectedDiff = source.collect()?;
-    let pre = pre_images(repo, staged, rev, &collected.files, &collected.raw);
+    let (pre, proven_downgraded) = pre_images(repo, staged, rev, &collected.files, &collected.raw);
     let inferred: InferredPatch =
         rsmpl_diff_infer::infer_rsmpl_with_pre_images(&collected.raw, &pre)?;
     let files = rsmpl_diff_source::files_in_diff(&inferred.rsmpl);
@@ -150,5 +178,20 @@ pub fn compress(
         skipped_history: collected.skipped_history,
         skipped_untracked_dirs: collected.skipped_untracked_dirs,
         hunks: inferred.hunks,
+        proven_downgraded,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rev_base;
+
+    #[test]
+    fn rev_base_strips_ranges_to_their_left_side() {
+        assert_eq!(rev_base("HEAD"), "HEAD");
+        assert_eq!(rev_base("HEAD~1"), "HEAD~1");
+        assert_eq!(rev_base("HEAD~1..HEAD"), "HEAD~1");
+        assert_eq!(rev_base("HEAD~1...HEAD"), "HEAD~1");
+        assert_eq!(rev_base("abc..def"), "abc");
+    }
 }

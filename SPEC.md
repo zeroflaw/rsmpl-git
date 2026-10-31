@@ -6150,15 +6150,20 @@ prints one JSON object to stdout:
   full appliable lowering while the preview stays truncated.
 - Exit codes are unchanged: `0` applied/clean, `2` patch error with a
   structured `RSMPL_*`/`GIT_*` diagnostic on stderr.
-- Defaults audit: `--format text` and `--repo .` stay; the lowering is
-  always 0-context (T128: the former `--context 3` default is gone — minimal
-  tokens by default, still appliable via the `--unidiff-zero` wrapper,
-  D.2.2). Text keeps human review working (JSON is a ~4-token opt-in);
+- Defaults audit: `--format text`, `--repo .`, and `--context 0` stay;
+  the verified lowering is always 0-context (minimal tokens by default,
+  still appliable via the `--unidiff-zero` wrapper; `--context N` only
+  renders presentation context around the same changes, D.2.2). Text
+  keeps human review working (JSON is a ~4-token opt-in);
   `--repo` defaults to `.`, so run from the worktree root and omit it,
   adding `--repo DIR` only when invoking from elsewhere.
   When DIR is a subdirectory of the work tree, the CLI runs `git apply`
   at the enclosing root with `--directory=<prefix>`, so subdir invocation
   applies identically (plain CWD-relative resolution would silently skip).
+- Sibling handshake: `gitrs` reads each sibling's `--version` before
+  re-exec and fails with `RSMPL_IO_CONFLICT` naming both versions on
+  mismatch (same stdout-only JSON envelope with `--format json`);
+  `GITRS_*_BIN` overrides (test doubles) skip the check.
 - Failure envelope: with `--format json`, every patch/IO failure prints
   one JSON envelope to stdout and exits 2, so an agent can repair without
   parsing stderr prose. The failure is stdout-only: no stderr `error:`
@@ -6262,44 +6267,51 @@ Rules:
 - The lowering itself is always 0-context (D.2.2): the budget flag above
   applies *after* lowering.
 
-#### D.2.2 Lowering context (always 0)
+#### D.2.2 Lowering context (verified 0, presented N)
 
-D.2.1 bounds the *reported* diff; the *lowered* diff itself is always
-0-context (T128: the former `--context N` flag is removed — one fewer flag,
-minimal tokens by default):
+D.2.1 bounds the *reported* diff; the *verified* lowering is always
+0-context (minimal tokens by default). `applyrs --context N` (default
+0, canonical form unchanged) additionally renders the same changes with
+N context lines for the reported/`--output` diff:
 
 ```sh
 # Run from the repo root; from elsewhere, add --repo ./my-repo to any command:
 # Minimal tokens by default, still a real appliable patch:
 gitrs apply --file change.rsmpl --check
+# Vanilla-compatible artifact (no --unidiff-zero needed to apply it):
+gitrs apply --file change.rsmpl --check --context 3 --output full.patch
 ```
 
 Rules:
 
-- The lowering shows only changed (`-`/`+`) lines; hunk headers stay
-  `@@ -a,b +c,d @@`. applyrs's own `--check`/apply/`--output` path handles
+- The verified lowering shows only changed (`-`/`+`) lines; hunk headers
+  stay `@@ -a,b +c,d @@`. applyrs's own `--check`/apply path handles
   it (it passes `git apply --unidiff-zero`, which plain `git apply`
-  requires for zero-context hunks); piping a saved patch to a
+  requires for zero-context hunks); piping a saved 0-context patch to a
   bare `git apply` needs that same flag.
-- `--check`, apply, and `--output` all see the same 0-context
-  lowering. A truncated report (`diff_truncated: true`) is review-only,
-  but a 0-context diff is appliable. Bare-`git apply` compatibility is
-  intentionally traded for token minimalism (agent-centric default).
-- Per-file `{path, added, removed}` stats are computed
-  from the full old/new contents, so they stay exact under any report budget.
-- Layering: the D.2.1 report budget applies after lowering.
-  `--diff-max-lines 2` shows the first 2 lines of the 0-context diff;
+- `--check` and apply always use the 0-context lowering; the reported
+  `diff` (`diff_lines`/`diff_shown`, text `--check` stdout) and
+  `--output` carry the `--context N` rendering of the same post-images.
+  A `--context 3 --output` artifact applies under vanilla `git apply`.
+  A truncated report (`diff_truncated: true`) is review-only either way.
+- Per-file `{path, added, removed, post_sha}` stats are computed
+  from the full old/new contents, so they stay exact under any report
+  budget and any `--context` (the post-tree is identical; only the
+  rendered diff text varies).
+- Layering: the D.2.1 report budget applies after rendering.
+  `--diff-max-lines 2` shows the first 2 lines of the rendered diff;
   `--diff-max-lines 0` omits with `diff_truncated: true` iff
   changes exist. With no changes the budget flag is a no-op.
-- Three-lever summary: `--format` chooses the report language (text diff
-  vs JSON object), `--diff-max-lines` trims only the reported `diff`
-  preview, and `--output` always saves the full lowering —
-  so `--format json --diff-max-lines 0 --check --output
-  full.patch` verifies with zero preview tokens while keeping the
-  appliable patch on disk.
-- The removed `--context` spelling is a clap usage error (unknown
-  argument): plain text by default, `RSMPL_IO_CONFLICT` envelope with
-  `--format json` (usage errors are enveloped, D.2).
+- Four-lever summary: `--format` chooses the report language (text diff
+  vs JSON object), `--context` chooses the rendering radius (0 verified
+  minimal vs N vanilla-compatible), `--diff-max-lines` trims only the
+  reported `diff` preview, and `--output` always saves the full
+  rendered diff — so `--format json --diff-max-lines 0 --check
+  --output full.patch` verifies with zero preview tokens while keeping
+  the appliable patch on disk.
+- Unknown `--context` values are a clap usage error: plain text by
+  default, `RSMPL_IO_CONFLICT` envelope with `--format json` (usage
+  errors are enveloped, D.2).
 
 #### D.2.3 Output streams and empty lowerings
 
@@ -6422,7 +6434,14 @@ repo-root-relative (check/apply run against the root, T390).
 empty files emit headers only (no hunk, exactly real git's shape);
 untracked executables emit `100755` (unix) so +x round-trips (T364);
 `--staged` selects index-vs-HEAD/rev; `[rev]` covers history with the
-same mechanism. `git diff` runs with `--no-color --no-ext-diff
+same mechanism, including ranges (`A..B` / `A...B` diff endpoint
+against endpoint). A range resolves its pre-image base to its left
+side (`A`): the range string itself never resolves in `git show`, so
+without the split every detector would silently downgrade to
+section-visible totality. A staged/rev conversion whose base lacks a
+changed `.rs` file warns per path on stderr (`no pre-image at the rev
+base; provenance downgraded to section-visible`) instead of weakening
+`proven` silently. `git diff` runs with `--no-color --no-ext-diff
 --unified=0` (rename detection stays on: moves surface as `rename
 from/to` sections that round-trip through `applyrs`, T377).
 Context radius is 0, so
@@ -6508,9 +6527,12 @@ emissions rebuild only the `diff --git` header and would silently
 drop the mode flip, while the per-hunk prelude keeps the mode lines
 (T401).
 
-`diffrs --format json` (default `text`) prints `{"version": 1, "files":
+`diffrs --format json` (default `text`) prints `{"version": 2, "files":
 [{path}], "patch": "<RSmPL-Git patch>", "hunks": [...]}` to stdout
-(text mode prints only the patch). Each `hunks` entry carries per-hunk
+(text mode prints only the patch). Failures carry the same error
+object as `applyrs` (`code/rule/file/range/reason/suggestion/repair`
+via `StructuredError`, stdout-only with `--format json`, exit 2).
+Each `hunks` entry carries per-hunk
 provenance for one emitted semantic hunk (empty when fully ordinary):
 `{rule, file, detector, sites, sites_exact, totality, proven,
 saved_bytes, group}`. `detector` is
@@ -6551,8 +6573,10 @@ each grouped hunk from its positional `rN` to the shared
 ungrouped sections never move). Per-group T375 re-basis: the shared
 name must cost strictly less than the group's `saved_bytes` sum, else
 that group falls back to positional `rN` names while keeping the
-`group` label. `version`
-stays `1` (additive, per D.2 rules). Budget (bytes beyond `patch`):
+`group` label. `version` is `2`
+(error object shared with `applyrs` via `StructuredError`; `v1`
+carried the same success keys with a hand-built error payload).
+Budget (bytes beyond `patch`):
 ≈100 B fixed + ≈165 B per `hunks[]` entry + ≈5 B per covered site
 (`sites` arrays grow with matches — evidence, not overhead).
 Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,

@@ -114,9 +114,9 @@ fn json_patch_flag_is_accepted_inline_source() {
 }
 
 #[test]
-fn json_removed_context_flag_is_envelope() {
-    // Complement to the T128 text-only `context_flag_is_gone` pin: the
-    // removed spelling is a usage error, so json mode envelops it.
-    let out = run_raw(&["--format", "json", "--context", "0"]);
+fn json_bad_context_value_is_envelope() {
+    // Complement to the WI-10a `--context` pin: an invalid value stays a
+    // usage error, so json mode envelops it.
+    let out = run_raw(&["--format", "json", "--context", "not-a-number"]);
     assert_envelope(&out, "--context");
 }
