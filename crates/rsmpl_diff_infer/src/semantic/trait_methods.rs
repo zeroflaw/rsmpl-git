@@ -38,37 +38,64 @@ pub(crate) fn try_trait_method_rename(
         return None;
     }
     let pre = file_old?;
+    // WI-23: two-phase classification. Def pairs parse as fn headers
+    // with a uniform ident delta; non-def pairs are candidate anchored
+    // call sites gated cheaply here (ident-boundary share) with the
+    // single-follow scratch probe authoritative below.
     let mut old_name: Option<String> = None;
     let mut new_name: Option<String> = None;
-    let mut terms: Vec<char> = Vec::with_capacity(minuses.len());
+    let mut terms: Vec<Option<char>> = Vec::with_capacity(minuses.len());
+    let mut is_def: Vec<bool> = Vec::with_capacity(minuses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n, term) = trait_rename_pair(m, p)?;
-        if old_name.as_ref().is_some_and(|c| *c != o) {
-            return None;
+        if let Some((o, n, term)) = trait_rename_pair(m, p) {
+            if old_name.as_ref().is_some_and(|c| *c != o) {
+                return None;
+            }
+            if new_name.as_ref().is_some_and(|c| *c != n) {
+                return None;
+            }
+            old_name = Some(o);
+            new_name = Some(n);
+            terms.push(Some(term));
+            is_def.push(true);
+        } else {
+            terms.push(None);
+            is_def.push(false);
         }
-        if new_name.as_ref().is_some_and(|c| *c != n) {
-            return None;
-        }
-        old_name = Some(o);
-        new_name = Some(n);
-        terms.push(term);
     }
     let (old_name, new_name) = (old_name?, new_name?);
     if old_name == new_name {
         return None;
     }
+    // Candidate calls must share the ident delta (ident-boundary,
+    // never substring); the scratch probe below proves anchoring.
+    for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
+        if is_def[i] {
+            continue;
+        }
+        if m.trim() == p.trim() {
+            return None;
+        }
+        if !contains_ident(m, &old_name) || !contains_ident(p, &new_name) {
+            return None;
+        }
+    }
+    let has_calls = is_def.iter().any(|d| !d);
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
     let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
     if !all_indented || !plus_indented {
         return None;
     }
-    // Side classification from the pre-image: every changed line must
-    // sit in a trait block or an impl block (macro bodies, strings,
-    // and free fns veto the whole class — probes alone cannot tell a
-    //same-spelling string line from a method).
+    // Side classification over def pairs only: every def line must sit
+    // in a trait block or an impl block (macro bodies, strings, and
+    // free fns veto the whole class). Call lines may sit anywhere —
+    // the scratch probe proves each anchored site.
     let mut trait_lines: Vec<usize> = Vec::new();
     let mut impl_lines: Vec<usize> = Vec::new();
-    for &site in changed {
+    for (i, &site) in changed.iter().enumerate() {
+        if !is_def[i] {
+            continue;
+        }
         if in_trait_block(pre, site) {
             trait_lines.push(site);
         } else if in_impl_block(pre, site) {
@@ -86,7 +113,9 @@ pub(crate) fn try_trait_method_rename(
     // pair lines and `changed` in the same order).
     let mut term_of: std::collections::HashMap<usize, char> = std::collections::HashMap::new();
     for (i, &site) in changed.iter().enumerate() {
-        term_of.insert(site, terms[i]);
+        if let Some(t) = terms[i] {
+            term_of.insert(site, t);
+        }
     }
     // Document order across both halves.
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
@@ -137,6 +166,11 @@ pub(crate) fn try_trait_method_rename(
             if scratch_single_reproduces(pre, path, &single, changed, minuses, pluses) {
                 return Some(single);
             }
+            // WI-23: calls have no block hunk; a failed call-inclusive
+            // scratch must stay ordinary, never a def-only partial.
+            if has_calls {
+                return None;
+            }
         }
     }
     let mut out = String::new();
@@ -169,6 +203,23 @@ pub(crate) fn try_trait_method_rename(
         ));
     }
     Some(out)
+}
+fn contains_ident(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut token = String::new();
+    for c in haystack.chars().chain(std::iter::once(' ')) {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            token.push(c);
+        } else {
+            if token == needle {
+                return true;
+            }
+            token.clear();
+        }
+    }
+    false
 }
 
 /// Scratch probe for the WI-3 single-hunk follow emission: applying the
@@ -485,6 +536,71 @@ mod tests {
             )
             .is_none(),
             "untouched twin vetoes via the per-hunk probe"
+        );
+    }
+    #[test]
+    fn call_inclusive_compresses_to_single_follow() {
+        // WI-23: trait decl + impl def + anchored call compress to the
+        // single trait follow hunk iff the scratch probe reproduces all
+        // three lines.
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nfn f(s: S) {\n    s.old();\n}\n";
+        let out = run(
+            &["    fn old(&self);", "    fn old(&self) {", "    s.old();"],
+            &["    fn new(&self);", "    fn new(&self) {", "    s.new();"],
+            pre,
+            &[2, 6, 10],
+        )
+        .expect("defs+calls must compress to one follow hunk");
+        assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        assert!(!out.contains("impl T for S {"), "out:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("fn new(&self);"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("fn new(&self) {"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(files["f.rs"].contains("s.new();"), "got: {}", files["f.rs"]);
+        assert!(!files["f.rs"].contains("old"), "got: {}", files["f.rs"]);
+    }
+    #[test]
+    fn unanchored_call_declines_to_ordinary() {
+        // Receiver of an unrelated type is `off-target` evidence, never
+        // a rewrite: the scratch over the full set fails, so the class
+        // stays ordinary (no def-only partial).
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nstruct U;\nfn f(y: U) {\n    y.old();\n}\n";
+        assert!(
+            run(
+                &["    fn old(&self);", "    fn old(&self) {", "    y.old();"],
+                &["    fn new(&self);", "    fn new(&self) {", "    y.new();"],
+                pre,
+                &[2, 6, 11],
+            )
+            .is_none(),
+            "unproven receivers never ride the follow"
+        );
+    }
+    #[test]
+    fn shadowed_call_declines_to_ordinary() {
+        // Same-name inherent method shadows the call: engine skips it,
+        // the full-set scratch fails, the section stays ordinary.
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nstruct U;\nimpl U {\n    fn old(&self) {}\n}\nfn f(u: U) {\n    u.old();\n}\n";
+        assert!(
+            run(
+                &["    fn old(&self);", "    fn old(&self) {", "    u.old();"],
+                &["    fn new(&self);", "    fn new(&self) {", "    u.new();"],
+                pre,
+                &[2, 6, 14],
+            )
+            .is_none(),
+            "shadowed receivers never ride the follow"
         );
     }
 }

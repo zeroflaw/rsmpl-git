@@ -7461,11 +7461,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   <Self>` definitions as `rename` spans; inherent `impl S` defs never
   claim); the scratch-apply line-equality probe is the totality (the
   single hunk applied to the pre-image must reproduce every native
-  plus line). Probe failure falls back to one hunk per enclosing
+  plus line). WI-23 admits anchored call lines sharing the ident delta
+  (cheap ident-boundary gate, scratch over defs+calls authoritative;
+  unproven/shadowed calls fail the scratch and stay ordinary, never a
+  def-only partial). Probe failure falls back to one hunk per enclosing
   block with verbatim headers sharing the `rename_Old_to_New` rule
-  (no follow; each hunk clears its own engine probe, twin headers and
-  untouched twins veto to ordinary). Divergent per-pair suffixes and
-  mixed indent stay passthrough. Detector name `trait_method_rename`.
+  (no follow, def-only classes; each hunk clears its own engine probe,
+  twin headers and untouched twins veto to ordinary). Divergent per-pair
+  suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
