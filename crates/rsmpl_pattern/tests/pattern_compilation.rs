@@ -1517,3 +1517,83 @@ fn keyed_repairs_never_echo_the_reason() {
         Some("rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk"),
     );
 }
+
+#[test]
+fn field_rename_compiles_with_struct_context() {
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n  struct S {\n- old: u32\n+ new: u32\n",
+    );
+    let c = compile(&h).unwrap();
+    match &c.kind {
+        PatternKind::FieldRename {
+            struct_name,
+            old,
+            new,
+            ty,
+            ..
+        } => {
+            assert_eq!(struct_name, "S");
+            assert_eq!(old, "old");
+            assert_eq!(new, "new");
+            assert_eq!(ty, "u32");
+        }
+        _ => panic!("expected field rename, got: {:?}", c.kind),
+    }
+}
+
+#[test]
+fn variant_rename_compiles_with_enum_context() {
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n  enum E {\n- Old\n+ New\n",
+    );
+    let c = compile(&h).unwrap();
+    assert!(
+        matches!(
+            &c.kind,
+            PatternKind::VariantRename { enum_name, old, new, .. }
+            if enum_name == "E" && old == "Old" && new == "New"
+        ),
+        "got: {:?}",
+        c.kind
+    );
+}
+
+#[test]
+fn field_pair_without_struct_context_fails_fast() {
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n- old: u32\n+ new: u32\n",
+    );
+    let err = compile(&h).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(err.message.contains("struct S"), "got: {}", err.message);
+}
+
+#[test]
+fn field_type_mismatch_fails_fast() {
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n  struct S {\n- old: u32\n+ new: bool\n",
+    );
+    let err = compile(&h).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(err.message.contains("differ"), "got: {}", err.message);
+}
+
+#[test]
+fn colon_shapes_still_route_away_from_fields() {
+    // `use crate::old` (use-rename) and `impl std::fmt::Display` (type
+    // pair) both carry colons but must not route to field renames.
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=u\n# lang=rust\n- use crate::old\n+ use crate::new\n",
+    );
+    assert!(matches!(
+        compile(&h).unwrap().kind,
+        PatternKind::UseRename { .. }
+    ));
+    let h = hunk_of(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=t\n# lang=rust\n- impl std::fmt::Display\n+ Box<dyn Display>\n",
+    );
+    assert!(matches!(
+        compile(&h).unwrap().kind,
+        PatternKind::General { .. } | PatternKind::Expr { .. }
+    ));
+}

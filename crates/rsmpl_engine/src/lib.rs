@@ -22,6 +22,7 @@ mod matcher_general_tails;
 mod matcher_impl;
 mod matcher_item;
 mod matcher_macro;
+mod matcher_member;
 mod matcher_sequence;
 mod matcher_spelling;
 mod matcher_types;
@@ -32,6 +33,7 @@ mod postcheck;
 mod suggest;
 mod use_graph;
 mod use_graph_macro;
+pub(crate) mod use_graph_member;
 mod use_graph_orphan;
 mod validate;
 

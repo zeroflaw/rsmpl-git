@@ -126,6 +126,10 @@ pub(crate) fn plus_instantiated(
             Some(post_canon.contains(&needle))
         }
         PatternKind::ItemRename { plus_name, .. } => Some(post_text.contains(plus_name)),
+        // WI-9a: member renames carry the same contains-posture as item
+        // renames (the new ident must appear in the post-image).
+        PatternKind::FieldRename { new, .. } => Some(post_text.contains(new)),
+        PatternKind::VariantRename { new, .. } => Some(post_text.contains(new)),
         PatternKind::UseRename { plus_path, .. } => {
             // Grouped tails (`crate::{new::Deep}`) never contain the full
             // `crate::new` prefix as a substring; the final segment is the

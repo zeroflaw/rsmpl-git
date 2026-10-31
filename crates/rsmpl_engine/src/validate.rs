@@ -220,24 +220,28 @@ pub(crate) fn gate_directives(
             "remove the directive and run `cargo fmt` after apply",
         )));
     }
-    // WI-6a: `# follow=uses` is legal only on fn and item rename hunks
-    // (SPEC 18.6); every other shape keeps the SPEC 14.8 follow-up hunks.
+    // WI-6a: `# follow=uses` is legal only on fn, item, field, and
+    // variant rename hunks (SPEC 18.6); every other shape keeps the SPEC
+    // 14.8 follow-up hunks.
     if rh.follows_uses()
         && !matches!(
             &compiled.kind,
-            PatternKind::Fn { .. } | PatternKind::ItemRename { .. }
+            PatternKind::Fn { .. }
+                | PatternKind::ItemRename { .. }
+                | PatternKind::FieldRename { .. }
+                | PatternKind::VariantRename { .. }
         )
     {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
-            "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+            "# follow=uses is only supported on fn, item, field, and variant rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
         )
         .with_rule(rh.rule_name())
         .with_file(path)
-        .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename")
+        .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename")
         .with_repair(StructuredError::fix_pattern_repair(
             "C17",
-            "remove `# follow=uses`, or rewrite this hunk as a fn/item rename",
+            "remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename",
         )));
     }
     let is_macro = matches!(

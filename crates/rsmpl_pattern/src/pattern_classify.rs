@@ -394,6 +394,15 @@ pub(crate) fn classify(
         return Ok(PatternKind::ImplContext { impl_header });
     }
 
+    // Field/variant member renames (`struct S {` context + `old: T` ->
+    // `new: T`; `enum E {` context + `Old` -> `New`). Shape-first: the
+    // pair must parse as a member pair on both sides before the context
+    // header is consulted, so ordinary hunks that merely sit inside a
+    // struct body never route here.
+    if let Some(rename) = classify_member_rename(m, p, c)? {
+        return Ok(rename);
+    }
+
     // Non-function item renames (`struct Old` -> `struct New`). Checked
     // before fn shapes: `const Old`/`static Old` also satisfy
     // `looks_like_fn`, and every fn shape falls through here as `None`.
@@ -830,6 +839,290 @@ fn classify_item_rename(
         }
         (None, None) => Ok(None),
     }
+}
+
+/// Container ident a `struct`/`enum` context line declares
+/// (`pub struct S<T> ... {` → `S`, `enum E ... {` → `E`). The line is
+/// completed with `}` and parsed as a real `syn::Item` so visibility,
+/// generics, and `where` clauses ride along; anything else (garbage,
+/// attribute lines, non-brace headers) yields `None` and the hunk falls
+/// through to the existing classifiers.
+fn member_context_container(line: &str, want_struct: bool) -> Option<String> {
+    let t = line.trim();
+    if !t.ends_with('{') {
+        return None;
+    }
+    let item: syn::Item = syn::parse_str(&format!("{t}}}")).ok()?;
+    match item {
+        syn::Item::Struct(s) if want_struct => Some(s.ident.to_string()),
+        syn::Item::Enum(e) if !want_struct => Some(e.ident.to_string()),
+        _ => None,
+    }
+}
+
+/// First `struct S {` container named by any context line, if any.
+fn struct_context(context_raw: &str) -> Option<String> {
+    context_raw
+        .lines()
+        .find_map(|l| member_context_container(l, true))
+}
+
+/// First `enum E {` container named by any context line, if any.
+fn enum_context(context_raw: &str) -> Option<String> {
+    context_raw
+        .lines()
+        .find_map(|l| member_context_container(l, false))
+}
+
+/// A plain Rust identifier (mirrors the item-rename gate), plus
+/// `r#`-prefixed raw idents (`r#type` names a field normal `type`
+/// cannot spell).
+fn is_member_ident(word: &str) -> bool {
+    let word = word.strip_prefix("r#").unwrap_or(word);
+    if word.starts_with("r#") {
+        return false;
+    }
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Split an optional `pub` / `pub(...)` visibility prefix; returns the
+/// normalized prefix plus the rest. Only consumes `pub` followed by a
+/// delimiter so `public` (an ident) is never visibility.
+fn split_member_vis(s: &str) -> (&str, &str) {
+    if let Some(rest) = s.strip_prefix("pub") {
+        if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+            let n = "pub".len();
+            let tail = s[n..].trim_start();
+            return ("pub", tail);
+        }
+        if let Some(after) = rest.trim_start().strip_prefix('(') {
+            let mut depth = 1i32;
+            for (i, c) in after.char_indices() {
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return ("pub(...)", after[i + 1..].trim_start());
+                    }
+                }
+            }
+        }
+    }
+    ("", s)
+}
+
+/// Full minus/plus text echoes context lines (the header included), so
+/// pair parsing runs on the text with container-header lines removed.
+/// A pair line never ends with `{`, so the strip cannot eat the pair.
+fn strip_container_headers(text: &str) -> String {
+    text.lines()
+        .filter(|l| {
+            member_context_container(l, true).is_none()
+                && member_context_container(l, false).is_none()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Byte index of the field-separator colon: a `:` with no `:` neighbor
+/// (path `::` separators never count). `None` when the side carries no
+/// field separator (`use crate::old`, `impl std::fmt::Display`, calls).
+fn find_field_colon(side: &str) -> Option<usize> {
+    let bytes = side.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b':' {
+            continue;
+        }
+        let prev = i.checked_sub(1).map(|j| bytes[j]);
+        let next = bytes.get(i + 1).copied();
+        if prev != Some(b':') && next != Some(b':') {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Parse one field-pair side (`[pub] name : Type`) into
+/// (vis-prefix, name, normalized type). `None` when the side is not a
+/// field-pair shape at all (no field separator, or the text ahead of it
+/// is not `[pub] ident` — some other classifier owns shapes like
+/// `struct Old { x: i32 }` or `use crate::old`); well-formed pairs with
+/// a bad type are hard `PatternConflict` errors, never silent
+/// fallthrough.
+fn parse_field_side(side: &str) -> Result<Option<(String, String, String)>, StructuredError> {
+    let Some(colon) = find_field_colon(side) else {
+        return Ok(None);
+    };
+    let (vis, rest) = split_member_vis(side[..colon].trim());
+    // Not a `[pub] ident` head: another shape owns this text (fall
+    // through so its own diagnostic fires, e.g. the item-rename
+    // concrete-shape gate or the use-rename router).
+    if !is_member_ident(rest) {
+        return Ok(None);
+    }
+    let err = |msg: String| {
+        Err(StructuredError::new(ErrorCode::PatternConflict, msg).with_repair(
+            StructuredError::fix_pattern_repair(
+                "field",
+                "write a field pair (`- old: Type` / `+ new: Type`, same type both sides) under a `struct S {` context line, or use an ordinary hunk",
+            ),
+        ))
+    };
+    let ty_raw = side[colon + 1..].trim();
+    if ty_raw.is_empty() {
+        return err(format!(
+            "field rename side `{side}` names no type (write `- <name>: <Type>`)"
+        ));
+    }
+    let ty: syn::Type = syn::parse_str(ty_raw).map_err(|_| {
+        StructuredError::new(
+            ErrorCode::PatternConflict,
+            format!("field rename type `{ty_raw}` does not parse as a Rust type"),
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "field",
+            "write a field pair (`- old: Type` / `+ new: Type`, same type both sides) under a `struct S {` context line, or use an ordinary hunk",
+        ))
+    })?;
+    let norm = quote::quote!(#ty)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(Some((vis.to_string(), rest.to_string(), norm)))
+}
+
+/// Parse one variant-pair side (bare `Name`, no `:`/`(`/`{`/`=` suffix).
+/// `None` when the side is not a bare ident (the caller falls through);
+/// `Some` always carries the ident.
+fn parse_variant_side(side: &str) -> Option<String> {
+    let t = side.trim();
+    if t.is_empty() || t.contains([':', '(', '{', '=', ';']) {
+        return None;
+    }
+    let word: String = t.split_whitespace().collect();
+    if word == t && is_member_ident(t) {
+        Some(t.to_string())
+    } else {
+        None
+    }
+}
+
+/// Classify struct-field and enum-variant renames (SPEC 13.4).
+///
+/// Shape-first, context-second: both sides must parse as the same
+/// member-pair shape before any context line is consulted, so ordinary
+/// hunks merely sitting inside a struct/enum body never route here.
+/// A parsed pair without its container header is a hard `PatternConflict`
+/// naming the missing context line (fail fast, never a confusing
+/// no-match downstream).
+fn classify_member_rename(
+    minus_raw: &str,
+    plus_raw: &str,
+    context_raw: &str,
+) -> Result<Option<PatternKind>, StructuredError> {
+    // The pair is the non-header lines (the context header echoes into
+    // both full texts); the container comes from the context lines.
+    // Leading `#[...]`/doc lines are the member's own attributes (SPEC
+    // 14.6 mirror parity with item renames — same peel, same gates).
+    let minus_stripped = strip_container_headers(minus_raw);
+    let plus_stripped = strip_container_headers(plus_raw);
+    let (minus_attrs, minus_pair) = crate::pattern_general::split_leading_attrs(&minus_stripped);
+    let (plus_attrs, plus_pair) = crate::pattern_general::split_leading_attrs(&plus_stripped);
+    // Field shape: both sides carry a top-level `:`.
+    let minus_field = parse_field_side(&minus_pair)?;
+    let plus_field = parse_field_side(&plus_pair)?;
+    match (minus_field, plus_field) {
+        (Some((mvis, mname, mty)), Some((pvis, pname, pty))) => {
+            let Some(container) = struct_context(context_raw) else {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "field rename pair needs a `struct S {` context line naming the container (add the header as context, or use an ordinary hunk)",
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "field",
+                    "add a `struct S {` context line naming the container, or use an ordinary hunk",
+                )));
+            };
+            if mname == pname {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("field rename minus and plus names are identical (`{mname}`); write the new name on the `+` side"),
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "field",
+                    "write the new name on the `+` side",
+                )));
+            }
+            if mvis != pvis {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("field rename visibility differs (`{mvis}` vs `{pvis}`); renames are ident-only — write the same prefix on both sides or neither"),
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "field",
+                    "write the same visibility prefix on both sides or neither",
+                )));
+            }
+            if mty != pty {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("field rename types differ (`{mty}` vs `{pty}`); renames are ident-only — write the same type on both sides"),
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "field",
+                    "write the same type on both sides",
+                )));
+            }
+            return Ok(Some(PatternKind::FieldRename {
+                struct_name: container,
+                old: mname,
+                new: pname,
+                ty: mty,
+                minus_attrs,
+                plus_attrs,
+            }));
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "field rename sides must both be `<name>: <Type>` pairs with the same type (or use an ordinary hunk)",
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "field",
+                "write a field pair (`- old: Type` / `+ new: Type`, same type both sides) under a `struct S {` context line, or use an ordinary hunk",
+            )));
+        }
+        (None, None) => {}
+    }
+    // Variant shape: both sides bare idents. A bare-ident pair with no
+    // member context is not claimed: without a container the engine
+    // cannot scope it, so the hunk falls through to the existing
+    // classifiers (identical names are meaningless everywhere).
+    if let (Some(mname), Some(pname)) = (
+        parse_variant_side(&minus_pair),
+        parse_variant_side(&plus_pair),
+    ) {
+        if mname == pname {
+            return Ok(None);
+        }
+        if let Some(container) = enum_context(context_raw) {
+            return Ok(Some(PatternKind::VariantRename {
+                enum_name: container,
+                old: mname,
+                new: pname,
+                minus_attrs,
+                plus_attrs,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// True when both pattern sides parse as Rust types (T149): lets `impl

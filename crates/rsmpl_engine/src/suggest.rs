@@ -27,6 +27,8 @@ pub(crate) fn candidate_preview(
             | PatternKind::ImplContext { .. }
             | PatternKind::ItemCapture { .. }
             | PatternKind::ItemRename { .. }
+            | PatternKind::FieldRename { .. }
+            | PatternKind::VariantRename { .. }
             | PatternKind::UseRename { .. }
     );
     if kind_specific {
@@ -49,6 +51,12 @@ pub(crate) fn candidate_preview(
                 PatternKind::ItemRename {
                     kind, minus_name, ..
                 } => Some((format!("{} ", kind.as_str()), Some(minus_name.clone()))),
+                PatternKind::FieldRename { struct_name, .. } => {
+                    Some(("struct ".to_string(), Some(struct_name.clone())))
+                }
+                PatternKind::VariantRename { enum_name, .. } => {
+                    Some(("enum ".to_string(), Some(enum_name.clone())))
+                }
                 PatternKind::ImplContext { .. } => Some(("fn ".to_string(), None)),
                 PatternKind::UseRename { .. } => Some(("use ".to_string(), None)),
                 _ => None,

@@ -967,6 +967,9 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 /// `# follow=uses`: (file, rewritten use-site count, line spans).
 pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>)>;
 
+/// Resolved follow edits per file: (path, [(start, end, replacement)]).
+type ResolvedUses = Vec<(String, Vec<(usize, usize, String)>)>;
+
 /// WI-6b1 `# follow=uses` workspace step (SPEC 14.8): after the definition
 /// rewrite, resolve use sites across every loaded `.rs` file (unique-
 /// definition fast path) and append their ident-span edits under the same
@@ -993,12 +996,28 @@ pub(crate) fn follow_uses_workspace(
     if found == 0 {
         return Ok((bindings, no_follow));
     }
-    let (old, new, macro_paths) = match &compiled.kind {
+    // WI-9a: member renames follow through the member collector (which
+    // claims only `E::Old` paths / `.old` + `S`-anchored labels); every
+    // other shape keeps the scalar resolver.
+    enum FollowTarget {
+        Scalar {
+            macro_paths: bool,
+        },
+        Member {
+            kind: crate::use_graph_member::MemberKind,
+            container: String,
+        },
+    }
+    let (old, new, target) = match &compiled.kind {
         PatternKind::Fn {
             minus_name,
             plus_name,
             ..
-        } => (minus_name.clone(), plus_name.clone(), false),
+        } => (
+            minus_name.clone(),
+            plus_name.clone(),
+            FollowTarget::Scalar { macro_paths: false },
+        ),
         PatternKind::ItemRename {
             minus_name,
             plus_name,
@@ -1007,19 +1026,47 @@ pub(crate) fn follow_uses_workspace(
         } => (
             minus_name.clone(),
             plus_name.clone(),
-            *kind == rsmpl_pattern::ItemKind::MacroRules,
+            FollowTarget::Scalar {
+                macro_paths: *kind == rsmpl_pattern::ItemKind::MacroRules,
+            },
+        ),
+        PatternKind::FieldRename {
+            struct_name,
+            old,
+            new,
+            ..
+        } => (
+            old.clone(),
+            new.clone(),
+            FollowTarget::Member {
+                kind: crate::use_graph_member::MemberKind::Field,
+                container: struct_name.clone(),
+            },
+        ),
+        PatternKind::VariantRename {
+            enum_name,
+            old,
+            new,
+            ..
+        } => (
+            old.clone(),
+            new.clone(),
+            FollowTarget::Member {
+                kind: crate::use_graph_member::MemberKind::Variant,
+                container: enum_name.clone(),
+            },
         ),
         _ => {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
-                "# follow=uses is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+                "# follow=uses is only supported on fn, item, field, and variant rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
             )
             .with_rule(rh.rule_name())
             .with_file(def_path)
-            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item rename")
+            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename")
             .with_repair(StructuredError::fix_pattern_repair(
                 "C17",
-                "remove `# follow=uses`, or rewrite this hunk as a fn/item rename",
+                "remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant rename",
             )));
         }
     };
@@ -1039,15 +1086,7 @@ pub(crate) fn follow_uses_workspace(
             refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
         }
     }
-    let outcome = resolve_workspace(
-        &refs,
-        &old,
-        def_path,
-        &renamed,
-        rh.fallback_syntax(),
-        macro_paths,
-    )
-    .map_err(|veto| {
+    let veto_to_err = |veto: FollowVeto| {
         StructuredError::new(ErrorCode::SymbolConflict, veto.reason)
             .with_rule(rh.rule_name())
             .with_file(def_path)
@@ -1055,7 +1094,71 @@ pub(crate) fn follow_uses_workspace(
                 "add `# fallback=syntax` to skip ambiguous sites (listed in `follow_skipped`) instead of failing",
             )
             .with_repair(StructuredError::add_directive_repair("# fallback=syntax"))
-    })?;
+    };
+    // Normalized edits per file. The scalar resolver rewrites every
+    // span to `new`; the member resolver carries its own replacements
+    // (shorthand expansion).
+    let (per_file, skipped_from_resolve): (ResolvedUses, Vec<String>) = match &target {
+        FollowTarget::Scalar { macro_paths } => {
+            let outcome = resolve_workspace(
+                &refs,
+                &old,
+                def_path,
+                &renamed,
+                rh.fallback_syntax(),
+                *macro_paths,
+            )
+            .map_err(veto_to_err)?;
+            let per_file = outcome
+                .per_file
+                .into_iter()
+                .map(|(f, spans)| {
+                    (
+                        f,
+                        spans
+                            .into_iter()
+                            .map(|(a, b)| (a, b, new.clone()))
+                            .collect(),
+                    )
+                })
+                .collect();
+            (per_file, outcome.skipped)
+        }
+        FollowTarget::Member { kind, container } => {
+            let outcome = crate::use_graph_member::resolve_member_workspace(
+                &refs,
+                *kind,
+                container,
+                &old,
+                &new,
+                def_path,
+                &renamed,
+                rh.fallback_syntax(),
+            )
+            .map_err(veto_to_err)?;
+            let per_file = outcome
+                .per_file
+                .into_iter()
+                .map(|(f, edits)| {
+                    (
+                        f,
+                        edits
+                            .into_iter()
+                            .map(|e| (e.start, e.end, e.replacement))
+                            .collect(),
+                    )
+                })
+                .collect();
+            (per_file, outcome.skipped)
+        }
+    };
+    let outcome = WorkspaceOutcome {
+        per_file: per_file
+            .iter()
+            .map(|(f, edits)| (f.clone(), edits.iter().map(|(a, b, _)| (*a, *b)).collect()))
+            .collect(),
+        skipped: skipped_from_resolve,
+    };
     // Unparseable-workspace tripwire (SPEC 14.8): a file the resolver could
     // not search that names `old` outside strings/comments fails loud
     // without fallback (never a silent stale site), or is listed and left
@@ -1085,26 +1188,26 @@ pub(crate) fn follow_uses_workspace(
     // Append use-span edits per file; record pre-push lengths so extra
     // reports span exactly the pushed edits.
     let mut before_lens: HashMap<String, usize> = HashMap::new();
-    for (f, spans) in &outcome.per_file {
+    for (f, edits) in &per_file {
         before_lens.insert(f.clone(), file_edits.get(f).map(|v| v.len()).unwrap_or(0));
         let vec = file_edits.get_mut(f).expect("workspace file state");
-        for (a, b) in spans {
-            vec.push(TextEdit::new(*a, *b, new.clone()));
+        for (a, b, replacement) in edits {
+            vec.push(TextEdit::new(*a, *b, replacement.clone()));
         }
     }
     let mut extras: FollowExtras = Vec::new();
-    for (f, spans) in &outcome.per_file {
+    for (f, edits) in &per_file {
         if f == def_path {
             continue;
         }
-        if spans.is_empty() {
+        if edits.is_empty() {
             continue;
         }
         let st = states.get(f).expect("workspace file state");
-        let edits = file_edits.get(f).expect("workspace file state");
+        let file_edit_list = file_edits.get(f).expect("workspace file state");
         let before = before_lens.get(f).copied().unwrap_or(0);
-        let line_spans = edit_spans(&st.index, &edits[before..]);
-        extras.push((f.clone(), spans.len(), line_spans));
+        let line_spans = edit_spans(&st.index, &file_edit_list[before..]);
+        extras.push((f.clone(), edits.len(), line_spans));
     }
     extras.sort_by(|a, b| a.0.cmp(&b.0));
     let mut skipped = outcome.skipped;

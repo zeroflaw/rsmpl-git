@@ -29,7 +29,7 @@ use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{
     matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item, matcher_macro,
-    matcher_use,
+    matcher_member, matcher_use,
 };
 use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
 
@@ -76,7 +76,10 @@ fn apply_inner(
     let patch_has_rename = patch.files.iter().flat_map(|s| &s.hunks).any(|h| match h {
         Hunk::Rsmpl(rh) => matches!(
             rsmpl_pattern::compile(rh).map(|c| c.kind),
-            Ok(PatternKind::Fn { .. } | PatternKind::ItemRename { .. })
+            Ok(PatternKind::Fn { .. }
+                | PatternKind::ItemRename { .. }
+                | PatternKind::FieldRename { .. }
+                | PatternKind::VariantRename { .. })
         ),
         Hunk::Ordinary(_) => false,
     });
@@ -539,6 +542,26 @@ fn apply_inner(
                                 }
                                 collect_orphans(&refs, minus_name, path, &renamed, false)
                             }
+                            PatternKind::FieldRename {
+                                struct_name, old, ..
+                            } => member_orphans(
+                                &states,
+                                &file_edits,
+                                path,
+                                edits_before,
+                                crate::use_graph_member::MemberKind::Field,
+                                struct_name,
+                                old,
+                            ),
+                            PatternKind::VariantRename { enum_name, old, .. } => member_orphans(
+                                &states,
+                                &file_edits,
+                                path,
+                                edits_before,
+                                crate::use_graph_member::MemberKind::Variant,
+                                enum_name,
+                                old,
+                            ),
                             PatternKind::ItemRename {
                                 minus_name, kind, ..
                             } => {
@@ -769,6 +792,37 @@ fn apply_inner(
 /// exact same dispatch (no predicate duplication, no drift). File context
 /// (`with_file`) is applied by the caller, not here, so real and probe
 /// runs share error shapes.
+/// WI-9a: orphan evidence for definition-only member renames (SPEC
+/// 14.8). Mirrors the scalar orphan block: the definition hunk's own
+/// ident-span edits plus every loaded `.rs` file feed the member
+/// collector.
+#[allow(clippy::too_many_arguments)]
+fn member_orphans(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    kind: crate::use_graph_member::MemberKind,
+    container: &str,
+    old: &str,
+) -> Vec<crate::OrphanReport> {
+    let renamed: Vec<(usize, usize)> = file_edits
+        .get(path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
+    let mut paths: Vec<&String> = states.keys().collect();
+    paths.sort();
+    for p in paths {
+        if let Some(st) = states.get(p) {
+            if let Some(parsed) = st.parsed.as_ref() {
+                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
+            }
+        }
+    }
+    crate::use_graph_member::collect_member_orphans(&refs, kind, container, old, path, &renamed)
+}
+
 fn apply_rsmpl_hunk(
     state: &FileState,
     path: &str,
@@ -816,6 +870,24 @@ fn apply_rsmpl_hunk(
             edits,
         ),
         PatternKind::ItemRename { .. } => matcher_item::apply_item_rename_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        )
+        .map(|n| (n, vec![empty(); n])),
+        PatternKind::FieldRename { .. } => matcher_member::apply_field_rename_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        )
+        .map(|n| (n, vec![empty(); n])),
+        PatternKind::VariantRename { .. } => matcher_member::apply_variant_rename_hunk(
             parsed,
             &state.original,
             &state.index,

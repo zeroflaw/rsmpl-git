@@ -42,7 +42,7 @@ overlap semantic ranges (SPEC 10.6, SPEC 11).
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments (SPEC 14.6) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous (SPEC 13.4) |
 | `# fallback=syntax` | allow syntactic match when `# symbol` can't resolve (SPEC 19); with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing (SPEC 14.8) |
-| `# follow=uses` | rewrite workspace use sites alongside a fn/item rename (unique-definition only, multi-def vetoes; one-hop `pub use` re-exports followed, second-hop/off-target/glob-re-export vetoes); definition-only without it, with `orphans` evidence (SPEC 14.8) |
+| `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant rename (unique-definition only, multi-def vetoes; one-hop `pub use` re-exports followed, second-hop/off-target/glob-re-export vetoes; fields claim `.old` + `S`-labels with shorthand `S { old }` → `S { new: old }`, variants claim `E::Old` paths while bare `Old` stays opaque); definition-only without it, with `orphans` evidence (SPEC 14.8) |
 | `# returns=none` | minus-side requires no return type (SPEC 14.2, fn only) |
 
 Everything else lives in the full table (SPEC 9.3); you rarely need it.

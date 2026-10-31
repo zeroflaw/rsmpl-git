@@ -11,8 +11,8 @@ through `gitrs` as ordinary hunks, so one tool owns every change.
 
 ## When to use / when not to
 
-- Use: rename (fn/item), call rewrites, moves, signature evolution,
-  `let`/expr/type rewrites — anything with `-`/`+` pattern lines.
+- Use: rename (fn/item/field/variant), call rewrites, moves, signature
+  evolution, `let`/expr/type rewrites — anything with `-`/`+` pattern lines.
 - Viewing only: use a targeted file read — the CLI lists nothing.
 - Small file already held: skip discovery entirely — `@@ -1,1 @@` plus
   `# sweep` searches the whole file (SPEC 17.3).
@@ -47,7 +47,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 | `# attrs=preserve` | default: ignore + preserve attrs/doc comments; write `#[...]` on its own diff line (single-line `#[a] let x = E;` never matches) |
 | `# root=item\|expr\|stmt\|type` | force parse context |
 | `# fallback=syntax` | syntactic match when `# symbol` can't resolve; with `# follow=uses`, skip ambiguous/opaque sites instead of vetoing |
-| `# follow=uses` | rewrite workspace use sites alongside a fn/item rename (unique-definition only, multi-def vetoes; one-hop `pub use` re-exports followed, second-hop/off-target/glob-re-export vetoes) (definition-only without it, with `orphans` evidence) |
+| `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant rename (unique-definition only, multi-def vetoes; one-hop `pub use` re-exports followed, second-hop/off-target/glob-re-export vetoes; fields claim `.old` + `S`-labels, variants claim `E::Old`) (definition-only without it, with `orphans` evidence) |
 | `# returns=none` | minus-side requires no return type (fn only) |
 
 ## Shapes (SPEC 14/15/16/18.6)

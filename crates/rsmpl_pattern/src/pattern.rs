@@ -87,6 +87,30 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Struct-field rename (`struct S {` context + `old: T` -> `new: T`):
+    /// only the field ident span is replaced; the container, visibility,
+    /// and type are preserved. Named fields only (SPEC 13.4).
+    FieldRename {
+        struct_name: String,
+        old: String,
+        new: String,
+        /// `quote!`-normalized expected field type (both sides equal).
+        ty: String,
+        /// Leading `#[...]`/doc attribute lines on each side (SPEC 14.6
+        /// mirror parity with item renames).
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
+    /// Enum-variant rename (`enum E {` context + `Old` -> `New`):
+    /// only the variant ident span is replaced; discriminants and
+    /// fields are preserved (SPEC 13.4).
+    VariantRename {
+        enum_name: String,
+        old: String,
+        new: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -354,6 +378,8 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             }
             PatternKind::Macro { .. } => "macro",
             PatternKind::ItemRename { .. } => "item-rename",
+            PatternKind::FieldRename { .. } => "field-rename",
+            PatternKind::VariantRename { .. } => "variant-rename",
             PatternKind::UseRename { .. } => "use-path",
             PatternKind::ItemCapture { .. } => "item-capture",
             PatternKind::Insertion { .. } => "insertion",
