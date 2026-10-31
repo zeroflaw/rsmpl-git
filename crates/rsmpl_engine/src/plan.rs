@@ -18,7 +18,8 @@ use rsmpl_pattern::PatternKind;
 
 use crate::capture::{paste_capture, CaptureStore, PasteTarget};
 use crate::edits::{
-    apply_edits, check_overlaps, coalesce_deletes, edit_spans, translate_spans_to_post, TextEdit,
+    apply_edits, check_overlaps, coalesce_deletes, dedupe_identical_edits, edit_spans,
+    translate_spans_to_post, TextEdit,
 };
 use crate::lines::{FileState, LineIndex};
 use crate::postcheck::{
@@ -750,10 +751,11 @@ fn apply_inner(
                     // is sorted at the source.
                     // WI-1b: follow-only extras are conservatively
                     // reparse-only (the definition probe covers the rename;
-                    // per-use plus shapes differ). Every extra span is a
-                    // rewritten use site: WI-2 `follow` label throughout.
-                    for (file, matches, spans) in extra_reports {
-                        let span_labels = vec![Some("follow".to_string()); spans.len()];
+                    // per-use plus shapes differ). Labels ride along:
+                    // use sites `follow`, WI-1 impl-definition claims
+                    // `rename`.
+                    for (file, matches, spans, labels) in extra_reports {
+                        let span_labels = labels.into_iter().map(Some).collect();
                         rule_order.push((
                             (sec_idx, hunk_idx),
                             RuleReport {
@@ -827,6 +829,11 @@ fn apply_inner(
         // T464: overlapping pure deletions union-merge (adjacent item
         // deletes double-claim their shared separator blank); every
         // other overlap pair still fails in `check_overlaps` below.
+        // WI-1: identical rewrites of the same span (a follow definition
+        // claim + a sibling definition-only hunk owning the same impl
+        // item, same replacement) collapse to one edit — same bytes,
+        // same outcome, never a conflict.
+        let edits = dedupe_identical_edits(edits);
         let edits = coalesce_deletes(edits);
         check_overlaps(&edits, path)?;
         full_edits.insert(path.clone(), edits.clone());

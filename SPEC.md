@@ -2658,8 +2658,19 @@ through untouched (free `type`/`const` pairs stay item renames /
 definition evolutions). Rename verification is span-local ident
 equality at the reported spans (`instantiated`).
 
-`# follow=uses` on an assoc rename (WI-27) rewrites the container-proven
-use tails and nothing else — in expression, type, and pattern positions:
+`# follow=uses` on an assoc rename (WI-27, definition set completed by
+WI-1) rewrites the container-proven use tails plus, for a trait-header
+rename, every trait-proven `impl <Trait> for <Self>` definition of the
+same kind and name (`type Item = …` / `const LIMIT … = …` inside an
+`impl Tr for S` block whose trait tail names the renamed trait) —
+each definition ident rewritten and labelled `rename` in `span_labels`
+(use tails stay `follow`; `matches` still counts definitions). Inherent
+impls (`impl S { … }` with no trait) never claim: they are a different
+item, so an inherent same-kind `old` definition is left untouched and
+reported as `shadowed` evidence. An impl header that does not
+textually name the trait (glob/second-hop) yields no definition claim
+(skip, never veto, never whole-run failure). Use tails rewrite in
+expression, type, and pattern positions:
 `Self::Old` inside a domain impl block (a header-matching block, or an
 `impl Tr for S` block when the renamed trait is `Tr`; `Self::Old`
 inside the matching `trait Tr` block itself likewise), `S::Old` /
@@ -2675,10 +2686,12 @@ rewrite (never a whole-run failure, with or without
 `# fallback=syntax`). Macro-token / attribute interiors mentioning
 `old` are opaque: veto without fallback, skip with `macro-hidden` under
 it (scalar/member parity). Bare `Old` is not assoc syntax and is
-ignored outright. Without follow, the same claim walk reports every
-left-behind site as an orphan (`off-target`, macro interiors
-`macro-hidden`). Follow-only file extras are `reparse-only` by
-construction; the definition probe covers the rename.
+ignored outright. Without follow, the same claim walk plus the WI-1
+definition set reports every left-behind site as an orphan
+(`off-target`, macro interiors `macro-hidden`) — including leftover
+trait-proven `impl` definitions. Follow-only file extras are
+`reparse-only` by construction; the definition probe covers the
+rename.
 
 Associated-item evolution (WI-26) keeps the name and rewrites only
 the RHS/default span under the same header: `type Item = Vec<T>;` →

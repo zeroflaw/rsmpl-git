@@ -997,10 +997,12 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 /// (SPEC 14.8). Zero new def edits (optional zero-match) means nothing to
 /// WI-6b1: one follow-only entry per non-definition file touched by
 /// `# follow=uses`: (file, rewritten use-site count, line spans).
-pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>)>;
+pub(crate) type FollowExtras = Vec<(String, usize, Vec<(u32, u32)>, Vec<String>)>;
 
-/// Resolved follow edits per file: (path, [(start, end, replacement)]).
-type ResolvedUses = Vec<(String, Vec<(usize, usize, String)>)>;
+/// Resolved follow edits per file: (path, [(start, end, replacement, label)]).
+/// Labels are WI-2 evidence only (`follow` for use sites, `rename` for
+/// WI-1 impl-definition claims).
+type ResolvedUses = Vec<(String, Vec<(usize, usize, String, &'static str)>)>;
 
 /// WI-2 follow-workspace outcome: the follow-only entries and the
 /// structured skip details (SPEC D.2). v4: the compat `follow_skipped`
@@ -1175,7 +1177,7 @@ pub(crate) fn follow_uses_workspace(
                         f,
                         spans
                             .into_iter()
-                            .map(|(a, b)| (a, b, new.clone()))
+                            .map(|(a, b)| (a, b, new.clone(), "follow"))
                             .collect(),
                     )
                 })
@@ -1202,7 +1204,7 @@ pub(crate) fn follow_uses_workspace(
                         f,
                         edits
                             .into_iter()
-                            .map(|e| (e.start, e.end, e.replacement))
+                            .map(|e| (e.start, e.end, e.replacement, "follow"))
                             .collect(),
                     )
                 })
@@ -1259,7 +1261,9 @@ pub(crate) fn follow_uses_workspace(
                         f,
                         spans
                             .into_iter()
-                            .map(|(a, b)| (a, b, new.clone()))
+                            .map(|(a, b, is_def)| {
+                                (a, b, new.clone(), if is_def { "rename" } else { "follow" })
+                            })
                             .collect(),
                     )
                 })
@@ -1270,7 +1274,12 @@ pub(crate) fn follow_uses_workspace(
     let outcome = WorkspaceOutcome {
         per_file: per_file
             .iter()
-            .map(|(f, edits)| (f.clone(), edits.iter().map(|(a, b, _)| (*a, *b)).collect()))
+            .map(|(f, edits)| {
+                (
+                    f.clone(),
+                    edits.iter().map(|(a, b, _, _)| (*a, *b)).collect(),
+                )
+            })
             .collect(),
         skipped: skipped_from_resolve,
     };
@@ -1301,14 +1310,15 @@ pub(crate) fn follow_uses_workspace(
         .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
     }
     // Append use-span edits per file; record pre-push lengths so extra
-    // reports span exactly the pushed edits. Follow use-site edits carry
-    // the WI-2 `follow` span label (evidence only).
+    // reports span exactly the pushed edits. Use sites carry the WI-2
+    // `follow` span label, WI-1 impl-definition claims `rename` (evidence
+    // only).
     let mut before_lens: HashMap<String, usize> = HashMap::new();
     for (f, edits) in &per_file {
         before_lens.insert(f.clone(), file_edits.get(f).map(|v| v.len()).unwrap_or(0));
         let vec = file_edits.get_mut(f).expect("workspace file state");
-        for (a, b, replacement) in edits {
-            vec.push(TextEdit::new(*a, *b, replacement.clone()).with_label("follow"));
+        for (a, b, replacement, label) in edits {
+            vec.push(TextEdit::new(*a, *b, replacement.clone()).with_label(label));
         }
     }
     let mut extras: FollowExtras = Vec::new();
@@ -1323,7 +1333,11 @@ pub(crate) fn follow_uses_workspace(
         let file_edit_list = file_edits.get(f).expect("workspace file state");
         let before = before_lens.get(f).copied().unwrap_or(0);
         let line_spans = edit_spans(&st.index, &file_edit_list[before..]);
-        extras.push((f.clone(), edits.len(), line_spans));
+        let labels: Vec<String> = file_edit_list[before..]
+            .iter()
+            .map(|e| e.label.unwrap_or("follow").to_string())
+            .collect();
+        extras.push((f.clone(), edits.len(), line_spans, labels));
     }
     extras.sort_by(|a, b| a.0.cmp(&b.0));
     let mut skipped = outcome.skipped;

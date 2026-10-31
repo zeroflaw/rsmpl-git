@@ -127,19 +127,41 @@ pub(crate) fn resolve_assoc_workspace(
     fallback: bool,
 ) -> Result<AssocWorkspaceOutcome, FollowVeto> {
     let census = AssocCensus::collect(files, domain, filter);
+    let def_claims = collect_impl_def_claims(files, domain, filter);
     let renamed_hit_in = |path: &str, a: usize, b: usize| {
         path == def_path && renamed.iter().any(|(s, e)| a < *e && *s < b)
     };
-    let mut per_file: Vec<(String, Vec<(usize, usize)>)> = Vec::new();
+    let mut per_file: AssocFileEdits = Vec::new();
     let mut skipped: Vec<FollowSkip> = Vec::new();
     let mut opaque: Vec<(String, u32, String)> = Vec::new();
+    // Index def claims by file for the per-file loop below.
+    let mut def_by_file: std::collections::HashMap<&str, Vec<(usize, usize, u32)>> =
+        std::collections::HashMap::new();
+    for (path, a, b, line) in &def_claims {
+        def_by_file
+            .entry(path.as_str())
+            .or_default()
+            .push((*a, *b, *line));
+    }
+    // Inherent same-kind definitions are a different item: evidence only.
+    for (path, line) in collect_inherent_def_lines(files, domain) {
+        skipped.push(FollowSkip::new(
+            format!(
+                "{path}:{line}: inherent assoc item `{}` (different item) left untouched",
+                domain.old,
+            ),
+            &path,
+            line,
+            skip_reason::SHADOWED,
+        ));
+    }
     for (path, parsed, original, index) in files {
         let mut walker = AssocWalker::new(domain, filter, &census);
         walker.visit_file(parsed);
         for (line, ctx) in &walker.opaque {
             opaque.push((path.clone(), *line, ctx.clone()));
         }
-        let mut edits: Vec<(usize, usize)> = Vec::new();
+        let mut edits: Vec<(usize, usize, bool)> = Vec::new();
         for span in &walker.claims {
             let line = span.start().line as u32;
             let Some((a, b)) = span_bytes(original, index, *span) else {
@@ -161,7 +183,22 @@ pub(crate) fn resolve_assoc_workspace(
             if renamed_hit_in(path, a, b) {
                 continue;
             }
-            edits.push((a, b));
+            edits.push((a, b, false));
+        }
+        // WI-1: trait-proven `impl Trait for S` definitions are definition
+        // claims (labelled `rename`), not use sites. Same text guard and
+        // renamed-overlap skip as path tails.
+        if let Some(defs) = def_by_file.get(path.as_str()) {
+            for (a, b, line) in defs {
+                if original.get(*a..*b) != Some(domain.old.as_str()) {
+                    continue;
+                }
+                if renamed_hit_in(path, *a, *b) {
+                    continue;
+                }
+                let _ = line;
+                edits.push((*a, *b, true));
+            }
         }
         edits.sort_unstable();
         edits.dedup();
@@ -208,17 +245,29 @@ pub(crate) fn resolve_assoc_workspace(
     Ok(AssocWorkspaceOutcome { per_file, skipped })
 }
 
-/// Workspace outcome: path → ident byte-spans (rewritten to `new` by
-/// the caller) plus structured skips.
+/// One assoc follow edit: byte span plus whether it is a WI-1
+/// impl-definition claim (`true` → `rename` label) or a `::`-tail use
+/// site (`false` → `follow` label).
+pub(crate) type AssocEdit = (usize, usize, bool);
+
+/// Per-file assoc follow edits.
+pub(crate) type AssocFileEdits = Vec<(String, Vec<AssocEdit>)>;
+
+/// Workspace outcome: path → (start, end, is_definition) byte spans
+/// (rewritten to `new` by the caller) plus structured skips.
+/// `is_definition == true` marks an `impl Trait for S` definition ident
+/// (WI-1: labelled `rename`); `false` marks a `::`-tail use site
+/// (labelled `follow`).
 #[derive(Debug)]
 pub(crate) struct AssocWorkspaceOutcome {
-    pub per_file: Vec<(String, Vec<(usize, usize)>)>,
+    pub per_file: AssocFileEdits,
     pub skipped: Vec<FollowSkip>,
 }
 
 /// Report-only orphan collection for definition-only assoc renames
 /// (WI-13 acceptance: without follow, orphans list every `Self::`
-/// site). Same claim walk as follow, never vetoing: claimable sites
+/// site; WI-1: plus every trait-proven `impl Trait for S` definition).
+/// Same claim walk as follow, never vetoing: claimable sites
 /// become `off-target` orphans, macro/attribute interiors
 /// `macro-hidden`. Unparseable files are excluded (the follow tripwire
 /// owns them).
@@ -230,6 +279,12 @@ pub(crate) fn collect_assoc_orphans(
     renamed: &[(usize, usize)],
 ) -> Vec<crate::OrphanReport> {
     let census = AssocCensus::collect(files, domain, filter);
+    let def_claims = collect_impl_def_claims(files, domain, filter);
+    let mut def_by_file: std::collections::HashMap<&str, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    for (path, a, b, _) in &def_claims {
+        def_by_file.entry(path.as_str()).or_default().push((*a, *b));
+    }
     let renamed_hit_in = |path: &str, a: usize, b: usize| {
         path == def_path && renamed.iter().any(|(s, e)| a < *e && *s < b)
     };
@@ -251,6 +306,18 @@ pub(crate) fn collect_assoc_orphans(
             }
             lines.push((line, "off-target"));
         }
+        if let Some(defs) = def_by_file.get(path.as_str()) {
+            for (a, b) in defs {
+                if original.get(*a..*b) != Some(domain.old.as_str()) {
+                    continue;
+                }
+                if renamed_hit_in(path, *a, *b) {
+                    continue;
+                }
+                let line = index.line_of(*a);
+                lines.push((line, "off-target"));
+            }
+        }
         for line in &walker.shadowed {
             lines.push((*line, "off-target"));
         }
@@ -270,6 +337,160 @@ pub(crate) fn collect_assoc_orphans(
     }
     out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     out.dedup_by(|a, b| a.file == b.file && a.line == b.line);
+    out
+}
+
+/// WI-1 definition set: for a trait-header rename, every
+/// `impl <Trait> for <Self>` block whose trait tail names the renamed
+/// trait contributes its same-kind, same-name `ImplItem` definition
+/// ident. Returns (path, start, end, line). Inherent impls (`trait_:
+/// None`) never claim — they are a different item. Gated on
+/// `filter.want_trait`: impl-header renames own exactly one block via
+/// the definition matcher already.
+///
+/// Proof discipline is syntactic (D8): last-segment equality on the
+/// trait path, the same rule the `Self::`-site walker uses for
+/// `trait_matches`. Glob/second-hop headers that do not textually name
+/// the trait simply yield no claim here (skip, never veto).
+fn collect_impl_def_claims(
+    files: &[(String, &syn::File, &str, &LineIndex)],
+    domain: &AssocDomain,
+    filter: &rsmpl_pattern::ImplHeaderFilter,
+) -> Vec<(String, usize, usize, u32)> {
+    if !filter.want_trait {
+        return Vec::new();
+    }
+    let Some(trait_name) = &domain.trait_name else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (path, parsed, original, index) in files {
+        struct DefVisitor<'a> {
+            trait_name: &'a str,
+            is_type: bool,
+            old: &'a str,
+            original: &'a str,
+            index: &'a LineIndex,
+            out: Vec<(usize, usize, u32)>,
+        }
+        impl<'ast> Visit<'ast> for DefVisitor<'_> {
+            fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+                let names_trait = match &node.trait_ {
+                    Some((_, path, _)) => last_ident(&norm_path(path)) == *self.trait_name,
+                    None => false,
+                };
+                if names_trait {
+                    if self.is_type {
+                        for it in &node.items {
+                            if let syn::ImplItem::Type(ty) = it {
+                                if ty.ident == self.old {
+                                    if let Some((a, b)) =
+                                        span_bytes(self.original, self.index, ty.ident.span())
+                                    {
+                                        if self.original.get(a..b) == Some(self.old) {
+                                            let line = ty.ident.span().start().line as u32;
+                                            self.out.push((a, b, line));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        for it in &node.items {
+                            if let syn::ImplItem::Const(c) = it {
+                                if c.ident == self.old {
+                                    if let Some((a, b)) =
+                                        span_bytes(self.original, self.index, c.ident.span())
+                                    {
+                                        if self.original.get(a..b) == Some(self.old) {
+                                            let line = c.ident.span().start().line as u32;
+                                            self.out.push((a, b, line));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                visit::visit_item_impl(self, node);
+            }
+        }
+        let mut visitor = DefVisitor {
+            trait_name,
+            is_type: domain.is_type,
+            old: &domain.old,
+            original,
+            index,
+            out: Vec::new(),
+        };
+        visitor.visit_file(parsed);
+        for (a, b, line) in visitor.out {
+            out.push((path.clone(), a, b, line));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Inherent same-kind definitions of `old`: `impl S { type Item … }` with
+/// no trait. A different item from the renamed trait item — follow
+/// evidence (`shadowed`), never a claim. Returns (path, line).
+fn collect_inherent_def_lines(
+    files: &[(String, &syn::File, &str, &LineIndex)],
+    domain: &AssocDomain,
+) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
+    for (path, parsed, _, _) in files {
+        struct InhVisitor<'a> {
+            is_type: bool,
+            old: &'a str,
+            out: Vec<u32>,
+        }
+        impl<'ast> Visit<'ast> for InhVisitor<'_> {
+            fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+                if node.trait_.is_none() {
+                    let defines = if self.is_type {
+                        node.items
+                            .iter()
+                            .any(|it| matches!(it, syn::ImplItem::Type(ty) if ty.ident == self.old))
+                    } else {
+                        node.items
+                            .iter()
+                            .any(|it| matches!(it, syn::ImplItem::Const(c) if c.ident == self.old))
+                    };
+                    if defines {
+                        for it in &node.items {
+                            let ident_span = match it {
+                                syn::ImplItem::Type(ty) if self.is_type && ty.ident == self.old => {
+                                    Some(ty.ident.span())
+                                }
+                                syn::ImplItem::Const(c) if !self.is_type && c.ident == self.old => {
+                                    Some(c.ident.span())
+                                }
+                                _ => None,
+                            };
+                            if let Some(span) = ident_span {
+                                self.out.push(span.start().line as u32);
+                            }
+                        }
+                    }
+                }
+                visit::visit_item_impl(self, node);
+            }
+        }
+        let mut visitor = InhVisitor {
+            is_type: domain.is_type,
+            old: &domain.old,
+            out: Vec::new(),
+        };
+        visitor.visit_file(parsed);
+        for line in visitor.out {
+            out.push((path.clone(), line));
+        }
+    }
+    out.sort();
+    out.dedup();
     out
 }
 

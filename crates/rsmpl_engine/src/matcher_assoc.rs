@@ -732,15 +732,21 @@ mod tests {
             out.contains("fn q(y: <S as Tr>::Output) -> Tr::Output {"),
             "got: {out}"
         );
-        assert!(!out.contains("::Item"), "got: {out}");
-        assert!(!out.contains("type Item;"), "got: {out}");
-        // `impl Tr for S` keeps its own `type Item` (definition-only:
-        // a second hunk owns it), only the use tails rewrite.
-        assert!(out.contains("type Item = u8;"), "got: {out}");
+        assert!(!out.contains("Item"), "got: {out}");
+        // WI-1: `impl Tr for S` definitions are definition claims, not
+        // leftovers — the trait-proven `type Item = u8` rewrites too.
+        assert!(out.contains("type Output = u8;"), "got: {out}");
         assert_eq!(
             report.rules[0].semantics,
             crate::RuleSemantics::Instantiated
         );
+        let labels: Vec<&str> = report.rules[0]
+            .span_labels
+            .iter()
+            .filter_map(|l| l.as_deref())
+            .collect();
+        assert!(labels.contains(&"rename"), "got: {labels:?}");
+        assert!(labels.contains(&"follow"), "got: {labels:?}");
     }
 
     #[test]
@@ -758,6 +764,12 @@ mod tests {
         .unwrap();
         assert!(files["src/a.rs"].contains("type Output;"));
         assert!(files["src/b.rs"].contains("fn make() -> Self::Output {"));
+        // WI-1: the cross-file `impl Tr for S` definition rewrites too.
+        assert!(
+            files["src/b.rs"].contains("type Output = u8;"),
+            "got: {}",
+            files["src/b.rs"]
+        );
         assert_eq!(report.rules.len(), 2);
         assert_eq!(report.rules[1].file, "src/b.rs");
     }
@@ -807,9 +819,47 @@ mod tests {
             orphans.iter().any(|o| o.text.contains("Self::Item")),
             "got: {orphans:?}"
         );
+        // WI-1: leftover trait-proven impl definitions are orphans too.
+        assert!(
+            orphans.iter().any(|o| o.text.contains("type Item = u8")),
+            "got: {orphans:?}"
+        );
         assert!(
             orphans.iter().all(|o| o.reason == "off-target"),
             "got: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn follow_rewrites_trait_const_impl_definition() {
+        // WI-1 const variant: `impl Tr for S` const definitions rewrite.
+        let src = "trait Tr {\n    const LIMIT: i32;\n}\nstruct S;\nimpl Tr for S {\n    const LIMIT: i32 = 10;\n}\nfn f() -> i32 {\n    <S as Tr>::LIMIT\n}\n";
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,9 @@ rule=r\n# follow=uses\n  trait Tr {\n- const LIMIT: i32;\n+ const MAX: i32;\n";
+        let (files, _) = apply_files(p, &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("const MAX: i32;"), "got: {out}");
+        assert!(out.contains("const MAX: i32 = 10;"), "got: {out}");
+        assert!(out.contains("<S as Tr>::MAX"), "got: {out}");
+        assert!(!out.contains("LIMIT"), "got: {out}");
+    }
+
+    #[test]
+    fn follow_rewrites_impl_definitions_inherent_shadowed() {
+        // WI-1: trait-proven impl definitions rewrite; an inherent
+        // namesake (`impl S` with no trait) is a different item —
+        // untouched `shadowed` evidence.
+        let src = "trait Tr {\n    type Item;\n}\nstruct S;\nstruct T;\nimpl Tr for S {\n    type Item = u8;\n}\nimpl T {\n    type Item = u16;\n}\n";
+        let patch = follow_patch().replace("@@ -1,16 +1,16 @@", "@@ -1,11 +1,11 @@");
+        let (files, report) = apply_files(&patch, &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("type Output;"), "got: {out}");
+        assert!(out.contains("type Output = u8;"), "got: {out}");
+        assert!(!out.contains("type Item = u8;"), "got: {out}");
+        assert!(out.contains("type Item = u16;"), "got: {out}");
+        let details = &report.rules[0].follow_skipped_details;
+        assert!(
+            details.iter().any(|d| d.reason == "shadowed"),
+            "got: {details:?}"
         );
     }
 
@@ -832,9 +882,10 @@ mod tests {
 
     #[test]
     fn sibling_follow_suppresses_def_only_orphans() {
-        // WI-28: a two-hunk intent (trait decl + follow, impl decl
-        // definition-only, shared rule) reports no orphans — the
-        // follow hunk owns the file-wide use set.
+        // WI-28 + WI-1: a two-hunk intent (trait decl + follow, impl decl
+        // definition-only, shared rule) reports no orphans. The follow
+        // hunk already claims the impl definition (WI-1), so the sibling
+        // hunk's identical rewrite dedupes instead of conflicting.
         let src = "trait Tr {\n    type Item;\n    fn make() -> Self::Item;\n}\nstruct S;\nimpl Tr for S {\n    type Item = u8;\n    fn make() -> Self::Item {\n        1\n    }\n}\n";
         let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# follow=uses\n  trait Tr {\n- type Item;\n+ type Output;\n@@ -6,6 +6,6 @@ rule=r\n  impl Tr for S {\n- type Item = u8;\n+ type Output = u8;\n";
         let (files, report) = apply_files(p, &[("src/lib.rs", src)]).unwrap();

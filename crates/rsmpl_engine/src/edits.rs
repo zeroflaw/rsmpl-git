@@ -115,6 +115,24 @@ pub fn apply_edits(text: &str, edits: Vec<TextEdit>) -> Result<String, Structure
     Ok(out)
 }
 
+/// WI-1: drop exact-duplicate edits (same range, same replacement).
+/// A follow definition claim and a sibling definition-only hunk may own
+/// the same impl item with the same new name; the outcome is identical
+/// either way, so the first edit wins and the duplicate is evidence-only.
+/// Labels are evidence and do not affect identity. Output preserves input
+/// document order.
+pub(crate) fn dedupe_identical_edits(edits: Vec<TextEdit>) -> Vec<TextEdit> {
+    let mut out: Vec<TextEdit> = Vec::with_capacity(edits.len());
+    for e in edits {
+        if !out.iter().any(|o: &TextEdit| {
+            o.start == e.start && o.end == e.end && o.replacement == e.replacement
+        }) {
+            out.push(e);
+        }
+    }
+    out
+}
+
 /// Union-merge overlapping pure-deletion edits (T464).
 ///
 /// `delete_lines` absorbs one adjacent blank per item, so adjacent item
