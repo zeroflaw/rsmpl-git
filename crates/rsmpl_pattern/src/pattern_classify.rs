@@ -9,6 +9,7 @@ use crate::expr_pattern::{classify_call_pattern, find_macro_bang, ExprPatternKin
 use crate::fn_pattern::parse_fn_pattern;
 use crate::metavar::MetavarTable;
 use crate::pattern::{GeneralShape, PatternKind};
+use crate::pattern_def_evo::classify_definition_evolution;
 use crate::pattern_evolution::is_evolution_template;
 use crate::pattern_general::try_general;
 use crate::quote_utils::qualifier_leads_to_fn;
@@ -401,6 +402,14 @@ pub(crate) fn classify(
     // struct body never route here.
     if let Some(rename) = classify_member_rename(m, p, c)? {
         return Ok(rename);
+    }
+
+    // Definition RHS evolution (`type A = ...`, `const/static ... = ...`).
+    // Claimed before the bare-rename classifier: the concrete suffix that
+    // fails the bare form is exactly the evolved RHS. Shapes without an
+    // `=`/name head fall through untouched.
+    if let Some(evo) = classify_definition_evolution(m, p, table, hunk)? {
+        return Ok(evo);
     }
 
     // Non-function item renames (`struct Old` -> `struct New`). Checked
@@ -931,7 +940,7 @@ fn enum_context(context_raw: &str) -> Option<String> {
 /// A plain Rust identifier (mirrors the item-rename gate), plus
 /// `r#`-prefixed raw idents (`r#type` names a field normal `type`
 /// cannot spell).
-fn is_member_ident(word: &str) -> bool {
+pub(crate) fn is_member_ident(word: &str) -> bool {
     let word = word.strip_prefix("r#").unwrap_or(word);
     if word.starts_with("r#") {
         return false;
@@ -987,7 +996,7 @@ fn strip_container_headers(text: &str) -> String {
 /// Byte index of the field-separator colon: a `:` with no `:` neighbor
 /// (path `::` separators never count). `None` when the side carries no
 /// field separator (`use crate::old`, `impl std::fmt::Display`, calls).
-fn find_field_colon(side: &str) -> Option<usize> {
+pub(crate) fn find_field_colon(side: &str) -> Option<usize> {
     let bytes = side.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         if b != b':' {

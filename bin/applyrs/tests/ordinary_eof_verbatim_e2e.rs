@@ -70,7 +70,7 @@ fn context_mismatch_verbatim() {
 #[test]
 fn unsupported_shape_empty_pattern_verbatim() {
     let patch = "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n-\n+\n";
-    let reason = "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)";
+    let reason = "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, type-alias/const-static evolution, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)";
     let content = "fn main() {}\n";
     let dir = init_repo();
     write(dir.path(), "a.rs", content);

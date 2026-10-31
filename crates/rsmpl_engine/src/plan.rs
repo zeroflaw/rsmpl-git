@@ -31,7 +31,7 @@ use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{
     matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item, matcher_macro,
-    matcher_member, matcher_use,
+    matcher_member, matcher_use, matcher_value,
 };
 use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
 
@@ -996,6 +996,22 @@ fn apply_rsmpl_hunk(
             edits,
         )
         .map(|n| (n, vec![empty(); n])),
+        PatternKind::TypeAliasEvolution { .. } => matcher_value::apply_type_alias_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
+        PatternKind::ConstEvolution { .. } => matcher_value::apply_const_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,
@@ -1062,7 +1078,7 @@ fn apply_rsmpl_hunk(
         ),
         PatternKind::Raw { .. } => Err(StructuredError::new(
             ErrorCode::PatternConflict,
-            "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
+            "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, type-alias/const-static evolution, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
         )
         .with_rule(rule)),
     }

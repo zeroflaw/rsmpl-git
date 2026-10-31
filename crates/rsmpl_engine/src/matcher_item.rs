@@ -215,7 +215,7 @@ fn norm_attr_text(s: &str) -> String {
     s.split_whitespace().collect()
 }
 
-fn attrs_equal(pattern_attrs: &[String], attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn attrs_equal(pattern_attrs: &[String], attrs: &[syn::Attribute]) -> bool {
     let want: Vec<String> = pattern_attrs.iter().map(|a| norm_attr_text(a)).collect();
     let have: Vec<String> = attrs
         .iter()

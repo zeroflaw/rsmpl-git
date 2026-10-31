@@ -1401,8 +1401,10 @@ Examples:
 | `let x = E;` | statement |
 | `Some(P)` | pattern or expression depending on directive/context |
 | `T` | type, path, or identifier depending on metavariable declaration |
+| `type A = Vec<T>;` | type-alias RHS evolution (name preserved, Section 14.8) |
+| `const MAX: i32 = E;` | const/static value evolution (name + ascribed type preserved, Section 14.8) |
 
-> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, `impl`, or `macro_rules!` is an item rename (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `struct S {` context plus an `old: T` / `new: T` pair is a field rename; `enum E {` context plus a bare `Old` / `New` pair is a variant rename; `trait`-header context plus a function pair is a trait-method rename (`unsafe trait`/`unsafe impl` headers route identically — the fn-block scan skips block headers despite the `unsafe ` prefix) (same slot planner: `;` declarations and default bodies match, bodies/`;` preserved, explicit `pub` never matches — trait methods carry no visibility — and a `+` side writing it fails fast; the header names the trait ident, otherwise the block is accepted only on range overlap like `impl`); `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
+> **v0.1 implementation note:** root inference is heuristic. A single `fn`-shaped minus/plus pair is a function signature rewrite (rename and/or slot evolution); a bare `<kind> <Name>` pair for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, `impl`, or `macro_rules!` is an item rename (Section 14.8); a `type NAME = RHS;` pair is a type-alias RHS evolution and a `const`/`static [mut] NAME: TY = EXPR;` pair is a const/static value evolution (Section 14.8); a bare `use <prefix>` pair is a use-path prefix rename (Section 14.9); a single bare declared metavariable (`- I`) is an item capture; an empty minus side is an insertion; `impl`-header context plus a function pair is an impl-method rename; `struct S {` context plus an `old: T` / `new: T` pair is a field rename; `enum E {` context plus a bare `Old` / `New` pair is a variant rename; `trait`-header context plus a function pair is a trait-method rename (`unsafe trait`/`unsafe impl` headers route identically — the fn-block scan skips block headers despite the `unsafe ` prefix) (same slot planner: `;` declarations and default bodies match, bodies/`;` preserved, explicit `pub` never matches — trait methods carry no visibility — and a `+` side writing it fails fast; the header names the trait ident, otherwise the block is accepted only on range overlap like `impl`); `NAME!(...)` shapes are macro patterns; anything else call-like is an expression rewrite. A bare `impl Name` minus whose plus side is not a bare `impl New` pair is not an item rename: when both sides parse as Rust types the hunk falls through to the general type matcher (so `- impl Display` / `+ Box<dyn Display>` rewrites `impl Trait` bounds structurally); anything else stays a pattern error. `# root=item` forces item capture, `# root=expr` forces expression rewrite, `# root=stmt` forces a `let`-statement pattern, and `# root=type` forces a type pattern for ambiguous shapes. Non-call expression shapes, `let` statements, and type shapes are matched by the generalized matcher (see the v0.1 note in Section 18).
 
 The trait-method visibility gate above fails fast with `RSMPL_PATTERN_CONFLICT` (exit 2; `rule:` + `file:` lines; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`):
 
@@ -2462,6 +2464,33 @@ Rules:
 - Orphan evidence mirrors scalar renames: a definition-only member rename lists every provable use line (plus bare-`Old` spellings and macro mentions for variants) as `orphans` (each with its WI-2 `reason`) while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped` owns that signal, each with its WI-2 `reason` in `follow_skipped_details`).
 
 Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, cross-file definition+uses intents (each raised section is one file), multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename`, SPEC D.4; everything else stays ordinary).
+
+#### Definition RHS evolution (WI-11a)
+
+A definition's *value* side — the `= …` of a type alias, `const`, or `static` — evolves without renaming anything. The author writes the definition line with a concrete preserved name and a template RHS; only the RHS span is replaced, everything else (visibility, generics, `where` clauses, attributes, the trailing `;`) is preserved byte-for-byte:
+
+```diff
+@@ -1,1 @@ rule=evolve_alias
+# lang=rust
+- type A = Vec<T>;
++ type A = Box<[T]>;
+```
+
+```diff
+@@ -1,1 @@ rule=evolve_const
+# lang=rust
+- const MAX: i32 = E;
++ const MAX: i32 = E + 1;
+```
+
+Rules:
+
+- Type-alias evolution is `type NAME = RHS;` with a concrete `NAME` on both sides and a type template for the RHS (`T` holes ride the existing diet/`# type T` inference, SPEC 15.8). Generics are preserved from the target, never authored (`type A<T> = …` is a pattern error). Visibility prefixes must agree; a vis change is a WI-9 header evolution, not this shape.
+- Const/static evolution is `const NAME: TY = EXPR;` (or `static [mut] NAME: TY = EXPR;`) with concrete `NAME`, token-equal `TY` on both sides, and a general-expr template for the value (`E` holes ride diet/`# expr E` inference). `static mut` must agree on both sides; `const` vs `static` never combine. A mismatched ascribed type at a site skips the site (subset semantics — never rewrites under a lie); a mismatched `mut` skips likewise.
+- A name-changing "evolution" fails fast: same RHS on both sides points at the bare `<kind> <Name>` rename pair; differing RHS on both sides never combines rename + evolution (write a rename hunk plus an evolution hunk, or an ordinary hunk).
+- Classification is shape-first: sides without `=` (bare `type Old`) fall through to the item-rename classifier untouched; `const { … }` block expressions are never definitions. Leading `#[...]`/doc lines are the item's own attributes (SPEC 14.6 mirror laws: plus-side additions and differing sets fail fast; matching sites carry them).
+- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict).
+- Out of scope in v0.1 (WI-11b owns the member-context shapes): field-type evolution (`struct S {` context), variant-payload evolution, discriminant evolution, generic-param/`where` evolution on aliases, and value conversion at use sites.
 
 ### 14.9 Use-path prefix renames
 

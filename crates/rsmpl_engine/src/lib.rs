@@ -31,6 +31,7 @@ mod matcher_sequence;
 mod matcher_spelling;
 mod matcher_types;
 mod matcher_use;
+mod matcher_value;
 mod ordinary;
 mod plan;
 mod postcheck;

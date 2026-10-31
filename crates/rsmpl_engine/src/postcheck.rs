@@ -362,6 +362,52 @@ pub(crate) fn plus_instantiated_parsed(
                 ),
             }
         }
+        // WI-11a: definition RHS evolution verifies by plus-pattern
+        // re-match (WI-1.5): the plus side recompiles through the same
+        // classifier and re-matches in the post-image with per-site
+        // binding equality — a reverted RHS at the span fails even when
+        // the same text occurs elsewhere.
+        PatternKind::TypeAliasEvolution { name, plus_raw, .. } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            verify_plus_pattern_at_spans(
+                rh,
+                std::slice::from_ref(&format!("type {name} = {plus_raw};")),
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
+        PatternKind::ConstEvolution {
+            is_static,
+            is_mut,
+            name,
+            ty,
+            plus_raw,
+            ..
+        } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            let kw = if *is_static { "static" } else { "const" };
+            let gap = if *is_static && *is_mut { "mut " } else { "" };
+            verify_plus_pattern_at_spans(
+                rh,
+                std::slice::from_ref(&format!("{kw} {gap}{name}: {ty} = {plus_raw};")),
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
         PatternKind::Expr { plus_raw, .. } => {
             let (parsed, index) = match (post_parsed, post_index) {
                 (Some(p), Some(i)) => (p, i),
@@ -621,6 +667,24 @@ fn verify_plus_pattern_at_spans(
         )
         .ok()?,
         PatternKind::Macro { .. } => crate::matcher_macro::apply_macro_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
+        PatternKind::TypeAliasEvolution { .. } => crate::matcher_value::apply_type_alias_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
+        PatternKind::ConstEvolution { .. } => crate::matcher_value::apply_const_hunk(
             post_parsed,
             post_text,
             post_index,

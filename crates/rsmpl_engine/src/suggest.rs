@@ -29,6 +29,8 @@ pub(crate) fn candidate_preview(
             | PatternKind::ItemRename { .. }
             | PatternKind::FieldRename { .. }
             | PatternKind::VariantRename { .. }
+            | PatternKind::TypeAliasEvolution { .. }
+            | PatternKind::ConstEvolution { .. }
             | PatternKind::UseRename { .. }
     );
     if kind_specific {
@@ -54,6 +56,19 @@ pub(crate) fn candidate_preview(
                 PatternKind::FieldRename { struct_name, .. } => {
                     Some(("struct ".to_string(), Some(struct_name.clone())))
                 }
+                PatternKind::TypeAliasEvolution { name, .. } => {
+                    Some(("type ".to_string(), Some(name.clone())))
+                }
+                PatternKind::ConstEvolution {
+                    is_static, name, ..
+                } => Some((
+                    if *is_static {
+                        "static ".to_string()
+                    } else {
+                        "const ".to_string()
+                    },
+                    Some(name.clone()),
+                )),
                 PatternKind::VariantRename { enum_name, .. } => {
                     Some(("enum ".to_string(), Some(enum_name.clone())))
                 }
@@ -130,6 +145,8 @@ fn head_token(kind: &PatternKind) -> Option<String> {
             rsmpl_pattern::ExprPatternKind::Raw { text } => longest_concrete_ident(text),
         },
         PatternKind::Macro { minus_raw, .. } => longest_concrete_ident(minus_raw),
+        PatternKind::TypeAliasEvolution { minus_sub, .. }
+        | PatternKind::ConstEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
         _ => None,
     }
 }

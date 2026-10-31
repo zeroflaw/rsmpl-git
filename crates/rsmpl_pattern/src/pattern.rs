@@ -111,6 +111,36 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Type-alias RHS evolution (`- type A = Vec<T>;` /
+    /// `+ type A = Box<[T]>;`): the name is concrete and preserved, the
+    /// RHS is a type template. Visibility, generics, `where` clauses,
+    /// and attributes are preserved. `# follow=uses` is rejected (C17).
+    TypeAliasEvolution {
+        name: String,
+        minus_sub: String,
+        plus_raw: String,
+        /// Placeholder idents per metavariable, for substitution checks.
+        placeholders: Vec<(String, String)>,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
+    /// Const/static value evolution (`- const MAX: i32 = E;` /
+    /// `+ const MAX: i32 = E + 1;`): name and ascribed type are preserved
+    /// token-equal, the value is a general-expr template. `static [mut]`
+    /// shares this kind (`is_static`/`is_mut` from the pattern; the
+    /// target must agree). `# follow=uses` is rejected (C17).
+    ConstEvolution {
+        is_static: bool,
+        is_mut: bool,
+        name: String,
+        ty: String,
+        minus_sub: String,
+        plus_raw: String,
+        /// Placeholder idents per metavariable, for substitution checks.
+        placeholders: Vec<(String, String)>,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -467,6 +497,8 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::ItemRename { .. } => "item-rename",
             PatternKind::FieldRename { .. } => "field-rename",
             PatternKind::VariantRename { .. } => "variant-rename",
+            PatternKind::TypeAliasEvolution { .. } => "type-alias evolution",
+            PatternKind::ConstEvolution { .. } => "const/static evolution",
             PatternKind::UseRename { .. } => "use-path",
             PatternKind::ItemCapture { .. } => "item-capture",
             PatternKind::Insertion { .. } => "insertion",

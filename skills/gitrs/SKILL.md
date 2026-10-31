@@ -86,6 +86,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   A bare `impl Old`/`impl New` pair renames self-ty + trait-side path; add
   `# allow=many` when several match; definition only — follow up
   type/value/literal/variant/use sites per the SPEC 14.8 table.
+- Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; name + vis/generics preserved, SPEC 14.8).
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between.
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)

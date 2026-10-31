@@ -658,7 +658,7 @@ fn assign_fn_slots(
 }
 
 /// True when `name` occurs as an ident token in `text` (bare or `$`-prefixed).
-fn occurs_in(text: &str, name: &str) -> bool {
+pub(crate) fn occurs_in(text: &str, name: &str) -> bool {
     scan_idents(text, false)
         .into_iter()
         .any(|t| t.trim_start_matches('$') == name)
@@ -1124,7 +1124,7 @@ fn infer_method_dot(s: &str) -> Option<usize> {
     dots.into_iter().rev().find(|&d| s[d + 1..].contains('('))
 }
 
-fn rfind_dot(s: &str) -> Option<usize> {
+pub(crate) fn rfind_dot(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut last = None;
     let mut i = 0;
@@ -1237,6 +1237,13 @@ fn assign_general_fallback(
                 {
                     continue;
                 }
+            }
+            // WI-11a: definition RHS positions infer before the
+            // item-header skip below (which would leave them literal).
+            // (`type NAME = RHS` assigns `type`, `const`/`static` value
+            // assigns `expr`; NAME never infers. Sibling module per D5.)
+            if super::infer_def::assign_def_rhs_line(t, kinds, masked_minus, masked_plus) {
+                continue;
             }
             // `use`-path and item-rename headers never infer: leave pending
             // (literal) so their classifiers emit their own needles.
@@ -1354,7 +1361,10 @@ fn assign_general_fallback(
 
 /// Names inside `(...)` argument groups (all groups, e.g. `foo(E) + bar(F)`
 /// yields `E, F`); the callee prefix stays literal.
-fn names_in_paren_groups(line: &str, kinds: &HashMap<String, HashSet<MetavarKind>>) -> Vec<String> {
+pub(crate) fn names_in_paren_groups(
+    line: &str,
+    kinds: &HashMap<String, HashSet<MetavarKind>>,
+) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -1404,7 +1414,10 @@ fn names_in_paren_groups(line: &str, kinds: &HashMap<String, HashSet<MetavarKind
 /// Names inside type arguments: text from the first `<`/`[` onward, so the
 /// leading constructor (`Vec`/`Box`/`Result`) stays literal. Bare `T`
 /// (no brackets) yields `T` itself.
-fn names_in_type_args(line: &str, kinds: &HashMap<String, HashSet<MetavarKind>>) -> Vec<String> {
+pub(crate) fn names_in_type_args(
+    line: &str,
+    kinds: &HashMap<String, HashSet<MetavarKind>>,
+) -> Vec<String> {
     let t = line.trim();
     if let Some(pos) = t.find(['<', '[']) {
         names_in(&t[pos..], kinds)
