@@ -6514,8 +6514,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `+ V Q fn New G (...) W {`); uniformly indented sites emit one
   hunk per enclosing `impl` block with the block's verbatim header
   line from the pre-image (Section 13.4: the engine filter matches
-  only the named block), all sharing the `rename_Old_to_New` rule
-  name; each hunk clears its own engine probe (twin headers veto to
+  only the named block), all sharing one positional rule (`rN`)
+  within the section (cross-file intents share `rename_Old_to_New`
+  after WI-7 grouping); each hunk clears its own engine probe
+  (twin headers veto to
   ordinary). Mixed indent or divergent deltas stay
   passthrough. The slot sweep is the zero-delta (rename-only) special
   case of the signature-evolution sweep below; both detectors run, slot
