@@ -384,5 +384,56 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "98-partition-fires" {
+        // WI-8: 8 hetero item/fn renames (adjacent const+fn pairs) compress
+        // pair by pair — one hunk per pair, positional rules — and the
+        // harness checks the tree legs (--check + lowered git apply).
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            8,
+            "all 8 renames must partition, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- const OLD_CONST_1\n"),
+            "const pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ const NEW_CONST_1\n"),
+            "const pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- fn old_helper_1\n"),
+            "fn pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn new_helper_1\n"),
+            "fn pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "partition must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "99-partition-atomicity-stays-ordinary" {
+        // WI-8 atomicity: 7 renames plus one ordinary field edit stay
+        // fully ordinary (never half-semantic).
+        assert!(
+            !semantic.contains("rule="),
+            "mixed section must stay ordinary, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+    x: u32,\n"),
+            "edit line must be preserved, got: {semantic}"
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
+        let normalized = normalize_native(native_input);
+        assert!(
+            semantic == normalized,
+            "[{name}] ordinary passthrough must equal normalized native"
+        );
     }
 }

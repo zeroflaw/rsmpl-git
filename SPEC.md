@@ -6536,6 +6536,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `static`, vis echoed) compress to bare `- kind Old` /
   `+ kind New` pairs. Single indented (method/block-level) and
   single generic-fn lines are excluded (no token win as a slot hunk).
+- Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
+  pair chain declined (heterogeneous deltas share no template) but
+  every pair is a single-pair item rename above (including the plain
+  `fn` arm, whose gates apply per pair). All-or-nothing: one
+  unclaimable pair vetoes the whole section (a mixed hunk stays
+  ordinary whole, never half-semantic), as do duplicate minus lines
+  (identical pairs belong to the verbatim sweep). Emission is one file
+  section with one hunk per pair (per-pair covering ranges, positional
+  `rN` rules; distinct deltas never group). The section-level byte-win
+  guard applies (the combined section must beat the ordinary section);
+  a losing partition falls back to the per-hunk path. Detector name
+  `item_rename`.
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/
@@ -7456,7 +7468,13 @@ single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
   permanent non-goal — no sub-hunk partition and no header+body joint
   shape, so the mixed re-diff stays mixed by construction (WI-5d-follow
   probe: 0/2473); `14` divergent single-file renames whose
-  deltas never share one intent, `30` trait-side-only decl/def
+  deltas never share one intent — 8 of 9 pairs are partition-claimable
+  but the `impl Printable for Old` → `impl Labeled for New` double-delta
+  pair defeats pair-partition atomicity (WI-8), so the section stays
+  ordinary apart from the lone per-hunk const single that still wins
+  its own byte-win guard (1 semantic + 7 ordinary); all-single-delta
+  multi-rename sections compress pair by pair instead (diffrs fixture
+  `98-partition-fires`, canonically lossless), `30` trait-side-only decl/def
   pairs (ordinary by design — no impl side shares the intent; mixed
   trait+impl classes raise via `trait_method_rename`, WI-4b); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only

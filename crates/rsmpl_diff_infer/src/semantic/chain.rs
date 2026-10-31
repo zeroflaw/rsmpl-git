@@ -231,6 +231,123 @@ pub(crate) fn run_pair_chain(
     None
 }
 
+/// WI-8 pair partition: a whole balanced section with N ≥ 2 pairs whose
+/// pair chain declined compresses pair by pair when every pair is a
+/// single-pair item rename (including the plain-`fn` arm, whose
+/// `{`/no-return/no-`where` gate applies per pair). All-or-nothing:
+/// one unclaimable pair vetoes the whole section (a mixed hunk stays
+/// ordinary whole, never half-semantic). Duplicate minus lines veto
+/// (identical pairs belong to the verbatim sweep); duplicate emitted
+/// minus patterns veto too (terse `fn` shapes drop params, so distinct
+/// raw lines can share one pattern and would overlap-match). Each pair
+/// also clears pre-image totality (`template_pair_holds` at n = 1, the
+/// `slot_holds` posture lifted to single pairs): an untouched twin
+/// anywhere in the file vetoes, `None` pre-image keeps the
+/// section-visible legacy allow. Emission is one file
+/// section with one hunk per pair (per-pair covering ranges from that
+/// pair's changed line, positional `rN` rules — the shared counter is
+/// already positional per WI-1e diet; distinct deltas never group so
+/// `group` stays `""`). Section-level T375 lives with the caller (same
+/// shape as the `run_pair_chain` block, rename prelude included).
+/// Detector `"item_rename"` so cross-file same-delta grouping keeps
+/// working with no `group.rs` change.
+pub(crate) fn try_partition_section(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() < 2 || minuses.len() != pluses.len() {
+        return None;
+    }
+    // Pair-to-site mapping for the per-pair covering ranges below.
+    if changed.len() != minuses.len() {
+        return None;
+    }
+    // Identical pairs belong to the verbatim sweep (and their patterns
+    // would overlap-match under `# allow=many`).
+    let mut ordered: Vec<&&str> = minuses.iter().collect();
+    ordered.sort();
+    ordered.dedup();
+    if ordered.len() != minuses.len() {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let mut bodies: Vec<String> = Vec::new();
+    for i in 0..minuses.len() {
+        match super::try_item_rename(
+            minuses[i],
+            pluses[i],
+            path,
+            file_old,
+            &changed[i..i + 1],
+            used_rules,
+        ) {
+            Some(full) => {
+                let Some((_, body)) = full.split_once('\n') else {
+                    used_rules.truncate(checkpoint);
+                    return None;
+                };
+                bodies.push(body.to_string());
+            }
+            None => {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+        }
+    }
+    // One minus pattern per pair; identical emitted patterns would
+    // overlap-match under `# allow=many` (terse `fn` shapes drop params,
+    // so distinct raw lines can share one pattern — those classes stay
+    // with the slot/verbatim sweeps).
+    let mut pats: Vec<(&str, &str)> = Vec::new();
+    for body in &bodies {
+        let mut minus = None;
+        let mut plus = None;
+        for line in body.lines() {
+            if let Some(pat) = line.strip_prefix("- ") {
+                if minus.is_none() {
+                    minus = Some(pat);
+                }
+            } else if let Some(pat) = line.strip_prefix("+ ") {
+                if plus.is_none() {
+                    plus = Some(pat);
+                }
+            }
+        }
+        let (Some(minus), Some(plus)) = (minus, plus) else {
+            used_rules.truncate(checkpoint);
+            return None;
+        };
+        pats.push((minus, plus));
+    }
+    let mut by_pat: Vec<&&str> = pats.iter().map(|(m, _)| m).collect();
+    by_pat.sort();
+    by_pat.dedup();
+    if by_pat.len() != pats.len() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // Pre-image totality per pair (the `slot_holds` posture lifted to
+    // single pairs): each minus pattern must match exactly its own site.
+    // An untouched twin anywhere in the file vetoes; `None` pre-image
+    // keeps the section-visible legacy allow (provenance marks it).
+    for &(minus, plus) in &pats {
+        if !crate::totality::template_pair_holds(path, file_old, minus, plus, 1) {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+    }
+    let mut out = crate::git_header(path);
+    out.push('\n');
+    for body in &bodies {
+        out.push_str(body);
+    }
+    Some((out, "item_rename"))
+}
+
 pub(crate) fn compress_section(
     section: &str,
     used_rules: &mut Vec<String>,
@@ -521,6 +638,54 @@ pub(crate) fn compress_section(
             used_rules.truncate(checkpoint);
         }
     }
+    // WI-8 pair partition: the chain declines hetero multi-rename
+    // classes (distinct deltas share no template); when every pair is
+    // a single-pair item rename the section still compresses pair by
+    // pair (one hunk per pair, positional rules). Verbatim owns
+    // identical pairs (the duplicate-minus veto), so at most one of
+    // the two fires; the per-hunk fallback below keeps every other
+    // class. Same T375 + provenance shape as the chain block.
+    let part_checkpoint = used_rules.len();
+    if let Some((part, part_detector)) =
+        try_partition_section(&minuses, &pluses, path, file_old, &changed, used_rules)
+    {
+        // WI-7a: rename sections re-emit under the preserved prelude;
+        // the T375 guard compares the final bytes.
+        if let Some(prelude) = &rename_prelude {
+            if let Some(final_text) = reheader_rename(&part, prelude) {
+                if final_text.len() < section.len() {
+                    push_section_prov(
+                        prov,
+                        &final_text,
+                        section,
+                        path,
+                        part_detector,
+                        &changed,
+                        file_old,
+                        part_checkpoint,
+                        used_rules,
+                    );
+                    return Some(final_text);
+                }
+            }
+            used_rules.truncate(part_checkpoint);
+        } else if part.len() < section.len() {
+            push_section_prov(
+                prov,
+                &part,
+                section,
+                path,
+                part_detector,
+                &changed,
+                file_old,
+                part_checkpoint,
+                used_rules,
+            );
+            return Some(part);
+        } else {
+            used_rules.truncate(part_checkpoint);
+        }
+    }
     let mut verb_fired: Vec<(String, &'static str)> = Vec::new();
     // WI-9a: same-name concrete macro interiors before verbatim (which
     // vetoes every macro, so no double-claim).
@@ -704,5 +869,199 @@ fn compress_section_per_hunk(
         Some(out)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    // WI-8: two consts interleaved with two plain fns (long suffixes so
+    // the per-pair semantic hunks beat ordinary bytes under T375).
+    const PRE: &str = "const OLD_A: usize = 1001;\nfn old_a(first_argument: FirstLongTypeArgument) {\n    first_argument\n}\nconst OLD_B: usize = 1002;\nfn old_b(second_argument: SecondLongTypeArgument) {\n    second_argument\n}\n";
+    const POST: &str = "const NEW_A: usize = 1001;\nfn new_a(first_argument: FirstLongTypeArgument) {\n    first_argument\n}\nconst NEW_B: usize = 1002;\nfn new_b(second_argument: SecondLongTypeArgument) {\n    second_argument\n}\n";
+
+    fn pairs() -> (Vec<&'static str>, Vec<&'static str>) {
+        (
+            vec![
+                "const OLD_A: usize = 1001;",
+                "fn old_a(first_argument: FirstLongTypeArgument) {",
+                "const OLD_B: usize = 1002;",
+                "fn old_b(second_argument: SecondLongTypeArgument) {",
+            ],
+            vec![
+                "const NEW_A: usize = 1001;",
+                "fn new_a(first_argument: FirstLongTypeArgument) {",
+                "const NEW_B: usize = 1002;",
+                "fn new_b(second_argument: SecondLongTypeArgument) {",
+            ],
+        )
+    }
+
+    fn pre_map() -> HashMap<String, String> {
+        HashMap::from([("f.rs".to_string(), PRE.to_string())])
+    }
+
+    fn applied(pre: &HashMap<String, String>, patch: &str) -> HashMap<String, String> {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("partition emission must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("partition must apply cleanly");
+        files
+    }
+
+    #[test]
+    fn partition_fires_and_round_trips() {
+        let (minuses, pluses) = pairs();
+        let mut used = Vec::new();
+        let (out, detector) = try_partition_section(
+            &minuses,
+            &pluses,
+            "f.rs",
+            Some(PRE),
+            &[1, 2, 5, 6],
+            &mut used,
+        )
+        .expect("all-item section must partition");
+        assert_eq!(detector, "item_rename");
+        assert_eq!(used.len(), 4);
+        assert_eq!(out.matches("rule=").count(), 4, "one hunk per pair:\n{out}");
+        assert!(
+            out.contains("rule=r1") && out.contains("rule=r4"),
+            "positional rules:\n{out}"
+        );
+        let files = applied(&pre_map(), &out);
+        assert_eq!(files["f.rs"], POST, "round-trip must be byte-identical");
+    }
+
+    #[test]
+    fn partition_vetoes_matrix() {
+        let (minuses, pluses) = pairs();
+        // Single pair: owned by the single-pair path, never partition.
+        let mut used = Vec::new();
+        assert!(try_partition_section(
+            &minuses[..1],
+            &pluses[..1],
+            "f.rs",
+            Some(PRE),
+            &[1],
+            &mut used
+        )
+        .is_none());
+        assert!(used.is_empty());
+        // Duplicate minus lines: identical pairs belong to verbatim.
+        let mut used = Vec::new();
+        let dup_m = vec![minuses[0], minuses[0]];
+        let dup_p = vec![pluses[0], pluses[0]];
+        assert!(
+            try_partition_section(&dup_m, &dup_p, "f.rs", Some(PRE), &[1, 1], &mut used).is_none()
+        );
+        assert!(used.is_empty());
+        // One unclaimable pair vetoes the whole section (atomicity) and
+        // releases every reservation.
+        let mut used = Vec::new();
+        let mut bad_m = minuses.clone();
+        let mut bad_p = pluses.clone();
+        bad_m.push("    indented = true;");
+        bad_p.push("    indented = false;");
+        assert!(try_partition_section(
+            &bad_m,
+            &bad_p,
+            "f.rs",
+            Some(PRE),
+            &[1, 2, 5, 6, 3],
+            &mut used
+        )
+        .is_none());
+        assert!(used.is_empty());
+        // Pair-to-site mapping must be exact.
+        let mut used = Vec::new();
+        assert!(
+            try_partition_section(&minuses, &pluses, "f.rs", Some(PRE), &[1, 2, 4], &mut used)
+                .is_none()
+        );
+        assert!(used.is_empty());
+        // The plain-fn gate applies per pair: visibility declines.
+        let mut used = Vec::new();
+        let mut vis_m = minuses.clone();
+        let mut vis_p = pluses.clone();
+        vis_m[1] = "pub fn old_a(first_argument: FirstLongTypeArgument) {";
+        vis_p[1] = "pub fn new_a(first_argument: FirstLongTypeArgument) {";
+        assert!(
+            try_partition_section(&vis_m, &vis_p, "f.rs", Some(PRE), &[1, 2, 5, 6], &mut used)
+                .is_none()
+        );
+        assert!(used.is_empty());
+        // Return-type headers decline (today's single-pair gate).
+        let mut used = Vec::new();
+        let mut ret_m = minuses.clone();
+        let mut ret_p = pluses.clone();
+        ret_m[1] = "fn old_a(first_argument: FirstLongTypeArgument) -> i32 {";
+        ret_p[1] = "fn new_a(first_argument: FirstLongTypeArgument) -> i32 {";
+        assert!(
+            try_partition_section(&ret_m, &ret_p, "f.rs", Some(PRE), &[1, 2, 5, 6], &mut used)
+                .is_none()
+        );
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn partition_section_fires_end_to_end() {
+        // Two -U0 hunks (adjacent const+fn pairs merge per hunk), whole
+        // balanced: chain and verbatim decline, partition emits 4/4.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-const OLD_A: usize = 1001;\n-fn old_a(first_argument: FirstLongTypeArgument) {\n+const NEW_A: usize = 1001;\n+fn new_a(first_argument: FirstLongTypeArgument) {\n@@ -5,2 +5,2 @@\n-const OLD_B: usize = 1002;\n-fn old_b(second_argument: SecondLongTypeArgument) {\n+const NEW_B: usize = 1002;\n+fn new_b(second_argument: SecondLongTypeArgument) {\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let pre = pre_map();
+        let out =
+            compress_section(section, &mut used, &pre, &mut prov).expect("partition must fire");
+        assert_eq!(out.matches("rule=").count(), 4, "got:\n{out}");
+        assert_eq!(prov.len(), 4, "one provenance entry per hunk: {prov:?}");
+        assert!(prov.iter().all(|p| p.detector == "item_rename"), "{prov:?}");
+        assert!(
+            prov.iter().all(|p| p.group.is_empty()),
+            "distinct deltas never group: {prov:?}"
+        );
+        let files = applied(&pre, &out);
+        assert_eq!(files["f.rs"], POST);
+    }
+
+    #[test]
+    fn partition_section_declines_tiny_structs() {
+        // -U0 tiny structs: per-pair semantic overhead beats the shared
+        // header saving, so section T375 declines (per-hunk singles lose
+        // too) — the section stays ordinary.
+        let tiny = "struct Old1 {\n    x: i32,\n}\nstruct Old2 {\n    x: i32,\n}\nstruct Old3 {\n    x: i32,\n}\n";
+        let section = "diff --git a/g.rs b/g.rs\n--- a/g.rs\n+++ b/g.rs\n@@ -1 +1 @@\n-struct Old1 {\n+struct New1 {\n@@ -4 +4 @@\n-struct Old2 {\n+struct New2 {\n@@ -7 +7 @@\n-struct Old3 {\n+struct New3 {\n";
+        let mut pre = HashMap::new();
+        pre.insert("g.rs".to_string(), tiny.to_string());
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        assert!(
+            compress_section(section, &mut used, &pre, &mut prov).is_none(),
+            "T375 must decline"
+        );
+        assert!(used.is_empty());
+        assert!(prov.is_empty());
+    }
+
+    #[test]
+    fn partition_section_atomicity_stays_ordinary() {
+        // One hunk, three pairs: two renames plus one ordinary edit — the
+        // edit vetoes partition, the chain declines hetero pairs, and the
+        // per-hunk fallback declines the mixed hunk: fully ordinary.
+        let pre = "const OLD_A: usize = 1001;\nconst OLD_B: usize = 1002;\nlet x = 1;\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1,3 @@\n-const OLD_A: usize = 1001;\n-const OLD_B: usize = 1002;\n-let x = 1;\n+const NEW_A: usize = 1001;\n+const NEW_B: usize = 1002;\n+let x = 2;\n";
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        assert!(compress_section(section, &mut used, &files, &mut prov).is_none());
+        assert!(used.is_empty());
+        assert!(prov.is_empty());
     }
 }

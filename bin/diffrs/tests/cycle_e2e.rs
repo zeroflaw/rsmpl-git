@@ -317,7 +317,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "14-item-rename",
-        "hetero: 8 renames re-infer as 1 semantic + 7 ordinary (grouping is WI-7)",
+        "hetero: 9 pairs re-infer as 1 semantic + 7 ordinary (WI-8 partition declines: the impl Printable-for-Old double-delta pair defeats atomicity)",
     ),
     (
         "18-general-expr",
