@@ -118,6 +118,7 @@ pub(crate) fn assign_groups(prov: &mut [HunkProvenance], patch: &str) {
         // block + impl blocks); every other detector still needs ≥2
         // files to group (the sweep posture). WI-7b: same-file
         // `macro_rules_rename` groups like `trait_method_rename`.
+        // WI-22c: cross-file trait_method_rename grouping joins on the method (old,new) delta only; each member intent stays per-file same-trait (WI-22b) — the shared rule is token sharing, not a global same-trait claim.
         let same_file_ok = members.iter().all(|&i| {
             prov[i].detector == "trait_method_rename" || prov[i].detector == "macro_rules_rename"
         });
@@ -656,6 +657,33 @@ mod tests {
             "shared rule re-emitted, got:\n{out}"
         );
         rsmpl_patch::parse_patch(&out).expect("grouped patch must parse");
+    }
+
+    #[test]
+    fn trait_method_different_traits_still_group() {
+        // WI-22c: cross-file trait_method_rename grouping joins on the
+        // method (old,new) delta only. Two intents from different traits
+        // (TA vs TB, each per-file same-trait under WI-22b) share one
+        // group label: the shared rule is token sharing, not a global
+        // same-trait claim.
+        let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 @@ rule=r1\n-    V Q fn old G (...) W ;\n+    V Q fn new G (...) W ;\ndiff --git b/b.rs b/b.rs\n--- b/b.rs\n+++ b/b.rs\n@@ -1,1 @@ rule=r2\n-    V Q fn old G (...) W ;\n+    V Q fn new G (...) W ;\n";
+        let mut prov = vec![
+            super::super::prov::HunkProvenance {
+                rule: "r1".to_string(),
+                file: "a.rs".to_string(),
+                detector: "trait_method_rename",
+                ..Default::default()
+            },
+            super::super::prov::HunkProvenance {
+                rule: "r2".to_string(),
+                file: "b.rs".to_string(),
+                detector: "trait_method_rename",
+                ..Default::default()
+            },
+        ];
+        super::assign_groups(&mut prov, patch);
+        assert_eq!(prov[0].group, "rename_old_to_new", "prov: {prov:?}");
+        assert_eq!(prov[1].group, "rename_old_to_new", "prov: {prov:?}");
     }
 
     #[test]

@@ -7473,6 +7473,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   inherent `impl S` block declines the whole class to ordinary (different
   items, never the K-hunk fallback). Divergent per-pair
   WI-22b: trait tails must match (last segment, `crate::T` proves `T`) or the whole class declines to ordinary (different items, `T::old` vs `U::old`).
+  WI-22c: cross-file grouping joins on the method `(old,new)` delta only; each grouped intent stays per-file same-trait (WI-22b), so the shared rule is token sharing, not a global same-trait claim.
   suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
