@@ -270,6 +270,10 @@ const CYCLE_OK: &[&str] = &[
     "87-field-follow-single",
     "88-variant-follow-single",
     "70-call-wrap",
+    "60-call-arg-swap",
+    "110-new-file-move-single",
+    "114-delete-single",
+    "115-move-evolve-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -404,10 +408,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "59-field-nofollow",
         "t375: single-site field def-only re-infers ordinary (orphan uses stay ordinary)",
-    ),
-    (
-        "60-call-arg-swap",
-        "nodet: call arg-swap re-infers as ordinary line rewrite (no arg-swap emission; tree legs still close)",
     ),
     (
         "62-repeat-grow",
@@ -574,24 +574,12 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site rename-calls rewrite re-infers ordinary",
     ),
     (
-        "110-new-file-move-single",
-        "t375: single-item new-file move re-infers ordinary",
-    ),
-    (
         "112-trait-sweep-single",
         "t375: single-site trait-sweep rewrite re-infers ordinary",
     ),
     (
         "113-sig-evolve-single",
         "t375: single-site sig evolution re-infers ordinary",
-    ),
-    (
-        "114-delete-single",
-        "t375: single-item delete re-infers ordinary",
-    ),
-    (
-        "115-move-evolve-single",
-        "t375: single-item move+evolve re-infers ordinary",
     ),
     (
         "116-call-arg-wrap-single",

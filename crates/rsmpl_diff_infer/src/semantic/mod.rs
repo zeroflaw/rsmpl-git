@@ -21,6 +21,7 @@ mod block_headers;
 mod calls;
 pub(crate) mod chain;
 mod deletes;
+pub(crate) mod general_expr;
 mod generalized;
 pub(crate) mod group;
 mod literal;
@@ -62,7 +63,7 @@ pub(crate) use slot::try_fn_slot_sweep;
 pub(crate) use trait_methods::try_trait_method_rename;
 
 pub(crate) use arg_template::{try_call_arg_template_sweep, try_method_arg_template_sweep};
-pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
+pub(crate) use calls::{try_call_arg_add_sweep, try_call_perm_sweep, try_call_sweep};
 pub(crate) use literal::try_call_literal_sweep;
 pub(crate) use macro_rules::try_macro_rules_rename;
 pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};
@@ -73,6 +74,7 @@ pub(crate) use methods::{
 };
 pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
+pub(crate) use general_expr::try_general_expr_sweep;
 pub(crate) use generalized::{
     try_let_sweep, try_let_template_sweep, try_sequence_sweep, try_sig_evolution_sweep,
     try_type_sweep,

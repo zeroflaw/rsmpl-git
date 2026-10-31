@@ -29,8 +29,10 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 /// Ordered pair-sweep chain, tightest first (existing order,
 /// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more, WI-5 one more): slot → sig-evolution → trait-method → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
-/// macro-rename → use-prefix → bare call → call-arg-add →
-/// call-literal → call-arg-template → method-arg-template → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
+/// macro-rename → use-prefix → bare call → call-perm →
+/// call-arg-add →
+/// call-literal → call-arg-template → method-arg-template →
+/// general-expr → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -134,6 +136,18 @@ pub(crate) fn run_pair_chain(
     {
         return Some((sweep, "call_sweep"));
     }
+    // WI-6 slice 2: whole-arg permutation sub-line sweep (same-callee
+    // same-arity calls with one uniform arg permutation across all
+    // subterms; the sub-line form of the arg-template permute promise).
+    // After the callee-only sweep (those own token-equal-args classes;
+    // this owns permuted-args classes), before the trailing-arg
+    // sweeps. Pure whole-line classes decline here (they belong to
+    // `call_arg_template` below).
+    if let Some(perm) =
+        super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((perm, "call_arg_template"));
+    }
     // T447: same-callee trailing-arg addition (homo concrete tails
     // compress; hetero tails like 09d3446's `symlink` vs `false`
     // veto via minus-arity totality).
@@ -163,6 +177,15 @@ pub(crate) fn run_pair_chain(
         super::try_method_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((marg, "method_arg_template"));
+    }
+    // WI-6: general-expression sweep (bare-expression anti-unification
+    // with at most one hole) — after the call/method arg templates
+    // (those own call shapes; this declines them), before the peel
+    // sweep (which owns array-head shapes, never bare expressions).
+    if let Some(general) =
+        super::try_general_expr_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((general, "general_expr"));
     }
     // T441: hetero-arg array-head-peel call migration
     // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);

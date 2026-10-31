@@ -6761,7 +6761,12 @@ same bare-subterm hunk as the whole-line shape (no frame is emitted;
 the frame is byte-identical on both sides so the subterm rewrite
 reproduces the post-image). Single-pair sections stay ordinary for
 call/method/use shapes even with two sites (T375: one pair never wins
-as a sweep); fn/item renames and moves keep firing at N = 1.
+as a sweep) — except whole-arg permutation with ≥ 2 subterm sites
+(WI-6 slice 2, `call_arg_template`): `swap(x, y) + swap(y, x)` →
+`swap(y, x) + swap(x, y)` re-infers `swap(E0, E1)` → `swap(E1, E0)`
+because the ordinary view cannot show multiset equality while the
+semantic form proves the permutation intent; fn/item renames and moves
+keep firing at N = 1.
 Item-shape detectors (item rename, slot sweep) match whole multi-line
 items, so a header-line range could never contain the match: they emit
 the covering item range (smallest `syn` item spans containing the
@@ -6785,7 +6790,7 @@ provenance for one emitted semantic hunk (empty when fully ordinary):
 saved_bytes, group}`. `detector` is
 the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_to_fn`, `method_to_method`, `method_same_literal`,
-`method_arg_template`, `call_arg_template`,
+`method_arg_template`, `call_arg_template`, `general_expr`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
@@ -6990,7 +6995,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    Pre-image totality is the real-pair engine-count check
    (`template_pair_holds`): the emitted pair must match exactly N
    sites in the pre-image — an untouched twin vetoes. Detector name
-   `call_arg_template`.
+   `call_arg_template`. Sub-line whole-arg permutation (WI-6 slice 2)
+   is the same family at subterm granularity: N ≥ 1 pairs whose every
+   call subterm is a same-callee same-arity bare call with one uniform
+   non-trivial arg permutation across all subterms (multiset-equal
+   args, ordered correspondence per Section 15.7; macro args veto;
+   the frame check parks each minus subterm on a placeholder so a swap
+   cannot alias), emitting `swap(E0, E1)` → `swap(E1, E0)` with total
+   subterm sites ≥ 2 (a single site stays ordinary, T375). Pure
+   whole-line classes decline here and fire as the whole-line sweep
+   above.
  - Hetero method-arg-template sweep (WI-5): the method-call sibling —
    N ≥ 2 `-`/`+` pairs, each `recv.m(args)` with per-site token-equal
    receivers (hetero across sites, bound as `Receiver`; a per-site
@@ -7001,6 +7015,23 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `- Receiver.m(E0)` / `+ Receiver.m(E0.clone())` (uppercase method
    backticked, Section 15.4). Totality is the same real-pair check.
    Detector name `method_arg_template`.
+ - General-expression sweep (WI-6): N ≥ 2 `-`/`+` pairs, each parsing
+   whole-line as one `syn::Expr` of the same variant (binary, unary,
+   cast, field, index, reference, await — `Call`/`MethodCall`/macro
+   whole-line shapes stay with their tighter detectors; macro or
+   unsupported subterms veto), anti-unified to one template pair with
+   at most one `E{i}` hole. Hole positions are subterms token-equal
+   within each pair but hetero across sites (ordered value
+   correspondence, Section 15.7); every other position is a literal
+   anchor token-equal across all sites on its side; at least one
+   anchor carries the delta (`E0 + 1` → `E0 + 2`, `E0.timeout` →
+   `E0.timeout2`, `&E0` → `&mut E0`). No-delta and multi-hole
+   classes stay ordinary. One `# allow=many` hunk (tight original
+   range, Section D.5) with diet holes, no declarations. Pre-image
+   totality is the real-pair engine-count check
+   (`template_pair_holds`): the emitted pair must match exactly N
+   subterms in the pre-image — an untouched twin vetoes. Detector
+   name `general_expr`.
  - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds

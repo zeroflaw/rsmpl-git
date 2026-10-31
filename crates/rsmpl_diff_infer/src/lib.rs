@@ -447,8 +447,16 @@ pub(crate) fn compress_balanced_pair_body(
     }
     let checkpoint = used_rules.len();
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
+        // Single pairs stay ordinary (T375) except whole-arg permutation:
+        // subterm-counted multi-site swaps owe canonical-losslessness,
+        // and the ordinary view cannot prove the permutation. Every other
+        // single-pair posture is untouched (WI-6 slice 2).
         semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
             .map(|f| (f, "item_rename"))
+            .or_else(|| {
+                semantic::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules)
+                    .map(|f| (f, "call_arg_template"))
+            })
     } else {
         semantic::chain::run_pair_chain(minuses, pluses, path, file_old, changed, used_rules)
     };

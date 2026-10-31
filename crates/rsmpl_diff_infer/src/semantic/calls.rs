@@ -4,6 +4,99 @@
 
 use super::{call_parts, parse_call_expr, unique_rule};
 
+/// Whole-arg permutation sweep (WI-6 slice 2, F6(a)): N ≥ 1 `-`/`+`
+/// pairs whose every call subterm is a same-callee same-arity bare
+/// call with one uniform non-trivial arg permutation across ALL
+/// subterms of ALL lines (ordered value correspondence per Section
+/// 15.7 — the sub-line form of the SPEC D.4 "plus templates may
+/// permute holes" promise the whole-line `call_arg_template` sweep
+/// already keeps). At least one pair must fail whole-line bare-call
+/// parse (anti-shadow: pure whole-line classes belong to
+/// `try_call_arg_template_sweep` later in the chain). Total subterm
+/// sites must be ≥ 2 (t375: a single-site swap re-infers ordinary).
+/// Totality is the real-pair engine-count check
+/// (`template_pair_holds`): the emitted pair must match exactly the
+/// subterm count in the pre-image — an untouched twin vetoes.
+/// Detector name `call_arg_template` (same emission family).
+pub(crate) fn try_call_perm_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != pluses.len() || minuses.is_empty() {
+        return None;
+    }
+    // All-identical multi-pair classes stay for the tighter verbatim
+    // sweep (T422). A single pair is never "all-identical" in the
+    // meaningful sense (minus always differs from plus, and verbatim
+    // never claims single pairs on this path) — the subterm count gate
+    // below owns singles.
+    if minuses.len() >= 2 && super::subline::all_identical_pairs(minuses, pluses) {
+        return None;
+    }
+    let mut cal: Option<String> = None;
+    let mut arity: Option<usize> = None;
+    let mut perm: Option<Vec<usize>> = None;
+    let mut total = 0usize;
+    let mut saw_subline_only = false;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        // Pure whole-line classes defer to `try_call_arg_template_sweep`:
+        // a whole-line bare call is `parse_call_expr` + `call_parts`
+        // (the former alone parses any `Expr`, including the Binary
+        // lines this detector owns).
+        let whole = |l: &str| parse_call_expr(l).and_then(|e| call_parts(&e)).is_some();
+        if !whole(m) || !whole(p) {
+            saw_subline_only = true;
+        }
+        let sites = super::subline::extract_arg_permutation_sites(m, p)?;
+        for s in &sites {
+            if cal.as_ref().is_some_and(|c| *c != s.cal) {
+                return None;
+            }
+            if arity.is_some_and(|x| x != s.arity) {
+                return None;
+            }
+            if perm.as_ref().is_some_and(|x| *x != s.perm) {
+                return None;
+            }
+            cal = Some(s.cal.clone());
+            arity = Some(s.arity);
+            perm = Some(s.perm.clone());
+            total += 1;
+        }
+    }
+    if !saw_subline_only {
+        return None;
+    }
+    let (cal, arity, perm) = (cal?, arity?, perm?);
+    if total < 2 {
+        return None;
+    }
+    let mut minus_args = Vec::with_capacity(arity);
+    let mut plus_args = Vec::with_capacity(arity);
+    for i in 0..arity {
+        minus_args.push(format!("E{i}"));
+    }
+    for p in perm.iter().take(arity) {
+        plus_args.push(format!("E{p}"));
+    }
+    // WI-7b parity: an uppercase callee rides backticks (literal), else
+    // the engine infers it as an `expr` hole (unbound plus).
+    let lit = super::shape::literal_callee(&cal);
+    let minus_tpl = format!("{lit}({})", minus_args.join(", "));
+    let plus_tpl = format!("{lit}({})", plus_args.join(", "));
+    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, total) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "call_arg_template");
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:
 /// every pair parses as `Old(args)` → `New(args)` with identical
 /// old/new callees, uniform arity, and per-site textually identical

@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -2,17 @@ rule=r1
+# allow=many
+- E0 + 1
++ E0 + 2

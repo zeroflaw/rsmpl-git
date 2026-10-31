@@ -90,6 +90,7 @@ counts in the JSON report).
 | 32-macro-rules-rename (`macro_rules!` def + 4 uses, 2 hunks sharing one rule) | 637 B / 15 ln | 253 B / 10 ln | 60% |
 | 33-field-rename (field def + 5 uses incl. shorthand expansion, 1 hunk with `# follow=uses`) | 1444 B / 21 ln | 170 B / 7 ln | 88% |
 | 34-variant-rename (variant def + 4 uses incl. `use` segment, 1 hunk with `# follow=uses`) | 793 B / 17 ln | 133 B / 7 ln | 83% |
+| 35-general-expr (5 sites, binary-op `E0 + 1` → `E0 + 2`, 1 hunk) | 563 B / 18 ln | 73 B / 5 ln | 87% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

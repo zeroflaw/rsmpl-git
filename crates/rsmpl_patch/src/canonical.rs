@@ -71,8 +71,24 @@ pub fn canonicalize_with_spans_parsed(
     spans: &HashMap<(String, String), Vec<(u32, u32)>>,
 ) -> String {
     normalize_ranges_with_spans(&mut patch, spans);
+    normalize_file_markers(&mut patch);
     order_files(&mut patch);
     emit_canonical(&mut patch)
+}
+
+/// WI-6 slice 2: the tree-aware form compares rewrites, not citations.
+/// `---`/`+++` file markers are git-apply conveniences the engine never
+/// reads (whole-section inferrer emissions never carry them; per-hunk
+/// and delete-sweep emissions preserve them from the native prelude),
+/// so an authored marker-free sweep and an inferred ranged hunk over
+/// the same sites share one form only once markers normalize away.
+/// Mode/rename/index metadata stays (load-bearing elsewhere). Pure
+/// [`canonicalize`] is untouched (spelling-preserving fixed point).
+fn normalize_file_markers(patch: &mut Patch) {
+    for sec in &mut patch.files {
+        sec.metadata
+            .retain(|l| !l.starts_with("--- ") && !l.starts_with("+++ "));
+    }
 }
 
 /// Apply the D.5 range rule to `allow == many` hunks with known spans.

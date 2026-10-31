@@ -434,6 +434,144 @@ pub(crate) fn extract_qual_sites(minus: &str, plus: &str) -> Option<Vec<QualSite
     Some(sites)
 }
 
+/// One whole-arg permutation site (WI-6 slice 2): the new arg order —
+/// plus position `i` holds minus arg `perm[i]`. `cal`/`arity` ride the
+/// same within-line uniformity as the callee extractors.
+pub(crate) struct PermSite {
+    pub(crate) cal: String,
+    pub(crate) arity: usize,
+    pub(crate) perm: Vec<usize>,
+}
+
+/// Permutation of one subterm's args: plus position `i` holds minus
+/// arg `perm[i]`, or `None` when the lists are not a non-trivial
+/// permutation of each other. Greedy with used-flags (deterministic);
+/// duplicate values take the first free slot — any consistent perm
+/// reproduces the line, and the line/cross-line uniformity gates keep
+/// it exact.
+fn arg_permutation(minus: &[String], plus: &[String]) -> Option<Vec<usize>> {
+    if minus.len() != plus.len() || minus.is_empty() {
+        return None;
+    }
+    if minus == plus {
+        return None;
+    }
+    let mut sorted_minus = minus.to_vec();
+    let mut sorted_plus = plus.to_vec();
+    sorted_minus.sort();
+    sorted_plus.sort();
+    if sorted_minus != sorted_plus {
+        return None;
+    }
+    let mut used = vec![false; minus.len()];
+    let mut perm = Vec::with_capacity(plus.len());
+    for p in plus {
+        let mut found = None;
+        for (j, m) in minus.iter().enumerate() {
+            if !used[j] && m == p {
+                found = Some(j);
+                break;
+            }
+        }
+        let j = found?;
+        used[j] = true;
+        perm.push(j);
+    }
+    Some(perm)
+}
+
+/// Frame check for permutation pairs (WI-6 slice 2): the plus line must
+/// equal the minus line under SIMULTANEOUS subterm replacement. The
+/// shared `frame_holds` sequential `replacen` aliases a swap (pair 1's
+/// plus text is pair 2's minus text), so each minus raw is first parked
+/// on a collision-checked placeholder in source order, then filled with
+/// its plus raw. A missing/out-of-order raw or a placeholder collision
+/// vetoes (safe direction).
+fn perm_frame_holds(minus_line: &str, plus_line: &str, pairs: &[(String, String)]) -> bool {
+    let mut cur = super::flat_ws(minus_line.trim());
+    let mut pos = 0usize;
+    let mut filled: Vec<(String, String)> = Vec::with_capacity(pairs.len());
+    for (i, (m, p)) in pairs.iter().enumerate() {
+        let mf = super::flat_ws(m);
+        let Some(rel) = cur[pos..].find(&mf) else {
+            return false;
+        };
+        let at = pos + rel;
+        let ph = format!("\u{1e}P{i}\u{1e}");
+        if cur.contains(&ph) {
+            return false;
+        }
+        cur.replace_range(at..at + mf.len(), &ph);
+        pos = at + ph.len();
+        filled.push((ph, super::flat_ws(p)));
+    }
+    for (ph, pf) in &filled {
+        cur = cur.replacen(ph, pf, 1);
+    }
+    cur == super::flat_ws(plus_line.trim())
+}
+
+/// Extract whole-arg permutation sites from one line pair (WI-6 slice
+/// 2, F6(a)): every minus/plus subterm pair is a same-callee
+/// same-arity bare call whose args are a non-trivial permutation, with
+/// one uniform permutation across the line's subterms. Same-callee
+/// same-arity, macro/unsupported args, `&`-leading, and frame rules
+/// mirror the callee extractors; nested same-family calls veto via the
+/// frame check (the outer raw swallows the inner span).
+pub(crate) fn extract_arg_permutation_sites(minus: &str, plus: &str) -> Option<Vec<PermSite>> {
+    if minus.trim().starts_with('&') {
+        return None;
+    }
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let m_calls = bare_calls(&m_expr);
+    let p_calls = bare_calls(&p_expr);
+    if m_calls.is_empty() || m_calls.len() != p_calls.len() {
+        return None;
+    }
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    for ((o_cal, o_args, o_raw), (n_cal, n_args, n_raw)) in m_calls.iter().zip(p_calls.iter()) {
+        if o_cal != n_cal || o_args.len() != n_args.len() {
+            return None;
+        }
+        // Macro/unsupported args would inline unmatchable text into a
+        // hole (the engine never binds inside macro bodies).
+        for arg in o_args.iter().chain(n_args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        let o_vals: Vec<String> = o_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        let n_vals: Vec<String> = n_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        let perm = arg_permutation(&o_vals, &n_vals)?;
+        sites.push(PermSite {
+            cal: o_cal.clone(),
+            arity: o_args.len(),
+            perm,
+        });
+        pairs.push((o_raw.clone(), n_raw.clone()));
+    }
+    let (c0, a0, p0) = (sites[0].cal.clone(), sites[0].arity, sites[0].perm.clone());
+    if sites
+        .iter()
+        .any(|s| s.cal != c0 || s.arity != a0 || s.perm != p0)
+    {
+        return None;
+    }
+    if !perm_frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;
@@ -589,14 +727,133 @@ mod tests {
         assert!(out.contains("- crate::api::old(E0)\n"), "got: {out}");
         assert!(out.contains("+ crate::api::new(E0)\n"), "got: {out}");
     }
+
+    #[test]
+    fn perm_single_pair_two_sites_fires_end_to_end() {
+        // WI-6 slice 2: fixture-60 shape through the full inference —
+        // one pair, two subterm sites, sub-line-only class.
+        let raw = section(
+            "src/lib.rs",
+            "@@ -5 +5 @@\n-    swap(x, y) + swap(y, x)\n+    swap(y, x) + swap(x, y)\n",
+        );
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn swap(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn f(x: i32, y: i32) -> i32 {\n    swap(x, y) + swap(y, x)\n}\n",
+        )]);
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("perm sweep must fire");
+        validated_live(&out, &pre);
+        assert!(out.contains("- swap(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ swap(E1, E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn perm_single_site_stays_ordinary() {
+        // t375: one subterm site never wins as a sweep (fixture 74).
+        let raw = section(
+            "src/lib.rs",
+            "@@ -5 +5 @@\n-    swap(x, y)\n+    swap(y, x)\n",
+        );
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn swap(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn f(x: i32, y: i32) -> i32 {\n    swap(x, y)\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none()
+        );
+    }
 }
 
 #[cfg(test)]
 mod verbatim_deferral_tests {
     use super::super::infer_semantic;
+    use super::{arg_permutation, extract_arg_permutation_sites};
 
     fn section(path: &str, body: &str) -> String {
         format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    #[test]
+    fn perm_fixture_60_shape_extracts() {
+        // WI-6 slice 2: the fixture-60 line pair — two `swap` subterms
+        // with a uniform [1,0] permutation — extracts with total 2.
+        let sites = extract_arg_permutation_sites(
+            "    swap(x, y) + swap(y, x)",
+            "    swap(y, x) + swap(x, y)",
+        )
+        .expect("must extract");
+        assert_eq!(sites.len(), 2);
+        assert!(sites
+            .iter()
+            .all(|s| s.cal == "swap" && s.arity == 2 && s.perm == vec![1, 0]));
+    }
+
+    #[test]
+    fn perm_identity_vetoes() {
+        assert!(extract_arg_permutation_sites("    swap(x, y)", "    swap(x, y)").is_none());
+        // Same order, different callee: the callee path's class, not this one.
+        assert!(extract_arg_permutation_sites("    foo(a, b)", "    bar(a, b)").is_none());
+    }
+
+    #[test]
+    fn perm_non_permutation_vetoes() {
+        // Not a multiset match: a real arg delta, stays elsewhere.
+        assert!(extract_arg_permutation_sites("    swap(a, b)", "    swap(b, c)").is_none());
+    }
+
+    #[test]
+    fn perm_hetero_cal_within_line_vetoes() {
+        assert!(extract_arg_permutation_sites(
+            "    swap(a, b) + other(a, b)",
+            "    swap(b, a) + other(b, a)",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn perm_non_uniform_perm_within_line_vetoes() {
+        assert!(extract_arg_permutation_sites(
+            "    swap(a, b, c) + swap(d, e, f)",
+            "    swap(b, a, c) + swap(d, f, e)",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn perm_macro_arg_vetoes() {
+        assert!(
+            extract_arg_permutation_sites("    swap(m!(x), y)", "    swap(y, m!(x))").is_none()
+        );
+    }
+
+    #[test]
+    fn perm_unit() {
+        assert_eq!(
+            arg_permutation(
+                &["a".to_string(), "b".to_string()],
+                &["b".to_string(), "a".to_string()]
+            ),
+            Some(vec![1, 0])
+        );
+        // Identity is no delta.
+        assert_eq!(
+            arg_permutation(&["a".to_string()], &["a".to_string()]),
+            None
+        );
+        // Different multisets are not permutations.
+        assert_eq!(
+            arg_permutation(&["a".to_string()], &["b".to_string()]),
+            None
+        );
+        // Duplicates take the first free slot deterministically.
+        assert_eq!(
+            arg_permutation(
+                &["a".to_string(), "a".to_string(), "b".to_string()],
+                &["a".to_string(), "b".to_string(), "a".to_string()]
+            ),
+            Some(vec![0, 2, 1])
+        );
     }
 
     #[test]
