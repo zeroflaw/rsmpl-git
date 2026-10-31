@@ -603,4 +603,104 @@ mod tests {
             "shadowed receivers never ride the follow"
         );
     }
+    #[test]
+    fn s_assoc_call_compresses_to_single_follow() {
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nfn f() {\n    S::old();\n}\n";
+        let out = run(
+            &["    fn old(&self);", "    fn old(&self) {", "    S::old();"],
+            &["    fn new(&self);", "    fn new(&self) {", "    S::new();"],
+            pre,
+            &[2, 6, 10],
+        )
+        .expect("S::old tails must ride the follow");
+        assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("S::new();"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(!files["f.rs"].contains("old"), "got: {}", files["f.rs"]);
+    }
+    #[test]
+    fn qself_call_compresses_to_single_follow() {
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nfn f() {\n    <S as T>::old();\n}\n";
+        let out = run(
+            &[
+                "    fn old(&self);",
+                "    fn old(&self) {",
+                "    <S as T>::old();",
+            ],
+            &[
+                "    fn new(&self);",
+                "    fn new(&self) {",
+                "    <S as T>::new();",
+            ],
+            pre,
+            &[2, 6, 10],
+        )
+        .expect("qself tails must ride the follow");
+        assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("<S as T>::new();"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(!files["f.rs"].contains("old"), "got: {}", files["f.rs"]);
+    }
+    #[test]
+    fn unrelated_assoc_tail_declines_to_ordinary() {
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nstruct X;\nfn f() {\n    X::old();\n}\n";
+        assert!(
+            run(
+                &["    fn old(&self);", "    fn old(&self) {", "    X::old();"],
+                &["    fn new(&self);", "    fn new(&self) {", "    X::new();"],
+                pre,
+                &[2, 6, 12],
+            )
+            .is_none(),
+            "unrelated X::old tails never ride the follow"
+        );
+    }
+    #[test]
+    fn self_assoc_tail_compresses_to_single_follow() {
+        let pre = "trait T {\n    fn old(&self);\n    fn run(&self) {\n        Self::old();\n    }\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\n";
+        let out = run(
+            &[
+                "    fn old(&self);",
+                "    fn old(&self) {",
+                "        Self::old();",
+            ],
+            &[
+                "    fn new(&self);",
+                "    fn new(&self) {",
+                "        Self::new();",
+            ],
+            pre,
+            &[2, 9, 4],
+        )
+        .expect("Self::old tails must ride the follow");
+        assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("Self::new();"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            !files["f.rs"].contains("Self::old"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
 }

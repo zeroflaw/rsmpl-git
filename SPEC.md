@@ -7464,7 +7464,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   plus line). WI-23 admits anchored call lines sharing the ident delta
   (cheap ident-boundary gate, scratch over defs+calls authoritative;
   unproven/shadowed calls fail the scratch and stay ordinary, never a
-  def-only partial). Probe failure falls back to one hunk per enclosing
+  def-only partial; WI-24 pins `S::old`/`Self::old`/`<S as T>::old` tails
+  on the same gated path — proven tails ride the follow, unrelated `X::old`
+  tails fail the scratch and stay ordinary). Probe failure falls back to one hunk per enclosing
   block with verbatim headers sharing the `rename_Old_to_New` rule
   (no follow, def-only classes; each hunk clears its own engine probe,
   twin headers and untouched twins veto to ordinary). Divergent per-pair
