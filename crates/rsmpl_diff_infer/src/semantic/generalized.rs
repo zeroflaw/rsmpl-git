@@ -529,7 +529,7 @@ pub(crate) fn try_sig_evolution_sweep(
 /// side sets the slot wholesale — the engine's all-or-nothing slot
 /// semantics). An absent side is `""` (addition/removal).
 #[derive(Debug)]
-enum SlotClass {
+pub(crate) enum SlotClass {
     Preserved { uniform: Option<String> },
     Evolving { minus: Option<String>, plus: String },
 }
@@ -540,7 +540,7 @@ impl SlotClass {
     /// bases ride the wildcard on both sides; removal (empty plus) needs
     /// a uniform base, else the class declines (hetero-base removal is
     /// engine-inexpressible — minus-wildcard/plus-omitted preserves).
-    fn plain(&self, wildcard: Emit) -> Option<(Emit, Emit)> {
+    pub(crate) fn plain(&self, wildcard: Emit) -> Option<(Emit, Emit)> {
         match self {
             SlotClass::Preserved { uniform } => match uniform {
                 Some(t) if t.is_empty() => Some((Emit::Omit, Emit::Omit)),
@@ -571,7 +571,7 @@ impl SlotClass {
     /// sides; the plus side is concrete always (a plus `...` after a
     /// concrete minus is a second spelling of deletion — never emit
     /// it).
-    fn params(&self) -> (Option<String>, Option<String>) {
+    pub(crate) fn params(&self) -> (Option<String>, Option<String>) {
         match self {
             SlotClass::Preserved { uniform } => match uniform {
                 Some(t) => (Some(t.clone()), Some(t.clone())),
@@ -586,7 +586,7 @@ impl SlotClass {
     /// preserved bases ride omission on both sides and hetero evolving
     /// bases omit on the minus side; removal (empty plus) needs a
     /// uniform present base (minus-concrete/plus-omitted deletes).
-    fn ret(&self) -> Option<(Option<String>, Option<String>)> {
+    pub(crate) fn ret(&self) -> Option<(Option<String>, Option<String>)> {
         match self {
             SlotClass::Preserved { uniform } => match uniform {
                 Some(t) if t.is_empty() => Some((None, None)),
@@ -615,14 +615,14 @@ impl SlotClass {
 
 /// One side of one plain slot in a header under construction.
 #[derive(Clone, PartialEq, Eq, Debug)]
-enum Emit {
+pub(crate) enum Emit {
     Omit,
     Concrete(String),
     Wild,
 }
 
 impl Emit {
-    fn text(&self, wildcard: &str) -> Option<String> {
+    pub(crate) fn text(&self, wildcard: &str) -> Option<String> {
         match self {
             Emit::Omit => None,
             Emit::Concrete(t) => Some(t.clone()),
@@ -636,7 +636,7 @@ impl Emit {
 /// inference-ambiguous and concrete+wildcard mixes are rejected —
 /// probed). Concrete texts on a paired side are dropped; the totality
 /// probe counts the broader match, so soundness holds.
-fn vq_pair(vis: Emit, qual: Emit) -> (Emit, Emit) {
+pub(crate) fn vq_pair(vis: Emit, qual: Emit) -> (Emit, Emit) {
     if vis == Emit::Wild || qual == Emit::Wild {
         (Emit::Wild, Emit::Wild)
     } else {
@@ -646,17 +646,17 @@ fn vq_pair(vis: Emit, qual: Emit) -> (Emit, Emit) {
 
 /// Pretty (single-space) slot texts of one parsed header.
 #[derive(Debug)]
-struct SigSlots {
-    name: String,
-    vis: String,
-    qual: String,
-    generics: String,
-    params: String,
-    ret: String,
-    where_: String,
+pub(crate) struct SigSlots {
+    pub(crate) name: String,
+    pub(crate) vis: String,
+    pub(crate) qual: String,
+    pub(crate) generics: String,
+    pub(crate) params: String,
+    pub(crate) ret: String,
+    pub(crate) where_: String,
 }
 
-fn slot_col(slots: &[SigSlots], f: impl Fn(&SigSlots) -> &String) -> Vec<String> {
+pub(crate) fn slot_col(slots: &[SigSlots], f: impl Fn(&SigSlots) -> &String) -> Vec<String> {
     slots.iter().map(|s| f(s).clone()).collect()
 }
 
@@ -673,7 +673,7 @@ fn flat_list(s: &str) -> String {
     flat_norm(s).trim_end_matches(',').to_string()
 }
 
-fn classify_slot(
+pub(crate) fn classify_slot(
     minus_pretty: Vec<String>,
     plus_pretty: Vec<String>,
     is_list: bool,
@@ -720,7 +720,7 @@ fn pretty<T: ToTokens>(node: &T) -> String {
 /// Parse one single-line `{`-terminated fn header into signature
 /// slots. `;`-terminated trait decls never reach here (the `{` gate
 /// excludes them, same as the slot sweep).
-fn parse_sig_slots(line: &str) -> Option<SigSlots> {
+pub(crate) fn parse_sig_slots(line: &str) -> Option<SigSlots> {
     let t = line.trim();
     if t.is_empty() || !t.ends_with('{') {
         return None;
@@ -789,7 +789,7 @@ fn parse_sig_slots(line: &str) -> Option<SigSlots> {
 /// abuts the name (`fn f<T>`); every other present slot is
 /// single-space separated (plain Rust spacing, as probed).
 #[allow(clippy::too_many_arguments)]
-fn build_sig_header(
+pub(crate) fn build_sig_header(
     name: &str,
     vis: Option<&str>,
     qual: Option<&str>,

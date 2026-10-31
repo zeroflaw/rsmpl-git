@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,15 @@ rule=r1
+# allow=many
+- fn N<T>(...) -> T {
++ fn N<T : Clone>(...) -> T {
+      ...
+  }

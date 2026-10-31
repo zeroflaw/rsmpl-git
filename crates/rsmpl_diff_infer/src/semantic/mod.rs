@@ -25,6 +25,7 @@ mod deletes;
 pub(crate) mod general_expr;
 mod generalized;
 pub(crate) mod group;
+pub(crate) mod header_evolution;
 mod literal;
 mod literal_frame;
 mod macro_enclosing;
@@ -82,6 +83,7 @@ pub(crate) use generalized::{
     try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep,
     try_sig_evolution_sweep, try_type_sweep, try_untyped_let_sweep,
 };
+pub(crate) use header_evolution::try_header_evolution_sweep;
 pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};

@@ -6887,14 +6887,35 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   appear as the pair (a lone `V`/`Q` is inference-ambiguous and
   concrete+wildcard mixes are rejected), and a concrete plus-side
   return drops the `where` wildcard (`-> T W` is unparsable — the
-  minus side keeps `W` and widens the return to omission instead).
-  Divergent plus sides and hetero-base removals stay ordinary (the
-  engine's slots are all-or-nothing: `...`, concrete, or omitted).
-  Pre-image totality is the generic engine-count check: the emitted
-  minus header must match exactly N fn items in the pre-image
-  (macro/string twins never count — the engine never enters them);
-  indented classes emit one verbatim-header hunk per enclosing `impl`
+   minus side keeps `W` and widens the return to omission instead).
+   Divergent plus sides and hetero-base removals stay ordinary (the
+   engine's slots are all-or-nothing: `...`, concrete, or omitted).
+   Pre-image totality is the generic engine-count check: the emitted
+   minus header must match exactly N fn items in the pre-image
+   (macro/string twins never count — the engine never enters them);
+   indented classes emit one verbatim-header hunk per enclosing `impl`
    block, each probed separately. Detector name `sig_evolution`.
+   The signature-evolution detector owns shared-name classes (one
+   uniform name delta plus slot deltas); hetero-name slot-only
+   classes belong to the header-evolution sweep below — the two are
+   disjoint by construction (uniform names vs hetero preserved names).
+- Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
+   `{`-terminated fn header, where every name is preserved per site
+   (`minus name == plus name`) but names differ across sites (≥ 2
+   distinct), and exactly one non-name slot
+   (vis/qualifiers/generics/params/return/where) carries one uniform
+   delta. Slot classification and emission ride the
+   signature-evolution laws above (concrete uniform bases,
+   wildcarded hetero bases, the `V Q` pairing rule, the
+   `-> T W` fixup), except the emitted name is the WI-5 name hole
+   `N` (`- fn N(...) {` / `+ pub fn N(...) {`). Zero evolving slots
+   is nothing to raise; two or more stay ordinary (never
+   half-claimed under one rule); any name delta stays with the
+   rename/evolution siblings. Trait-context `vis` deltas decline at
+   emission (`pub` is illegal in traits). Pre-image totality is the
+   same engine-count check over the `N`-holed minus header (free fns)
+   or per-`impl`-block probes (methods) — an untouched same-shape
+   header vetoes to ordinary. Detector name `header_evolution`.
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated) differing in

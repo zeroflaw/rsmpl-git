@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-fn alpha(first_argument: FirstLongTypeArgument) -> FirstLongTypeArgument {
++pub fn alpha(first_argument: FirstLongTypeArgument) -> FirstLongTypeArgument {
+@@ -5 +5 @@
+-fn beta(second_argument: SecondLongTypeArgument) -> SecondLongTypeArgument {
++pub fn beta(second_argument: SecondLongTypeArgument) -> SecondLongTypeArgument {
+@@ -9 +9 @@
+-fn gamma(third_argument: ThirdLongTypeArgument) -> ThirdLongTypeArgument {
++pub fn gamma(third_argument: ThirdLongTypeArgument) -> ThirdLongTypeArgument {
+@@ -13 +13 @@
+-fn delta(fourth_argument: FourthLongTypeArgument) -> FourthLongTypeArgument {
++pub fn delta(fourth_argument: FourthLongTypeArgument) -> FourthLongTypeArgument {

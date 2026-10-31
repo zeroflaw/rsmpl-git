@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-fn alpha<T>(first_argument: T) -> T {
++fn alpha<T: Clone>(first_argument: T) -> T {
+@@ -5 +5 @@ fn alpha<T>(first_argument: T) -> T {
+-fn beta<T>(second_argument: T) -> T {
++fn beta<T: Clone>(second_argument: T) -> T {
+@@ -9 +9 @@ fn beta<T>(second_argument: T) -> T {
+-fn gamma<T>(third_argument: T) -> T {
++fn gamma<T: Clone>(third_argument: T) -> T {
+@@ -13 +13 @@ fn gamma<T>(third_argument: T) -> T {
+-fn delta<T>(fourth_argument: T) -> T {
++fn delta<T: Clone>(fourth_argument: T) -> T {

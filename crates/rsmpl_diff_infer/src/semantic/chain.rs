@@ -27,7 +27,7 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 }
 
 /// Ordered pair-sweep chain, tightest first (existing order,
-/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more, WI-5 one more): slot → sig-evolution → trait-method → method-to-fn → method-to-method →
+/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more, WI-5 one more, WI-9 one more): slot → sig-evolution → header-evolution → trait-method → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-perm →
 /// call-arg-add →
@@ -66,6 +66,16 @@ pub(crate) fn run_pair_chain(
         super::try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((evo, "sig_evolution"));
+    }
+    // WI-9: header slot-only evolution (hetero preserved names, one
+    // uniform slot delta, `N` emission) — immediately after its
+    // shared-name sibling (disjoint by construction: that one owns
+    // uniform names, this one requires hetero preserved names),
+    // before the trait-method detector (those own `;` decls).
+    if let Some(header) =
+        super::try_header_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((header, "header_evolution"));
     }
     // WI-4b: trait+impl method rename (mixed `;` decl / `{` def
     // classes the slot and sig-evolution sweeps decline by

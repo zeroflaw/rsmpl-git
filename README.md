@@ -162,6 +162,7 @@ context would be larger, so these are lower bounds.)
 | 26-stmt-interior-rewrite (1 hunk rewrites `F`→`F + 1` inside `if` bodies with an opaque `log!("hit");` over 4 sites) | 138 B / 5 ln | 616 B / 35 ln | 78% |
 | 27-fn-bound-rewrite (1 hunk rewrites `Box<dyn Fn(T) -> u8>`→`Box<dyn Fn(T) -> String>` over 4 hetero-input sites) | 105 B / 5 ln | 507 B / 15 ln | 79% |
 | 28-macro-let-sweep (1 hunk rewrites a verbatim-macro `let` over 4 sites) | 114 B / 5 ln | 379 B / 15 ln | 70% |
+| 29-vis-sweep (1 hunk adds `pub` to 4 hetero-named fns, `N` hole) | 95 B / 7 ln | 755 B / 15 ln | 87% |
 
 `example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):
@@ -204,6 +205,7 @@ context would be larger, so these are lower bounds.)
 | 34-variant-rename (variant def + 4 uses incl. `use` segment, 1 hunk with `# follow=uses`) | 793 B / 17 ln | 133 B / 7 ln | 83% |
 | 35-general-expr (5 sites, binary-op `E0 + 1` → `E0 + 2`, 1 hunk) | 563 B / 18 ln | 73 B / 5 ln | 87% |
 | 36-log-message (4 sites, log/message `"old-msg"` → `"new-msg"`, 1 hunk) | 422 B / 15 ln | 79 B / 5 ln | 81% |
+| 37-bound-sweep (4 hetero-named fns gain `T: Clone`, `N` hole, 1 hunk) | 577 B / 15 ln | 121 B / 7 ln | 79% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

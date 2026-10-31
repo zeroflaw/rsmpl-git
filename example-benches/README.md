@@ -47,6 +47,7 @@ below).
 | 26-stmt-interior-rewrite | 1 hunk rewrites `F`→`F + 1` inside `if` bodies that also carry an opaque `log!("hit");` statement over 4 sites (WI-6b: diet `E`/`F` infer, macro stays literal) | 138 B / 5 ln | 616 B / 35 ln | 78% |
 | 27-fn-bound-rewrite | 1 hunk rewrites `Box<dyn Fn(T) -> u8>`→`Box<dyn Fn(T) -> String>` over 4 hetero-input sites (WI-6d: diet `T` infers, uniform output delta, raising via `type_sweep`) | 105 B / 5 ln | 507 B / 15 ln | 79% |
 | 28-macro-let-sweep | 1 hunk rewrites a verbatim-macro `let` (`format!(..)`) over 4 sites (WI-2a arm, WI-2b bench) | 114 B / 5 ln | 379 B / 15 ln | 70% |
+| 29-vis-sweep | 1 hunk adds `pub` to 4 hetero-named fns, `N` hole (WI-9) | 95 B / 7 ln | 755 B / 15 ln | 87% |
 
 Reading the table: fan-out edits (many sites, moves) save 50–90%.
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps even
@@ -92,6 +93,7 @@ counts in the JSON report).
 | 34-variant-rename (variant def + 4 uses incl. `use` segment, 1 hunk with `# follow=uses`) | 793 B / 17 ln | 133 B / 7 ln | 83% |
 | 35-general-expr (5 sites, binary-op `E0 + 1` → `E0 + 2`, 1 hunk) | 563 B / 18 ln | 73 B / 5 ln | 87% |
 | 36-log-message (4 sites, log/message `"old-msg"` → `"new-msg"`, 1 hunk) | 422 B / 15 ln | 79 B / 5 ln | 81% |
+| 37-bound-sweep (4 hetero-named fns gain `T: Clone`, `N` hole, 1 hunk, WI-9) | 577 B / 15 ln | 121 B / 7 ln | 79% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end
