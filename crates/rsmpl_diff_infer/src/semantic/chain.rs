@@ -106,6 +106,16 @@ pub(crate) fn run_pair_chain(
     {
         return Some((member, "member_rename"));
     }
+    // WI-12 slice 1: definition-value evolution (alias/const/field/
+    // payload/discriminant, uniform delta) — immediately after the
+    // member rename (those own ident deltas; this owns same-identity
+    // RHS deltas), before the method sweeps (those own call shapes,
+    // never `:`/payload/alias lines).
+    if let Some((evo, _)) =
+        super::try_definition_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((evo, "definition_evolution"));
+    }
     if let Some(m2f) =
         super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
@@ -619,6 +629,50 @@ pub(crate) fn compress_section(
                 return Some(rename);
             } else {
                 used_rules.truncate(checkpoint);
+            }
+        }
+        // WI-12 slice 1: single-definition evolution under the precision
+        // guard (`semantic <= ordinary + 16`) — the only N=1 shape the
+        // pair chain owns. Strict T375 would price every lone RHS edit
+        // above its ordinary hunk; the guard prices the proof instead.
+        let evo_checkpoint = used_rules.len();
+        if let Some((evo, detector)) = super::try_definition_evolution_sweep(
+            &minuses, &pluses, path, file_old, &changed, used_rules,
+        ) {
+            debug_assert_eq!(detector, "definition_evolution");
+            if let Some(prelude) = &rename_prelude {
+                if let Some(final_text) = reheader_rename(&evo, prelude) {
+                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
+                        push_section_prov(
+                            prov,
+                            &final_text,
+                            section,
+                            path,
+                            "definition_evolution",
+                            &changed,
+                            file_old,
+                            evo_checkpoint,
+                            used_rules,
+                        );
+                        return Some(final_text);
+                    }
+                }
+                used_rules.truncate(evo_checkpoint);
+            } else if evo.len() <= section.len() + super::PRECISION_GUARD {
+                push_section_prov(
+                    prov,
+                    &evo,
+                    section,
+                    path,
+                    "definition_evolution",
+                    &changed,
+                    file_old,
+                    evo_checkpoint,
+                    used_rules,
+                );
+                return Some(evo);
+            } else {
+                used_rules.truncate(evo_checkpoint);
             }
         }
         return compress_section_per_hunk(section, path, file_old, used_rules, prov);

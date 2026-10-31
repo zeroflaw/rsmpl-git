@@ -446,6 +446,20 @@ pub(crate) fn compress_balanced_pair_body(
         return None;
     }
     let checkpoint = used_rules.len();
+    // WI-12 slice 1: single-definition evolution under the precision
+    // guard (`body <= hunk + 16`). Singles otherwise stay ordinary
+    // (T375) except whole-arg permutation (WI-6 slice 2 posture).
+    if minuses.len() == 1 {
+        if let Some((evo, detector)) = semantic::try_definition_evolution_sweep(
+            minuses, pluses, path, file_old, changed, used_rules,
+        ) {
+            let body = evo.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), detector));
+            }
+            used_rules.truncate(checkpoint);
+        }
+    }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         // Single pairs stay ordinary (T375) except whole-arg permutation:
         // subterm-counted multi-site swaps owe canonical-losslessness,

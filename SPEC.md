@@ -7008,9 +7008,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   emitted hunk must apply to the pre-image with `matches == class
   size` and reproduce byte-identically the result of applying the
   claimed ordinary hunks (count equality alone can coincide wrongly).
-  Per-class T375 (each body beats its covered hunks); a losing class
-  declines alone, never vetoing a winning one. Detector name
-  `attr_sweep`.
+   Per-class T375 (each body beats its covered hunks); a losing class
+   declines alone, never vetoing a winning one. Detector name
+   `attr_sweep`.
+- Definition-value evolution (WI-12 slice 1): one balanced pair
+  (N == 1) — or N ≥ 2 uniform pairs sharing one shape class,
+  identity, and exact RHS delta — compresses to the WI-11 authored
+  spelling (bare `- type A = RHS;` / `- const/static … = EXPR;`
+  pairs; member pairs under a recovered `struct S {` / `enum E {`
+  container header). Generics-bearing aliases, vis/mut/kind/type
+  mismatches, hetero deltas, and hetero containers (member N ≥ 2)
+  decline; `None` pre-image declines (containers are unprovable
+  without it). Totality is the scratch-apply byte-compare probe:
+  the emitted hunk must apply with `matches == n` and reproduce
+  byte-identically the native post lines at the changed sites.
+  Guard is the precision guard (semantic ≤ ordinary + 16 bytes);
+  sweep shapes keep strict T375. Field/variant addition with
+  construction follow-through is WI-12b (stays ordinary here).
+  Detector name `definition_evolution`.
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated) differing in

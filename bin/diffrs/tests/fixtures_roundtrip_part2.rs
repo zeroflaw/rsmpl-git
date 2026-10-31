@@ -542,5 +542,35 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             !semantic.contains("rule="),
             "let-attr insert must stay ordinary, got: {semantic}"
         );
+    } else if name == "106-definition-alias-fires" {
+        // WI-12 slice 1: single-definition alias evolution raises to the
+        // WI-11a authored spelling under the precision guard.
+        assert!(
+            semantic.contains("- type A = Vec<u8>;"),
+            "alias minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ type A = Box<[u8]>;"),
+            "alias plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1"),
+            "single evolution must carry a rule, got: {semantic}"
+        );
+    } else if name == "107-definition-field-type-fires" {
+        // WI-12 slice 1: single-definition field-type evolution raises
+        // to the WI-11b member spelling with its container header.
+        assert!(
+            semantic.contains("  struct S {"),
+            "field header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- old: u32"),
+            "field minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ old: u64"),
+            "field plus must raise, got: {semantic}"
+        );
     }
 }
