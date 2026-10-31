@@ -8,20 +8,17 @@
 //!   hunk that matched must have at least one byte-changing definition
 //!   edit. A sweep claims every site in scope; a sweep that changes
 //!   nothing (e.g. `foo(E) -> foo(E)`) is a loud `RSMPL_MATCH_CONFLICT`.
-//! - plus-instantiation gate (WI-1b, WI-1.2, WI-1.4): every rewrite
-//!   hunk's plus template, instantiated with its recorded per-site
-//!   bindings, must verify in the post-image *at the reported spans*
-//!   (SPEC 24.6). Rename kinds verify the new ident by syn ident
-//!   equality at overlapping spans (WI-1.4 — exact ident match, never a
-//!   substring, so `New` no longer matches `New2`); `Expr`/`General`/
-//!   `Macro` verify the instantiated plus by string-aware token-edge
-//!   comparison inside the span windows (WI-1.4 — string literals keep
-//!   their whitespace, fragment edges require token boundaries so `x+2`
-//!   no longer matches `x+22`), paired per site when one span per match
-//!   holds (WI-1.4 — binding `i` must verify at span `i`, ending the
-//!   twin-share existence posture); code-level `...` tails verify as
-//!   ordered fragments ("the absorbed tail is present verbatim") — and
-//!   `ImplContext` verifies `fn {name}` span-locally.
+//! - plus-pattern gate (WI-1b, WI-1.2, WI-1.4, WI-1.5): every rewrite
+//!   hunk's plus template, compiled to a pattern with the same compiler,
+//!   must re-match in the post-image *at the reported spans* (SPEC 24.6)
+//!   with SPEC-15.7-equal bindings. Rename kinds verify the new ident by
+//!   syn ident equality at overlapping spans (WI-1.4 — exact ident match,
+//!   never a substring, so `New` never matches `New2`); `Expr`/`General`/
+//!   `Macro` re-run the existing matchers over a synthetic plus-as-minus
+//!   hunk (WI-1.5 — no instantiation, no text windows; overlap comes
+//!   from matcher byte offsets); code-level `...` tails re-match through
+//!   the same matchers — and `ImplContext` verifies `fn {name}`
+//!   span-locally.
 //!   Occurrence elsewhere in the file never counts. A rewrite that did
 //!   not land as authored fails loud as `RSMPL_MATCH_CONFLICT`.
 //!
@@ -41,6 +38,7 @@ use rsmpl_patch::{Allow, ErrorCode, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
 
 use crate::edits::TextEdit;
+use crate::lines::LineIndex;
 
 /// Whether this hunk owes the sweep change gate: non-`optional`,
 /// file-scope `# allow=many`, countable rewrite kind (insertions, cuts
@@ -133,40 +131,39 @@ pub(crate) fn instantiation_error(rule: &str, file: &str, range_desc: &str) -> S
 /// deletions, signature-evolution slot edits) where only the ident-bearing
 /// spans name the new ident.
 ///
-/// `Expr`/`General`/`Macro` verify span-locally too (WI-1.4): the
-/// instantiated plus (substitute + backtick-strip, exactly as the engine
-/// emits) must verify inside the reported spans' adaptive windows under
-/// string-aware token-edge comparison — string literals keep their
-/// whitespace, and every fragment edge that ends/starts in an ident char
-/// requires a token boundary, so `x + 2` no longer verifies inside
-/// `x + 22`. Code-level `...` tails verify as ordered fragments (the
-/// absorbed tail is present verbatim). When one span per recorded binding
-/// holds, binding `i` must verify at span `i` (pairwise — a swapped or
-/// reverted site fails even when its text occurs at a sibling span);
-/// multi-edit shapes keep the count/existence formulation, now on the
-/// structural predicate. `ImplContext` counts spans overlapping a
+/// `Expr`/`General`/`Macro` verify by plus-pattern re-match (WI-1.5):
+/// the plus side is compiled to a pattern with the same compiler and
+/// re-matched in the post-image with the existing matchers; every
+/// reported span must overlap a plus match whose bindings are
+/// SPEC-15.7-equal to the recorded ones (pairwise when one span per
+/// binding holds, per-span otherwise). No instantiation, no text
+/// windows — overlap is computed from byte offsets via the post-image
+/// `LineIndex`. `ImplContext` counts spans overlapping a
 /// `fn {name}` definition (syn ident equality).
 ///
-/// `post_parsed` is the once-per-file post-image parse owned by the
-/// caller; `None` falls back to the text posture (unit-test callers and
-/// unparseable inputs keep the old behaviour, never a new veto).
+/// `post_parsed`/`post_index` are the once-per-file post-image parse
+/// and line index owned by the caller; `None` (unparseable inputs)
+/// downgrades to `reparse-only` (honest, never a new veto).
 ///
 /// Returns `None` when the plus shape cannot be verified (insertions,
-/// cuts, pastes, `Raw`, unextractable impl-method names) — the caller
-/// downgrades to `reparse-only` (honest, never over-claimed). Otherwise
-/// `Some(true)` when every site's instantiated template verifies at its
-/// spans, `Some(false)` when any is missing.
-/// WI-1.4 parse-once entry point: structural plus verification over a
+/// cuts, pastes, `Raw`, unextractable impl-method names, plus-side
+/// compile/match failures) — the caller downgrades to `reparse-only`
+/// (honest, never over-claimed). Otherwise `Some(true)` when every
+/// reported span verifies, `Some(false)` when any is missing.
+/// WI-1.5 parse-once entry point: structural plus verification over a
 /// caller-owned post-image parse. Production callers ([`crate::plan`])
 /// pass the per-file parse here so N rules over one file share a single
-/// `syn::File`; `post_parsed = None` keeps the text posture (unparseable
-/// inputs keep the old behaviour, never a new veto).
+/// `syn::File`; `post_parsed = None` (or `post_index = None`) yields
+/// `reparse-only` for the pattern kinds (unparseable inputs keep no
+/// veto, never a failure).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn plus_instantiated_parsed(
     compiled: &rsmpl_pattern::CompiledPattern,
     rh: &rsmpl_patch::RsmplHunk,
     bindings_list: &[HashMap<String, String>],
     post_text: &str,
     post_parsed: Option<&syn::File>,
+    post_index: Option<&LineIndex>,
     spans: &[(u32, u32)],
     matches: usize,
 ) -> Option<bool> {
@@ -240,24 +237,77 @@ pub(crate) fn plus_instantiated_parsed(
                 ),
             }
         }
-        PatternKind::Expr { plus_raw, .. } => Some(verify_instantiated_structural(
-            plus_raw,
-            bindings_list,
-            post_text,
-            spans,
-        )),
-        PatternKind::General { plus_body, .. } => Some(verify_instantiated_structural(
+        PatternKind::Expr { plus_raw, .. } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            // T126 doctrine: a trailing `;` on an expression pattern
+            // denotes statement position (the candidate span excludes
+            // it), not expression content. Compiling it into the
+            // synthetic minus gloms it onto a binding (observed:
+            // `E=(a.wrapping_add(1);)`), so strip one terminator.
+            let trimmed = plus_raw.trim_end();
+            let line = trimmed.strip_suffix(';').unwrap_or(trimmed).to_string();
+            verify_plus_pattern_at_spans(
+                rh,
+                std::slice::from_ref(&line),
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
+        PatternKind::General {
             plus_body,
-            bindings_list,
-            post_text,
-            spans,
-        )),
-        PatternKind::Macro { plus_raw, .. } => Some(verify_instantiated_structural(
-            plus_raw,
-            bindings_list,
-            post_text,
-            spans,
-        )),
+            had_semi,
+            ..
+        } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            // T126 doctrine (mirrors the Expr arm): with `had_semi` the
+            // trailing `;` denotes statement position (the candidate
+            // span excludes it), not pattern content. A true `let`
+            // statement keeps its terminator; only the terminator
+            // artifact is stripped.
+            let mut lines = plus_body_lines(plus_body);
+            if *had_semi {
+                if let Some(last) = lines.last_mut() {
+                    let t = last.trim_end();
+                    *last = t.strip_suffix(';').unwrap_or(t).to_string();
+                }
+            }
+            verify_plus_pattern_at_spans(
+                rh,
+                &lines,
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
+        PatternKind::Macro { plus_raw, .. } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            verify_plus_pattern_at_spans(
+                rh,
+                std::slice::from_ref(plus_raw),
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
         PatternKind::ImplContext { .. } => {
             let name = plus_fn_name(rh)?;
             match post_parsed {
@@ -278,6 +328,217 @@ pub(crate) fn plus_instantiated_parsed(
         PatternKind::Insertion { .. }
         | PatternKind::ItemCapture { .. }
         | PatternKind::Raw { .. } => None,
+    }
+}
+
+/// Split a `General` plus body into synthetic-hunk lines (one body
+/// line per text line, empty lines dropped — the parser skips blanks).
+fn plus_body_lines(plus_body: &str) -> Vec<String> {
+    plus_body
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// WI-1.5 synthetic plus-as-minus hunk: the recorded plus side,
+/// compiled with the same compiler that compiled the minus. Metavar
+/// declarations (`# expr E`, `# lang=rust`, `# repeat`, `# fallback`,
+/// …) are preserved; the discovery posture is forced to file-scope
+/// `# allow=many` so every plus occurrence in the post-image is found.
+/// `optional`/ranged postures never carry over (a missing plus match
+/// must fail, never pass by abstention).
+fn plus_pattern_hunk(rh: &rsmpl_patch::RsmplHunk, plus_lines: &[String]) -> rsmpl_patch::RsmplHunk {
+    let mut directives = Vec::new();
+    for d in &rh.directives {
+        match d {
+            rsmpl_patch::Directive::Allow(_)
+            | rsmpl_patch::Directive::Scope(_)
+            | rsmpl_patch::Directive::Optional(_) => {}
+            _ => directives.push(d.clone()),
+        }
+    }
+    directives.push(rsmpl_patch::Directive::Allow(Allow::Many));
+    directives.push(rsmpl_patch::Directive::Scope(Scope::File));
+    let mut lines = Vec::with_capacity(plus_lines.len() * 2);
+    for t in plus_lines {
+        lines.push(rsmpl_patch::BodyLine {
+            prefix: '-',
+            text: t.clone(),
+        });
+        lines.push(rsmpl_patch::BodyLine {
+            prefix: '+',
+            text: t.clone(),
+        });
+    }
+    let header = rsmpl_patch::HunkHeader {
+        old_start: 1,
+        old_len: 1,
+        new_start: 1,
+        new_len: 1,
+        new_elided: true,
+        rule: rh.header.rule.clone(),
+        raw_tail: String::new(),
+    };
+    rsmpl_patch::RsmplHunk {
+        header,
+        directives,
+        raw_directives: Vec::new(),
+        lines,
+    }
+}
+
+/// Line-range intersection (1-based inclusive on both sides).
+fn spans_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
+    a.0 <= b.1 && b.0 <= a.1
+}
+
+/// SPEC 15.7 binding equality for the postcondition: every variable the
+/// fresh plus-match binds must equal the recorded value under the
+/// string-aware canonical form (whitespace-insensitive outside string
+/// literals, trailing-comma-insensitive). Minus-only variables the plus
+/// side drops (e.g. an arg-drop `foo(E, F)` → `bar(E)`) have no fresh
+/// counterpart and are ignored — there is nothing to re-match.
+///
+/// Plus-side concrete idents that diet inference hole-ifies when the
+/// plus side is compiled as a pattern (e.g. the `String` in
+/// `Box<dyn Fn(T) -> String>`, which was concrete on the plus side but
+/// infers as a hole as a minus) are recovered here: a fresh key absent
+/// from the recorded map must be self-bound (value equals the name, so
+/// the hole matched the literal text). A reverted site binding that
+/// hole to anything else fails — exactly the concrete semantics.
+fn plus_bindings_equal(
+    recorded: &HashMap<String, String>,
+    fresh: &HashMap<String, String>,
+) -> bool {
+    for (k, v) in fresh {
+        match recorded.get(k) {
+            Some(rv) => {
+                if canonical_struct(rv) != canonical_struct(v) {
+                    return false;
+                }
+            }
+            None => {
+                if canonical_struct(v) != canonical_struct(k) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// WI-1.5 plus-pattern re-match at the reported spans.
+///
+/// Compiles the recorded plus side as a pattern (minus = plus) and runs
+/// the existing matchers over the post-image in check mode. Each
+/// reported span (post-image coordinates) must overlap a plus match;
+/// binding equality follows the pairing rule: one span per recorded
+/// binding pairs binding `i` with span `i` (a swapped or reverted site
+/// fails even when its text occurs at a sibling span); otherwise each
+/// span must overlap a plus match equal to some recorded map (the
+/// single-map multi-edit case checks every span against the one map).
+/// All-empty bindings check overlap only (the concrete template must
+/// match at each span). Empty spans (byte-identical self-rewrites, no
+/// edits) require at least `matches` plus matches file-wide.
+///
+/// Any synthetic-compile or matcher failure returns `None` (honest
+/// `reparse-only`, never a new veto). No instantiation, no text
+/// windows: overlap comes from matcher byte offsets via `post_index`.
+/// Line-range pair for one plus-match edit with its binding map.
+type SpanBinding<'a> = ((u32, u32), &'a HashMap<String, String>);
+
+#[allow(clippy::too_many_arguments)]
+fn verify_plus_pattern_at_spans(
+    rh: &rsmpl_patch::RsmplHunk,
+    plus_lines: &[String],
+    bindings_list: &[HashMap<String, String>],
+    post_text: &str,
+    post_parsed: &syn::File,
+    post_index: &LineIndex,
+    spans: &[(u32, u32)],
+    matches: usize,
+) -> Option<bool> {
+    if plus_lines.is_empty() || plus_lines.iter().all(|l| l.trim().is_empty()) {
+        return None;
+    }
+    let synth = plus_pattern_hunk(rh, plus_lines);
+    let plus_compiled = rsmpl_pattern::compile(&synth).ok()?;
+    let mut throwaway: Vec<TextEdit> = Vec::new();
+    let (_matched, fresh_bindings) = match &plus_compiled.kind {
+        PatternKind::Expr { .. } => crate::matcher_expr::apply_expr_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
+        PatternKind::General { .. } => crate::matcher_general_apply::apply_general_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
+        PatternKind::Macro { .. } => crate::matcher_macro::apply_macro_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
+        _ => return None,
+    };
+    if spans.is_empty() {
+        return Some(fresh_bindings.len() >= matches.max(1));
+    }
+    // Pair each plus-match edit span with its binding map. The matchers
+    // emit one edit per match in document order, parallel to the
+    // bindings vec; a single-map multi-edit run broadcasts its map.
+    let pm_spans = crate::edits::edit_spans(post_index, &throwaway);
+    let paired: Vec<SpanBinding<'_>> = if pm_spans.len() == fresh_bindings.len() {
+        pm_spans.into_iter().zip(fresh_bindings.iter()).collect()
+    } else if fresh_bindings.len() == 1 {
+        pm_spans
+            .into_iter()
+            .zip(fresh_bindings.iter().cycle())
+            .collect()
+    } else {
+        return None;
+    };
+    if bindings_list.iter().all(|m| m.is_empty()) {
+        // Concrete template: the plus pattern must match at each span.
+        // Diet-inference artifacts (plus-side concrete idents compiled
+        // as holes) are admitted only when self-bound — `plus_bindings_equal`
+        // against the empty map is exactly the concrete semantics.
+        let empty = HashMap::new();
+        return Some(spans.iter().all(|sp| {
+            paired
+                .iter()
+                .any(|(pm, fresh)| spans_overlap(*sp, *pm) && plus_bindings_equal(&empty, fresh))
+        }));
+    }
+    let nonempty: Vec<&HashMap<String, String>> =
+        bindings_list.iter().filter(|m| !m.is_empty()).collect();
+    if nonempty.len() == spans.len() {
+        Some(nonempty.iter().zip(spans.iter()).all(|(rec, sp)| {
+            paired
+                .iter()
+                .any(|(pm, fresh)| spans_overlap(*sp, *pm) && plus_bindings_equal(rec, fresh))
+        }))
+    } else {
+        Some(spans.iter().all(|sp| {
+            paired.iter().any(|(pm, fresh)| {
+                spans_overlap(*sp, *pm)
+                    && nonempty.iter().any(|rec| plus_bindings_equal(rec, fresh))
+            })
+        }))
     }
 }
 
@@ -531,106 +792,11 @@ fn spans_count(
         .count()
 }
 
-/// WI-1.4 span-local structural check for `Expr`/`General`/`Macro` plus
-/// shapes.
-///
-/// Every non-empty recorded binding's instantiated plus (substitute +
-/// backtick-strip, exactly as the engine emits) must verify inside the
-/// reported spans' adaptive windows under [`fragments_present_struct`]
-/// (string-aware canonical forms, token-edge boundaries, ordered `...`
-/// fragments with the T157 comma-swallowing replay rule). All-empty
-/// bindings check the concrete template. Empty spans fall back to the
-/// whole post-image (callers without spans keep the old posture, never a
-/// new veto).
-///
-/// Pairing (WI-1.4): when the number of non-empty bindings equals the
-/// number of windows (the common one-edit-per-match sweep), binding `i`
-/// must verify at window `i` — a swapped or reverted site fails even
-/// when its text occurs at a sibling span (the WI-1.2 twin-share hazard).
-/// Multi-edit shapes (several spans per match) keep the existence
-/// formulation, now on the structural predicate.
-fn verify_instantiated_structural(
-    plus_raw: &str,
-    bindings_list: &[HashMap<String, String>],
-    post_text: &str,
-    spans: &[(u32, u32)],
-) -> bool {
-    if spans.is_empty() {
-        let hay = canonical_struct(post_text);
-        let check = |m: &HashMap<String, String>| {
-            let inst = strip_backticks(&substitute_plus(plus_raw, m));
-            fragments_present_struct(&hay, &inst)
-        };
-        if bindings_list.iter().all(|m| m.is_empty()) {
-            return check(&HashMap::new());
-        }
-        return bindings_list.iter().filter(|m| !m.is_empty()).all(check);
-    }
-    let windows: Vec<String> = {
-        let lines: Vec<&str> = post_text.lines().collect();
-        spans
-            .iter()
-            .map(|(s, e)| {
-                let inst_lines = plus_raw.lines().count().max(1);
-                span_window_struct(&lines, *s, *e, inst_lines)
-            })
-            .collect()
-    };
-    let nonempty: Vec<&HashMap<String, String>> =
-        bindings_list.iter().filter(|m| !m.is_empty()).collect();
-    if bindings_list.iter().all(|m| m.is_empty()) {
-        let inst = strip_backticks(&substitute_plus(plus_raw, &HashMap::new()));
-        return single_or_any(&windows, &inst);
-    }
-    // Pairwise when the sweep emitted one span per match; existence
-    // otherwise (multi-edit sites share spans across one binding map).
-    if nonempty.len() == windows.len() {
-        nonempty
-            .iter()
-            .zip(windows.iter())
-            .all(|(m, w)| plus_holds_at_struct(plus_raw, m, w))
-    } else {
-        nonempty
-            .iter()
-            .all(|m| windows.iter().any(|w| plus_holds_at_struct(plus_raw, m, w)))
-    }
-}
-
-/// One binding map against one window: instantiate, then verify as
-/// ordered token-edge fragments.
-fn plus_holds_at_struct(plus_raw: &str, m: &HashMap<String, String>, window: &str) -> bool {
-    let inst = strip_backticks(&substitute_plus(plus_raw, m));
-    fragments_present_struct(window, &inst)
-}
-
-/// Concrete-template (all-empty bindings) check against paired-or-any
-/// windows, mirroring the pairing rule above.
-fn single_or_any(windows: &[String], inst: &str) -> bool {
-    if windows.len() == 1 {
-        return fragments_present_struct(&windows[0], inst);
-    }
-    windows.iter().any(|w| fragments_present_struct(w, inst))
-}
-
-/// WI-1.4 adaptive post-image window in string-aware canonical form
-/// (starts at `s`, covers `max(span_len, min_lines)` lines clamped to
-/// EOF: a wrapping rewrite's emitted output is at most template-shaped
-/// plus the original span's own lines, so the site's output is covered).
-fn span_window_struct(lines: &[&str], s: u32, e: u32, min_lines: usize) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-    let start = (s as usize).saturating_sub(1).min(lines.len() - 1);
-    let span_len = (e as usize).saturating_sub(s as usize) + 1;
-    let len = span_len.max(min_lines);
-    let end = (start + len).min(lines.len());
-    canonical_struct(&lines[start..end].join("\n"))
-}
-
-/// WI-1.4 string-aware canonical form: whitespace removed *outside*
-/// string literals (whitespace inside `"..."` is significant and kept),
-/// trailing commas before closers stripped outside strings
-/// (`(2,)` → `(2)`). String-aware so `"a b"` never verifies as `"ab"`.
+/// WI-1.5 string-aware canonical form (kept for SPEC 15.7 binding
+/// equality): whitespace removed *outside* string literals (whitespace
+/// inside `"..."` is significant and kept), trailing commas before
+/// closers stripped outside strings (`(2,)` → `(2)`). String-aware so
+/// `"a b"` never equals `"ab".
 fn canonical_struct(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
@@ -667,127 +833,6 @@ fn canonical_struct(s: &str) -> String {
     out.replace(",)", ")").replace(",]", "]").replace(",}", "}")
 }
 
-/// WI-1.4 token-edge ordered-fragment check: the instantiated plus is
-/// split on code-level `...` (string-aware) and every fragment hit
-/// requires token boundaries at fragment edges that begin/end in ident
-/// characters (see [`edge_find`]), so `x + 2` never verifies inside
-/// `x + 22` and `bar(1` never verifies inside `bar(10`. The T157
-/// comma-swallowing replay rule is kept (an empty `...` remainder may
-/// swallow its adjacent comma).
-fn fragments_present_struct(window_canon: &str, needle_raw: &str) -> bool {
-    let mut rest = window_canon;
-    for frag in split_code_ellipsis(needle_raw) {
-        let frag = canonical_struct(&frag);
-        if frag.is_empty() {
-            continue;
-        }
-        if let Some(pos) = edge_find(rest, &frag) {
-            rest = &rest[pos + frag.len()..];
-            continue;
-        }
-        let stripped = frag.strip_suffix(',').or_else(|| frag.strip_prefix(','));
-        match stripped {
-            None => return false,
-            Some("") => continue,
-            Some(s) => match edge_find(rest, s) {
-                Some(pos) => rest = &rest[pos + s.len()..],
-                None => return false,
-            },
-        }
-    }
-    true
-}
-
-/// Find `needle` in `hay` at a token edge: when the needle starts
-/// (ends) with an ident-continue char (`[A-Za-z0-9_]`), `$`, or `"`, the
-/// haystack char before (after) the hit must not continue the token.
-/// Punctuation edges match freely — fragments are partial token streams
-/// by design (`bar(1,` legitimately continues with the next argument).
-fn edge_find(hay: &str, needle: &str) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    let needs_before = haystack_boundary_char(needle.chars().next().unwrap_or(' '));
-    let needs_after = haystack_boundary_char(needle.chars().next_back().unwrap_or(' '));
-    let mut start = 0;
-    while start <= hay.len() {
-        let rel = hay[start..].find(needle)?;
-        let pos = start + rel;
-        let before_ok = !needs_before
-            || pos == 0
-            || hay[..pos]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !is_token_continue(c));
-        let after = &hay[pos + needle.len()..];
-        let after_ok = !needs_after || after.chars().next().is_none_or(|c| !is_token_continue(c));
-        if before_ok && after_ok {
-            return Some(pos);
-        }
-        // Advance one haystack char past the hit start (never stall, never
-        // split a UTF-8 boundary: `pos` is a `find` hit, hence a boundary).
-        let next = hay[pos..]
-            .chars()
-            .next()
-            .map(|c| pos + c.len_utf8())
-            .unwrap_or(hay.len());
-        start = next.max(pos + 1).min(hay.len());
-        if start >= hay.len() {
-            return None;
-        }
-    }
-    None
-}
-
-/// Chars whose adjacency fuses tokens: ident continues, `$`-sigils, and
-/// string quotes (a literal directly abutting code is a different token).
-fn haystack_boundary_char(c: char) -> bool {
-    is_ident_char(c) || c == '$' || c == '"'
-}
-
-fn is_token_continue(c: char) -> bool {
-    is_ident_char(c) || c == '$' || c == '"'
-}
-
-/// Split on `...` outside string literals (backslash escapes honoured).
-fn split_code_ellipsis(s: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut cur = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    let mut in_str = false;
-    while i < chars.len() {
-        let c = chars[i];
-        if in_str {
-            cur.push(c);
-            if c == '\\' && i + 1 < chars.len() {
-                cur.push(chars[i + 1]);
-                i += 2;
-                continue;
-            }
-            if c == '"' {
-                in_str = false;
-            }
-            i += 1;
-            continue;
-        }
-        if c == '"' {
-            in_str = true;
-            cur.push(c);
-            i += 1;
-            continue;
-        }
-        if c == '.' && i + 2 < chars.len() && chars[i + 1] == '.' && chars[i + 2] == '.' {
-            parts.push(std::mem::take(&mut cur));
-            i += 3;
-            continue;
-        }
-        cur.push(c);
-        i += 1;
-    }
-    parts.push(cur);
-    parts
-}
 /// Canonical (whitespace-free) variant for `Fn` needles.
 fn spans_count_canon(post_text: &str, spans: &[(u32, u32)], needle: &str) -> usize {
     let lines: Vec<&str> = post_text.lines().collect();
@@ -842,101 +887,6 @@ fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-fn strip_backticks(s: &str) -> String {
-    s.chars().filter(|c| *c != '`').collect()
-}
-
-/// Substitute whole-ident metavars in `template` with bound values,
-/// skipping double-quoted string literals and backtick-literal regions
-/// (metavars stay concrete there, SPEC 15.4 / WI-5b).
-fn substitute_plus(template: &str, bindings: &HashMap<String, String>) -> String {
-    if bindings.is_empty() {
-        return template.to_string();
-    }
-    let mut keys: Vec<&String> = bindings.keys().collect();
-    keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
-    let mut out = String::with_capacity(template.len());
-    let chars: Vec<char> = template.chars().collect();
-    let mut i = 0;
-    let mut in_str = false;
-    let mut in_tick = false;
-    while i < chars.len() {
-        let c = chars[i];
-        if in_str {
-            out.push(c);
-            if c == '\\' && i + 1 < chars.len() {
-                out.push(chars[i + 1]);
-                i += 2;
-                continue;
-            }
-            if c == '"' {
-                in_str = false;
-            }
-            i += 1;
-            continue;
-        }
-        if in_tick {
-            out.push(c);
-            if c == '`' {
-                in_tick = false;
-            }
-            i += 1;
-            continue;
-        }
-        if c == '"' {
-            in_str = true;
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        if c == '`' {
-            in_tick = true;
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        // WI-1b sigiled support: `$E` references the `E` binding (the
-        // engine emits the value without the `$` sigil).
-        if c == '$' {
-            let mut j = i + 1;
-            while j < chars.len() && is_ident_char(chars[j]) {
-                j += 1;
-            }
-            if j > i + 1 {
-                let ident: String = chars[i + 1..j].iter().collect();
-                if let Some(v) = bindings.get(&ident) {
-                    out.push_str(v);
-                    i = j;
-                    continue;
-                }
-            }
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        if is_ident_char(c) {
-            let mut j = i;
-            while j < chars.len() && is_ident_char(chars[j]) {
-                j += 1;
-            }
-            let ident: String = chars[i..j].iter().collect();
-            if let Some(v) = bindings.get(&ident) {
-                out.push_str(v);
-            } else {
-                out.push_str(&ident);
-            }
-            i = j;
-            continue;
-        }
-        out.push(c);
-        i += 1;
-    }
-    // Second pass for any remaining keys that abut non-ident chars
-    // already handled above (single pass suffices; kept for clarity).
-    let _ = keys;
-    out
-}
-
 /// Extract the plus-side `fn` name from an impl-context hunk body.
 fn plus_fn_name(rh: &rsmpl_patch::RsmplHunk) -> Option<String> {
     for l in &rh.lines {
@@ -968,12 +918,14 @@ mod tests {
         matches: usize,
     ) -> Option<bool> {
         let parsed = syn::parse_str::<syn::File>(post_text).ok();
+        let index = LineIndex::new(post_text);
         plus_instantiated_parsed(
             compiled,
             rh,
             bindings_list,
             post_text,
             parsed.as_ref(),
+            Some(&index),
             spans,
             matches,
         )
@@ -1524,6 +1476,83 @@ mod tests {
                 &[(2, 2)],
                 1,
             ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn widening_plus_rematches_own_output() {
+        // WI-1.5: a widening rewrite (`foo(E)` → `foo(foo(E))`)
+        // re-matches its own output — the plus pattern matches the
+        // post-image node with equal bindings (minus-zero stays
+        // rejected by design elsewhere; this gate only checks plus).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E)\n+ foo(foo(E))\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "x")]);
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    foo(foo(x));\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(true)
+        );
+        // Reverted span fails even though the minus output is present.
+        assert_eq!(
+            plus_instantiated(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    foo(x);\n}\n",
+                &[(2, 2)],
+                1,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn unparseable_post_downgrades_to_reparse_only() {
+        // WI-1.5: without a post-image parse the pattern kinds cannot
+        // re-match — honest `reparse-only` (`None`), never a new veto.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "x")]);
+        assert_eq!(
+            plus_instantiated_parsed(
+                &compiled,
+                &rh,
+                &bindings,
+                "fn f() {\n    bar(x);\n}\n",
+                None,
+                None,
+                &[(2, 2)],
+                1,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn single_binding_each_span_checked() {
+        // WI-1.5: one recorded map across two spans (multi-edit shape)
+        // checks *each* span against that map — a reverted second span
+        // fails, although the old any-span existence posture passed it
+        // (the first window alone satisfied the binding).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n- foo(E)\n+ bar(E)\n";
+        let (rh, compiled) = compile_first_rh(patch);
+        let bindings = bindings1(&[("E", "x")]);
+        let both = "fn f() {\n    bar(x);\n}\nfn g() {\n    bar(x);\n}\n";
+        assert_eq!(
+            plus_instantiated(&compiled, &rh, &bindings, both, &[(2, 2), (5, 5)], 1),
+            Some(true)
+        );
+        let reverted = "fn f() {\n    bar(x);\n}\nfn g() {\n    foo(x);\n}\n";
+        assert_eq!(
+            plus_instantiated(&compiled, &rh, &bindings, reverted, &[(2, 2), (5, 5)], 1),
             Some(false)
         );
     }

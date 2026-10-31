@@ -290,7 +290,76 @@ pub(crate) fn match_callee_generic_arg(
             return true;
         }
     }
+    // WI-1.5: structural recursion for `Seg<...>` patterns (e.g. the
+    // synthetic plus `Vec<T>` over `Vec<Vec<i32>>`): same-spine paths
+    // recurse per generic arg so inner placeholders bind instead of
+    // failing the whole token compare. Concrete spines still compare
+    // token-normalized at the leaves, so non-placeholder outcomes are
+    // unchanged (this only turns fail into bind-or-fail).
+    if let syn::GenericArgument::Type(syn::Type::Path(pat_tp)) = pat_arg {
+        if pat_tp.qself.is_none() && path_has_args(&pat_tp.path) {
+            if let Ok(syn::Type::Path(tgt_tp)) = syn::parse_str::<syn::Type>(tgt_text) {
+                if tgt_tp.qself.is_none() && same_path_spine(&pat_tp.path, &tgt_tp.path) {
+                    return match_path_args(&pat_tp.path, &tgt_tp.path, reverse_map, bindings);
+                }
+            }
+        }
+    }
     fragments_equal(&quote::quote!(#pat_arg).to_string(), tgt_text)
+}
+
+/// True when any path segment carries generic arguments.
+fn path_has_args(path: &syn::Path) -> bool {
+    path.segments
+        .iter()
+        .any(|s| !matches!(s.arguments, syn::PathArguments::None))
+}
+
+/// Same segment count, same ident per segment, same argument shape per
+/// segment (both bare, or both angle-bracketed with equal arg counts —
+/// the per-arg recursion enforces the rest).
+fn same_path_spine(a: &syn::Path, b: &syn::Path) -> bool {
+    if a.segments.len() != b.segments.len() {
+        return false;
+    }
+    a.segments.iter().zip(b.segments.iter()).all(|(x, y)| {
+        x.ident == y.ident
+            && match (&x.arguments, &y.arguments) {
+                (syn::PathArguments::None, syn::PathArguments::None) => true,
+                (
+                    syn::PathArguments::AngleBracketed(xb),
+                    syn::PathArguments::AngleBracketed(yb),
+                ) => xb.args.len() == yb.args.len(),
+                _ => false,
+            }
+    })
+}
+
+/// Recurse per generic argument (target args rendered to source text
+/// for the shared comparator). Bindings roll back on failure so a
+/// partial bind never leaks into the caller's map.
+fn match_path_args(
+    pat: &syn::Path,
+    tgt: &syn::Path,
+    reverse_map: &std::collections::HashMap<String, String>,
+    bindings: &mut std::collections::HashMap<String, String>,
+) -> bool {
+    let saved = bindings.clone();
+    for (ps, ts) in pat.segments.iter().zip(tgt.segments.iter()) {
+        let (syn::PathArguments::AngleBracketed(pb), syn::PathArguments::AngleBracketed(tb)) =
+            (&ps.arguments, &ts.arguments)
+        else {
+            continue;
+        };
+        for (pa, ta) in pb.args.iter().zip(tb.args.iter()) {
+            let tt = quote::quote!(#ta).to_string();
+            if !match_callee_generic_arg(pa, &tt, reverse_map, bindings) {
+                *bindings = saved;
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Declared name if `arg` is a single-placeholder type (`T` for

@@ -770,31 +770,33 @@ fn apply_inner(
         files.insert(path.clone(), updated);
     }
 
-    // WI-1b/WI-1.2/WI-1.4: plus-instantiation postcondition (SPEC 24.6).
-    // Every rewrite hunk's plus template, instantiated with its recorded
-    // per-site bindings, must verify in the post-image at the reported
-    // spans (translated to post-image coordinates: line-changing
-    // rewrites shift later sites). Renames verify the new ident by syn
-    // ident equality at overlapping spans (WI-1.4); Expr/General/Macro
-    // verify the instantiated plus by token-edge comparison inside the
-    // span windows, pairwise when one span per match holds (WI-1.4);
-    // ImplContext verifies `fn {name}` span-locally by ident equality.
+    // WI-1b/WI-1.5: plus-pattern postcondition (SPEC 24.6).
+    // Every rewrite hunk's plus template, compiled to a pattern, must
+    // re-match in the post-image at the reported spans (translated to
+    // post-image coordinates: line-changing rewrites shift later sites).
+    // Renames verify the new ident by syn ident equality at overlapping
+    // spans (WI-1.4); Expr/General/Macro re-run the existing matchers
+    // over a synthetic plus-as-minus hunk with SPEC-15.7 binding
+    // equality (WI-1.5); ImplContext verifies `fn {name}` span-locally
+    // by ident equality.
     // Occurrence elsewhere never counts. Failures are loud
     // `RSMPL_MATCH_CONFLICT`; unverifiable plus shapes (insertions,
-    // cuts, `Raw`, unextractable impl names) downgrade to `reparse-only`
-    // (honest, never over-claimed).
+    // cuts, `Raw`, unextractable impl names, plus-side compile/match
+    // failures) downgrade to `reparse-only` (honest, never over-claimed).
     // `probe_pending` and the provisional `instantiated|postcondition`
     // entries are both in document order, so zip in order.
     {
-        // WI-1.4: parse each touched post-image once; the structural
-        // postcondition reuses the parse instead of re-splitting text
-        // per rule (reparse already validated above, so failures here
-        // only mean falling back to the text posture inside the check).
+        // WI-1.5: parse each touched post-image once plus its line
+        // index; the plus-pattern postcondition reuses both instead of
+        // re-splitting text per rule (reparse already validated above,
+        // so a missing parse only means `reparse-only` inside the check).
         let mut post_parsed: HashMap<String, syn::File> = HashMap::new();
+        let mut post_index: HashMap<String, crate::lines::LineIndex> = HashMap::new();
         for (path, text) in files.iter() {
             if let Ok(f) = syn::parse_str::<syn::File>(text) {
                 post_parsed.insert(path.clone(), f);
             }
+            post_index.insert(path.clone(), crate::lines::LineIndex::new(text));
         }
         let mut jobs = probe_pending.into_iter();
         for r in report.rules.iter_mut() {
@@ -835,6 +837,7 @@ fn apply_inner(
                 &bindings_list,
                 &post_text,
                 post_parsed.get(&r.file),
+                post_index.get(&r.file),
                 &post_spans,
                 r.matches,
             ) {
