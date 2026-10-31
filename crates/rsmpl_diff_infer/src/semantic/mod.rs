@@ -23,6 +23,7 @@ mod deletes;
 mod generalized;
 pub(crate) mod group;
 mod literal;
+mod macro_enclosing;
 mod macro_hetero;
 mod macro_parts;
 mod macros;

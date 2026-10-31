@@ -448,6 +448,20 @@ pub(crate) fn compress_section(
         {
             rewritten = Some(interior);
         }
+        // WI-7a: enclosing-macro interiors (changed lines inside one
+        // shared macro invocation) over the interior output: already
+        // semantic (`rule=`) hunks are never re-harvested, so claimed
+        // pairs cannot double-fire.
+        let after_interior = rewritten.as_deref().unwrap_or(section);
+        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
+            after_interior,
+            path,
+            used_rules,
+            file_old,
+            &mut fired,
+        ) {
+            rewritten = Some(enclosing);
+        }
         let after_mac = rewritten.as_deref().unwrap_or(section);
         if let Some(verbatim) =
             super::verbatim::try_verbatim_sweep(after_mac, path, used_rules, file_old, &mut fired)
@@ -505,6 +519,26 @@ pub(crate) fn compress_section(
     if let Some(interior) =
         super::try_macro_interior_section(section, path, used_rules, file_old, &mut verb_fired)
     {
+        // WI-7a: enclosing-macro interiors over the interior output
+        // (already-semantic hunks are never re-harvested).
+        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
+            &interior,
+            path,
+            used_rules,
+            file_old,
+            &mut verb_fired,
+        ) {
+            commit_prov(
+                prov,
+                &enclosing,
+                section,
+                path,
+                &verb_fired,
+                &changed,
+                file_old,
+            );
+            return Some(enclosing);
+        }
         commit_prov(
             prov,
             &interior,
@@ -515,6 +549,26 @@ pub(crate) fn compress_section(
             file_old,
         );
         return Some(interior);
+    }
+    // WI-7a: the interior sweep declined the section whole — the
+    // enclosing sweep still sees the original ordinary hunks.
+    if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
+        section,
+        path,
+        used_rules,
+        file_old,
+        &mut verb_fired,
+    ) {
+        commit_prov(
+            prov,
+            &enclosing,
+            section,
+            path,
+            &verb_fired,
+            &changed,
+            file_old,
+        );
+        return Some(enclosing);
     }
     if let Some(verbatim) =
         super::verbatim::try_verbatim_sweep(section, path, used_rules, file_old, &mut verb_fired)

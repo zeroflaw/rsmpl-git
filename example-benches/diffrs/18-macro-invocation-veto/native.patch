@@ -4,11 +4,18 @@ diff --git a/src/lib.rs b/src/lib.rs
 @@ -9 +9 @@ fn check_alpha(out: &Out) {
 -    assert_eq!(out.rsmpl, TEXT_SECTION);
 +    assert_eq!(out.rsmpl, TEXT_STRIPPED);
-@@ -13 +13,6 @@ fn check_beta(out: &Out) {
--    assert_eq!(out.rsmpl, TEXT_SECTION);
-+    assert_eq!(out.rsmpl, TEXT_STRIPPED);
-+}
+@@ -13 +13 @@ fn check_beta(other: &Out) {
+-    assert_eq!(other.rsmpl, TEXT_SECTION);
++    assert_eq!(other.rsmpl, TEXT_STRIPPED);
+@@ -17 +17 @@ fn check_gamma(third: &Out) {
+-    assert_eq!(third.rsmpl, TEXT_SECTION);
++    assert_eq!(third.rsmpl, TEXT_STRIPPED);
+@@ -21 +21 @@ fn check_delta(fourth: &Out) {
+-    assert_eq!(fourth.rsmpl, TEXT_SECTION);
++    assert_eq!(fourth.rsmpl, TEXT_STRIPPED);
+@@ -24,0 +25,5 @@ fn unchanged_helper() {}
 +
 +#[test]
 +fn extra_probe() {
 +    assert!(true);
++}

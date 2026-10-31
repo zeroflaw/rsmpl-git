@@ -1,13 +1,13 @@
 diff --git src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -9,5 @@ rule=r1
+@@ -9,13 @@ rule=r1
 # allow=many
 - assert_eq!(E0, TEXT_SECTION)
 + assert_eq!(E0, TEXT_STRIPPED)
-@@ -13,0 +14,5 @@
-+}
+@@ -24,0 +25,5 @@
 +
 +#[test]
 +fn extra_probe() {
 +    assert!(true);
++}

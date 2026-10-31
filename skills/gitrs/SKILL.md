@@ -98,8 +98,8 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 - Ordinary hunks: text edits with no `#` lines; headers stay two-sided
   (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11; blank insertion needs bare `+`, `- foo` removal a `-- ` body line, SPEC 11).
 - Macros: plain call patterns never reach inside macro invocations;
-  `# macro=token_tree` is verbatim-only (`- M!(...)` / `+ N!(...)` renames);
-  edits inside macro bodies go through ordinary hunks (SPEC 21).
+  `# macro=token_tree` renames verbatim (`M!(...)`→`N!(...)`) or binds one hole
+  per top-level arg; shared-enclosing lines raise as one sweep (SPEC 21).
 
 ## Loop (SPEC D.3)
 

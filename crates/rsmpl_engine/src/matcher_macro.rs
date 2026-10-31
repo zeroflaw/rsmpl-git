@@ -279,15 +279,6 @@ pub fn apply_macro_hunk(
         None => (String::new(), String::new()),
     };
 
-    // Token-tree mode: body must be a bare `...` (verbatim preservation).
-    if token_tree && minus_args_pat.trim() != "..." {
-        return Err(StructuredError::new(
-            ErrorCode::PatternConflict,
-            "v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body",
-        )
-        .with_rule(&rule));
-    }
-
     let reverse_map = reverse_map_of(compiled);
     // Classify minus args with the shared arg classifier. The pattern text at
     // this point still holds `__RSMPL_` placeholders (from the pattern
@@ -302,6 +293,26 @@ pub fn apply_macro_hunk(
             other => other,
         })
         .collect::<Vec<_>>();
+
+    // Token-tree mode (WI-7a): the body is a top-level comma-separated
+    // argument list where each argument is whole (`...`, one bare
+    // metavariable, or concrete token soup). A declared metavariable
+    // *inside* a larger argument (`old!(foo(E))`) never binds — fail fast
+    // with the verbatim-body diagnostic instead of matching literally.
+    if token_tree && minus_args_pat.trim() != "..." {
+        let declared: Vec<&str> = reverse_map.values().map(String::as_str).collect();
+        for arg in &minus_args {
+            if let ArgPat::Concrete(c) = arg {
+                if concrete_holds_declared_meta(c, &declared) {
+                    return Err(StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        "v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body",
+                    )
+                    .with_rule(&rule));
+                }
+            }
+        }
+    }
 
     let mut collector = MacroCollector {
         original,
@@ -339,8 +350,8 @@ pub fn apply_macro_hunk(
         ) {
             continue;
         }
-        if token_tree {
-            // Verbatim body: nothing to match inside.
+        if minus_args_pat.trim() == "..." {
+            // Verbatim body: nothing to match inside (both modes).
         } else if is_lone_body_meta(&minus_args) {
             // `M!(TT)`: the single metavariable captures the whole body.
             let name = lone_meta_name(&minus_args, &reverse_map).unwrap();
@@ -364,7 +375,7 @@ pub fn apply_macro_hunk(
             )
         };
         let plus_name_lit = rsmpl_pattern::unmask_literal_spans(&plus_name_pat, &plus_sentinels);
-        let replacement = if token_tree
+        let replacement = if minus_args_pat.trim() == "..."
             || (plus_args_pat.trim() == minus_args_pat.trim()
                 && plus_name_lit == minus_name_pat
                 && reverse_map.is_empty())
@@ -600,6 +611,63 @@ fn rsmpl_pattern_args(pattern_args: &str, reverse_map: &HashMap<String, String>)
     out
 }
 
+/// True when concrete token-soup `text` mentions a declared metavariable
+/// name as an ident token outside string literals (WI-7a token-tree lint).
+/// A token preceded by `'` (lifetime/char, e.g. `'a`) never counts;
+/// string bodies are skipped with escape awareness (T428 posture).
+fn concrete_holds_declared_meta(text: &str, declared: &[&str]) -> bool {
+    if declared.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' {
+            i += 1;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let d = bytes[i] as char;
+                if escaped {
+                    escaped = false;
+                } else if d == '\\' {
+                    escaped = true;
+                } else if d == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == '_' || c == '$' {
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let e = bytes[j] as char;
+                if e.is_ascii_alphanumeric() || e == '_' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            let tok = &text[i..j];
+            let bare = tok.trim_start_matches('$');
+            let preceded_by_quote = i > 0 && bytes[i - 1] == b'\'';
+            if !preceded_by_quote
+                && declared
+                    .iter()
+                    .any(|n| *n == tok || *n == bare || n.trim_start_matches('$') == bare)
+            {
+                return true;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// True when `t` is exactly a substituted `__RSMPL_ELLIPSIS_N` ident
 /// (T442: `starts_with` alone misclassified args containing `...` inside
 /// a larger expression as arg-level `Ellipsis`).
@@ -709,12 +777,46 @@ mod tests {
     }
 
     #[test]
-    fn token_tree_nonverbatim_rejected() {
-        // T133: `# macro=token_tree` is verbatim-only by design; binding
-        // metavars inside token soup is rejected, not silently ignored.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n# macro=token_tree\n# expr E\n- old!(E)\n+ new!(E)\n";
-        let err = apply(patch, "fn a() {\n    old!(1);\n}\n").unwrap_err();
+    fn token_tree_whole_arg_hole_fires() {
+        // WI-7a: `# macro=token_tree` binds one metavariable per top-level
+        // comma-separated argument (`old!(E)` captures the whole body for
+        // single-arg invocations via the lone-body path).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n# macro=token_tree\n# expr E\n- old!(E)\n+ new!(E)\n";
+        let out = apply(patch, "fn a() {\n    old!(1);\n    old!(2);\n}").unwrap();
+        assert_eq!(out.matches("new!(1);").count(), 1, "got: {out}");
+        assert_eq!(out.matches("new!(2);").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn token_tree_multi_arg_hole_fires() {
+        // WI-7a: per-position concrete/hole matching (`E0` binds per site,
+        // `TEXT_SECTION` is token-equal) with repeat-equality across sites.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n# macro=token_tree\n# expr E0\n- assert_eq!(E0, TEXT_SECTION)\n+ assert_eq!(E0, TEXT_STRIPPED)\n";
+        let same = "fn a(x: i32) {\n    assert_eq!(x, TEXT_SECTION);\n    assert_eq!(x + 1, TEXT_SECTION);\n}\n";
+        let out = apply(patch, same).unwrap();
+        assert_eq!(out.matches("TEXT_STRIPPED").count(), 2, "got: {out}");
+        assert!(!out.contains("TEXT_SECTION"), "got: {out}");
+    }
+
+    #[test]
+    fn token_tree_embedded_hole_rejected() {
+        // WI-7a: a declared hole *inside* a larger token-tree argument
+        // (`foo(E)`) never binds — fail fast, not a silent literal match.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# macro=token_tree\n# expr E\n- old!(foo(E))\n+ new!(foo(E))\n";
+        let err = apply(patch, "fn a() {\n    old!(foo(1));\n}\n").unwrap_err();
         assert!(err.contains("verbatim body"), "got: {err}");
+    }
+
+    #[test]
+    fn token_tree_bracket_delim_preserved() {
+        // WI-7a: delimiters are significant — `![...]` interiors round-trip
+        // with brackets, never normalized to parens.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=x\n# lang=rust\n# allow=many\n# macro=token_tree\n# expr E\n- my_vec![E, 2]\n+ my_vec![E, 3]\n";
+        let src = "fn m() {\n    my_vec![1, 2];\n    my_vec![x, 2];\n}\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out.matches("my_vec![1, 3];").count(), 1, "got: {out}");
+        assert_eq!(out.matches("my_vec![x, 3];").count(), 1, "got: {out}");
+        assert!(!out.contains("my_vec!("), "got: {out}");
     }
 
     #[test]

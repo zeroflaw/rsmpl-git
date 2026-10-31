@@ -3555,7 +3555,7 @@ case where an ordinary hunk cannot express the edit.
 | C17 | `# follow=uses` on any shape other than a fn or item rename hunk (WI-6a) | `` `# follow=uses` is only supported on fn and item rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
-| C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites, or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
+| C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites or per-argument holes (WI-7a: one hole per top-level comma-separated argument), or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 
 C6 note: `...;` expression-statement deletions never reach the general
 matcher — call-like `foo(E);` shapes route to the call matcher (Section 13.4)
@@ -4001,21 +4001,46 @@ Supported macro modes:
 + new_mac!(...)
 ```
 
-In token-tree mode the body must be a bare `...` (verbatim
-preservation); anything else is rejected with `RSMPL_PATTERN_CONFLICT`.
-This is less structured than AST mode and should be used cautiously.
+A bare `...` body preserves the body verbatim (rename-only). Since
+WI-7a the body may also be a top-level comma-separated argument list
+in which each argument is whole — `...`, one bare metavariable, or
+concrete token soup:
 
-Composition (permanent answer, T133): invocation mode already binds
+```diff
+@@ -30,1 @@ rule=wrap_second_arg
+# macro=token_tree
+# allow=many
+# expr E
+- assert_eq!(E, TEXT_SECTION)
++ assert_eq!(E, TEXT_STRIPPED)
+```
+
+Per-position matching reuses invocation-mode semantics (SPEC 21.2):
+a bare argument binds the whole argument, a concrete argument compares
+token-equal (whitespace-insensitive), `...` absorbs any argument count
+with backtracking, and repeated metavariables must match structurally
+(SPEC 15.7). Plus templates splice per argument (`+ ...` replays the
+whole body); the plus pattern's delimiter decides the emitted spelling
+(`![...]` stays `![...]`, never normalized to parens). A declared hole
+*inside* a larger argument (`old!(foo(E))`) never binds — it fails
+fast with the verbatim-body diagnostic instead of matching literally.
+Uppercase single-side idents read as unbound metavariables, exactly as
+in every other shape (diet inference only binds shared both-sides
+macro args to `expr`).
+
+Composition (updated WI-7a, T133): invocation mode already binds
 metavariables where the body is well-defined — comma-separated args
 (`- assert_eq!(E, E)` / `+ assert_equal_once(E)`, with repeated-metavar
 equality) and the lone whole-body capture (`- M!(TT)` / `+ new_macro!(TT)`
-with `# macro M` + `# token_tree TT`). `# macro=token_tree` stays
-verbatim-only (`NAME!(...)`, body preserved) by design: token-tree bodies
-are token soup, not Rust lists (§21.4), so there is no delimiter contract
-for binding `# expr`-style metavars inside them. Anything else nested in
+with `# macro M` + `# token_tree TT`). `# macro=token_tree` adds the
+same per-argument positions for token soup the author scopes by name
+and delimiter instead of by AST: one hole per top-level argument, no
+descent into nested macro tokens (a nested macro inside a *bound*
+argument position never matches — concrete positions compare
+textually and never descend). Anything else nested in
 a macro body goes through ordinary hunks — the same one-tool composition
-as §14.9 (no new flags or directives; extending the macro matcher with a
-token-level expression splitter is rejected, not deferred).
+as §14.9 (no new flags or directives; binding *inside* a token-tree
+argument is rejected, not deferred).
 
 Engine-verbatim shape rejections (both exit 2; both carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit nulls):
 
@@ -4033,7 +4058,7 @@ file: a.rs
 reason: v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body
 ```
 
-The first `got ...` tail echoes the offending minus text verbatim (here `foo(E)`); the second fires when the minus side is macro-shaped but the body is not a bare `...`. The `expected macro pattern` fallthrough arm is dispatch-unreachable (the planner routes only macro-classified patterns there) and carries no fence.
+The first `got ...` tail echoes the offending minus text verbatim (here `foo(E)`); the second fires when a declared hole sits inside a larger token-tree argument (`old!(foo(E))`) — whole-argument holes (`old!(E)`) and bare `...` bodies match instead. The `expected macro pattern` fallthrough arm is dispatch-unreachable (the planner routes only macro-classified patterns there) and carries no fence.
 
 ### 21.4 Ellipsis in token-tree mode
 
@@ -6460,7 +6485,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
- `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `repeat_fold`, `partial_strip`, `single_block`, `macro_interior`, `verbatim`, `delete`, `move`). `sites` are
+   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `repeat_fold`, `partial_strip`, `single_block`, `macro_interior`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -6948,11 +6973,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   whose first plus matches shed minus + first plus and stay a
   pure-insertion leftover), so sections with a pure addition still
   compress their runs. Totality is the generic engine-count probe on
-  the emitted minus (the engine's own match domain). `![...]`/`!{}`
+  the emitted minus (the engine's own match domain).    `![...]`/`!{}`
     Mixed-delimiter pairs stay ordinary (no cross-delimiter class);
-   renames (name delta) and macro-body-descent
-   edits (changed lines nested inside a macro body the pattern never
-   enters) stay ordinary; varying-across-sites hetero body rewrites
+   renames (name delta) and varying-across-sites macro-body-descent
+   edits (changed lines nested inside macro bodies whose enclosing
+   texts differ per site) stay ordinary; identical-enclosing descents
+   group one level up (enclosing sweep below). Varying-across-sites hetero body rewrites
    group cross-site (WI-9b2 below), while pairs whose delta itself
    varies across sites stay ordinary. WI-9b1 hetero emission: when every
   stable (minus==plus) non-string arg longer than its hole name can hole
@@ -7003,6 +7029,25 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    (`template_pair_holds`, N = members), same index-based hunk
    atomicity, plus a per-group byte sanity so a losing candidate can
    never flip the section T375 into a whole-sweep veto.
+   Enclosing-macro sweep (WI-7a): N ≥ 2 balanced pairs whose changed
+   lines are not themselves macro invocations (whole-line and
+   `let`-init shapes belong to the interior sweep above, which runs
+   first) but sit each inside one same-spelling macro invocation in
+   the pre-image — same path, same delimiter, byte-identical enclosing
+   span texts on both sides after line-splicing each pair's changed
+   line into its span (nested same-line macros never qualify: byte
+   containment requires the span to cover the whole changed line).
+   → one `# sweep` hunk spelling the raw enclosing texts
+   (`-`/`+` bare prefixes, no added space — the span text carries its
+   own indentation and the parser strips exactly one prefix char).
+   Emission is always file scope: the candidate (enclosing span)
+   exceeds any interior-line range, so a ranged hunk could never
+   contain it. Totality is a multi-line engine-count probe
+   (`template_enclosing_holds`: the emitted pair must match exactly N
+   sites file-wide — an untouched twin vetoes). Same index-based hunk
+   atomicity, same section-global T375 (no stranded joins in v1; tiny
+   templates lose to ordinary hunks by design). `macro_rules!`
+   definitions never enclose (WI-7b owns that kind).
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed

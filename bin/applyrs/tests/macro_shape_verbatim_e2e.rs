@@ -58,12 +58,15 @@ fn non_macro_shape_rejected_verbatim() {
 }
 
 #[test]
-fn token_tree_nonverbatim_body_rejected_verbatim() {
+fn token_tree_embedded_hole_rejected_verbatim() {
+    // WI-7a: whole-arg holes (`old!(E)`) now fire; a declared hole *inside*
+    // a larger token-tree argument (`old!(foo(E))`) still fails fast with
+    // the verbatim-body diagnostic.
     let patch =
-        "diff --git src/lib.rs\n@@ -1,3 @@ rule=m\n# macro=token_tree\n# expr E\n- old!(E)\n+ new!(E)\n";
+        "diff --git src/lib.rs\n@@ -1,3 @@ rule=m\n# macro=token_tree\n# expr E\n- old!(foo(E))\n+ new!(foo(E))\n";
     let reason = "v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body";
     let dir = init_repo();
-    write(dir.path(), "src/lib.rs", "fn a() {\n    old!(1, 2);\n}\n");
+    write(dir.path(), "src/lib.rs", "fn a() {\n    old!(foo(1));\n}\n");
     let out = run_stdin(dir.path(), patch, &["--check"]);
     assert_eq!(
         out.status.code(),
@@ -76,8 +79,8 @@ fn token_tree_nonverbatim_body_rejected_verbatim() {
     assert!(stderr.contains(reason), "got: {stderr}");
     assert!(!stderr.contains("suggestion:"), "got: {stderr}");
     let got = read(dir.path(), "src/lib.rs");
-    assert_eq!(got, "fn a() {\n    old!(1, 2);\n}\n");
-    let v = check_json(patch, "src/lib.rs", "fn a() {\n    old!(1, 2);\n}\n");
+    assert_eq!(got, "fn a() {\n    old!(foo(1));\n}\n");
+    let v = check_json(patch, "src/lib.rs", "fn a() {\n    old!(foo(1));\n}\n");
     assert_eq!(
         v["error"]["code"],
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
@@ -86,4 +89,32 @@ fn token_tree_nonverbatim_body_rejected_verbatim() {
     assert_eq!(v["error"]["reason"], serde_json::json!(reason));
     assert!(v["error"]["range"].is_null(), "got: {v}");
     assert!(v["error"]["suggestion"].is_null(), "got: {v}");
+}
+
+#[test]
+fn token_tree_whole_arg_hole_fires() {
+    // WI-7a: `# macro=token_tree` per-arg holes apply and report the match.
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,3 @@ rule=m\n# macro=token_tree\n# allow=many\n# expr E\n- old!(E, TEXT_SECTION)\n+ old!(E, TEXT_STRIPPED)\n";
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn a(x: i32) {\n    old!(x, TEXT_SECTION);\n    old!(x + 1, TEXT_SECTION);\n}\n",
+    );
+    let out = run_stdin(dir.path(), patch, &["--format", "json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["rules"][0]["matches"], serde_json::json!(2));
+    let got = read(dir.path(), "src/lib.rs");
+    assert_eq!(
+        got, "fn a(x: i32) {\n    old!(x, TEXT_STRIPPED);\n    old!(x + 1, TEXT_STRIPPED);\n}\n",
+        "got: {got}"
+    );
 }

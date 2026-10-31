@@ -1,19 +1,20 @@
 diff --git src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -4 +4 @@
+@@ -1,1 @@ rule=r1
+# sweep
+-format!(
+-        "{header}\nrest\n",
 -        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
+-    )
++format!(
++        "{header}\nrest\n",
 +        header = super::git_header(path)
-@@ -8 +8 @@
--        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
-+        header = super::git_header(path)
-@@ -12 +12 @@
--        header = rsmpl_patch::collapse_git_header(&format!("diff --git a/{path} b/{path}"))
-+        header = super::git_header(path)
++    )
 diff --git src/tool.rs
 --- a/src/tool.rs
 +++ b/src/tool.rs
-@@ -2,11 @@ rule=r1
+@@ -2,11 @@ rule=r2
 # allow=many
 - env!("CARGO_BIN_EXE_gitrs")
 + env!("CARGO_BIN_EXE_applyrs")

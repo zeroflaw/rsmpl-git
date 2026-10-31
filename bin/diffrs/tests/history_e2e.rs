@@ -207,9 +207,13 @@ const CASES: &[Case] = &[
         commit: "33a8cbbe7d3936411f96895437b5eac5e1478918",
         rev: None,
         root: false,
-        // T403 macro gate: `&format!(...)` interior patterns are
-        // engine-illegal (SPEC 21) — stays ordinary.
-        expect_sem: 0,
+        // WI-7a enclosing sweep: the two identical multi-line `format!`
+        // interiors (`collapse_git_header(&format!(...))` →
+        // `git_header(path)`, bench-17 shape) compress to two `# sweep`
+        // enclosing hunks (T361 real-apply byte-identical). The old T403
+        // macro gate (whole-line pairs only) stays for the lines the
+        // enclosing sweep does not cover.
+        expect_sem: 2,
     },
     Case {
         commit: "a2fc9b3966312b60439e56e40030f8a3dc88d92a",

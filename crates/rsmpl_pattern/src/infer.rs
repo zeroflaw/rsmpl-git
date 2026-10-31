@@ -882,6 +882,24 @@ fn assign_call_slots(
                     continue;
                 }
             }
+            // Bracket/brace macro invocations (`name![args]`,
+            // `name!{args}`): same shared-arg `expr` rule as paren
+            // macros (WI-7a; the paren path below never sees these
+            // lines since there is no `(` to split on).
+            if let Some(args) = crate::macro_bracket_args(t) {
+                let other = if side == 0 { masked_plus } else { masked_minus };
+                for n in names_in(&args, kinds) {
+                    // Declared non-`expr` names keep their kind (same
+                    // agreement-error posture as the paren macro arm).
+                    if base.kind_of(&n).is_some_and(|k| k != MetavarKind::Expr) {
+                        continue;
+                    }
+                    if occurs_in(other, &n) {
+                        add_kind(kinds, &n, MetavarKind::Expr);
+                    }
+                }
+                continue;
+            }
             // Plain call `callee(args)` / macro `name!(args)`.
             if let Some(paren) = t.find('(') {
                 let callee = t[..paren].trim();
@@ -1225,14 +1243,16 @@ fn assign_general_fallback(
             if assign_control_line(t, kinds) {
                 continue;
             }
-            // Macro invocations (`foo!(...)`) carry token-tree bodies,
-            // not expression args (same rule as the call pass).
-            if t.contains('!') && t.contains('(') {
-                if let Some(bang) = t.find('!') {
-                    let after = t[bang + 1..].trim_start();
-                    if after.starts_with('(') || after.starts_with('[') || after.starts_with('{') {
-                        continue;
-                    }
+            // Macro invocations (`foo!(...)`, `foo![...]`,
+            // `foo!{...}`) carry token-tree bodies, not expression
+            // args (same rule as the call pass). The opener after the
+            // bang decides — `!=` / `!cond` never skip (WI-7a: bracket
+            // and brace macros without any paren must also skip, else
+            // `syn::Type` (macro-in-type-position) misclaims holes).
+            if let Some(bang) = t.find('!') {
+                let after = t[bang + 1..].trim_start();
+                if after.starts_with('(') || after.starts_with('[') || after.starts_with('{') {
+                    continue;
                 }
             }
             let has_call_shape = t.contains('(') || t.contains('!') || rfind_dot(t).is_some();
