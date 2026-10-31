@@ -379,13 +379,39 @@ fn apply_inner(
                         rh.header.old_start + rh.header.old_len
                     );
                     let edits_before = file_edits.get(path).map(|v| v.len()).unwrap_or(0);
-                    let (found, def_bindings) = {
+                    let (mut found, mut def_bindings) = {
                         let state = states.get(path).expect("file state");
                         let edits = file_edits.get_mut(path).expect("file state");
                         // Definition matching only; follow runs below.
                         apply_rsmpl_hunk(state, path, rh, &compiled, &captures, edits)
                             .map_err(|e| e.with_file(path))?
                     };
+                    // WI-10b drift fallback (SPEC 10.8): a stale cited range
+                    // retries once file-scoped, anchored by the hunk's body
+                    // context lines. Exactly one anchored candidate splices
+                    // its edits/bindings into the normal path below (spans,
+                    // sites, follow, postconditions all run unchanged);
+                    // anything else keeps the original zero-match error.
+                    if found == 0 && crate::drift::is_drift_eligible(rh, &compiled) {
+                        let state = states.get(path).expect("file state");
+                        if let Some(outcome) =
+                            try_drift_apply(state, path, rh, &compiled, &captures)
+                        {
+                            let edits = file_edits.get_mut(path).expect("file state");
+                            edits.extend(outcome.edits);
+                            found = 1;
+                            def_bindings = outcome.bindings;
+                            report.drifts.push(crate::DriftReport {
+                                rule: rule.clone(),
+                                file: path.clone(),
+                                cited: (
+                                    rh.header.old_start,
+                                    rh.header.old_start + rh.header.old_len.saturating_sub(1),
+                                ),
+                                actual: outcome.actual,
+                            });
+                        }
+                    }
                     // WI-2c sweep change gate (SPEC 24.6): a file-scope
                     // `# allow=many` hunk that matched but changes no bytes
                     // (identical replacements) fails loud here, before
@@ -966,6 +992,67 @@ fn apply_rsmpl_hunk(
         )
         .with_rule(rule)),
     }
+}
+
+/// WI-10b drift retry (SPEC 10.8): re-run the same matcher with scope
+/// overridden to `File`, keeping the edits. Succeeds only when the
+/// file-wide run yields exactly one match whose span the hunk's body
+/// context anchors satisfy (leading/trailing ` ` lines in order, see
+/// `drift`). Probe errors, zero matches, multiple matches, missing
+/// anchors, or an unsatisfied candidate all yield `None` — the caller
+/// keeps the original zero-match error (never a too-many or a guess).
+fn try_drift_apply(
+    state: &FileState,
+    path: &str,
+    rh: &rsmpl_patch::RsmplHunk,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    captures: &CaptureStore,
+) -> Option<crate::drift::DriftOutcome> {
+    let (leading, trailing) = crate::drift::drift_anchors(rh);
+    if leading.is_empty() && trailing.is_empty() {
+        return None;
+    }
+    let mut wide_hunk = rh.clone();
+    wide_hunk.directives.push(Directive::Scope(Scope::File));
+    let mut probe_edits = Vec::new();
+    let (n, bindings) = apply_rsmpl_hunk(
+        state,
+        path,
+        &wide_hunk,
+        compiled,
+        captures,
+        &mut probe_edits,
+    )
+    .ok()?;
+    if n != 1 {
+        return None;
+    }
+    let spans = edit_spans(&state.index, &probe_edits);
+    let actual = crate::drift::bounding_box(&spans)?;
+    // SPEC 10.8: the stale range must share no line with the drifted
+    // item — an overlapping range is a scope/filter statement about
+    // that item (SPEC 17.3), not line drift.
+    let cited = (
+        rh.header.old_start,
+        rh.header.old_start + rh.header.old_len.saturating_sub(1),
+    );
+    let region = state
+        .parsed
+        .as_ref()
+        .and_then(|p| crate::drift::enclosing_top_item_span(p, actual))
+        .unwrap_or(actual);
+    if !crate::drift::cited_is_disjoint(cited, region) {
+        return None;
+    }
+    let file_lines: Vec<&str> = state.original.lines().collect();
+    if !crate::drift::anchors_satisfied(&file_lines, actual, &leading, &trailing) {
+        return None;
+    }
+    Some(crate::drift::DriftOutcome {
+        edits: probe_edits,
+        bindings,
+        actual,
+    })
 }
 
 /// T62 whole-file probe: re-run the same matcher with scope overridden to

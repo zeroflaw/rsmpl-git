@@ -1195,6 +1195,32 @@ materialize final file
 emit concrete Git diff if requested
 ```
 
+### 10.8 Drift fallback (stale ranges)
+
+A ranged hunk authored against shifted line numbers finds zero matches
+in its cited range. When that happens the engine retries once with file
+scope, anchored by the hunk's body context lines: leading ` ` lines
+(before the first `-`/`+` line) must occur trimmed-equal in order in
+the 10 lines before the single file-wide candidate, trailing ` ` lines
+(after the last `-`/`+` line) in order in the 10 lines after it.
+Whitespace-only and `...`-only lines carry no disambiguation and are
+skipped. Exactly one anchored candidate applies with `drift` evidence
+(`{rule, file, cited: [s,e], actual: [a,b]}`, Section D.2; one `drift:`
+stderr line in text mode) only when the cited range shares no line
+with the drifted item's enclosing top-level item: an overlapping range
+is a scope/filter statement about that item (Section 17.3), not line
+drift. Zero or several candidates, or an overlapping range, keep the
+original
+`RSMPL_MATCH_CONFLICT` and apply nothing. `# scope=file` and sweep
+hunks never drift (they make no locality claim), nor do insertions
+(anchor-positioned already), `# optional` hunks (zero is success),
+ranged `# allow=many` (the exactly-one gate contradicts fan-out — use
+`# scope=file` for mobile sweeps), or header-context hunks (`impl` /
+trait contexts, member renames: the header is already a precise
+file-wide selector, so a range/header disagreement is an authoring
+error the Section 13.4 pins keep loud). Emitted edits still cite original
+coordinates and the Section 24.6 postconditions still gate.
+
 ---
 
 ## 11. Ordinary Git Hunks
@@ -6078,6 +6104,12 @@ prints one JSON object to stdout:
   outside a worktree). Present whenever the patch needed a workspace
   search (`# follow=uses` rewrites or plain-rename orphan scans);
   additive keys that do not bump `version`.
+- `drift` reports stale-range retries (Section 10.8): one
+  `{rule, file, cited: [s,e], actual: [a,b]}` per drifted hunk in
+  application order, absent when no hunk drifted. Text mode prints one
+  `drift: {rule} {file} cited [s,e] -> actual [a,b]` stderr line per
+  entry (both `--check` and apply); JSON mode carries the evidence in
+  the payload only. Additive within `version: 3`.
 - Per-rule `orphans` reports definition-only rename fallout
   (Section 14.8): `[{file, line, text}]` plus `orphans_truncated`
   when more than 8 lines name the old ident (each `text` truncated to

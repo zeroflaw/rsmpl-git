@@ -10,6 +10,7 @@
 
 mod canonical_tree;
 mod capture;
+mod drift;
 mod edits;
 mod lines;
 mod matcher_expr;
@@ -118,6 +119,19 @@ pub struct SiteReport {
     pub bindings: Vec<(String, String)>,
 }
 
+/// One drifted hunk application (WI-10b, SPEC 10.8): the cited range was
+/// stale, so the engine retried once file-scoped, anchored by the hunk's
+/// body context lines. `cited` is the stale header range, `actual` the
+/// bounding box of the applied spans (both original-source 1-based
+/// inclusive line ranges).
+#[derive(Debug, Clone, Default)]
+pub struct DriftReport {
+    pub rule: String,
+    pub file: String,
+    pub cited: (u32, u32),
+    pub actual: (u32, u32),
+}
+
 /// Result of applying a patch to an in-memory file tree.
 ///
 /// Only per-rule match counts live here. The changed-file set is owned
@@ -130,6 +144,9 @@ pub struct ApplyReport {
     /// Ordinary hunks are reparse-validated only and force the global
     /// `checked.semantics` to `partial` (WI-1b, SPEC 24.6).
     pub has_ordinary: bool,
+    /// WI-10b drift evidence, in application order (empty when no hunk
+    /// drifted; omitted from reports then).
+    pub drifts: Vec<DriftReport>,
 }
 
 /// Apply `patch` to `files` (path -> contents) in place.

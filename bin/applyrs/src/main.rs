@@ -721,6 +721,21 @@ fn run() -> Result<(), CliError> {
             payload["follow_files"] = serde_json::json!(n);
             payload["follow_source"] = serde_json::json!(source);
         }
+        // WI-10b drift evidence (SPEC 10.8, D.2): one entry per drifted
+        // hunk, in application order. Absent when no hunk drifted.
+        if !report.drifts.is_empty() {
+            payload["drift"] = serde_json::json!(report
+                .drifts
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "rule": d.rule, "file": d.file,
+                        "cited": [d.cited.0, d.cited.1],
+                        "actual": [d.actual.0, d.actual.1],
+                    })
+                })
+                .collect::<Vec<_>>());
+        }
         println!(
             "{}",
             serde_json::to_string(&payload)
@@ -783,6 +798,12 @@ fn run() -> Result<(), CliError> {
         if let Some(line) = orphan_text_line(&report) {
             eprintln!("{line}");
         }
+        for d in &report.drifts {
+            eprintln!(
+                "drift: {} {} cited [{},{}] -> actual [{},{}]",
+                d.rule, d.file, d.cited.0, d.cited.1, d.actual.0, d.actual.1
+            );
+        }
         return Ok(());
     }
 
@@ -806,6 +827,12 @@ fn run() -> Result<(), CliError> {
     );
     if let Some(line) = orphan_text_line(&report) {
         eprintln!("{line}");
+    }
+    for d in &report.drifts {
+        eprintln!(
+            "drift: {} {} cited [{},{}] -> actual [{},{}]",
+            d.rule, d.file, d.cited.0, d.cited.1, d.actual.0, d.actual.1
+        );
     }
     Ok(())
 }
