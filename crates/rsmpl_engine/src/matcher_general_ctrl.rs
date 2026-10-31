@@ -20,8 +20,6 @@
 
 use syn::spanned::Spanned;
 
-use crate::edits::fragments_equal;
-
 use super::matcher_general::{as_placeholder, match_expr, render, render_eq, MatchCx};
 use super::matcher_types::{match_return_type, match_type, single_placeholder_type};
 
@@ -64,7 +62,9 @@ pub(crate) fn match_local(pat: &syn::Local, tgt: &syn::Local, cx: &mut MatchCx) 
         } else if !render_eq(pi, ti) {
             return false;
         }
-    } else if !fragments_equal(&render(&pat.pat), &render(&tgt.pat)) {
+    } else if !match_pat(pi, ti, cx) {
+        // WI-3: composite bound patterns (`Some(P)`, `(P, Q)`, …)
+        // match structurally through the shared pattern core.
         return false;
     }
     // Ascribed-type agreement (strict: both absent, or both present and
@@ -223,9 +223,12 @@ pub(crate) fn match_if(pat: &syn::ExprIf, tgt: &syn::ExprIf, cx: &mut MatchCx) -
 /// target pattern text; a placeholder-head `P @ sub` binds `P` to the
 /// whole target text and matches `sub` recursively (a target `@`
 /// unwraps to its subpattern, otherwise the whole target pattern);
-/// anything else must be strictly token-equal (never guessed).
-/// Shared by `match_local` bound patterns (WI-5a) and by match arms,
-/// for-loop / closure / let-expression positions (WI-5b).
+/// composite patterns (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`,
+/// `(P)`) match structurally with holes bound per position; an `Or`
+/// pattern or anything else must be strictly token-equal (never
+/// guessed, WI-3). Shared by `match_local` bound patterns (WI-5a) and
+/// by match arms, for-loop / closure / let-expression positions
+/// (WI-5b).
 pub(crate) fn match_pat(pat: &syn::Pat, tgt: &syn::Pat, cx: &mut MatchCx) -> bool {
     if let syn::Pat::Ident(pid) = pat {
         if let Some(name) = as_placeholder(&cx.reverse, &pid.ident.to_string()).cloned() {
@@ -245,7 +248,108 @@ pub(crate) fn match_pat(pat: &syn::Pat, tgt: &syn::Pat, cx: &mut MatchCx) -> boo
             return cx.bind_span(&name, tgt.span());
         }
     }
+    match_pat_structural(pat, tgt, cx)
+}
+
+/// WI-3 structural composite matching: the six bounded arms. A leaf
+/// placeholder `Ident` binds the target fragment at that position
+/// (repeat occurrences enforce structural equality via `bind`); a
+/// concrete leaf compares token-equal. `Or` and every other variant
+/// stay token-equal — `Or`-with-hole is rejected at compile time (C8).
+fn match_pat_structural(pat: &syn::Pat, tgt: &syn::Pat, cx: &mut MatchCx) -> bool {
+    // A placeholder ident in any leaf position binds the whole target
+    // fragment (flags such as `mut`/`ref` ride the binding).
+    if let syn::Pat::Ident(pid) = pat {
+        if let Some(name) = as_placeholder(&cx.reverse, &pid.ident.to_string()).cloned() {
+            debug_assert!(pid.subpat.is_none(), "P @ sub handled above");
+            return cx.bind_span(&name, tgt.span());
+        }
+    }
+    match (pat, tgt) {
+        (syn::Pat::TupleStruct(a), syn::Pat::TupleStruct(b)) => {
+            match_pat_path(&a.path, &b.path, cx)
+                && a.elems.len() == b.elems.len()
+                && a.elems
+                    .iter()
+                    .zip(b.elems.iter())
+                    .all(|(x, y)| match_pat(x, y, cx))
+        }
+        (syn::Pat::Tuple(a), syn::Pat::Tuple(b)) => {
+            a.elems.len() == b.elems.len()
+                && a.elems
+                    .iter()
+                    .zip(b.elems.iter())
+                    .all(|(x, y)| match_pat(x, y, cx))
+        }
+        (syn::Pat::Struct(a), syn::Pat::Struct(b)) => {
+            match_pat_path(&a.path, &b.path, cx) && match_pat_struct_fields(a, b, cx)
+        }
+        (syn::Pat::Paren(a), syn::Pat::Paren(b)) => match_pat(&a.pat, &b.pat, cx),
+        (syn::Pat::Reference(a), syn::Pat::Reference(b)) => {
+            a.mutability.is_some() == b.mutability.is_some() && match_pat(&a.pat, &b.pat, cx)
+        }
+        (syn::Pat::Slice(a), syn::Pat::Slice(b)) => {
+            a.elems.len() == b.elems.len()
+                && a.elems
+                    .iter()
+                    .zip(b.elems.iter())
+                    .all(|(x, y)| match_pat(x, y, cx))
+        }
+        _ => render_eq(pat, tgt),
+    }
+}
+
+/// WI-3 pattern-path filter: a path that is a single bare placeholder
+/// ident (a declared hole naming the whole path, e.g. `# type S` over
+/// `S { f: P }`) binds the target path span; anything else compares
+/// token-equal. Multi-segment or generic-arg paths with holes stay
+/// concrete (never guessed).
+fn match_pat_path(pat: &syn::Path, tgt: &syn::Path, cx: &mut MatchCx) -> bool {
+    if pat.segments.len() == 1 {
+        let seg = &pat.segments[0];
+        if matches!(seg.arguments, syn::PathArguments::None) {
+            if let Some(name) = as_placeholder(&cx.reverse, &seg.ident.to_string()).cloned() {
+                return cx.bind_span(&name, tgt.span());
+            }
+        }
+    }
     render_eq(pat, tgt)
+}
+
+/// WI-3 struct-pattern fields: matched by member name (source order
+/// irrelevant), each pair recursing. `..`-rest presence must agree on
+/// both sides; with rest on both, the pattern fields must be a subset
+/// of the target fields (rest absorbs the surplus); without rest, the
+/// member sets must be exactly equal.
+fn match_pat_struct_fields(a: &syn::PatStruct, b: &syn::PatStruct, cx: &mut MatchCx) -> bool {
+    if a.rest.is_some() != b.rest.is_some() {
+        return false;
+    }
+    if a.rest.is_none() && a.fields.len() != b.fields.len() {
+        return false;
+    }
+    if a.fields.len() > b.fields.len() {
+        return false;
+    }
+    // Roll back partial bindings on failure: a member-name miss after
+    // earlier fields bound must not poison the candidate.
+    let checkpoint = cx.bindings.clone();
+    for f in &a.fields {
+        let member = render(&f.member);
+        let Some(g) = b.fields.iter().find(|g| render(&g.member) == member) else {
+            cx.bindings = checkpoint;
+            return false;
+        };
+        if f.colon_token.is_some() != g.colon_token.is_some() {
+            cx.bindings = checkpoint;
+            return false;
+        }
+        if !match_pat(&f.pat, &g.pat, cx) {
+            cx.bindings = checkpoint;
+            return false;
+        }
+    }
+    true
 }
 
 /// Strict label equality: a labeled block/loop is a different control
@@ -877,5 +981,184 @@ mod tests {
             "fn a() -> i32 {\n    let w = {\n        const C: i32 = 1;\n        C\n    };\n    w\n}\n";
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("C + 1"), "got: {out}");
+    }
+
+    // WI-3: tuple-struct hole binds the inner fragment; the plus side
+    // replays it through the same hole.
+    #[test]
+    fn tuple_struct_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let Some(P) = E;\n+ let Some(P) = E.unwrap_or(0);\n"
+        );
+        let src = "fn a(o: Option<i32>, p: Option<i32>) {\n    let Some(v) = o;\n    let Some(w) = p;\n    let _ = (v, w);\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let Some(v) = o.unwrap_or(0);"), "got: {out}");
+        assert!(out.contains("let Some(w) = p.unwrap_or(0);"), "got: {out}");
+    }
+
+    // WI-3: a tuple-struct head mismatch vetoes (never guessed).
+    #[test]
+    fn tuple_struct_head_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let Some(P) = E;\n+ let Some(P) = E.unwrap_or(0);\n"
+        );
+        let src = "fn a(o: Option<i32>) {\n    let None = o;\n    let _ = 1;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-3: tuple holes bind per position.
+    #[test]
+    fn tuple_holes_rewrite() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- let (P, Q) = E;\n+ let (Q, P) = E;\n"
+        );
+        let src = "fn a(t: (i32, i32)) {\n    let (a, b) = t;\n    let _ = (a, b);\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let (b, a) = t;"), "got: {out}");
+    }
+
+    // WI-3: repeated holes enforce structural equality (SPEC 15.7).
+    #[test]
+    fn repeated_hole_requires_equal_fragments() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let (P, P) = E;\n+ let (P, P) = E.clone();\n"
+        );
+        let same = "fn a(t: (i32, i32)) {\n    let (a, a) = t;\n    let _ = 1;\n}\n";
+        let out = apply(&patch, same).unwrap();
+        assert!(out.contains("let (a, a) = t.clone();"), "got: {out}");
+        let diff = "fn a(t: (i32, i32)) {\n    let (a, b) = t;\n    let _ = 1;\n}\n";
+        assert!(apply(&patch, diff).is_err());
+    }
+
+    // WI-3: struct fields match by member name — source order is
+    // irrelevant. (The plus side swaps the holes so the rewrite is
+    // not an identity, which the sweep no-op gate rejects.)
+    #[test]
+    fn struct_fields_match_reordered() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- let S {{ f: P, g: Q }} = E;\n+ let S {{ f: Q, g: P }} = E;\n"
+        );
+        let src = "fn a(s: S) {\n    let S { g: 1, f: v } = s;\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let S { f: 1, g: v } = s;"), "got: {out}");
+    }
+
+    // WI-3: `..`-rest presence must agree on both sides.
+    #[test]
+    fn struct_rest_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let S {{ f: P, .. }} = E;\n+ let S {{ f: P, .. }} = E;\n"
+        );
+        let src = "fn a(s: S) {\n    let S { f: v } = s;\n    let _ = v;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-3: an unknown member never matches.
+    #[test]
+    fn struct_unknown_member_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let S {{ f: P }} = E;\n+ let S {{ f: P }} = E;\n"
+        );
+        let src = "fn a(s: S) {\n    let S { g: v } = s;\n    let _ = v;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-3: reference mutability is strict, the inner hole binds.
+    // (The plus side drops the `&`, so the rewrite is not an
+    // identity, which the sweep no-op gate rejects.)
+    #[test]
+    fn reference_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let &P = E;\n+ let P = E;\n"
+        );
+        let src = "fn a(r: &i32) {\n    let &v = r;\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let v = r;"), "got: {out}");
+    }
+
+    #[test]
+    fn reference_mutability_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let &P = E;\n+ let &P = E;\n"
+        );
+        let src = "fn a(r: &mut i32) {\n    let &mut v = r;\n    let _ = v;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-3: slice arity is exact, holes bind per element.
+    #[test]
+    fn slice_holes_rewrite() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- let [P, Q] = E;\n+ let [Q, P] = E;\n"
+        );
+        let src = "fn a(a: [i32; 2]) {\n    let [x, y] = a;\n    let _ = (x, y);\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let [y, x] = a;"), "got: {out}");
+    }
+
+    #[test]
+    fn slice_arity_mismatch_vetoes() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- let [P, Q] = E;\n+ let [Q, P] = E;\n"
+        );
+        let src = "fn a(a: [i32; 3]) {\n    let [x, y, z] = a;\n    let _ = (x, y, z);\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    // WI-3: paren unwraps one level. (The plus side drops the parens,
+    // so the rewrite is not an identity, which the sweep no-op gate
+    // rejects.)
+    #[test]
+    fn paren_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let (P) = E;\n+ let P = E;\n"
+        );
+        let src = "fn a(x: i32) {\n    let (v) = x;\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let v = x;"), "got: {out}");
+    }
+
+    // WI-3: nested composites recurse (tuple inside tuple-struct).
+    #[test]
+    fn nested_composite_hole_rewrites() {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n# lang=rust\n# pat P\n# expr E\n- let Some((P, 1)) = E;\n+ let Some((P, 2)) = E;\n"
+        );
+        let src = "fn a(o: Option<(i32, i32)>) {\n    let Some((v, 1)) = o;\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let Some((v, 2)) = o;"), "got: {out}");
+    }
+
+    // WI-3: composite holes work in match-arm position too.
+    #[test]
+    fn composite_hole_in_match_arm_fires() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- match E {{ Some(P) => 1, _ => 2 }}\n+ match E {{ Some(P) => 9, _ => 2 }}\n"
+        );
+        let src = "fn a(o: Option<i32>) {\n    let v = match o { Some(v) => 1, _ => 2 };\n    let _ = v;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("Some(v) => 9"), "got: {out}");
+    }
+
+    // WI-3: composite holes work in `for`-loop position.
+    #[test]
+    fn composite_hole_in_for_loop_fires() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- for (P, Q) in E {{ break; }}\n+ for (P, Q) in E {{ continue; }}\n"
+        );
+        let src = "fn a() {\n    for (k, v) in m { break; }\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("for (k, v) in m { continue; }"), "got: {out}");
+    }
+
+    // WI-3: composite holes work in closure-param position.
+    #[test]
+    fn composite_hole_in_closure_param_fires() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# pat Q\n# expr E\n- |(P, Q)| E\n+ |(P, Q)| E + 1\n"
+        );
+        let src = "fn a() {\n    let f = |(x, y)| x;\n    let _ = f;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("|(x, y)| x + 1"), "got: {out}");
     }
 }

@@ -154,9 +154,12 @@ fn c7_empty_plus_type() {
 
 #[test]
 fn c8_embedded_let_metavariable() {
+    // WI-3 admits tuple/slice/struct holes, so the C8 pin is the
+    // ambiguous shape: `Or` with a hole (every pattern position shares
+    // this gate — arm/closure twins live in structural_pat_e2e.rs).
     check(
-        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# expr E\n- let (E, x) = foo();\n+ let (E, y) = foo();\n",
-        "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
+        "diff --git a.rs\n@@ -1,1 @@ rule=r\n# pat P\n# expr E\n- let (Some(P) | None) = foo();\n+ let (Some(P) | None) = bar();\n",
+        "v1 patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, WI-3 structural composites (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`, `(P)`) with holes in bindable leaf positions, or `P: T` with placeholder parts, in `let`, match-arm, `for`, closure, and `let`-expression positions; embedded metavariables elsewhere in a pattern are not supported",
         false,
     );
 }

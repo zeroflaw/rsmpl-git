@@ -3,9 +3,9 @@
 //! Split from `infer` per D5 (the parent file sits near the 2000-line
 //! gate). Owns the AST-aware position assignment for control-flow
 //! shapes (`for`/`match`/`while`/`loop`/closure/`let`): pattern slots
-//! infer `pat`, type slots `type`, everything else `expr`. Only
-//! whole-placeholder patterns infer; composites stay literal,
-//! mirroring `check_let_pat`.
+//! infer `pat`, type slots `type`, everything else `expr`. Whole
+//! placeholders and WI-3 structural composites infer by position;
+//! `Or`/macro interiors stay literal, mirroring `check_let_pat`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,10 +18,10 @@ use super::infer::{add_kind, is_candidate, names_in, split_top_colon};
 /// Text-level inference assigns every name on a `for P in E` or `|P| E`
 /// line as `expr`, contradicting an explicit `# pat P`. These helpers
 /// parse the fragment with `syn` and assign by position: pattern slots
-/// (match arms, for-loop pat, closure params, `let` pat, `@` heads/subs)
-/// → `pat`; type slots → `type`; everything else → `expr`. Only
-/// whole-placeholder patterns infer (`P`, `P @ sub`, `P: T`); composite
-/// patterns (`Some(x)`) stay literal, mirroring `check_let_pat`.
+/// (match arms, for-loop pat, closure params, `let` pat, `@` heads/subs,
+/// WI-3 composite leaves) → `pat`; type slots → `type`; everything else
+/// → `expr`. `Or` arms and macro interiors stay literal, mirroring
+/// `check_let_pat`.
 pub(crate) fn assign_expr_text(text: &str, kinds: &mut HashMap<String, HashSet<MetavarKind>>) {
     match syn::parse_str::<syn::Expr>(text.trim()) {
         Ok(e) => assign_expr_ast(&e, kinds),
@@ -34,10 +34,15 @@ pub(crate) fn assign_expr_text(text: &str, kinds: &mut HashMap<String, HashSet<M
 }
 
 fn assign_pat_text(text: &str, kinds: &mut HashMap<String, HashSet<MetavarKind>>) {
-    // `syn::Pat` has no `Parse` impl — handle the v1-admitted shapes
-    // textually (`P`, `P @ sub`, `P: T`), mirroring `check_let_pat`.
-    // Composite patterns stay literal.
+    // `syn::Pat` has no `Parse` impl — probe through a `let` statement
+    // (WI-3 composites included) before the textual shapes below.
     let t = text.trim();
+    if let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(&format!("let {t} = _;")) {
+        assign_pat_ast(&local.pat, kinds);
+        return;
+    }
+    // Textual fallback for the v1-admitted shapes (`P`, `P @ sub`,
+    // `P: T`), mirroring `check_let_pat`.
     let (pat_part, ty_part) = split_top_colon(t);
     if let Some(ty) = ty_part {
         let p = pat_part.trim();
@@ -124,6 +129,36 @@ pub(crate) fn is_control_expr(e: &syn::Expr) -> bool {
     )
 }
 
+/// Non-mutating predicate for passes that must defer to the control
+/// reader (e.g. the call-slot pass skips these lines so paren-group
+/// names inside patterns are never claimed as `expr`).
+pub(crate) fn is_control_line(t: &str) -> bool {
+    let u = t.trim().trim_end_matches(';').trim();
+    if u.is_empty() {
+        return false;
+    }
+    if let Ok(syn::Stmt::Expr(e, _)) = syn::parse_str::<syn::Stmt>(u) {
+        if is_control_expr(&e) {
+            return true;
+        }
+    }
+    if let Ok(e) = syn::parse_str::<syn::Expr>(u) {
+        if is_control_expr(&e) {
+            return true;
+        }
+    }
+    if u.starts_with("for ") || u.starts_with("for(") {
+        return true;
+    }
+    // Closure header present (`|params|` with a body after).
+    if let Some(start) = u.find('|') {
+        if u[start + 1..].find('|').is_some() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Try a control-flow reading of one fallback line. Returns true when
 /// the line was handled (AST walk or `for`/closure text split), so the
 /// caller skips the text fallback that would claim `P` as `expr`.
@@ -196,7 +231,7 @@ pub(crate) fn assign_control_line(
     false
 }
 
-fn assign_pat_ast(pat: &syn::Pat, kinds: &mut HashMap<String, HashSet<MetavarKind>>) {
+pub(crate) fn assign_pat_ast(pat: &syn::Pat, kinds: &mut HashMap<String, HashSet<MetavarKind>>) {
     match pat {
         syn::Pat::Ident(pid) => {
             add_kind(
@@ -212,8 +247,41 @@ fn assign_pat_ast(pat: &syn::Pat, kinds: &mut HashMap<String, HashSet<MetavarKin
             assign_pat_ast(&pt.pat, kinds);
             assign_type_ast(&pt.ty, kinds);
         }
-        // Composite patterns (`Some(x)`, `&P`, `(P,)`, `a | b`) stay
-        // literal: v1 only admits whole placeholders (C8).
+        // WI-3 structural composites: bare idents in bindable leaf
+        // positions infer `pat` (mirrors the engine's `match_pat`
+        // arms + the C8 `pat_holes_ok` gate). `Or` stays literal
+        // (see below).
+        syn::Pat::TupleStruct(ps) => {
+            for e in &ps.elems {
+                assign_pat_ast(e, kinds);
+            }
+        }
+        syn::Pat::Tuple(pt) => {
+            for e in &pt.elems {
+                assign_pat_ast(e, kinds);
+            }
+        }
+        syn::Pat::Struct(ps) => {
+            for f in &ps.fields {
+                assign_pat_ast(&f.pat, kinds);
+            }
+        }
+        syn::Pat::Paren(pp) => assign_pat_ast(&pp.pat, kinds),
+        syn::Pat::Reference(pr) => assign_pat_ast(&pr.pat, kinds),
+        syn::Pat::Slice(ps) => {
+            for e in &ps.elems {
+                assign_pat_ast(e, kinds);
+            }
+        }
+        // `Or` stays literal: the engine treats `Or` as concrete and
+        // the C8 gate rejects holes inside it. Walking arms would
+        // claim concrete variants (`None` in `Some(P) | None`) as
+        // `pat` while the call pass claims them as `expr`,
+        // producing a spurious incompatible-positions conflict
+        // instead of the C8 needle.
+        syn::Pat::Or(_) => {}
+        // Remaining composites (`Const`, `Macro`, ...) stay literal:
+        // v1 admits no holes there (C8/C19).
         _ => {}
     }
 }

@@ -157,6 +157,11 @@ pub(crate) fn try_general(
     // WI-2b C19: macro bodies and `Verbatim` nodes never match (verbatim-only
     // engine); fail at compile time with the exact node kind.
     check_c19(&sub)?;
+    // WI-3 C8 uniformity: structural-composite holes are admitted, but
+    // every other embedded hole (notably `Or`-with-hole) fails here at
+    // compile time in every pattern position — never a match-time
+    // `no match found` the agent must debug by reading the file.
+    check_pat_positions(&sub)?;
 
     let want = |s: GeneralShape| forced.is_none_or(|f| f == s);
     let has_type_decl = table.declared.iter().any(|(k, _)| {
@@ -572,8 +577,10 @@ fn build_general(
 /// Reject `let` patterns the v1 engine cannot match: embedded metavariables
 /// inside the bound pattern (other than a whole-pattern `# pat P` placeholder,
 /// a `P @ sub` shape whose head is a whole-pattern placeholder and whose
-/// subpattern is a single placeholder or concrete, a concrete pattern, or a
-/// `P: T` shape whose parts are each whole-placeholder/concrete).
+/// subpattern is a single placeholder or concrete, a concrete pattern,
+/// WI-3 structural composites (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`,
+/// `[P]`, `(P)`) with holes only in bindable leaf positions, or a `P: T`
+/// shape whose parts are each whole-placeholder/concrete).
 fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
     let pat = &local.pat;
     let (inner, ty) = match pat {
@@ -604,11 +611,99 @@ fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
         }
         return Ok(());
     }
-    let rendered = quote::quote!(#pat).to_string();
-    if rendered.contains("__RSMPL_") {
+    if !pat_holes_ok(inner) {
+        return Err(embedded_pat_err());
+    }
+    if let Some(t) = ty {
+        let rendered = quote::quote!(#t).to_string();
+        if rendered.contains("__RSMPL_") && !is_single_placeholder_type(t) {
+            return Err(embedded_pat_err());
+        }
+    }
+    Ok(())
+}
+
+/// WI-3: true when every metavariable inside `pat` sits in a position the
+/// engine's `match_pat` can bind: a whole placeholder, a `P @ sub` shape
+/// with a placeholder head and a single-placeholder-or-concrete sub, or
+/// one of the six structural composites (tuple-struct, tuple, struct,
+/// paren, reference, slice) recursed into. `Or` (ambiguous binding),
+/// macro/verbatim interiors, and ascribed-type holes beyond a single
+/// placeholder all return false (C8 at the caller).
+fn pat_holes_ok(pat: &syn::Pat) -> bool {
+    match pat {
+        syn::Pat::Ident(pid) => {
+            let head_is_ph = pid.ident.to_string().starts_with("__RSMPL_");
+            match &pid.subpat {
+                None => true,
+                Some((_, sub)) => {
+                    if head_is_ph {
+                        !contains_placeholder(sub) || is_single_placeholder_pat(sub)
+                    } else {
+                        !contains_placeholder(sub)
+                    }
+                }
+            }
+        }
+        syn::Pat::Type(pt) => {
+            let ty = &pt.ty;
+            let rendered = quote::quote!(#ty).to_string();
+            if rendered.contains("__RSMPL_") && !is_single_placeholder_type(ty) {
+                return false;
+            }
+            pat_holes_ok(&pt.pat)
+        }
+        syn::Pat::TupleStruct(ps) => ps.elems.iter().all(pat_holes_ok),
+        syn::Pat::Tuple(pt) => pt.elems.iter().all(pat_holes_ok),
+        syn::Pat::Struct(ps) => ps.fields.iter().all(|f| pat_holes_ok(&f.pat)),
+        syn::Pat::Paren(pp) => pat_holes_ok(&pp.pat),
+        syn::Pat::Reference(pr) => pat_holes_ok(&pr.pat),
+        syn::Pat::Slice(ps) => ps.elems.iter().all(pat_holes_ok),
+        // `Or` stays concrete-only (binding under alternation is
+        // ambiguous); everything else must be hole-free.
+        _ => !contains_placeholder(pat),
+    }
+}
+
+/// WI-3 C8 uniformity: every pattern position in the substituted minus
+/// tree (bound `let` patterns, match arms, `for`/`closure` params,
+/// `let`-expression conditions) obeys the same `pat_holes_ok` rule.
+/// Walks each parse root that succeeds (same roots as `check_c19`; the
+/// walk is idempotent). Plus sides are unchecked — writing a bound hole
+/// into a pattern position is textual substitution and applies today.
+fn check_pat_positions(minus_sub: &str) -> Result<(), StructuredError> {
+    let mut bad = false;
+    let mut walk = PatGateWalk { bad: &mut bad };
+    if let Ok(stmt) = syn::parse_str::<syn::Stmt>(minus_sub) {
+        walk.visit_stmt(&stmt);
+    }
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(minus_sub) {
+        walk.visit_expr(&expr);
+    }
+    if let Ok(ty) = syn::parse_str::<syn::Type>(minus_sub) {
+        walk.visit_type(&ty);
+    }
+    if let Ok(block) = syn::parse_str::<syn::Block>(&format!("{{ {minus_sub} }}")) {
+        walk.visit_block(&block);
+    }
+    if bad {
         return Err(embedded_pat_err());
     }
     Ok(())
+}
+
+/// C8 walker: flags the first pattern position `pat_holes_ok` rejects.
+struct PatGateWalk<'a> {
+    bad: &'a mut bool,
+}
+
+impl<'ast, 'a> Visit<'ast> for PatGateWalk<'a> {
+    fn visit_pat(&mut self, p: &'ast syn::Pat) {
+        if !*self.bad && !pat_holes_ok(p) {
+            *self.bad = true;
+        }
+        visit::visit_pat(self, p);
+    }
 }
 
 /// True when the subpattern carries any placeholder ident.
@@ -637,11 +732,11 @@ fn is_single_placeholder_type(t: &syn::Type) -> bool {
 fn embedded_pat_err() -> StructuredError {
     StructuredError::new(
         ErrorCode::PatternConflict,
-        "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
+        "v1 patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, WI-3 structural composites (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`, `[P]`, `(P)`) with holes in bindable leaf positions, or `P: T` with placeholder parts, in `let`, match-arm, `for`, closure, and `let`-expression positions; embedded metavariables elsewhere in a pattern are not supported",
     )
     .with_repair(StructuredError::fix_pattern_repair(
         "C8",
-        "use a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts",
+        "use a whole-pattern `# pat P` placeholder, a concrete pattern, a WI-3 structural composite, or `P: T` with placeholder parts",
     ))
 }
 

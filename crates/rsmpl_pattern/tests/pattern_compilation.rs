@@ -595,15 +595,17 @@ fn general_coverage_diagnostics_are_pinned() {
             format!("{head}@@ -1,1 +1,0 @@ rule=x\n# lang=rust\n# type T\n- Vec<T>\n"),
             "v1 type patterns cannot be deleted (empty `+` side would produce invalid syntax); write an explicit replacement type",
         ),
-        // C8: embedded metavariable inside the `let` bound pattern.
+        // C8: embedded metavariable the v1 engine cannot bind (`Or`
+        // with a hole — binding under alternation is ambiguous).
         // (T16a: paren tuples reach the gate too — the `let`-led
         // bypass stops the call router claiming `let(...)`; the
-        // slice shape below pins the C8 diagnostic byte-for-byte.)
+        // slice/tuple shapes with holes are WI-3 structural matches,
+        // pinned as fires below.)
         (
             format!(
-                "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let [E, x] = E;\n+ let [E, x] = E;\n"
+                "{head}@@ -2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let (Some(E) | None) = E;\n+ let (Some(E) | None) = E;\n"
             ),
-            "v1 `let` patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, or `P: T` with placeholder parts; embedded metavariables elsewhere in the pattern are not supported",
+            "v1 patterns support a whole-pattern `# pat P` placeholder, a concrete pattern, WI-3 structural composites",
         ),
         // C9: `# returns=none` on a non-function hunk.
         (
@@ -644,17 +646,22 @@ fn general_coverage_diagnostics_are_pinned() {
 #[test]
 fn paren_tuple_let_reaches_let_gate() {
     // T16a router-precision pin: `let (E, x)` must reach the general
-    // `let` gate (C8) instead of classifying as a `let(...)` call.
+    // `let` gate instead of classifying as a `let(...)` call. WI-3
+    // admits tuple holes, so the holed form now compiles to Stmt
+    // (an `Or`-with-hole twin below still pins the C8 gate).
     let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
     let patch = format!(
         "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# stmt S\n# expr E\n- let (E, x) = E;\n+ let (E, x) = E;\n"
     );
-    let err = compile(&hunk_of(&patch)).unwrap_err();
-    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
     assert!(
-        err.render().contains("embedded metavariables elsewhere"),
-        "paren-tuple let missed the C8 gate:\n{}",
-        err.render()
+        matches!(
+            compile(&hunk_of(&patch)).unwrap().kind,
+            PatternKind::General {
+                shape: GeneralShape::Stmt,
+                ..
+            }
+        ),
+        "holed paren-tuple let should be General::Stmt"
     );
     // Concrete paren-tuple lets compile to the Stmt shape.
     let ok = format!(
@@ -669,6 +676,23 @@ fn paren_tuple_let_reaches_let_gate() {
             }
         ),
         "concrete paren-tuple let should be General::Stmt"
+    );
+}
+
+#[test]
+fn or_with_hole_stays_c8() {
+    // WI-3: `Or` with a hole is ambiguous (which arm binds?) — the C8
+    // gate every pattern position shares.
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    let patch = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# pat P\n# expr E\n- let (Some(P) | None) = E;\n+ let (Some(P) | None) = E;\n"
+    );
+    let err = compile(&hunk_of(&patch)).unwrap_err();
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render().contains("embedded metavariables elsewhere"),
+        "Or-with-hole missed the C8 gate:\n{}",
+        err.render()
     );
 }
 

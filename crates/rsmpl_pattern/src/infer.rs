@@ -12,7 +12,8 @@ use crate::metavar::MetavarTable;
 use crate::quote_utils::{mask_literal_spans, qualifier_leads_to_fn};
 
 use super::infer_control::{
-    assign_control_line, assign_expr_ast, assign_expr_text, assign_type_ast, is_control_expr,
+    assign_control_line, assign_expr_ast, assign_expr_text, assign_pat_ast, assign_type_ast,
+    is_control_expr, is_control_line,
 };
 
 /// True for diet candidates: leading `A-Z`, rest alnum/`_`.
@@ -692,8 +693,12 @@ fn split_top_eq(s: &str) -> Option<(String, String)> {
 }
 
 pub(crate) fn split_top_colon(s: &str) -> (String, Option<String>) {
+    // WI-3: brace/paren/bracket-depth-aware — a struct-pattern field
+    // colon (`S { f: P }`) must not split the ascription. Only a
+    // depth-0 `:` separates `P: T`.
     let mut in_str = false;
     let mut esc = false;
+    let mut depth: i32 = 0;
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -708,7 +713,11 @@ pub(crate) fn split_top_colon(s: &str) -> (String, Option<String>) {
             }
         } else if b == b'"' {
             in_str = true;
-        } else if b == b':' {
+        } else if b == b'(' || b == b'[' || b == b'{' {
+            depth += 1;
+        } else if (b == b')' || b == b']' || b == b'}') && depth > 0 {
+            depth -= 1;
+        } else if b == b':' && depth == 0 {
             let next = bytes.get(i + 1).copied().unwrap_or(b' ');
             let prev = if i > 0 { bytes[i - 1] } else { b' ' };
             if next == b':' || prev == b':' {
@@ -745,9 +754,16 @@ fn assign_let_slots(
             let pat_names = names_in(&pat, kinds);
             if pat_names.len() == 1 && pat.trim() == pat_names[0] {
                 add_kind(kinds, &pat_names[0], MetavarKind::Pat);
+            } else if let Ok(syn::Stmt::Local(local)) =
+                syn::parse_str::<syn::Stmt>(&format!("let {pat} = _;"))
+            {
+                // WI-3 structural composites: bare idents in bindable
+                // leaf positions infer `pat` (mirrors the engine's
+                // `match_pat` arms + the C8 gate). Unparseable spans
+                // stay literal so the compile gate fails loud.
+                assign_pat_ast(&local.pat, kinds);
             } else {
-                // `P: T` inside the pattern span already split above; a
-                // composite pattern with holes is not a v1 `let` shape —
+                // A composite pattern with holes is not a v1 `let` shape —
                 // leave uninferred (literal) so `check_let_pat` fails
                 // with its own needle rather than a spurious infer.
                 for n in pat_names {
@@ -767,7 +783,13 @@ fn assign_let_slots(
                 {
                     add_kind(kinds, pat_t, MetavarKind::Pat);
                 }
-                for n in names_in(ty_t, kinds) {
+                // Type constructors stay literal (`Option` in
+                // `Option<i32>` never infers); only arg-position names
+                // (`T` in `Vec<T>`, bare `T`) infer `type` — the same
+                // head-literal rule as the general fallback's
+                // `names_in_type_args` (WI-3: a holed `Option` head hit
+                // C8 instead of matching structurally).
+                for n in names_in_type_args(ty_t, kinds) {
                     add_kind(kinds, &n, MetavarKind::Type);
                 }
             }
@@ -798,6 +820,16 @@ fn assign_call_slots(
         for line in text.lines() {
             let t = line.trim();
             if t.is_empty() || t.starts_with("let ") || t.starts_with("fn ") {
+                continue;
+            }
+            // Control-flow lines (`match`/`for`/closures/`if`/`while`)
+            // are AST-owned: the control pass assigns `pat` slots inside
+            // patterns and `expr` elsewhere. Claiming paren-group names
+            // here as `expr` would tag pattern holes (e.g. `P` in
+            // `match E { Some(P) => .. }`) as `expr`, conflicting with
+            // the `pat` kind (spurious incompatible-positions instead
+            // of the C8 needle for `Or`-with-hole).
+            if is_control_line(t) {
                 continue;
             }
             // Method split at the receiver/method dot: depth-aware (same

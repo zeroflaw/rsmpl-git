@@ -27,6 +27,7 @@
 //! carries one uniform delta (`E0` → `E0.wrapping_add(1)`). Signature
 //! evolution (WI-4c) reuses this module next.
 
+use super::pat_template::site_spelling;
 use super::shape::init_ok;
 use quote::ToTokens;
 use syn::spanned::Spanned as _;
@@ -108,7 +109,9 @@ pub(crate) fn antiunify_let_template(
         return None;
     }
     let mut pats: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut pat_asts: Vec<syn::Pat> = Vec::with_capacity(minuses.len());
     let mut tys: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut ty_asts: Vec<syn::Type> = Vec::with_capacity(minuses.len());
     let mut minus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
     let mut plus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
@@ -120,17 +123,24 @@ pub(crate) fn antiunify_let_template(
             return None;
         }
         pats.push(tok(&m_pat));
+        pat_asts.push(m_pat);
         tys.push(tok(&m_ty));
+        ty_asts.push(m_ty);
         minus_inits.push(m_init);
         plus_inits.push(p_init);
     }
+    // Uniform concrete spots keep the first site's spelling
+    // (byte-identical real-apply, WI-3 D1).
     let pat_tpl = if pats.iter().all(|x| *x == pats[0]) {
-        pats[0].clone()
+        site_spelling(minuses[0], &pat_asts[0], &pats[0])
+    } else if let Some(tpl) = super::pat_template::gen_pat_template(&pat_asts) {
+        // WI-3: destructuring keeps its anchor (`Some(P0)`).
+        tpl
     } else {
         "P0".to_string()
     };
     let ty_tpl = if tys.iter().all(|x| *x == tys[0]) {
-        tys[0].clone()
+        site_spelling(minuses[0], &ty_asts[0], &tys[0])
     } else {
         "T0".to_string()
     };
@@ -142,7 +152,10 @@ pub(crate) fn antiunify_let_template(
         if minus_vals[0] == plus_vals[0] {
             return None;
         }
-        (minus_vals[0].clone(), plus_vals[0].clone())
+        (
+            site_spelling(minuses[0], &minus_inits[0], &minus_vals[0]),
+            site_spelling(pluses[0], &plus_inits[0], &plus_vals[0]),
+        )
     } else if !minus_uniform && !plus_uniform {
         let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits)?;
         ("E0".to_string(), plus_tpl)
@@ -263,6 +276,7 @@ pub(crate) fn antiunify_sequence(
 
 /// WI-5c: rename the shared cores' `P0`/`T0`/`E0` holes to the
 /// position-`j` spelling (`P{j}`/`T{j}`/`E{j}`), whole tokens only.
+/// WI-3: numbered `P1…` holes rename to `P{j}_{k}` (SPEC 15.7).
 fn rename_holes(s: &str, j: usize) -> String {
     let mut out = String::new();
     let mut cur = String::new();
@@ -271,7 +285,12 @@ fn rename_holes(s: &str, j: usize) -> String {
             "P0" => format!("P{j}"),
             "T0" => format!("T{j}"),
             "E0" => format!("E{j}"),
-            _ => cur.clone(),
+            _ => match cur.strip_prefix('P') {
+                Some(k) if !k.is_empty() && k.chars().all(|c| c.is_ascii_digit()) => {
+                    format!("P{j}_{k}")
+                }
+                _ => cur.clone(),
+            },
         };
         out.push_str(&repl);
         cur.clear();
@@ -312,6 +331,7 @@ fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, S
         return None;
     }
     let mut pats: Vec<String> = Vec::with_capacity(minuses.len());
+    let mut pat_asts: Vec<syn::Pat> = Vec::with_capacity(minuses.len());
     let mut minus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
     let mut plus_inits: Vec<syn::Expr> = Vec::with_capacity(minuses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
@@ -323,11 +343,14 @@ fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, S
             return None;
         }
         pats.push(tok(&m_pat));
+        pat_asts.push(m_pat);
         minus_inits.push(m_init);
         plus_inits.push(p_init);
     }
     let pat_tpl = if pats.iter().all(|x| *x == pats[0]) {
-        pats[0].clone()
+        site_spelling(minuses[0], &pat_asts[0], &pats[0])
+    } else if let Some(tpl) = super::pat_template::gen_pat_template(&pat_asts) {
+        tpl // WI-3 parity with the typed core above.
     } else {
         "P0".to_string()
     };
@@ -339,7 +362,10 @@ fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option<(String, S
         if minus_vals[0] == plus_vals[0] {
             return None;
         }
-        (minus_vals[0].clone(), plus_vals[0].clone())
+        (
+            site_spelling(minuses[0], &minus_inits[0], &minus_vals[0]),
+            site_spelling(pluses[0], &plus_inits[0], &plus_vals[0]),
+        )
     } else if !minus_uniform && !plus_uniform {
         let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits)?;
         ("E0".to_string(), plus_tpl)
