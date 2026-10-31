@@ -600,13 +600,15 @@ fn apply_inner(
                     // reports no orphans of its own — the follow hunk
                     // owns the file-wide use set, and per-hunk orphans
                     // would duplicate sites it already rewrote.
-                    let sibling_follow = matches!(&compiled.kind, PatternKind::AssocRename { .. })
-                        && patch.files.iter().any(|sec| {
-                            sec.hunks.iter().any(|h| match h {
-                                Hunk::Rsmpl(srh) => srh.rule_name() == rule && srh.follows_uses(),
-                                _ => false,
-                            })
-                        });
+                    let sibling_follow = matches!(
+                        &compiled.kind,
+                        PatternKind::AssocRename { .. } | PatternKind::ImplContext { .. }
+                    ) && patch.files.iter().any(|sec| {
+                        sec.hunks.iter().any(|h| match h {
+                            Hunk::Rsmpl(srh) => srh.rule_name() == rule && srh.follows_uses(),
+                            _ => false,
+                        })
+                    });
                     let orphans = if !rh.follows_uses() && !sibling_follow && found > 0 {
                         match &compiled.kind {
                             PatternKind::Fn { minus_name, .. } => {
@@ -671,6 +673,16 @@ fn apply_inner(
                                 minus_name,
                             ),
                             PatternKind::AssocEvolution { .. } => Vec::new(),
+                            PatternKind::ImplContext { .. } => {
+                                crate::use_graph_method::method_orphans_for(
+                                    &states,
+                                    &file_edits,
+                                    path,
+                                    edits_before,
+                                    rh,
+                                    &compiled,
+                                )
+                            }
                             PatternKind::ItemRename {
                                 minus_name, kind, ..
                             } => {
@@ -761,12 +773,19 @@ fn apply_inner(
                     // impl-definition claims `rename`.
                     for (file, matches, spans, labels) in extra_reports {
                         let span_labels = labels.into_iter().map(Some).collect();
+                        let method_new = match &compiled.kind {
+                            PatternKind::ImplContext { .. } => {
+                                crate::use_graph_method::method_follow_new_name(rh, &compiled)
+                            }
+                            _ => None,
+                        };
                         follow_probe_pending.push((
                             (sec_idx, hunk_idx),
                             rule.clone(),
                             compiled.clone(),
                             file.clone(),
                             spans.clone(),
+                            method_new,
                         ));
                         rule_order.push((
                             (sec_idx, hunk_idx),
@@ -828,7 +847,7 @@ fn apply_inner(
     // section order, then hunk order within a section).
     rule_order.sort_by_key(|(pos, _)| *pos);
     probe_pending.sort_by_key(|(pos, _, _, _, _)| *pos);
-    follow_probe_pending.sort_by_key(|(pos, _, _, _, _)| *pos);
+    follow_probe_pending.sort_by_key(|(pos, _, _, _, _, _)| *pos);
     report.rules.extend(rule_order.into_iter().map(|(_, r)| r));
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
@@ -967,12 +986,19 @@ fn apply_inner(
             }
             // WI-6: same-file follow spans verify identically (helper owns
             // the subset probe; `rename` impl-def claims stay under WI-1).
+            let method_new = match &compiled.kind {
+                PatternKind::ImplContext { .. } => {
+                    crate::use_graph_method::method_follow_new_name(&rh, &compiled)
+                }
+                _ => None,
+            };
             crate::postcheck_follow::verify_definition_follows(
                 &r.rule,
                 &r.file,
                 &r.spans,
                 &r.span_labels,
                 &compiled,
+                method_new.as_deref(),
                 &states,
                 &full_edits,
                 &post_text,

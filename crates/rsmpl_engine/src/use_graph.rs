@@ -49,6 +49,22 @@ pub struct FollowVeto {
     pub reason: String,
 }
 
+/// Shared C17 rejection (WI-3 widens the legal list to trait-method
+/// renames; every other shape keeps the follow-up hunks).
+fn c17_err(rh: &rsmpl_patch::RsmplHunk, def_path: &str) -> StructuredError {
+    StructuredError::new(
+        ErrorCode::PatternConflict,
+        "# follow=uses is only supported on fn, item, field, variant, assoc, and trait-method rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+    )
+    .with_rule(rh.rule_name())
+    .with_file(def_path)
+    .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename")
+    .with_repair(StructuredError::fix_pattern_repair(
+        "C17",
+        "remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename",
+    ))
+}
+
 /// Resolve same-file use sites of `old` for a `old` → `new` rename.
 ///
 /// `renamed` carries the byte ranges the definition hunk already rewrote
@@ -1051,6 +1067,9 @@ pub(crate) fn follow_uses_workspace(
             want_trait: bool,
             is_type: bool,
         },
+        Method {
+            impl_header: String,
+        },
     }
     let (old, new, target) = match &compiled.kind {
         PatternKind::Fn {
@@ -1116,18 +1135,22 @@ pub(crate) fn follow_uses_workspace(
                 is_type: *is_type,
             },
         ),
-        _ => {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "# follow=uses is only supported on fn, item, field, variant, and assoc rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+        PatternKind::ImplContext { .. } => {
+            let Some((old, new, header)) =
+                crate::use_graph_method::method_follow_target(rh, compiled)
+            else {
+                return Err(c17_err(rh, def_path));
+            };
+            (
+                old,
+                new,
+                FollowTarget::Method {
+                    impl_header: header,
+                },
             )
-            .with_rule(rh.rule_name())
-            .with_file(def_path)
-            .with_suggestion("remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename")
-            .with_repair(StructuredError::fix_pattern_repair(
-                "C17",
-                "remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename",
-            )));
+        }
+        _ => {
+            return Err(c17_err(rh, def_path));
         }
     };
     // Ranges this hunk already rewrote: a same-named definition outside
@@ -1269,6 +1292,45 @@ pub(crate) fn follow_uses_workspace(
                 })
                 .collect();
             (per_file, outcome.skipped)
+        }
+        FollowTarget::Method { impl_header } => {
+            if crate::use_graph_method::method_trait_name(impl_header).is_none() {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "method follow header does not parse as a `trait` block header",
+                )
+                .with_rule(rh.rule_name())
+                .with_file(def_path)
+                .with_suggestion("copy the `trait T {` header verbatim from the file")
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "method",
+                    "copy the `trait T {` header verbatim from the file",
+                )));
+            }
+            let (spans, skipped) = crate::use_graph_method::resolve_method_follow(
+                &refs,
+                impl_header,
+                &old,
+                def_path,
+                &renamed,
+                rh.fallback_syntax(),
+            )
+            .map_err(veto_to_err)?;
+            let per_file = spans
+                .into_iter()
+                .map(|(f, edits)| {
+                    (
+                        f,
+                        edits
+                            .into_iter()
+                            .map(|(a, b, is_def)| {
+                                (a, b, new.clone(), if is_def { "rename" } else { "follow" })
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            (per_file, skipped)
         }
     };
     let outcome = WorkspaceOutcome {

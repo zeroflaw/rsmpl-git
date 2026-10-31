@@ -1224,7 +1224,18 @@ fn plus_fn_name(rh: &rsmpl_patch::RsmplHunk) -> Option<String> {
             continue;
         }
         let t = l.text.trim().trim_start_matches("pub ").trim_start();
-        let rest = t.strip_prefix("fn ")?;
+        // Diet spellings carry slot metas before `fn` (`V Q fn new ...`);
+        // find the `fn ` token word-boundarily instead of prefix-matching.
+        let rest = match t.split_once("fn ") {
+            Some((head, rest)) => {
+                if head.is_empty() || head.ends_with(char::is_whitespace) {
+                    rest
+                } else {
+                    continue;
+                }
+            }
+            None => continue,
+        };
         let name: String = rest.chars().take_while(|c| is_ident_char(*c)).collect();
         if !name.is_empty() {
             return Some(name);

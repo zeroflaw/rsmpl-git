@@ -211,8 +211,9 @@ pub enum PatternKind {
     /// Associated-item rename (`trait Tr {` / `impl S {` context + `type
     /// Item;` → `type Output;`, `const MAX: i32;` → `const LIMIT: i32;`):
     /// only the member name ident span is replaced; generics, bounds,
-    /// types, and values are preserved. `# follow=uses` is rejected (C17)
-    /// in v1 (follow lands in WI-27). Reports `postcondition`.
+    /// types, and values are preserved. `# follow=uses` rewrites
+    /// container-proven uses plus trait-proven impl definitions (WI-27,
+    /// WI-1). Reports `postcondition`.
     AssocRename {
         impl_header: String,
         want_trait: bool,

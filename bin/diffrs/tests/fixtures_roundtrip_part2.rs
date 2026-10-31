@@ -723,9 +723,10 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "second hetero body stays per-site, got: {semantic}"
         );
     } else if name == "116-assoc-rename-fires" {
-        // WI-28: trait decl + 2 impl decls + `::Item` use tails sharing
-        // one delta compress to one hunk per block with follow on the
-        // first; the re-apply is byte-identical (harness asserts).
+        // WI-28 + WI-3: trait decl + 2 impl decls + `::Item` use tails
+        // sharing one delta compress to the single trait follow hunk
+        // (WI-1 claims the impl defs); the re-apply is byte-identical
+        // (harness asserts).
         assert!(
             semantic.contains("  trait Tr {"),
             "trait header must be verbatim, got: {semantic}"
@@ -735,8 +736,8 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "trait decl pair must raise, got: {semantic}"
         );
         assert!(
-            semantic.contains("- type Item = u8;"),
-            "impl decl pair must raise, got: {semantic}"
+            !semantic.contains("- type Item = u8;"),
+            "WI-3: impl decls ride the follow, got: {semantic}"
         );
         assert!(
             semantic.contains("# follow=uses"),

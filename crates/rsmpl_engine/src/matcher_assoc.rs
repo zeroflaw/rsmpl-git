@@ -4,7 +4,9 @@
 //! Renames replace only the member name ident span (suffixes preserved).
 //! Evolutions keep the name and replace only the RHS/default span via a
 //! type/general-expr template (WI-11 discipline scoped by the block
-//! header). Definition-only in v1: `# follow=uses` is rejected (C17).
+//! header). Definition-only without follow (orphans name the leftovers);
+//! `# follow=uses` claims container-proven uses plus trait-proven impl
+//! definitions (WI-27, WI-1).
 
 use std::collections::HashMap;
 

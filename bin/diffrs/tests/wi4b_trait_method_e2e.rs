@@ -99,8 +99,8 @@ fn renamed(before: &str) -> String {
         + "\n"
 }
 
-// WI-4b: trait declaration + two impl definitions (one intent)
-// compress to one hunk per enclosing block sharing the rule name;
+// WI-4b + WI-3: trait declaration + two impl definitions (one intent)
+// compress to the single trait follow hunk (WI-1-style impl-def claims);
 // the free-fn distractor stays untouched.
 #[test]
 fn trait_method_rename_compresses_to_one_hunk_per_block() {
@@ -117,20 +117,17 @@ fn trait_method_rename_compresses_to_one_hunk_per_block() {
     assert!(patch.contains("  trait Greeter {"), "got: {patch}");
     assert_eq!(
         patch.matches("  impl Greeter for ").count(),
-        2,
-        "got: {patch}"
+        0,
+        "WI-3: impl defs ride the follow, got: {patch}"
     );
     assert_eq!(
         patch.matches("rule=rename_greet_to_hello").count(),
-        3,
-        "all hunks share the descriptive rule, got: {patch}"
+        1,
+        "WI-3: single follow hunk, got: {patch}"
     );
+    assert!(patch.contains("# follow=uses"), "got: {patch}");
     assert!(
         patch.contains("-     V Q fn greet G (...) W ;"),
-        "got: {patch}"
-    );
-    assert!(
-        patch.contains("-     V Q fn greet G (...) W {"),
         "got: {patch}"
     );
     assert!(!patch.contains("fn greet() -> i32"), "got: {patch}");
@@ -162,7 +159,13 @@ fn trait_method_rename_compresses_to_one_hunk_per_block() {
         .iter()
         .map(|r| r["matches"].as_i64().unwrap())
         .sum();
-    assert_eq!(total, 3, "got: {v}");
+    // WI-3: one definition match; the impl defs ride as follow spans.
+    assert_eq!(total, 1, "got: {v}");
+    assert_eq!(
+        v["checked"]["semantics"].as_str().unwrap(),
+        "verified",
+        "single follow hunk must verify, got: {v}"
+    );
 
     // Real apply is byte-identical to the recorded post-tree.
     let applied = Command::new(sibling_applyrs())

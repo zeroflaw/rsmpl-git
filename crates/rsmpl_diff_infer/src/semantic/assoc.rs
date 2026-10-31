@@ -150,18 +150,33 @@ pub(crate) fn try_assoc_rename(
     }
     groups.sort_by_key(|(_, _, idx)| changed[idx[0]]);
     let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
+    // WI-3: the follow hunk alone suffices (WI-1 claims impl definitions
+    // as `rename` spans). Emit the document-first def hunk with follow;
+    // the scratch probe proves the sibling defs + uses. Multi-hunk is the
+    // fallback when the single-hunk probe fails (twin headers, etc.).
+    let (first_header, first_span, first_idx) = groups.first().cloned().unwrap();
+    let k = first_idx[0];
+    let mut single = String::new();
+    single.push_str(&crate::emission_header(
+        path,
+        &rule,
+        &[first_span.0, first_span.1],
+    ));
+    single.push_str("# follow=uses\n");
+    single.push_str(&format!("  {first_header}\n"));
+    single.push_str(&format!("- {}\n", minuses[k].trim()));
+    single.push_str(&format!("+ {}\n", pluses[k].trim()));
+    if scratch_reproduces(pre, path, &single, &pre_lines, changed, pluses) {
+        return Some(single);
+    }
     let mut out = String::new();
-    // Only the first hunk carries `# follow=uses`: a follow on every
-    // hunk overlaps the siblings' covering ranges (each follow claims
-    // the same file-wide use set), so the engine vetoes multi-follow
-    // as overlapping edits. Definition-only hunks report no orphans of
-    // their own — `plan.rs` suppresses the no-follow orphan arm when a
-    // same-file, same-rule sibling carries the follow (the sites belong
-    // to the intent, not to any one hunk).
+    // Fallback: one hunk per block, follow on the first only (a follow on
+    // every hunk overlaps the siblings' covering ranges, so the engine
+    // vetoes multi-follow as overlapping edits). Definition-only hunks
+    // report no orphans of their own — `plan.rs` suppresses the no-follow
+    // orphan arm when a same-file, same-rule sibling carries the follow.
     for (gi, (header, span, idx)) in groups.iter().enumerate() {
         let k = idx[0];
-        // `emission_header` reads min/max as a range (SPEC D.5 tight
-        // range posture); the block span always fits (blocks are small).
         out.push_str(&crate::emission_header(path, &rule, &[span.0, span.1]));
         if gi == 0 {
             out.push_str("# follow=uses\n");
@@ -584,7 +599,8 @@ mod tests {
         assert!(out.contains("trait Tr {"), "got:\n{out}");
         assert!(out.contains("- type Item;"), "got:\n{out}");
         assert!(out.contains("# follow=uses"), "got:\n{out}");
-        assert_eq!(out.matches("rule=r1").count(), 3, "got:\n{out}");
+        // WI-3: single follow hunk owns the impl definitions (was 3).
+        assert_eq!(out.matches("rule=r1").count(), 1, "got:\n{out}");
         validated_live(&out, &pre);
         // WI-28 sibling suppression: the def-only hunks report no
         // orphans — the follow hunk owns the use set.

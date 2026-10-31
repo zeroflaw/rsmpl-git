@@ -2693,6 +2693,17 @@ trait-proven `impl` definitions. Follow-only file extras are
 `reparse-only` by construction; the definition probe covers the
 rename.
 
+`# follow=uses` on a trait-header method rename (WI-3, `trait Tr {`
+context + `fn old` → `fn new`) rewrites the trait declaration plus
+every trait-proven `impl <Trait> for <Self>` definition of the same
+name — each impl `fn` ident rewritten and labelled `rename` in
+`span_labels` (`matches` counts the trait declaration). Inherent
+`impl S { fn old }` defs never claim (different item → `shadowed`
+evidence); call sites are untouched in v1 (ordinary hunks own them).
+Without follow, leftover trait-proven impl defs report as orphans
+(`off-target`). Inherent-`impl` headers and same-name evolutions keep
+the C17 rejection.
+
 Associated-item evolution (WI-26) keeps the name and rewrites only
 the RHS/default span under the same header: `type Item = Vec<T>;` →
 `type Item = Box<[T]>;` (RHS is a type template, `T` holes ride diet
@@ -3957,7 +3968,7 @@ case where an ordinary hunk cannot express the edit.
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk whose seeded path resolves to no definition in this crate | `` symbol `<Name>` (`<path>`) resolves to no definition in this crate `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` write the concrete path `<path>` in the pattern, or add `# fallback=syntax` to allow syntactic matching ``, repair `add_directive` `# fallback=syntax`). Only minus-side seeds must resolve (plus-only seeds name the rewrite target, which the crate may not define yet); only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
-| C17 | `# follow=uses` on any shape other than a fn, item, field, variant, or assoc rename hunk (WI-6a, WI-9a, WI-27; evolution, member-addition, and assoc-evolution kinds included) | `` `# follow=uses` is only supported on fn, item, field, variant, and assoc rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
+| C17 | `# follow=uses` on any shape other than a fn, item, field, variant, assoc, or trait-method rename hunk (WI-6a, WI-9a, WI-27, WI-3; evolution, member-addition, assoc-evolution, and inherent-`impl` method kinds included) | `` `# follow=uses` is only supported on fn, item, field, variant, assoc, and trait-method rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites or per-argument holes (WI-7a: one hole per top-level comma-separated argument), or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
@@ -5984,7 +5995,10 @@ diff --git src/service.rs
 ```
 
 The same shape with a `trait` header rewrites trait methods, including
-`;` declarations (the `;` is preserved like a body):
+`;` declarations (the `;` is preserved like a body). A trait-header
+rename may carry `# follow=uses`: the engine then owns the
+trait-proven `impl <Trait> for <Self>` definitions (WI-3), so `diffrs`
+emits the single trait hunk alone:
 
 ```diff rsmpl
 diff --git src/service.rs
@@ -7215,7 +7229,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   veto the join; the per-section `use_prefix` chain may still compress
   the unclaimed remainder, each hunk independently totality-checked).
 - Field/variant member rename (WI-9a authored, WI-9b raised single-file, WI-15b raised cross-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary. Single-section shapes raise per section; multi-section / cross-file shapes raise via the whole-patch `member_rename` pre-pass (one def pair joined with same-delta use lines across files, file/section-pure partial: proven files collapse to the one hunk, unproven files stay ordinary, mixed sections veto the intent). Def-only singles (WI-19b, N = 1 definition pair, no use sites): the definition hunk alone with no `# follow=uses` (a follow would rewrite uses the diff did not touch) in the concrete directive-free spelling, under the precision guard; same container recovery + scratch probe.
-- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). Emission is one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges) with `# follow=uses` on the first hunk; the scratch-apply line-equality probe is the totality. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline the whole-section follow to ordinary; cross-file intents stay ordinary (future work). Def-only singles (WI-19b, N = 1 definition pair, no use sites, no follow, concrete directive-free spelling, precision guard) still compress per hunk with the opaque remainder left ordinary verbatim in the same section (disjoint ranges) — the WI-28 whole-section veto owns the follow intent, not the follow-free def hunk. Detector name `assoc_rename`.
+- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised, single-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). WI-3 emits the single document-first def hunk with `# follow=uses` (WI-1 claims the sibling impl definitions, so one hunk suffices); the scratch-apply line-equality probe is the totality, falling back to one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges, follow on the first) when the single-hunk probe fails. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline the whole-section follow to ordinary; cross-file intents stay ordinary (future work). Def-only singles (WI-19b, N = 1 definition pair, no use sites, no follow, concrete directive-free spelling, precision guard) still compress per hunk with the opaque remainder left ordinary verbatim in the same section (disjoint ranges) — the WI-28 whole-section veto owns the follow intent, not the follow-free def hunk. Detector name `assoc_rename`.
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
   every pair is a single-pair item rename above (including the plain
@@ -7432,14 +7446,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   or an `impl` block (pre-image totality), with at least one site on
   each side: pure trait-side classes stay ordinary (no impl side
   shares the intent) and pure impl-side classes stay with the slot
-  sweep. Uniformly indented sites emit one hunk per enclosing block
-  with the block's verbatim header line from the pre-image
-  (Section 13.4: the engine filter matches only the named block),
-  `;` pairs on trait-declaration groups and `{` pairs elsewhere, all
-  sharing the `rename_Old_to_New` rule name (same-file grouping);
-  each hunk clears its own engine probe (twin headers and untouched
-  twins veto to ordinary). Divergent per-pair suffixes and mixed
-  indent stay passthrough. Detector name `trait_method_rename`.
+  sweep. WI-3 emits the single document-first trait hunk with
+  `# follow=uses` (the engine claims trait-proven `impl <Trait> for
+  <Self>` definitions as `rename` spans; inherent `impl S` defs never
+  claim); the scratch-apply line-equality probe is the totality (the
+  single hunk applied to the pre-image must reproduce every native
+  plus line). Probe failure falls back to one hunk per enclosing
+  block with verbatim headers sharing the `rename_Old_to_New` rule
+  (no follow; each hunk clears its own engine probe, twin headers and
+  untouched twins veto to ordinary). Divergent per-pair suffixes and
+  mixed indent stay passthrough. Detector name `trait_method_rename`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →

@@ -19,13 +19,16 @@ use rsmpl_pattern::{CompiledPattern, PatternKind};
 use crate::edits::{translate_spans_to_post, TextEdit};
 use crate::lines::FileState;
 
-/// WI-6 pending follow-only probe (position, rule, compiled, file, spans).
+/// WI-6 pending follow-only probe (position, rule, compiled, file, spans,
+/// optional new-name override for `ImplContext`, whose compiled kind
+/// carries no names).
 pub(crate) type FollowJob = (
     (usize, usize),
     String,
     CompiledPattern,
     String,
     Vec<(u32, u32)>,
+    Option<String>,
 );
 
 /// New ident this follow proves, or `None` when the shape carries no
@@ -37,8 +40,21 @@ pub(crate) fn follow_new_name(compiled: &CompiledPattern) -> Option<String> {
         PatternKind::FieldRename { new, .. } => Some(new.clone()),
         PatternKind::VariantRename { new, .. } => Some(new.clone()),
         PatternKind::AssocRename { plus_name, .. } => Some(plus_name.clone()),
+        PatternKind::ImplContext { .. } => None,
         _ => None,
     }
+}
+
+/// Resolve the probe name: explicit override (WI-3 `ImplContext`, whose
+/// compiled kind carries no names) wins; otherwise the compiled rename
+/// name.
+fn probe_new_name(compiled: &CompiledPattern, override_name: Option<&str>) -> Option<String> {
+    if let Some(n) = override_name {
+        if !n.trim().is_empty() {
+            return Some(n.to_string());
+        }
+    }
+    follow_new_name(compiled)
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -122,16 +138,16 @@ pub(crate) fn upgrade_follow_only_entries(
 ) -> Result<HashSet<(String, String)>, StructuredError> {
     let keys: HashSet<(String, String)> = jobs
         .iter()
-        .map(|(_, rule, _, file, _)| (rule.clone(), file.clone()))
+        .map(|(_, rule, _, file, _, _)| (rule.clone(), file.clone()))
         .collect();
-    for (_, rule, compiled, file, spans) in jobs {
+    for (_, rule, compiled, file, spans, override_name) in jobs {
         let Some(r) = rules
             .iter_mut()
             .find(|r| &r.rule == rule && &r.file == file)
         else {
             continue;
         };
-        let Some(new_name) = follow_new_name(compiled) else {
+        let Some(new_name) = probe_new_name(compiled, override_name.as_deref()) else {
             continue;
         };
         let post_text = files.get(file).cloned().unwrap_or_default();
@@ -173,6 +189,7 @@ pub(crate) fn verify_definition_follows(
     spans: &[(u32, u32)],
     span_labels: &[Option<String>],
     compiled: &CompiledPattern,
+    override_name: Option<&str>,
     states: &HashMap<String, FileState>,
     full_edits: &HashMap<String, Vec<TextEdit>>,
     post_text: &str,
@@ -188,7 +205,7 @@ pub(crate) fn verify_definition_follows(
     if follow_orig.is_empty() {
         return Ok(());
     }
-    let Some(new_name) = follow_new_name(compiled) else {
+    let Some(new_name) = probe_new_name(compiled, override_name) else {
         return Ok(());
     };
     let follow_post: Vec<(u32, u32)> = states

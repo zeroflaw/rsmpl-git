@@ -98,6 +98,47 @@ pub(crate) fn try_trait_method_rename(
     }
     groups.sort_by_key(|(_, sites)| sites.first().copied().unwrap_or(usize::MAX));
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
+    // WI-3: the trait follow hunk alone suffices (engine claims impl
+    // definitions as `rename` spans). Emit the document-first trait hunk
+    // with `# follow=uses`; the scratch probe proves the impl defs.
+    // Fallback: the K-hunk intent when the single-hunk probe fails.
+    if let Some(first_trait) = trait_groups.first() {
+        let mut term = None;
+        for s in &first_trait.sites {
+            let t = term_of.get(s)?;
+            if term.is_some_and(|c| c != *t) {
+                return None;
+            }
+            term = Some(*t);
+        }
+        let minus_fn = format!("V Q fn {old_name} G (...) W {}", term?);
+        let plus_fn = format!("V Q fn {new_name} G (...) W {}", term?);
+        if super::block_headers::probe_block_hunk(
+            path,
+            pre,
+            &first_trait.header_line,
+            &minus_fn,
+            &plus_fn,
+            first_trait.sites.len(),
+        ) {
+            let mut single = String::new();
+            single.push_str(&item_emission_header(
+                path,
+                &rule,
+                file_old,
+                &first_trait.sites,
+            ));
+            single.push_str("# follow=uses\n");
+            single.push_str(&super::block_headers::block_hunk_body(
+                &first_trait.header_line,
+                &minus_fn,
+                &plus_fn,
+            ));
+            if scratch_single_reproduces(pre, path, &single, changed, minuses, pluses) {
+                return Some(single);
+            }
+        }
+    }
     let mut out = String::new();
     for (header, sites) in &groups {
         // Per-block uniform terminator (a block holds at most one
@@ -128,6 +169,54 @@ pub(crate) fn try_trait_method_rename(
         ));
     }
     Some(out)
+}
+
+/// Scratch probe for the WI-3 single-hunk follow emission: applying the
+/// single trait hunk must reproduce every changed line (trait + impl
+/// defs) with all other lines byte-identical. Same discipline as
+/// `assoc.rs::scratch_reproduces`.
+fn scratch_single_reproduces(
+    pre: &str,
+    path: &str,
+    section: &str,
+    changed: &[usize],
+    minuses: &[&str],
+    pluses: &[&str],
+) -> bool {
+    let parsed = match rsmpl_patch::parse_patch(section) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    if rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).is_err() {
+        return false;
+    }
+    let post = &files[path];
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let post_lines: Vec<&str> = post.lines().collect();
+    if post_lines.len() != pre_lines.len() {
+        return false;
+    }
+    let changed_set: std::collections::HashSet<usize> = changed.iter().copied().collect();
+    for (i, &site) in changed.iter().enumerate() {
+        let Some(post_line) = post_lines.get(site.saturating_sub(1)) else {
+            return false;
+        };
+        if post_line.trim() != pluses[i].trim() {
+            return false;
+        }
+        let _ = minuses[i];
+    }
+    for (idx, (pre_line, post_line)) in pre_lines.iter().zip(post_lines.iter()).enumerate() {
+        if changed_set.contains(&(idx + 1)) {
+            continue;
+        }
+        if pre_line != post_line {
+            return false;
+        }
+    }
+    true
 }
 
 /// A `-`/`+` line pair as a method-rename header: both trimmed lines
@@ -240,7 +329,7 @@ mod tests {
     use super::*;
 
     const PRE: &str =
-        "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl S {\n    fn old(&self) {}\n}\n";
+        "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\n";
 
     fn run(minuses: &[&str], pluses: &[&str], pre: &str, changed: &[usize]) -> Option<String> {
         let mut used = Vec::new();
@@ -256,12 +345,45 @@ mod tests {
             &[2, 6],
         )
         .expect("trait+impl rename must compress");
-        assert_eq!(out.matches("rule=r1").count(), 2, "out:\n{out}");
+        // WI-3: single trait follow hunk owns the impl definition.
+        assert_eq!(out.matches("rule=r1").count(), 1, "out:\n{out}");
         assert!(out.contains("trait T {"), "out:\n{out}");
-        assert!(out.contains("impl S {"), "out:\n{out}");
+        assert!(!out.contains("impl T for S {"), "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
         assert!(out.contains("-     V Q fn old G (...) W ;"), "out:\n{out}");
-        assert!(out.contains("-     V Q fn old G (...) W {"), "out:\n{out}");
         rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        // Round-trip: the impl definition rewrites via the follow.
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), PRE.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("fn new(&self);"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("fn new(&self) {"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(!files["f.rs"].contains("fn old"), "got: {}", files["f.rs"]);
+    }
+
+    #[test]
+    fn inherent_impl_declines_single_follow() {
+        // Trait decl + inherent impl def are different items: the single
+        // follow hunk must not claim the inherent def, so the class falls
+        // back to the K-hunk intent (or ordinary if probes fail).
+        let pre =
+            "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl S {\n    fn old(&self) {}\n}\n";
+        let out = run(
+            &["    fn old(&self);", "    fn old(&self) {"],
+            &["    fn new(&self);", "    fn new(&self) {"],
+            pre,
+            &[2, 6],
+        )
+        .expect("fallback intent still compresses");
+        assert!(!out.contains("# follow=uses"), "got:\n{out}");
     }
 
     #[test]
