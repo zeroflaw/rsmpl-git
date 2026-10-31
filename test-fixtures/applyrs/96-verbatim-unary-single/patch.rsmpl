@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,9 @@ rule=verbatim
+# allow=many
+- !ready(flag)
++ !ready_done(flag)

@@ -505,6 +505,42 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "90-macro-rules-nofollow",
         "t375: single-site macro-rules def-only re-infers ordinary (orphan use stays ordinary)",
     ),
+    (
+        "92-m2m-single",
+        "t375: single-site m2m rewrite re-infers ordinary",
+    ),
+    (
+        "93-verbatim-single",
+        "t375: single-site verbatim rewrite re-infers ordinary",
+    ),
+    (
+        "94-return-single",
+        "t375: single-site return rewrite re-infers ordinary",
+    ),
+    (
+        "95-verbatim-call-single",
+        "t375: single-site verbatim-call rewrite re-infers ordinary",
+    ),
+    (
+        "96-verbatim-unary-single",
+        "t375: single-site verbatim-unary rewrite re-infers ordinary",
+    ),
+    (
+        "97-macro-sweep-single",
+        "t375: single-site macro-sweep rewrite re-infers ordinary",
+    ),
+    (
+        "98-pat-sweep-single",
+        "t375: single-site pat-sweep rewrite re-infers ordinary",
+    ),
+    (
+        "99-slot-sweep-single",
+        "t375: single-site slot-sweep rewrite re-infers ordinary",
+    ),
+    (
+        "100-call-sweep-single",
+        "t375: single-site call-sweep rewrite re-infers ordinary",
+    ),
 ];
 
 /// Load the fixture pre-image: repo-relative path → file text.

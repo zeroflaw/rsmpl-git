@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 @@ rule=verbatim
+# allow=many
+- let out = run(dir.path(), &["--patch", patch]);
++ let out = run_stdin(dir.path(), patch, &[]);

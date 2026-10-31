@@ -1,0 +1,7 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=sweep_macros
+# scope=file
+# allow=many
+# macro=token_tree
+- old_mac!(...)
++ new_mac!(...)
