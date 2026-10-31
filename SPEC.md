@@ -4826,10 +4826,18 @@ if:
      impl-context method renames verify span-locally by syn ident
      equality (WI-1.4): at least `matches` reported spans must overlap
      the new ident's own token lines (`fn {name}` for impl-context)
-     with exact text equality — occurrence elsewhere in the file never
-     counts, a longer ident merely containing the needle (`New2`) never
-     counts, and a span still carrying the old ident fails.
-     `Expr`/`General`/`Macro` verify by plus-pattern re-match (WI-1.5):
+      with exact text equality — occurrence elsewhere in the file never
+      counts, a longer ident merely containing the needle (`New2`) never
+      counts, and a span still carrying the old ident fails.
+      Follow spans (WI-6) verify the same way at their own spans: every
+      `follow`-labeled use span in the post-image must name the new ident
+      as an exact ident token (same boundary discipline, so the
+      shorthand `S { new: old }` verifies by its `new` token and a
+      reverted `S { old }` fails). Follow-only entries whose spans all
+      verify report `instantiated`; any missing span fails loud with
+      `RSMPL_MATCH_CONFLICT`, never a silent downgrade. Same-file follow
+      spans verify identically alongside the definition probe.
+      `Expr`/`General`/`Macro` verify by plus-pattern re-match (WI-1.5):
      the recorded plus side is compiled as a pattern (minus = plus,
      same directives, forced file-scope `# allow=many`) and re-run
      through the existing matchers over the post-image; every reported
@@ -4858,14 +4866,15 @@ if:
      side fails to compile as a pattern (or fails to re-match for an
      engine reason, or finds no attributable plus match) — including
      unparseable post-images, which never veto.
-   Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran),
-   `postcondition` (sweep gate + plus-pattern both ran),
-   `reparse-only` (insertions, cuts, pastes, follow-only extras, or
-   unverifiable plus), `not-applicable` (`optional` zero-edit hunks).
-   The global `checked.semantics` is `verified` iff every rule is
-   `instantiated`/`postcondition` and no ordinary hunk is present;
-   otherwise `partial` (insertions, cuts, ordinary hunks, follow-only
-   extras, and optional zero-edits all force `partial`).
+    Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
+    including verified follow-only entries), `postcondition` (sweep gate
+    + plus-pattern both ran), `reparse-only` (insertions, cuts, pastes,
+    unverified follow-only extras, or unverifiable plus),
+    `not-applicable` (`optional` zero-edit hunks).
+    The global `checked.semantics` is `verified` iff every rule is
+    `instantiated`/`postcondition` and no ordinary hunk is present;
+    otherwise `partial` (insertions, cuts, ordinary hunks, unverified
+    follow-only extras, and optional zero-edits all force `partial`).
 
 ---
 
@@ -6651,8 +6660,9 @@ prints one JSON object to stdout:
   --check` verdict on the full lowering (empty lowerings skip git and
   report `true`); `semantics` is `"verified"` iff every rule is
   `instantiated`/`postcondition` and no ordinary hunk is present, else
-  `"partial"` (Section 24.6: insertions, cuts, pastes, follow-only
-  extras, optional zero-edits, and ordinary hunks all force `partial`);
+  `"partial"` (Section 24.6: insertions, cuts, pastes, unverified
+  follow-only extras, optional zero-edits, and ordinary hunks all force
+  `partial`);
   `build` is `"pass"` iff `--verify build`
   ran, else `"skipped"` (a build failure exits 2 with the `{error}`
   envelope below, never a success payload). Failures never reach this

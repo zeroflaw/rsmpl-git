@@ -42,6 +42,7 @@ mod plan_symbol;
 mod postcheck;
 mod postcheck_assoc;
 mod postcheck_attr;
+mod postcheck_follow;
 mod postcheck_namehole;
 mod postcheck_synth;
 mod suggest;
@@ -73,7 +74,8 @@ pub enum RuleSemantics {
     Instantiated,
     /// Sweep change gate + instantiation both ran (file-scope sweeps).
     Postcondition,
-    /// Only reparse validated (insertions, cuts, pastes, follow-only extras).
+    /// Only reparse validated (insertions, cuts, pastes, unverified
+    /// follow-only extras).
     #[default]
     ReparseOnly,
     /// Optional zero-edit hunks (no edits, nothing to verify).

@@ -213,6 +213,11 @@ fn apply_inner(
         Vec<HashMap<String, String>>,
     );
     let mut probe_pending: Vec<ProbeJob> = Vec::new();
+    // WI-6: follow-only entries awaiting the span-local ident probe (new
+    // ident at each rewritten use span). Verified post-materialization;
+    // failures are loud, abstentions stay `reparse-only`. (Type lives in
+    // `postcheck_follow` so `plan.rs` stays under the file-size gate.)
+    let mut follow_probe_pending: Vec<crate::postcheck_follow::FollowJob> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     for (sec_idx, section) in patch.files.iter().enumerate() {
@@ -749,13 +754,20 @@ fn apply_inner(
                     // them adjacent to the definition entry in document
                     // order (the sort below is stable); file order inside
                     // is sorted at the source.
-                    // WI-1b: follow-only extras are conservatively
-                    // reparse-only (the definition probe covers the rename;
-                    // per-use plus shapes differ). Labels ride along:
-                    // use sites `follow`, WI-1 impl-definition claims
-                    // `rename`.
+                    // WI-6: follow-only extras verify at their spans (SPEC
+                    // 24.6 ident probe), so they start `reparse-only` and
+                    // the post-materialization probe upgrades or fails
+                    // loud. Labels ride along: use sites `follow`, WI-1
+                    // impl-definition claims `rename`.
                     for (file, matches, spans, labels) in extra_reports {
                         let span_labels = labels.into_iter().map(Some).collect();
+                        follow_probe_pending.push((
+                            (sec_idx, hunk_idx),
+                            rule.clone(),
+                            compiled.clone(),
+                            file.clone(),
+                            spans.clone(),
+                        ));
                         rule_order.push((
                             (sec_idx, hunk_idx),
                             RuleReport {
@@ -816,6 +828,7 @@ fn apply_inner(
     // section order, then hunk order within a section).
     rule_order.sort_by_key(|(pos, _)| *pos);
     probe_pending.sort_by_key(|(pos, _, _, _, _)| *pos);
+    follow_probe_pending.sort_by_key(|(pos, _, _, _, _)| *pos);
     report.rules.extend(rule_order.into_iter().map(|(_, r)| r));
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
@@ -887,7 +900,20 @@ fn apply_inner(
             post_index.insert(path.clone(), crate::lines::LineIndex::new(text));
         }
         let mut jobs = probe_pending.into_iter();
+        // WI-6: follow-only entries verify at their spans (helper owns the
+        // loop so `plan.rs` stays under the file-size gate).
+        let follow_keys = crate::postcheck_follow::upgrade_follow_only_entries(
+            &mut report.rules,
+            &follow_probe_pending,
+            &states,
+            &full_edits,
+            files,
+            &post_parsed,
+        )?;
         for r in report.rules.iter_mut() {
+            if follow_keys.contains(&(r.rule.clone(), r.file.clone())) {
+                continue;
+            }
             if r.semantics != RuleSemantics::Instantiated
                 && r.semantics != RuleSemantics::Postcondition
             {
@@ -936,8 +962,23 @@ fn apply_inner(
                 }
                 None => {
                     r.semantics = RuleSemantics::ReparseOnly;
+                    continue;
                 }
             }
+            // WI-6: same-file follow spans verify identically (helper owns
+            // the subset probe; `rename` impl-def claims stay under WI-1).
+            crate::postcheck_follow::verify_definition_follows(
+                &r.rule,
+                &r.file,
+                &r.spans,
+                &r.span_labels,
+                &compiled,
+                &states,
+                &full_edits,
+                &post_text,
+                post_parsed.get(&r.file),
+                &range_desc,
+            )?;
         }
     }
 
