@@ -1325,6 +1325,16 @@ fn assign_general_fallback(
                         continue;
                     }
                 }
+                // WI-23: dotted expression lines (`E0.timeout`,
+                // `E0.a + 1`, `&E0.f`) carry no paren groups, so the
+                // group scan below yields nothing and the base hole
+                // stays literal. The sibling `infer_control` module
+                // owns the AST-walk fallback (D5: this file sits over
+                // the 1600-line gate); qself lines keep the legacy
+                // scan (v1 has no holes inside `qself`).
+                if super::infer_control::try_assign_dotted_expr(t, kinds) {
+                    continue;
+                }
                 // Holes live inside the argument groups; the callee prefix
                 // (`Box` in `Box::new(E)`, `foo` in `foo(E)`) stays literal.
                 // The call pass already bound true call args; this covers
@@ -1420,6 +1430,70 @@ mod tests {
     fn single_uppercase_arg_infers_expr() {
         let t = infer("foo(E)", "bar(E)");
         assert_eq!(t.kind_of("E"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi23_field_base_infers_expr() {
+        // WI-23: diet field-base hole (`E0.timeout` → `E0.timeout2`).
+        let t = infer("E0.timeout", "E0.timeout2");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi23_dotted_operand_infers_expr() {
+        // WI-23 residue: any dotted operand missed the same way
+        // (`has_call_shape` + no paren groups). Binary/reference
+        // wrappers around a field base infer through the AST walk.
+        let t = infer("E0.a + 1", "E0.a + 2");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+        let t = infer("&E0.f", "&E0.g");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi23_explicit_field_decl_agrees() {
+        // The explicit-declaration fallback keeps compiling: declared
+        // `expr` is a member of the inferred set (agreement, not
+        // conflict).
+        let b = base(vec![Directive::MetaVar {
+            kind: MetavarKind::Expr,
+            names: vec!["E0".to_string()],
+        }]);
+        let t = infer_table(b, "E0.timeout", "E0.timeout2", None).unwrap();
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi23_sigiled_field_base_infers_expr() {
+        // Sigiled mode: `$E0.timeout` strips to a parseable field for
+        // inference (bare `E0` stays literal there).
+        let b = base(vec![Directive::SigiledMetavars(true)]);
+        let t = infer_table(b, "foo(E)", "bar(E)", None).unwrap();
+        assert_eq!(t.kind_of("E"), None);
+        let b2 = base(vec![Directive::SigiledMetavars(true)]);
+        let t2 = infer_table(b2, "$E0.timeout", "$E0.timeout2", None).unwrap();
+        assert_eq!(t2.kind_of("E0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi23_concrete_dotted_stays_literal() {
+        // Fully-concrete dotted lines carry no holes.
+        let t = infer("order.timeout", "order.timeout2");
+        assert_eq!(t.kind_of("order"), None);
+    }
+
+    #[test]
+    fn wi23_qself_qualifier_stays_literal() {
+        // Qself qualifiers are token-compared by the engine (no holes
+        // inside `qself`): the AST walk skips them so the qualified
+        // call sweep keeps firing (fixture 94). Args still infer.
+        let t = infer(
+            "<TargetType as ConversionTrait>::old_handler_name(E0)",
+            "<TargetType as ConversionTrait>::new_handler_name(E0)",
+        );
+        assert_eq!(t.kind_of("TargetType"), None);
+        assert_eq!(t.kind_of("ConversionTrait"), None);
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
     }
 
     #[test]

@@ -13,6 +13,49 @@ use rsmpl_patch::MetavarKind;
 
 use super::infer::{add_kind, is_candidate, names_in, split_top_colon};
 
+/// WI-23: diet fallback for dotted expression lines on the
+/// `has_call_shape` path (`E0.timeout`, `E0.a + 1`, `&E0.f`). Those
+/// lines carry no paren groups, so the group scan yields nothing and
+/// the base hole stays literal. Parse the line as an expression and
+/// walk it positionally (field bases → `expr`, lowercase members
+/// ignored as non-candidates) — the same discipline as the call
+/// pass, covering every WI-6 variant. `$`-stripped for sigiled mode
+/// (`$E0.timeout` never parses as Rust). Returns true when the line
+/// was handled (the caller skips the group scan); qself-qualified
+/// lines (`<T as Tr>::f(x)`) return false and keep the legacy scan —
+/// v1 has no holes inside `qself` (the engine compares the written
+/// type token-equal), so inferring `T` there would break the
+/// previously-firing qualified call sweep (fixture 94).
+pub(crate) fn try_assign_dotted_expr(
+    line: &str,
+    kinds: &mut HashMap<String, HashSet<MetavarKind>>,
+) -> bool {
+    let stripped: String = line.split('$').collect();
+    let Ok(e) = syn::parse_str::<syn::Expr>(stripped.trim()) else {
+        return false;
+    };
+    if expr_has_qself(&e) {
+        return false;
+    }
+    assign_expr_ast(&e, kinds);
+    true
+}
+
+/// True when the expression carries a `QSelf` qualifier anywhere
+/// (`<T as Tr>::f(x)`). v1 has no holes inside `qself`, so the
+/// WI-23 walk must not infer there.
+fn expr_has_qself(e: &syn::Expr) -> bool {
+    struct Probe(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Probe {
+        fn visit_qself(&mut self, _: &'ast syn::QSelf) {
+            self.0 = true;
+        }
+    }
+    let mut p = Probe(false);
+    syn::visit::visit_expr(&mut p, e);
+    p.0
+}
+
 /// WI-5b: AST-aware kind assignment for control-flow shapes.
 ///
 /// Text-level inference assigns every name on a `for P in E` or `|P| E`

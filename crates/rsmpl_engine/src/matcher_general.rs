@@ -706,6 +706,24 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_bare_field_template_diet() {
+        // WI-23: diet field-base holes infer `expr` — no `# expr E0`
+        // line needed. Explicit form keeps applying identically.
+        let diet = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,2 +2,2 @@ rule=retime\n# allow=many\n- E0.timeout\n+ E0.timeout2\n";
+        let src = "fn m() {\n    let a = foo.timeout;\n    let b = bar.timeout;\n}\n";
+        let out = apply(diet, src).unwrap();
+        assert_eq!(out.matches(".timeout2").count(), 2, "got: {out}");
+        assert!(!out.contains("foo.timeout;"), "got: {out}");
+        assert!(!out.contains("bar.timeout;"), "got: {out}");
+        let explicit = diet.replace("# allow=many", "# allow=many\n# expr E0");
+        let out2 = apply(&explicit, src).unwrap();
+        assert_eq!(
+            out2, out,
+            "explicit fallback must agree: {out2:?} vs {out:?}"
+        );
+    }
+
+    #[test]
     fn deletes_let_statement() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,0 @@ rule=cut\n# lang=rust\n# stmt S\n# expr E\n- let x = E;\n";
         let src = "fn a() {\n    let x = 1;\n    let y = 2;\n}\n";

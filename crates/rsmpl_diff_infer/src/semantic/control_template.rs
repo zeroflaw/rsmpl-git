@@ -288,21 +288,9 @@ fn try_position(minuses: &[syn::Expr], pluses: &[syn::Expr]) -> Option<(String, 
     antiunify_general_exprs(minuses, pluses)
 }
 
-/// Diet inference assigns `E0` in field-base position (`E0.a`) no kind,
-/// so a bare probe/emission matches nothing (engine-probed: 0 matches
-/// bare vs 2 with `# expr E0`). Index bases (`E0[0]`) and every other
-/// WI-6 shape infer fine. The declaration rides only field-hole
-/// templates, in the probe and the emission alike (WI-6 residue —
-/// `antiunify_general_exprs` has pinned the `E0.timeout` shape since
-/// WI-6 but no sweep could ever emit it; noted in REVIEW).
-fn needs_expr_decl(minus_tpl: &str) -> bool {
-    minus_tpl.contains("E0.")
-}
-
-/// Whole-file real-pair probe for control templates: identical to
-/// `totality::template_pair_holds` except field-hole templates carry
-/// the `# expr E0` declaration the diet inference omits (see
-/// [`needs_expr_decl`]). An untouched twin anywhere (including an
+/// Whole-file real-pair probe for control templates: the diet pair
+/// itself (WI-23: field-base holes infer `expr`, so no declaration
+/// rides the probe). An untouched twin anywhere (including an
 /// out-of-position plain-body twin) counts `N+1` and vetoes.
 fn control_pair_holds(
     path: &str,
@@ -317,13 +305,8 @@ fn control_pair_holds(
     let Some(pre) = file_old else {
         return true;
     };
-    let decl = if needs_expr_decl(minus_tpl) {
-        "# expr E0\n"
-    } else {
-        ""
-    };
     let probe = format!(
-        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n{decl}- {minus_tpl}\n+ {plus_tpl}\n",
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {minus_tpl}\n+ {plus_tpl}\n",
         crate::git_header(path)
     );
     let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
@@ -404,9 +387,6 @@ pub(crate) fn try_control_template_sweep(
         }
         let rule = unique_rule(used_rules, "control_template");
         let mut hunk = crate::emission_header(path, &rule, changed);
-        if needs_expr_decl(&minus_tpl) {
-            hunk.push_str("# expr E0\n");
-        }
         hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
         return Some(hunk);
     }
@@ -702,8 +682,8 @@ mod tests {
 
     #[test]
     fn try_base_sweep_fires() {
-        // `?` shares the await extractor and the field-hole discipline
-        // (explicit declaration pinned).
+        // `?` shares the await extractor; field bases infer diet
+        // (WI-23 — no declaration rides the emission).
         let pre = "fn f(s: S, t: S) -> Option<i32> {\n    let x = s.a?;\n    let y = t.a?;\n    Some(0)\n}\n";
         let raw = section(
             "f.rs",
@@ -713,7 +693,7 @@ mod tests {
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
             .expect("try-base sweep must fire");
         validated_live(&out, &pre_map);
-        assert!(out.contains("# expr E0\n"), "got: {out}");
+        assert!(!out.contains("# expr"), "diet, no declaration: {out}");
         assert!(out.contains("- E0.a\n"), "got: {out}");
         assert!(out.contains("+ E0.b\n"), "got: {out}");
     }
@@ -742,8 +722,8 @@ mod tests {
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
             .expect("await-base sweep must fire");
         validated_live(&out, &pre_map);
-        // Field-base holes need the explicit declaration diet omits.
-        assert!(out.contains("# expr E0\n"), "got: {out}");
+        // WI-23: field-base holes infer diet — no declaration.
+        assert!(!out.contains("# expr"), "diet, no declaration: {out}");
         assert!(out.contains("- E0.a\n"), "got: {out}");
         assert!(out.contains("+ E0.b\n"), "got: {out}");
     }

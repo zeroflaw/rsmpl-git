@@ -498,7 +498,9 @@ pub(crate) fn try_general_expr_sweep(
 
 #[cfg(test)]
 mod tests {
+    use super::super::infer_semantic_with_pre_images;
     use super::antiunify_general_exprs;
+    use std::collections::HashMap;
 
     fn exprs(texts: &[&str]) -> Vec<syn::Expr> {
         texts
@@ -509,6 +511,55 @@ mod tests {
 
     fn anti(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
         antiunify_general_exprs(&exprs(minuses), &exprs(pluses))
+    }
+
+    fn section(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+    }
+
+    #[test]
+    fn wi23_field_sweep_fires_diet_and_round_trips() {
+        // WI-23: a 2-site whole-line field delta raises to one diet
+        // `# allow=many` hunk (no `# expr` line) and real-applies
+        // byte-identical. Before the diet fix this class stayed
+        // ordinary (the template never matched without a declaration,
+        // and no sweep emitted one).
+        let pre = "fn m() {\n    foo.timeout;\n    bar.timeout;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo.timeout;\n+    foo.timeout2;\n@@ -3 +3 @@\n-    bar.timeout;\n+    bar.timeout2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("field sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(!out.contains("# expr"), "diet, no declaration: {out}");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("# allow=many"), "got: {out}");
+        assert!(out.contains("- E0.timeout\n"), "got: {out}");
+        assert!(out.contains("+ E0.timeout2\n"), "got: {out}");
+        let post = pre.replace(".timeout;", ".timeout2;");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post);
     }
 
     #[test]

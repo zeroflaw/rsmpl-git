@@ -7042,13 +7042,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `let`-init spelling, same wrapper both sides) — with all N pairs
    extracting through the same position kind (mixed positions
    decline). The subterm columns anti-unify through the WI-6
-   general-expression core (same ≤1-hole discipline, same macro/
-   unsupported vetoes); call-shaped subterms stay ordinary in v1
-   (no `Call`/`MethodCall` variant in the core). Emission is the bare
-   WI-6 template pair (`- E0 > 0` / `+ E0 >= 0`) in one `# allow=many`
-   hunk (tight original range, Section D.5); field-hole templates
-   carry the explicit `# expr E0` declaration diet inference omits
-   for field bases. Totality is the same whole-file real-pair check:
+    general-expression core (same ≤1-hole discipline, same macro/
+    unsupported vetoes); call-shaped subterms stay ordinary in v1
+    (no `Call`/`MethodCall` variant in the core). Emission is the bare
+    WI-6 template pair (`- E0 > 0` / `+ E0 >= 0`) in one `# allow=many`
+    hunk (tight original range, Section D.5) with diet holes, no
+    declarations (field bases infer `expr`, WI-23). Totality is the
+    same whole-file real-pair check:
    an untouched twin anywhere — including the same subterm in a
    plain body expression — counts N+1 and vetoes to ordinary instead
    of rewriting the body (position-scoped counting and control
