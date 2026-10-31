@@ -141,6 +141,33 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Struct-field type evolution (`struct S {` context +
+    /// `- old: Vec<T>` / `+ old: Box<[T]>`): the field name is concrete
+    /// and preserved, the type is a type template. Visibility is
+    /// preserved (prefixes must agree). `# follow=uses` is rejected (C17).
+    FieldTypeEvolution {
+        struct_name: String,
+        field: String,
+        vis: String,
+        minus_sub: String,
+        plus_raw: String,
+        /// Placeholder idents per metavariable, for substitution checks.
+        placeholders: Vec<(String, String)>,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
+    /// Enum-variant payload/discriminant evolution (`enum E {` context):
+    /// the variant name is concrete and preserved, exactly one region
+    /// evolves — tuple payload types, struct payload field types (field
+    /// names preserved), or the discriminant expression. `# follow=uses`
+    /// is rejected (C17).
+    VariantPayloadEvolution {
+        enum_name: String,
+        variant: String,
+        payload: VariantPayload,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// `use`-path prefix rename (`use crate::old` -> `use crate::new`):
     /// the matched leading-segment span of each `use` item is replaced,
     /// tails (groups, globs, `as`, final names) are preserved.
@@ -174,6 +201,30 @@ pub enum PatternKind {
     },
     /// Fallback raw-text pattern (kept for diagnostics).
     Raw { minus: String, plus: String },
+}
+
+/// One evolving region inside a `VariantPayloadEvolution` hunk (WI-11b).
+/// Tuple and struct arms carry per-position templates sharing one
+/// placeholder map (SPEC 15.7 equality holds across positions);
+/// discriminant carries a general-expr template.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantPayload {
+    Tuple {
+        minus_subs: Vec<String>,
+        plus_raws: Vec<String>,
+        placeholders: Vec<(String, String)>,
+    },
+    Struct {
+        fields: Vec<String>,
+        minus_subs: Vec<String>,
+        plus_raws: Vec<String>,
+        placeholders: Vec<(String, String)>,
+    },
+    Discriminant {
+        minus_sub: String,
+        plus_raw: String,
+        placeholders: Vec<(String, String)>,
+    },
 }
 
 /// A compiled hunk pattern ready for the engine.
@@ -499,6 +550,8 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::VariantRename { .. } => "variant-rename",
             PatternKind::TypeAliasEvolution { .. } => "type-alias evolution",
             PatternKind::ConstEvolution { .. } => "const/static evolution",
+            PatternKind::FieldTypeEvolution { .. } => "field-type evolution",
+            PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
             PatternKind::UseRename { .. } => "use-path",
             PatternKind::ItemCapture { .. } => "item-capture",
             PatternKind::Insertion { .. } => "insertion",

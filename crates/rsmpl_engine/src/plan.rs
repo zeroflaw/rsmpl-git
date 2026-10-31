@@ -31,7 +31,7 @@ use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{
     matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item, matcher_macro,
-    matcher_member, matcher_use, matcher_value,
+    matcher_member, matcher_member_evo, matcher_use, matcher_value,
 };
 use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
 
@@ -1012,6 +1012,26 @@ fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
+        PatternKind::FieldTypeEvolution { .. } => {
+            matcher_member_evo::apply_field_type_hunk(
+                parsed,
+                &state.original,
+                &state.index,
+                rh,
+                compiled,
+                edits,
+            )
+        }
+        PatternKind::VariantPayloadEvolution { .. } => {
+            matcher_member_evo::apply_variant_payload_hunk(
+                parsed,
+                &state.original,
+                &state.index,
+                rh,
+                compiled,
+                edits,
+            )
+        }
         PatternKind::UseRename { .. } => matcher_use::apply_use_rename_hunk(
             parsed,
             &state.original,

@@ -90,6 +90,8 @@ pub(crate) fn is_drift_eligible(rh: &RsmplHunk, compiled: &CompiledPattern) -> b
             | PatternKind::ImplContext { .. }
             | PatternKind::FieldRename { .. }
             | PatternKind::VariantRename { .. }
+            | PatternKind::FieldTypeEvolution { .. }
+            | PatternKind::VariantPayloadEvolution { .. }
     )
 }
 

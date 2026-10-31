@@ -1,0 +1,765 @@
+//! Member-context definition RHS evolution (SPEC 14.8, WI-11b).
+//!
+//! Field-type, variant-payload, and discriminant rewrites. The author
+//! writes the member pair under its container header with a concrete
+//! preserved name; only the evolved RHS span is replaced — the container,
+//! visibility, attributes, and suffixes are preserved byte-for-byte.
+//!
+//! ```diff
+//!   struct S {
+//! - old: Vec<T>
+//! + old: Box<[T]>
+//! ```
+//!
+//! ```diff
+//!   enum E {
+//! - Old(Vec<T>)
+//! + Old(Box<[T]>)
+//! ```
+//!
+//! Single-region rule (classifier-enforced): one hunk evolves the field
+//! type XOR the tuple payload XOR the struct payload XOR the discriminant.
+//! A mismatched ascribed vis/`mut` or preserved-region difference skips the
+//! site (subset semantics: never rewrites under a lie).
+
+use std::collections::HashMap;
+
+use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
+
+use rsmpl_patch::{Allow, ErrorCode, RsmplHunk, Scope, StructuredError};
+use rsmpl_pattern::{CompiledPattern, PatternKind, VariantPayload};
+
+use crate::edits::TextEdit;
+use crate::lines::LineIndex;
+use crate::matcher_item::{attrs_equal, check_attrs, span_bytes};
+
+/// One field candidate: the named field's type span.
+struct FieldCandidate<'ast> {
+    attrs: Vec<syn::Attribute>,
+    ty: &'ast syn::Type,
+    vis_norm: String,
+    container_start: u32,
+    container_end: u32,
+    anchor_line: u32,
+    attr_start_line: u32,
+}
+
+fn norm_vis(v: &syn::Visibility) -> String {
+    quote::quote!(#v)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn collect_fields<'ast>(
+    items: &'ast [syn::Item],
+    struct_name: &str,
+    field: &str,
+    out: &mut Vec<FieldCandidate<'ast>>,
+) {
+    struct Collector<'a, 'ast> {
+        struct_name: &'a str,
+        field: &'a str,
+        found: Vec<FieldCandidate<'ast>>,
+    }
+    impl<'ast> Visit<'ast> for Collector<'_, 'ast> {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            if let syn::Item::Struct(s) = it {
+                if s.ident == self.struct_name {
+                    if let syn::Fields::Named(fields) = &s.fields {
+                        for f in &fields.named {
+                            if let Some(ident) = &f.ident {
+                                if ident == self.field {
+                                    self.found.push(FieldCandidate {
+                                        attrs: f.attrs.clone(),
+                                        ty: &f.ty,
+                                        vis_norm: norm_vis(&f.vis),
+                                        container_start: s.span().start().line as u32,
+                                        container_end: s.span().end().line as u32,
+                                        anchor_line: ident.span().start().line as u32,
+                                        attr_start_line: f.span().start().line as u32,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            visit::visit_item(self, it);
+        }
+    }
+    let mut c = Collector {
+        struct_name,
+        field,
+        found: Vec::new(),
+    };
+    for it in items {
+        c.visit_item(it);
+    }
+    out.extend(c.found);
+}
+
+/// One variant candidate: tuple payload types, struct payload fields, or
+/// discriminant expression.
+struct VariantCandidate<'ast> {
+    attrs: Vec<syn::Attribute>,
+    tuple_tys: Vec<&'ast syn::Type>,
+    struct_fields: Vec<(String, &'ast syn::Type)>,
+    discriminant: Option<&'ast syn::Expr>,
+    is_tuple: bool,
+    is_struct: bool,
+    container_start: u32,
+    container_end: u32,
+    anchor_line: u32,
+    attr_start_line: u32,
+}
+
+fn collect_variants<'ast>(
+    items: &'ast [syn::Item],
+    enum_name: &str,
+    variant: &str,
+    out: &mut Vec<VariantCandidate<'ast>>,
+) {
+    struct Collector<'a, 'ast> {
+        enum_name: &'a str,
+        variant: &'a str,
+        found: Vec<VariantCandidate<'ast>>,
+    }
+    impl<'ast> Visit<'ast> for Collector<'_, 'ast> {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            if let syn::Item::Enum(e) = it {
+                if e.ident == self.enum_name {
+                    for v in &e.variants {
+                        if v.ident == self.variant {
+                            let (tuple_tys, struct_fields, is_tuple, is_struct) = match &v.fields {
+                                syn::Fields::Unnamed(u) => (
+                                    u.unnamed.iter().map(|f| &f.ty).collect(),
+                                    Vec::new(),
+                                    true,
+                                    false,
+                                ),
+                                syn::Fields::Named(n) => (
+                                    Vec::new(),
+                                    n.named
+                                        .iter()
+                                        .filter_map(|f| {
+                                            f.ident.as_ref().map(|i| (i.to_string(), &f.ty))
+                                        })
+                                        .collect(),
+                                    false,
+                                    true,
+                                ),
+                                syn::Fields::Unit => (Vec::new(), Vec::new(), false, false),
+                            };
+                            self.found.push(VariantCandidate {
+                                attrs: v.attrs.clone(),
+                                tuple_tys,
+                                struct_fields,
+                                discriminant: v.discriminant.as_ref().map(|(_, e)| e),
+                                is_tuple,
+                                is_struct,
+                                container_start: e.span().start().line as u32,
+                                container_end: e.span().end().line as u32,
+                                anchor_line: v.ident.span().start().line as u32,
+                                attr_start_line: v.span().start().line as u32,
+                            });
+                        }
+                    }
+                }
+            }
+            visit::visit_item(self, it);
+        }
+    }
+    let mut c = Collector {
+        enum_name,
+        variant,
+        found: Vec::new(),
+    };
+    for it in items {
+        c.visit_item(it);
+    }
+    out.extend(c.found);
+}
+
+fn in_scope(
+    c_start: u32,
+    c_end: u32,
+    anchor: u32,
+    scope: Scope,
+    old_start: u32,
+    old_len: u32,
+) -> bool {
+    let end = old_start + old_len.saturating_sub(1);
+    match scope {
+        Scope::Contained => c_start >= old_start && c_end <= end.max(old_start),
+        Scope::Anchor => anchor >= old_start && anchor <= end.max(old_start),
+        Scope::Overlap => c_start <= end.max(old_start) && c_end >= old_start,
+        Scope::Exact => old_len > 0 && c_start == old_start && c_end == end,
+        Scope::File => true,
+    }
+}
+
+fn range_err(rule: &str, line: u32) -> StructuredError {
+    StructuredError::new(
+        ErrorCode::RangeConflict,
+        format!("span line {line} outside file"),
+    )
+    .with_rule(rule)
+    .with_repair(StructuredError::internal_repair())
+}
+
+fn pattern_err(rule: &str, msg: String) -> StructuredError {
+    StructuredError::new(ErrorCode::PatternConflict, msg)
+        .with_rule(rule)
+        .with_repair(StructuredError::internal_repair())
+}
+
+/// Apply a field-type evolution hunk. Only the field type span is
+/// replaced; the container, visibility, name, and attributes are
+/// preserved. Vis must render equal to the authored prefix (a different
+/// vis skips the site, never rewrites under a lie).
+pub fn apply_field_type_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    let (struct_name, field, vis, minus_sub, plus_raw, placeholders, minus_attrs) =
+        match &compiled.kind {
+            PatternKind::FieldTypeEvolution {
+                struct_name,
+                field,
+                vis,
+                minus_sub,
+                plus_raw,
+                placeholders,
+                minus_attrs,
+                ..
+            } => (
+                struct_name.clone(),
+                field.clone(),
+                vis.clone(),
+                minus_sub.clone(),
+                plus_raw.clone(),
+                placeholders.clone(),
+                minus_attrs.clone(),
+            ),
+            _ => {
+                return Err(StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    "expected field-type evolution pattern".to_string(),
+                ));
+            }
+        };
+    let rule = hunk.rule_name();
+    let file = "";
+    let pat_ty: syn::Type = syn::parse_str(&minus_sub)
+        .map_err(|e| pattern_err(&rule, format!("invalid field type pattern: {e}")))?;
+    let mut candidates = Vec::new();
+    collect_fields(&parsed.items, &struct_name, &field, &mut candidates);
+    candidates.sort_by_key(|c| (c.container_start, c.anchor_line));
+    let reverse: HashMap<String, String> = placeholders
+        .iter()
+        .map(|(n, ph)| (ph.clone(), n.clone()))
+        .collect();
+    let old_start = hunk.header.old_start;
+    let old_len = hunk.header.old_len;
+    let mut matched = 0;
+    let mut all_bindings = Vec::new();
+    for c in &candidates {
+        if !in_scope(
+            c.container_start,
+            c.container_end,
+            c.anchor_line,
+            hunk.scope(),
+            old_start,
+            old_len,
+        ) {
+            continue;
+        }
+        if hunk.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve
+            && !minus_attrs.is_empty()
+            && !attrs_equal(&minus_attrs, &c.attrs)
+        {
+            continue;
+        }
+        check_attrs(&c.attrs, hunk.attrs_policy(), &minus_attrs, &rule, file)?;
+        // Subset semantics: vis must agree with the authored prefix.
+        if norm_vis_of(&c.vis_norm) != norm_vis_of(&vis) {
+            continue;
+        }
+        let mut cx =
+            crate::matcher_general::MatchCx::with_reverse(original, index, reverse.clone());
+        if !crate::matcher_types::match_type(&pat_ty, c.ty, &mut cx) {
+            continue;
+        }
+        let subst = crate::matcher_expr_subst::substitute_call_plus(
+            &plus_raw,
+            &cx.bindings,
+            &[],
+            compiled.table.sigiled,
+        );
+        syn::parse_str::<syn::Type>(&subst).map_err(|e| {
+            pattern_err(&rule, format!("substituted field type does not parse: {e}"))
+        })?;
+        let (a, b) = span_bytes(original, index, c.ty.span())
+            .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+        edits.push(TextEdit::new(a, b, subst).with_label("type"));
+        if hunk.attrs_policy() == rsmpl_patch::AttrsPolicy::Strip && !c.attrs.is_empty() {
+            let start = index
+                .line_start(c.attr_start_line)
+                .ok_or_else(|| range_err(&rule, c.attr_start_line))?;
+            let end = index
+                .line_start(c.anchor_line)
+                .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+            if end > start {
+                edits.push(TextEdit::new(start, end, String::new()));
+            }
+        }
+        all_bindings.push(cx.bindings);
+        matched += 1;
+        if hunk.allow() == Allow::One && matched > 1 {
+            break;
+        }
+    }
+    Ok((matched, all_bindings))
+}
+
+fn norm_vis_of(s: &str) -> String {
+    s.split_whitespace().collect()
+}
+
+/// Apply a variant payload/discriminant evolution hunk. Only the evolved
+/// region spans are replaced; the variant name and preserved regions stay
+/// byte-for-byte.
+pub fn apply_variant_payload_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    let (enum_name, variant, payload, minus_attrs) = match &compiled.kind {
+        PatternKind::VariantPayloadEvolution {
+            enum_name,
+            variant,
+            payload,
+            minus_attrs,
+            ..
+        } => (
+            enum_name.clone(),
+            variant.clone(),
+            payload.clone(),
+            minus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected variant-payload evolution pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    let file = "";
+    let (minus_subs, plus_raws, disc_minus, disc_plus, placeholders, mode) = match &payload {
+        VariantPayload::Tuple {
+            minus_subs,
+            plus_raws,
+            placeholders,
+        } => (
+            minus_subs.clone(),
+            plus_raws.clone(),
+            None,
+            None,
+            placeholders.clone(),
+            "tuple",
+        ),
+        VariantPayload::Struct {
+            minus_subs,
+            plus_raws,
+            placeholders: sph,
+            ..
+        } => (
+            minus_subs.clone(),
+            plus_raws.clone(),
+            None,
+            None,
+            sph.clone(),
+            "struct",
+        ),
+        VariantPayload::Discriminant {
+            minus_sub,
+            plus_raw,
+            placeholders,
+        } => (
+            vec![minus_sub.clone()],
+            vec![plus_raw.clone()],
+            Some(minus_sub.clone()),
+            Some(plus_raw.clone()),
+            placeholders.clone(),
+            "disc",
+        ),
+    };
+    let mut candidates = Vec::new();
+    collect_variants(&parsed.items, &enum_name, &variant, &mut candidates);
+    candidates.sort_by_key(|c| (c.container_start, c.anchor_line));
+    let reverse: HashMap<String, String> = placeholders
+        .iter()
+        .map(|(n, ph)| (ph.clone(), n.clone()))
+        .collect();
+    // Parse minus templates once per hunk.
+    let pat_tys: Vec<syn::Type> = if mode == "disc" {
+        Vec::new()
+    } else {
+        minus_subs
+            .iter()
+            .map(|s| {
+                syn::parse_str::<syn::Type>(s)
+                    .map_err(|e| pattern_err(&rule, format!("invalid payload type pattern: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let pat_disc: Option<syn::Expr> = if mode == "disc" {
+        Some(
+            syn::parse_str::<syn::Expr>(disc_minus.as_ref().expect("disc"))
+                .map_err(|e| pattern_err(&rule, format!("invalid discriminant pattern: {e}")))?,
+        )
+    } else {
+        None
+    };
+    let old_start = hunk.header.old_start;
+    let old_len = hunk.header.old_len;
+    let mut matched = 0;
+    let mut all_bindings = Vec::new();
+    for c in &candidates {
+        if !in_scope(
+            c.container_start,
+            c.container_end,
+            c.anchor_line,
+            hunk.scope(),
+            old_start,
+            old_len,
+        ) {
+            continue;
+        }
+        if hunk.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve
+            && !minus_attrs.is_empty()
+            && !attrs_equal(&minus_attrs, &c.attrs)
+        {
+            continue;
+        }
+        check_attrs(&c.attrs, hunk.attrs_policy(), &minus_attrs, &rule, file)?;
+        let mut cx =
+            crate::matcher_general::MatchCx::with_reverse(original, index, reverse.clone());
+        // Structural match with one shared binding set (SPEC 15.7 holds
+        // across positions).
+        let ok = match mode {
+            "tuple" => {
+                if !c.is_tuple || c.tuple_tys.len() != pat_tys.len() {
+                    false
+                } else {
+                    pat_tys
+                        .iter()
+                        .zip(c.tuple_tys.iter())
+                        .all(|(p, t)| crate::matcher_types::match_type(p, t, &mut cx))
+                }
+            }
+            "struct" => {
+                if !c.is_struct {
+                    false
+                } else {
+                    let want: Vec<String> = match &payload {
+                        VariantPayload::Struct { fields, .. } => fields.clone(),
+                        _ => Vec::new(),
+                    };
+                    let have: Vec<String> =
+                        c.struct_fields.iter().map(|(n, _)| n.clone()).collect();
+                    if want != have {
+                        false
+                    } else {
+                        pat_tys
+                            .iter()
+                            .zip(c.struct_fields.iter().map(|(_, t)| *t))
+                            .all(|(p, t)| crate::matcher_types::match_type(p, t, &mut cx))
+                    }
+                }
+            }
+            _ => match (&pat_disc, c.discriminant) {
+                (Some(p), Some(t)) => crate::matcher_general::match_expr(p, t, &mut cx),
+                _ => false,
+            },
+        };
+        if !ok {
+            continue;
+        }
+        // Emit one span edit per evolved position.
+        match mode {
+            "tuple" => {
+                for (i, target) in c.tuple_tys.iter().enumerate() {
+                    let subst = crate::matcher_expr_subst::substitute_call_plus(
+                        &plus_raws[i],
+                        &cx.bindings,
+                        &[],
+                        compiled.table.sigiled,
+                    );
+                    syn::parse_str::<syn::Type>(&subst).map_err(|e| {
+                        pattern_err(
+                            &rule,
+                            format!("substituted payload type does not parse: {e}"),
+                        )
+                    })?;
+                    let (a, b) = span_bytes(original, index, target.span())
+                        .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                    edits.push(TextEdit::new(a, b, subst).with_label("payload"));
+                }
+            }
+            "struct" => {
+                for (i, (_, target)) in c.struct_fields.iter().enumerate() {
+                    let subst = crate::matcher_expr_subst::substitute_call_plus(
+                        &plus_raws[i],
+                        &cx.bindings,
+                        &[],
+                        compiled.table.sigiled,
+                    );
+                    syn::parse_str::<syn::Type>(&subst).map_err(|e| {
+                        pattern_err(
+                            &rule,
+                            format!("substituted payload type does not parse: {e}"),
+                        )
+                    })?;
+                    let (a, b) = span_bytes(original, index, target.span())
+                        .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                    edits.push(TextEdit::new(a, b, subst).with_label("payload"));
+                }
+            }
+            _ => {
+                let target = c.discriminant.expect("discriminant");
+                let subst = crate::matcher_expr_subst::substitute_call_plus(
+                    disc_plus.as_ref().expect("disc"),
+                    &cx.bindings,
+                    &[],
+                    compiled.table.sigiled,
+                );
+                syn::parse_str::<syn::Expr>(&subst).map_err(|e| {
+                    pattern_err(
+                        &rule,
+                        format!("substituted discriminant does not parse: {e}"),
+                    )
+                })?;
+                let (a, b) = span_bytes(original, index, target.span())
+                    .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                edits.push(TextEdit::new(a, b, subst).with_label("discriminant"));
+            }
+        }
+        if hunk.attrs_policy() == rsmpl_patch::AttrsPolicy::Strip && !c.attrs.is_empty() {
+            let start = index
+                .line_start(c.attr_start_line)
+                .ok_or_else(|| range_err(&rule, c.attr_start_line))?;
+            let end = index
+                .line_start(c.anchor_line)
+                .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+            if end > start {
+                edits.push(TextEdit::new(start, end, String::new()));
+            }
+        }
+        all_bindings.push(cx.bindings);
+        matched += 1;
+        if hunk.allow() == Allow::One && matched > 1 {
+            break;
+        }
+    }
+    Ok((matched, all_bindings))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::super::RuleSemantics;
+
+    fn apply_report(
+        patch_text: &str,
+        file_text: &str,
+    ) -> Result<(String, crate::ApplyReport), String> {
+        let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
+        let mut files = HashMap::new();
+        files.insert("src/lib.rs".to_string(), file_text.to_string());
+        let mut patch = patch;
+        for f in &mut patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        let report = crate::apply_patch_to_tree(&mut files, &patch).map_err(|e| e.render())?;
+        Ok((files["src/lib.rs"].clone(), report))
+    }
+
+    fn apply(patch_text: &str, file_text: &str) -> Result<String, String> {
+        apply_report(patch_text, file_text).map(|(s, _)| s)
+    }
+
+    const FIELD_CTX: &str = "  struct S {\n";
+
+    fn field_patch(minus: &str, plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evo\n{FIELD_CTX}- {minus}\n+ {plus}\n"
+        )
+    }
+
+    const VAR_CTX: &str = "  enum E {\n";
+
+    fn var_patch(minus: &str, plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evo\n{VAR_CTX}- {minus}\n+ {plus}\n"
+        )
+    }
+
+    #[test]
+    fn field_type_concrete_fire_instantiated() {
+        let patch = field_patch("old: Vec<u8>", "old: Box<[u8]>");
+        let (out, report) = apply_report(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap();
+        assert!(out.contains("old: Box<[u8]>"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+    }
+
+    #[test]
+    fn field_type_hole_fire() {
+        let patch = field_patch("old: Vec<T>", "old: Box<[T]>");
+        let (out, report) = apply_report(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap();
+        assert!(out.contains("old: Box<[u8]>"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(
+            report.rules[0].sites[0].bindings,
+            vec![("T".to_string(), "u8".to_string())]
+        );
+    }
+
+    #[test]
+    fn field_type_repeat_equality_vetoes() {
+        let patch = field_patch("old: (T, T)", "old: (T, u8)");
+        let err = apply(&patch, "struct S {\n    old: (u8, bool),\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn field_type_name_change_fails_fast() {
+        // Same-type different-name is the rename spelling (claimed by the
+        // rename classifier via fallthrough), not an evolution error.
+        let patch = field_patch("old: Vec<u8>", "new: Vec<u8>");
+        let out = apply(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap();
+        assert!(out.contains("new: Vec<u8>"), "got: {out:?}");
+        // Both differ never combines rename + evolution.
+        let patch = field_patch("old: Vec<u8>", "new: Box<[u8]>");
+        let err = apply(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap_err();
+        assert!(err.contains("never combine"), "got: {err}");
+    }
+
+    #[test]
+    fn field_type_needs_struct_context() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=evo\n- old: Vec<u8>\n+ old: Box<[u8]>\n";
+        let err = apply(patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("struct S"), "got: {err}");
+    }
+
+    #[test]
+    fn field_type_vis_mismatch_rejected() {
+        let patch = field_patch("pub old: Vec<u8>", "old: Box<[u8]>");
+        let err = apply(&patch, "struct S {\n    pub old: Vec<u8>,\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn field_type_other_container_untouched() {
+        let patch = field_patch("old: Vec<u8>", "old: Box<[u8]>");
+        let src = "struct S {\n    x: u8,\n}\nstruct T {\n    old: Vec<u8>,\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn tuple_payload_concrete_fire() {
+        let patch = var_patch("Old(Vec<u8>)", "Old(Box<[u8]>)");
+        let (out, report) = apply_report(&patch, "enum E {\n    Old(Vec<u8>),\n}\n").unwrap();
+        assert!(out.contains("Old(Box<[u8]>)"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+    }
+
+    #[test]
+    fn tuple_payload_hole_fire() {
+        let patch = var_patch("Old(Vec<T>)", "Old(Box<[T]>)");
+        let (out, _) = apply_report(&patch, "enum E {\n    Old(Vec<u8>),\n}\n").unwrap();
+        assert!(out.contains("Old(Box<[u8]>)"), "got: {out:?}");
+    }
+
+    #[test]
+    fn tuple_payload_arity_mismatch_rejected() {
+        let patch = var_patch("Old(Vec<T>)", "Old(Box<[T]>, u8)");
+        let err = apply(&patch, "enum E {\n    Old(Vec<u8>),\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("arity"), "got: {err}");
+    }
+
+    #[test]
+    fn struct_payload_fire_preserving_names() {
+        let patch = var_patch("Old { f: Vec<T> }", "Old { f: Box<[T]> }");
+        let (out, report) = apply_report(&patch, "enum E {\n    Old { f: Vec<u8> },\n}\n").unwrap();
+        assert!(out.contains("Old { f: Box<[u8]> }"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+    }
+
+    #[test]
+    fn struct_payload_field_mismatch_rejected() {
+        let patch = var_patch("Old { f: Vec<T> }", "Old { g: Box<[T]> }");
+        let err = apply(&patch, "enum E {\n    Old { f: Vec<u8> },\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn discriminant_fire_instantiated() {
+        let patch = var_patch("Old = E", "Old = E + 1");
+        let (out, report) = apply_report(&patch, "enum E {\n    Old = 1,\n}\n").unwrap();
+        assert!(out.contains("Old = 1 + 1"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(
+            report.rules[0].sites[0].bindings,
+            vec![("E".to_string(), "1".to_string())]
+        );
+    }
+
+    #[test]
+    fn discriminant_without_header_is_not_member_evolution() {
+        // No `enum E {` header: the pair falls through to the
+        // general-expression classifier (assignment reading) instead of
+        // the member classifier — never the member missing-header error.
+        // (The field-pair twin keeps the rename missing-header error via
+        // fallthrough; see `field_type_needs_struct_context`.)
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=evo\n- Old = E\n+ Old = E + 1\n";
+        let err = apply(patch, "enum E {\n    Old = 1,\n}\n").unwrap_err();
+        assert!(
+            !err.contains("needs an `enum E {` context"),
+            "must not claim member evolution without a header, got: {err}"
+        );
+    }
+
+    #[test]
+    fn evolution_rejects_follow_uses() {
+        let patch = format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evo\n# follow=uses\n{FIELD_CTX}- old: Vec<u8>\n+ old: Box<[u8]>\n"
+        );
+        let err = apply(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+        assert!(err.contains("C17"), "got: {err}");
+    }
+
+    #[test]
+    fn tuple_payload_other_enum_untouched() {
+        let patch = var_patch("Old(Vec<u8>)", "Old(Box<[u8]>)");
+        let src = "enum E {\n    Keep,\n}\nenum F {\n    Old(Vec<u8>),\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+}

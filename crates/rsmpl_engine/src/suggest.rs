@@ -31,6 +31,8 @@ pub(crate) fn candidate_preview(
             | PatternKind::VariantRename { .. }
             | PatternKind::TypeAliasEvolution { .. }
             | PatternKind::ConstEvolution { .. }
+            | PatternKind::FieldTypeEvolution { .. }
+            | PatternKind::VariantPayloadEvolution { .. }
             | PatternKind::UseRename { .. }
     );
     if kind_specific {
@@ -70,6 +72,12 @@ pub(crate) fn candidate_preview(
                     Some(name.clone()),
                 )),
                 PatternKind::VariantRename { enum_name, .. } => {
+                    Some(("enum ".to_string(), Some(enum_name.clone())))
+                }
+                PatternKind::FieldTypeEvolution { struct_name, .. } => {
+                    Some(("struct ".to_string(), Some(struct_name.clone())))
+                }
+                PatternKind::VariantPayloadEvolution { enum_name, .. } => {
                     Some(("enum ".to_string(), Some(enum_name.clone())))
                 }
                 PatternKind::ImplContext { .. } => Some(("fn ".to_string(), None)),
@@ -147,6 +155,20 @@ fn head_token(kind: &PatternKind) -> Option<String> {
         PatternKind::Macro { minus_raw, .. } => longest_concrete_ident(minus_raw),
         PatternKind::TypeAliasEvolution { minus_sub, .. }
         | PatternKind::ConstEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
+        PatternKind::FieldTypeEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
+        PatternKind::VariantPayloadEvolution { payload, .. } => match payload {
+            rsmpl_pattern::VariantPayload::Tuple { minus_subs, .. } => minus_subs
+                .iter()
+                .filter_map(|s| longest_concrete_ident(s))
+                .max_by_key(|s| s.len()),
+            rsmpl_pattern::VariantPayload::Struct { minus_subs, .. } => minus_subs
+                .iter()
+                .filter_map(|s| longest_concrete_ident(s))
+                .max_by_key(|s| s.len()),
+            rsmpl_pattern::VariantPayload::Discriminant { minus_sub, .. } => {
+                longest_concrete_ident(minus_sub)
+            }
+        },
         _ => None,
     }
 }

@@ -400,6 +400,15 @@ pub(crate) fn classify(
     // pair must parse as a member pair on both sides before the context
     // header is consulted, so ordinary hunks that merely sit inside a
     // struct body never route here.
+    // Member-context RHS evolution (WI-11b): field-type, variant-payload,
+    // discriminant. Same header+pair spelling as renames; evolution is
+    // "same name, template RHS differs" while renames are "names differ,
+    // RHS token-equal". Evolution first: same-type pairs fall through to
+    // the rename classifier below (single identical/rename gates there).
+    if let Some(evo) = crate::pattern_member_evo::classify_member_evolution(m, p, c, table)? {
+        return Ok(evo);
+    }
+
     if let Some(rename) = classify_member_rename(m, p, c)? {
         return Ok(rename);
     }

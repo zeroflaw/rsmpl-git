@@ -18,6 +18,7 @@ mod pattern_def_evo;
 mod pattern_ellipsis;
 mod pattern_evolution;
 mod pattern_general;
+mod pattern_member_evo;
 mod quote_utils;
 mod terse_fn;
 mod use_rename;
@@ -34,7 +35,7 @@ pub use pattern::{
     parse_static_evolution_template, parse_struct_evolution_template,
     parse_trait_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
     split_leading_attrs, trait_header_ident, CompiledPattern, GeneralShape, ImplHeaderFilter,
-    PatternKind,
+    PatternKind, VariantPayload,
 };
 pub use quote_utils::{
     char_col_to_byte, char_lit_len, count_ellipsis_markers, has_ellipsis_marker,

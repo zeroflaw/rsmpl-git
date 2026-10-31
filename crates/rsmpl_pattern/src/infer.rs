@@ -844,10 +844,18 @@ fn assign_call_slots(
     masked_plus: &str,
     base: &MetavarTable,
 ) -> Result<(), StructuredError> {
+    // WI-11b: member-context pair lines infer in the member pass, not
+    // as calls — but only when a struct/enum container header is present
+    // (else `foo(E)` stays a call; the WI-5 pins).
+    let member_mode = super::infer_def::has_member_container(masked_minus)
+        || super::infer_def::has_member_container(masked_plus);
     for (side, text) in [masked_minus, masked_plus].into_iter().enumerate() {
         for line in text.lines() {
             let t = line.trim();
             if t.is_empty() || t.starts_with("let ") || t.starts_with("fn ") {
+                continue;
+            }
+            if member_mode && super::infer_def::is_member_pair_line(t) {
                 continue;
             }
             // Control-flow lines (`match`/`for`/closures/`if`/`while`)
@@ -1243,6 +1251,13 @@ fn assign_general_fallback(
             // (`type NAME = RHS` assigns `type`, `const`/`static` value
             // assigns `expr`; NAME never infers. Sibling module per D5.)
             if super::infer_def::assign_def_rhs_line(t, kinds, masked_minus, masked_plus) {
+                continue;
+            }
+            // WI-11b: member-context pair lines (`name: Type`,
+            // `Name(...)`, `Name { ... }`, `Name = EXPR`) assign before
+            // the generic fallback (which would misclaim payload types
+            // as `expr`). Container headers return false here.
+            if super::infer_def::assign_member_evo_line(t, kinds, masked_minus, masked_plus) {
                 continue;
             }
             // `use`-path and item-rename headers never infer: leave pending

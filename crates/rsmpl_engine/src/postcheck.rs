@@ -408,6 +408,79 @@ pub(crate) fn plus_instantiated_parsed(
                 matches,
             )
         }
+        // WI-11b: member-context RHS evolution verifies by plus-pattern
+        // re-match (WI-1.5): the plus pair recompiles under its container
+        // header and re-matches in the post-image with per-site binding
+        // equality — a reverted RHS at the span fails.
+        PatternKind::FieldTypeEvolution {
+            struct_name,
+            field,
+            vis,
+            plus_raw,
+            ..
+        } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            let vis_gap = if vis.is_empty() {
+                String::new()
+            } else {
+                format!("{vis} ")
+            };
+            verify_plus_pattern_at_spans(
+                rh,
+                &[
+                    format!("struct {struct_name} {{"),
+                    format!("{vis_gap}{field}: {plus_raw}"),
+                ],
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
+        PatternKind::VariantPayloadEvolution {
+            enum_name,
+            variant,
+            payload,
+            ..
+        } => {
+            let (parsed, index) = match (post_parsed, post_index) {
+                (Some(p), Some(i)) => (p, i),
+                _ => return None,
+            };
+            let pair = match payload {
+                rsmpl_pattern::VariantPayload::Tuple { plus_raws, .. } => {
+                    format!("{variant}({})", plus_raws.join(", "))
+                }
+                rsmpl_pattern::VariantPayload::Struct {
+                    fields, plus_raws, ..
+                } => {
+                    let inner: Vec<String> = fields
+                        .iter()
+                        .zip(plus_raws.iter())
+                        .map(|(f, t)| format!("{f}: {t}"))
+                        .collect();
+                    format!("{variant} {{ {} }}", inner.join(", "))
+                }
+                rsmpl_pattern::VariantPayload::Discriminant { plus_raw, .. } => {
+                    format!("{variant} = {plus_raw}")
+                }
+            };
+            verify_plus_pattern_at_spans(
+                rh,
+                &[format!("enum {enum_name} {{"), pair],
+                bindings_list,
+                post_text,
+                parsed,
+                index,
+                spans,
+                matches,
+            )
+        }
         PatternKind::Expr { plus_raw, .. } => {
             let (parsed, index) = match (post_parsed, post_index) {
                 (Some(p), Some(i)) => (p, i),
@@ -570,6 +643,73 @@ fn plus_pattern_hunk(rh: &rsmpl_patch::RsmplHunk, plus_lines: &[String]) -> rsmp
     }
 }
 
+/// WI-11b synthetic plus-as-minus hunk with a container header as context:
+/// the header rides as ` ` lines (the classifier needs it to scope the
+/// pair), the pair as `-`/`+` lines. Discovery is file-scope
+/// `# allow=many` like `plus_pattern_hunk`; `optional`/ranged postures
+/// never carry over.
+fn plus_pattern_hunk_with_context(
+    rh: &rsmpl_patch::RsmplHunk,
+    context_lines: &[String],
+    pair_lines: &[String],
+) -> rsmpl_patch::RsmplHunk {
+    let mut directives = Vec::new();
+    for d in &rh.directives {
+        match d {
+            rsmpl_patch::Directive::Allow(_)
+            | rsmpl_patch::Directive::Scope(_)
+            | rsmpl_patch::Directive::Optional(_) => {}
+            _ => directives.push(d.clone()),
+        }
+    }
+    directives.push(rsmpl_patch::Directive::Allow(Allow::Many));
+    directives.push(rsmpl_patch::Directive::Scope(Scope::File));
+    let mut lines = Vec::with_capacity(context_lines.len() + pair_lines.len() * 2);
+    for t in context_lines {
+        lines.push(rsmpl_patch::BodyLine {
+            prefix: ' ',
+            text: t.clone(),
+        });
+    }
+    for t in pair_lines {
+        lines.push(rsmpl_patch::BodyLine {
+            prefix: '-',
+            text: t.clone(),
+        });
+        lines.push(rsmpl_patch::BodyLine {
+            prefix: '+',
+            text: t.clone(),
+        });
+    }
+    let header = rsmpl_patch::HunkHeader {
+        old_start: 1,
+        old_len: 1,
+        new_start: 1,
+        new_len: 1,
+        new_elided: true,
+        rule: rh.header.rule.clone(),
+        raw_tail: String::new(),
+    };
+    rsmpl_patch::RsmplHunk {
+        header,
+        directives,
+        raw_directives: Vec::new(),
+        lines,
+    }
+}
+
+/// True when the line opens a `struct`/`enum` container header (the
+/// WI-11b member-evolution context). Same parse discipline as the
+/// classifier: complete with `}` and accept real `syn` items only.
+fn is_member_container_header(line: &str) -> bool {
+    let t = line.trim();
+    if !t.ends_with('{') {
+        return false;
+    }
+    syn::parse_str::<syn::Item>(&format!("{t}}}"))
+        .is_ok_and(|it| matches!(it, syn::Item::Struct(_) | syn::Item::Enum(_)))
+}
+
 /// Line-range intersection (1-based inclusive on both sides).
 fn spans_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
     a.0 <= b.1 && b.0 <= a.1
@@ -644,7 +784,14 @@ fn verify_plus_pattern_at_spans(
     if plus_lines.is_empty() || plus_lines.iter().all(|l| l.trim().is_empty()) {
         return None;
     }
-    let synth = plus_pattern_hunk(rh, plus_lines);
+    // WI-11b: a leading `struct S {` / `enum E {` line is the member
+    // container header — it rides as context, not as a `-`/`+` pair
+    // (the classifier needs it to scope the pair that follows).
+    let synth = if plus_lines.len() >= 2 && is_member_container_header(&plus_lines[0]) {
+        plus_pattern_hunk_with_context(rh, &plus_lines[..1], &plus_lines[1..])
+    } else {
+        plus_pattern_hunk(rh, plus_lines)
+    };
     let plus_compiled = rsmpl_pattern::compile(&synth).ok()?;
     let mut throwaway: Vec<TextEdit> = Vec::new();
     let (_matched, fresh_bindings) = match &plus_compiled.kind {
@@ -693,6 +840,26 @@ fn verify_plus_pattern_at_spans(
             &mut throwaway,
         )
         .ok()?,
+        PatternKind::FieldTypeEvolution { .. } => crate::matcher_member_evo::apply_field_type_hunk(
+            post_parsed,
+            post_text,
+            post_index,
+            &synth,
+            &plus_compiled,
+            &mut throwaway,
+        )
+        .ok()?,
+        PatternKind::VariantPayloadEvolution { .. } => {
+            crate::matcher_member_evo::apply_variant_payload_hunk(
+                post_parsed,
+                post_text,
+                post_index,
+                &synth,
+                &plus_compiled,
+                &mut throwaway,
+            )
+            .ok()?
+        }
         _ => return None,
     };
     if spans.is_empty() {

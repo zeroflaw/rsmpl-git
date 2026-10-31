@@ -27,6 +27,7 @@ mod matcher_impl;
 mod matcher_item;
 mod matcher_macro;
 mod matcher_member;
+mod matcher_member_evo;
 mod matcher_sequence;
 mod matcher_spelling;
 mod matcher_types;

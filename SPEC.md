@@ -2465,7 +2465,7 @@ Rules:
 
 Out of scope in v0.1: tuple-struct positional fields, locals/params, unions, cross-crate resolution, cross-file definition+uses intents (each raised section is one file), multi-definition sections, and any use attribution beyond the syntactic shapes above (`diffrs` raises single-file def+uses intents via `member_rename`, SPEC D.4; everything else stays ordinary).
 
-#### Definition RHS evolution (WI-11a)
+#### Definition RHS evolution (WI-11a/WI-11b)
 
 A definition's *value* side — the `= …` of a type alias, `const`, or `static` — evolves without renaming anything. The author writes the definition line with a concrete preserved name and a template RHS; only the RHS span is replaced, everything else (visibility, generics, `where` clauses, attributes, the trailing `;`) is preserved byte-for-byte:
 
@@ -2483,14 +2483,41 @@ A definition's *value* side — the `= …` of a type alias, `const`, or `static
 + const MAX: i32 = E + 1;
 ```
 
+Member-context shapes reuse the member-rename header+pair spelling (the
+container header is the disambiguator: without `struct S {` / `enum E {`
+context, call-shaped pairs belong to the call classifier):
+
+```diff
+@@ -1,3 +1,3 @@ rule=evolve_field
+  struct S {
+- old: Vec<T>
++ old: Box<[T]>
+```
+
+```diff
+@@ -1,3 +1,3 @@ rule=evolve_payload
+  enum E {
+- Old(Vec<T>)
++ Old(Box<[T]>)
+```
+
+```diff
+@@ -1,3 +1,3 @@ rule=evolve_disc
+  enum E {
+- Old = E
++ Old = E + 1
+```
+
 Rules:
 
 - Type-alias evolution is `type NAME = RHS;` with a concrete `NAME` on both sides and a type template for the RHS (`T` holes ride the existing diet/`# type T` inference, SPEC 15.8). Generics are preserved from the target, never authored (`type A<T> = …` is a pattern error). Visibility prefixes must agree; a vis change is a WI-9 header evolution, not this shape.
 - Const/static evolution is `const NAME: TY = EXPR;` (or `static [mut] NAME: TY = EXPR;`) with concrete `NAME`, token-equal `TY` on both sides, and a general-expr template for the value (`E` holes ride diet/`# expr E` inference). `static mut` must agree on both sides; `const` vs `static` never combine. A mismatched ascribed type at a site skips the site (subset semantics — never rewrites under a lie); a mismatched `mut` skips likewise.
+- Field-type evolution is `struct S {` context + `old: OLD_TY` / `old: NEW_TY` with concrete preserved `old` and a type template on each side (diet `T` infers from the RHS region). Same-type pairs belong to the field-rename classifier (a different name with the same type is a rename, claimed via fallthrough); different names with different types never combine (two hunks, or an ordinary hunk).
+- Variant-payload evolution is `enum E {` context + one of three same-shape pairs with concrete preserved variant name: tuple payloads `Old(A, …)` / `Old(B, …)` (same arity, per-position type templates sharing one binding set under SPEC 15.7), struct payloads `Old { f: A, … }` / `Old { f: B, … }` (same field names in order, per-field type templates), or discriminants `Old = D0` / `Old = D1` (a general-expr template). Payload and discriminant never evolve together (one hunk per region, or an ordinary hunk). A bare `Old` / `New` pair stays a variant rename; call-shaped pairs without the header stay calls.
 - A name-changing "evolution" fails fast: same RHS on both sides points at the bare `<kind> <Name>` rename pair; differing RHS on both sides never combines rename + evolution (write a rename hunk plus an evolution hunk, or an ordinary hunk).
-- Classification is shape-first: sides without `=` (bare `type Old`) fall through to the item-rename classifier untouched; `const { … }` block expressions are never definitions. Leading `#[...]`/doc lines are the item's own attributes (SPEC 14.6 mirror laws: plus-side additions and differing sets fail fast; matching sites carry them).
+- Classification is shape-first: sides without `=` (bare `type Old`) fall through to the item-rename classifier untouched; `const { … }` block expressions are never definitions. Member pairs without their container header fall through (field pairs to the member-rename missing-header error; call-shaped and discriminant pairs to the call/general classifiers). Leading `#[...]`/doc lines are the member's own attributes (SPEC 14.6 mirror laws: plus-side additions and differing sets fail fast; matching sites carry them).
 - `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict).
-- Out of scope in v0.1 (WI-11b owns the member-context shapes): field-type evolution (`struct S {` context), variant-payload evolution, discriminant evolution, generic-param/`where` evolution on aliases, and value conversion at use sites.
+- Out of scope in v0.1: generic-param/`where` evolution on aliases and fields, and value conversion at use sites.
 
 ### 14.9 Use-path prefix renames
 
