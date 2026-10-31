@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=macro_hole
+# scope=file
+# expr E
+- let b = format!(E);
++ let b = format!("y");

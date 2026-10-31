@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=macro_sweep
+# scope=file
+# allow=many
+- let b = format!("x{}", 1);
++ let b = format!("y{}", 1);

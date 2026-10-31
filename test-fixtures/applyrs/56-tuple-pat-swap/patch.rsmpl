@@ -1,0 +1,9 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=swap
+# sweep
+# lang=rust
+# pat P
+# pat Q
+# expr E
+- let (P, Q) = E;
++ let (Q, P) = E;

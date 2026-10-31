@@ -370,6 +370,42 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "51-drift-stale-range",
         "t375: drift-applied single-site rename re-infers as terse ordinary (drift is apply-only; S′ cites the actual range)",
     ),
+    (
+        "52-macro-verbatim",
+        "hetero: let-verbatim macro sweep re-infers as sub-line call sweep (different semantic shape; tree legs still close)",
+    ),
+    (
+        "53-const-block",
+        "nodet: const-block let rewrite re-infers ordinary (no const-block template detector; tree legs still close)",
+    ),
+    (
+        "54-raw-addr",
+        "t375: single-site raw-addr rewrite re-infers ordinary",
+    ),
+    (
+        "55-infer-wildcard",
+        "nodet: infer-wildcard let rewrite re-infers ordinary (no wildcard-template detector; tree legs still close)",
+    ),
+    (
+        "56-tuple-pat-swap",
+        "nodet: tuple-pat swap re-infers ordinary (raising declines tuple-pat swap; tree legs still close)",
+    ),
+    (
+        "57-some-unwrap",
+        "nodet: some-unwrap let sweep re-infers ordinary (raising declines some-unwrap at 2 sites; tree legs still close)",
+    ),
+    (
+        "58-impl-filter",
+        "t375: single-site impl-filter rename re-infers ordinary",
+    ),
+    (
+        "59-field-nofollow",
+        "t375: single-site field def-only re-infers ordinary (orphan uses stay ordinary)",
+    ),
+    (
+        "60-call-arg-swap",
+        "nodet: call arg-swap re-infers as ordinary line rewrite (no arg-swap emission; tree legs still close)",
+    ),
 ];
 
 /// Load the fixture pre-image: repo-relative path → file text.

@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=swap_args
+# scope=file
+# allow=many
+- swap(E0, E1)
++ swap(E1, E0)

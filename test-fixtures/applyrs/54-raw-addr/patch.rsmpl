@@ -1,0 +1,5 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=raw_mut
+# scope=file
+- let p = &raw const x;
++ let p = &raw mut x;

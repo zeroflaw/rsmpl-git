@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=infer_wild
+# scope=file
+# allow=many
+- let v = _;
++ let v = 0;

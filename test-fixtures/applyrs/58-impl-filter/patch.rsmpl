@@ -1,0 +1,10 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=sweep
+# scope=file
+# allow=many
+  impl A {
+-     fn old(...) {
++     fn new(...) {
+          ...
+      }
+  }
