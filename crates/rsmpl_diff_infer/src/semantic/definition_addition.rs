@@ -112,6 +112,394 @@ pub(crate) fn try_definition_addition(
     Some((out, "definition_addition"))
 }
 
+/// WI-12c slice 1: one emitted hunk inside a definition-addition
+/// follow-through group (ordered native order by the caller).
+pub(crate) struct FollowHunk {
+    /// Single-hunk text starting at its `@@` line (no `diff --git`).
+    pub emitted: String,
+    /// Covered native hunk (for provenance + guard accounting).
+    pub native: String,
+    /// `definition_addition` (def) or `definition_addition_follow`.
+    pub detector: &'static str,
+    /// Changed old-side lines this hunk covers.
+    pub changed: Vec<usize>,
+    /// Reserved rule name (`rN`) for this hunk.
+    pub rule: String,
+}
+
+/// WI-12c slice 1: field-addition construction follow-through.
+///
+/// A file section holding exactly one pure-insertion field addition
+/// (the WI-12b shape) plus K ≥ 1 balanced single-pair hunks whose only
+/// delta is adding the new field to a struct literal of the same
+/// struct compresses to the definition hunk plus K per-site concrete
+/// ranged construction hunks. Hetero added values stay per-site
+/// concrete (a plus-only hole would be `unbound`); ranges pin each
+/// value to its line so values cannot cross-apply.
+///
+/// All-or-nothing over the section's hunks: any unclassifiable hunk
+/// (variant insertion, `..`-rest pair, multi-line pair, unrelated
+/// edit) declines the whole group (`None` — the per-hunk fallback
+/// then still compresses the definition insertion alone). Totality is
+/// the joint scratch-apply probe (every hunk matches once AND the
+/// post equals the native post byte-identically); the guard is the
+/// precision guard scaled per emitted hunk
+/// (`semantic ≤ ordinary + 16 × hunks`).
+pub(crate) fn try_definition_addition_follow(
+    section: &str,
+    path: &str,
+    file_old: Option<&str>,
+    used_rules: &mut Vec<String>,
+) -> Option<Vec<FollowHunk>> {
+    let pre = file_old?;
+    // Split prelude from native hunks (same shape as the chain's
+    // per-hunk fallback).
+    let mut hunks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in section.lines() {
+        if line.starts_with("@@") {
+            if let Some(h) = current.take() {
+                hunks.push(h);
+            }
+            current = Some(String::new());
+        }
+        if let Some(h) = current.as_mut() {
+            h.push_str(line);
+            h.push('\n');
+        }
+    }
+    if let Some(h) = current.take() {
+        hunks.push(h);
+    }
+    if hunks.len() < 2 {
+        return None;
+    }
+    // One pure-insertion hunk, every other hunk a balanced single pair.
+    let mut pairs: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+    for h in &hunks {
+        let mut minuses: Vec<String> = Vec::new();
+        let mut pluses: Vec<String> = Vec::new();
+        for line in h.lines().skip(1) {
+            if line.starts_with('-') && !line.starts_with("---") {
+                minuses.push(line[1..].to_string());
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                pluses.push(line[1..].to_string());
+            }
+        }
+        pairs.push((minuses, pluses));
+    }
+    let mut insert_idx: Option<usize> = None;
+    for (i, (m, p)) in pairs.iter().enumerate() {
+        if m.is_empty() && p.len() == 1 {
+            if insert_idx.is_some() {
+                return None;
+            }
+            insert_idx = Some(i);
+        } else if m.len() != 1 || p.len() != 1 {
+            return None;
+        }
+    }
+    let insert_idx = insert_idx?;
+    let checkpoint = used_rules.len();
+    // Reuse the single-insertion classifier/emitter (validates the
+    // container, the probe, and reserves the def rule).
+    let def_section = match try_definition_addition(
+        &[],
+        &[pairs[insert_idx].1[0].as_str()],
+        path,
+        Some(pre),
+        &hunks[insert_idx],
+        used_rules,
+    ) {
+        Some((s, _)) => s,
+        None => {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+    };
+    // Slice 1 owns field addition only: the def emission names its
+    // container (`  struct S {` vs `  enum E {`). Variant insertions
+    // (match-arm follow-through) are WI-12d.
+    let Some((container, field)) = def_container_field(&def_section) else {
+        used_rules.truncate(checkpoint);
+        return None;
+    };
+    // Every balanced hunk must add exactly this field to an `S`
+    // literal; each cites its own changed line (hetero-safe).
+    let mut out: Vec<FollowHunk> = Vec::new();
+    let def_body = def_section
+        .split_once('\n')
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_default();
+    let def_rule = used_rules.last().cloned().unwrap_or_default();
+    for (i, h) in hunks.iter().enumerate() {
+        if i == insert_idx {
+            out.push(FollowHunk {
+                emitted: def_body.clone(),
+                native: h.clone(),
+                detector: "definition_addition",
+                changed: crate::totality::changed_old_lines(h),
+                rule: def_rule.clone(),
+            });
+            continue;
+        }
+        let changed = crate::totality::changed_old_lines(h);
+        if changed.len() != 1 {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+        if !classify_literal_addition(&pairs[i].0[0], &pairs[i].1[0], &container, &field) {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+        let rule = unique_rule(used_rules, "definition_addition_follow");
+        let emitted = format!(
+            "@@ -{},1 @@ rule={rule}\n- {}\n+ {}\n",
+            changed[0],
+            pairs[i].0[0].trim(),
+            pairs[i].1[0].trim(),
+        );
+        out.push(FollowHunk {
+            emitted,
+            native: h.clone(),
+            detector: "definition_addition_follow",
+            changed,
+            rule,
+        });
+    }
+    // Scaled precision guard: each emitted hunk carries the same
+    // 16-byte proof budget as the WI-12 single shape.
+    let native_len: usize = hunks.iter().map(|h| h.len()).sum();
+    let emitted_len: usize = out.iter().map(|h| h.emitted.len()).sum();
+    if emitted_len > native_len + PRECISION_GUARD * out.len() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    // Joint scratch-apply probe: every hunk matches once AND the post
+    // equals the native post byte-identically (untouched lines —
+    // including `..`-rest sites with no diff — covered by the compare).
+    if !joint_reproduces(pre, path, section, &out) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some(out)
+}
+
+/// Read back the def emission's container + field (`  struct S {` /
+/// `+ b: bool,`). `None` for variant additions (WI-12d) or malformed
+/// emissions (defensive — the emitter above is the only producer).
+fn def_container_field(def_section: &str) -> Option<(String, String)> {
+    let mut container: Option<String> = None;
+    let mut member: Option<String> = None;
+    for line in def_section.lines().skip(1) {
+        if line.starts_with("@@") || line.starts_with('#') {
+            continue;
+        } else if let Some(body) = line.strip_prefix("  ") {
+            let t = body.trim();
+            let name = t.strip_prefix("struct ")?;
+            container = name.strip_suffix('{').map(|s| s.trim().to_string());
+        } else if let Some(plus) = line.strip_prefix('+') {
+            member = Some(plus.trim().to_string());
+        }
+    }
+    let field = split_field(member?.as_str())?.0;
+    Some((container?, field))
+}
+
+/// A balanced pair as a struct-literal field addition: both sides name
+/// the same `S` literal (bare tail-expr or `let`-bound), no `..` rest
+/// on either side, plus carries exactly the minus fields (token-equal
+/// values) plus one extra named `field`.
+fn classify_literal_addition(
+    minus_raw: &str,
+    plus_raw: &str,
+    struct_name: &str,
+    field: &str,
+) -> bool {
+    let m = minus_raw.trim().trim_end_matches(',').trim();
+    let p = plus_raw.trim().trim_end_matches(',').trim();
+    if m.is_empty() || p.is_empty() {
+        return false;
+    }
+    let (sm, sp) = match (stmt_struct(m), stmt_struct(p)) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return false,
+    };
+    if sm.is_local != sp.is_local || sm.semi != sp.semi || sm.pat != sp.pat {
+        return false;
+    }
+    struct_adds_field(&sm.expr, &sp.expr, struct_name, field)
+}
+
+/// A parsed statement holding a struct literal: bare or `let`-bound.
+struct StmtStruct {
+    is_local: bool,
+    /// Token-normalised `let` pattern (`""` for bare expressions).
+    pat: String,
+    semi: bool,
+    expr: syn::ExprStruct,
+}
+
+fn stmt_struct(line: &str) -> Option<StmtStruct> {
+    if let Ok(stmt) = syn::parse_str::<syn::Stmt>(line) {
+        match stmt {
+            syn::Stmt::Local(local) => {
+                let init = local.init.as_ref()?;
+                // `let … else` diverges: a different change, decline.
+                if init.diverge.is_some() {
+                    return None;
+                }
+                if let syn::Expr::Struct(s) = (*init.expr).clone() {
+                    let pat = &local.pat;
+                    return Some(StmtStruct {
+                        is_local: true,
+                        pat: norm_tokens(&quote::quote!(#pat)),
+                        // `let` always carries its `;` (syn's
+                        // `semi_token` is not optional).
+                        semi: true,
+                        expr: s,
+                    });
+                }
+                return None;
+            }
+            syn::Stmt::Expr(expr, semi) => {
+                if let syn::Expr::Struct(s) = expr {
+                    return Some(StmtStruct {
+                        is_local: false,
+                        pat: String::new(),
+                        semi: semi.is_some(),
+                        expr: s,
+                    });
+                }
+                return None;
+            }
+            // `let`-less `;`-terminated expressions (`S { … };`) parse
+            // as `Stmt::Expr` with `Some(;)` in this syn version (no
+            // separate `Semi` variant) — the arm above owns them.
+            _ => return None,
+        }
+    }
+    // Bare struct in a non-statement line (vec element, call arg):
+    // trailing-comma-stripped lines like `S { a: 1 }` parse as
+    // expressions directly.
+    if let Ok(syn::Expr::Struct(s)) = syn::parse_str::<syn::Expr>(line) {
+        return Some(StmtStruct {
+            is_local: false,
+            pat: String::new(),
+            semi: false,
+            expr: s,
+        });
+    }
+    None
+}
+
+fn struct_adds_field(
+    minus: &syn::ExprStruct,
+    plus: &syn::ExprStruct,
+    struct_name: &str,
+    field: &str,
+) -> bool {
+    if minus.qself.is_some() || plus.qself.is_some() {
+        return false;
+    }
+    // Same path, naming the proven container.
+    let minus_path = &minus.path;
+    let plus_path = &plus.path;
+    if norm_tokens(&quote::quote!(#minus_path)) != norm_tokens(&quote::quote!(#plus_path)) {
+        return false;
+    }
+    let last = minus
+        .path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .unwrap_or_default();
+    if last != struct_name {
+        return false;
+    }
+    // `..rest` on either side: no explicit label to add (acceptance:
+    // stays ordinary).
+    if minus.rest.is_some() || plus.rest.is_some() {
+        return false;
+    }
+    let mut mfields: Vec<(String, String)> = Vec::new();
+    for fv in &minus.fields {
+        // Shorthand (`S { a }`) is `Named` with no colon and a path
+        // value — the token-normalised value still compares equal.
+        let syn::Member::Named(id) = &fv.member else {
+            return false;
+        };
+        let en = &fv.expr;
+        mfields.push((id.to_string(), norm_tokens(&quote::quote!(#en))));
+    }
+    let mut pfields: Vec<(String, String)> = Vec::new();
+    for fv in &plus.fields {
+        let syn::Member::Named(id) = &fv.member else {
+            return false;
+        };
+        let en = &fv.expr;
+        pfields.push((id.to_string(), norm_tokens(&quote::quote!(#en))));
+    }
+    if pfields.len() != mfields.len() + 1 {
+        return false;
+    }
+    for (name, val) in &mfields {
+        match pfields.iter().find(|(n, _)| n == name) {
+            Some((_, pv)) if pv == val => {}
+            _ => return false,
+        }
+    }
+    let extras: Vec<&(String, String)> = pfields
+        .iter()
+        .filter(|(n, _)| !mfields.iter().any(|(m, _)| m == n))
+        .collect();
+    if extras.len() != 1 || extras[0].0 != field {
+        return false;
+    }
+    // The added value is a real expression by construction (parsed).
+    true
+}
+
+fn norm_tokens(ts: &impl quote::ToTokens) -> String {
+    quote::quote!(#ts)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Joint scratch-apply probe (T361 for the group): the emitted hunks
+/// apply to `pre` with one match each AND reproduce byte-identically
+/// the native post (applying `section` to `pre`).
+fn joint_reproduces(pre: &str, path: &str, section: &str, hunks: &[FollowHunk]) -> bool {
+    let mut emission = format!("{}\n", crate::git_header(path));
+    for h in hunks {
+        emission.push_str(&h.emitted);
+    }
+    let Ok(parsed) = rsmpl_patch::parse_patch(&emission) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    if report.rules.iter().map(|r| r.matches).sum::<usize>() != hunks.len() {
+        return false;
+    }
+    let post = files[path].clone();
+    // Native post for the byte-compare leg.
+    let Ok(native) = rsmpl_patch::parse_patch(section) else {
+        return false;
+    };
+    let mut nfiles = std::collections::HashMap::new();
+    nfiles.insert(path.to_string(), pre.to_string());
+    let Ok(_) = rsmpl_engine::apply_patch_to_tree(&mut nfiles, &native) else {
+        return false;
+    };
+    post == nfiles[path]
+}
+
 /// `@@ -N,0` insertion point N (`None` for balanced/sweep headers).
 fn insertion_point(hunk: &str) -> Option<usize> {
     for line in hunk.lines() {
@@ -547,5 +935,296 @@ mod tests {
             out.is_none() || !out.unwrap().contains("definition_addition"),
             "over-guard addition must stay ordinary"
         );
+    }
+
+    // -- WI-12c slice 1: struct-literal follow-through ------------------
+
+    const FOLLOW_PRE: &str = "struct S {\n    a: u32,\n}\n\nfn f() -> S {\n    S { a: 1 }\n}\n\nfn g() -> S {\n    S { a: 2 }\n}\n";
+    const FOLLOW_POST: &str = "struct S {\n    a: u32,\n    b: bool,\n}\n\nfn f() -> S {\n    S { a: 1, b: true }\n}\n\nfn g() -> S {\n    S { a: 2, b: false }\n}\n";
+
+    fn follow_section() -> String {
+        section(
+            "f.rs",
+            concat!(
+                "@@ -2,0 +3 @@\n",
+                "+    b: bool,\n",
+                "@@ -6 +7 @@\n",
+                "-    S { a: 1 }\n",
+                "+    S { a: 1, b: true }\n",
+                "@@ -10 +11 @@\n",
+                "-    S { a: 2 }\n",
+                "+    S { a: 2, b: false }\n",
+            ),
+        )
+    }
+
+    #[test]
+    fn follow_group_fires_hetero_and_round_trips() {
+        let raw = follow_section();
+        let pre = pre_map(&[("f.rs", FOLLOW_PRE)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("def + 2 hetero literals must compress");
+        assert!(out.contains("  struct S {"), "def header, got:\n{out}");
+        assert!(out.contains("+ b: bool,"), "def member, got:\n{out}");
+        assert!(out.contains("rule=r1"), "got:\n{out}");
+        assert!(out.contains("rule=r2"), "got:\n{out}");
+        assert!(out.contains("rule=r3"), "got:\n{out}");
+        assert!(out.contains("- S { a: 1 }"), "got:\n{out}");
+        assert!(out.contains("+ S { a: 1, b: true }"), "got:\n{out}");
+        assert!(out.contains("- S { a: 2 }"), "got:\n{out}");
+        assert!(out.contains("+ S { a: 2, b: false }"), "got:\n{out}");
+        // Real-apply byte-compare: the joint probe's promise.
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], FOLLOW_POST);
+    }
+
+    #[test]
+    fn follow_group_let_bound_fires() {
+        let raw = section(
+            "f.rs",
+            concat!(
+                "@@ -2,0 +3 @@\n",
+                "+    b: bool,\n",
+                "@@ -6 +7 @@\n",
+                "-    let x = S { a: 1 };\n",
+                "+    let x = S { a: 1, b: true };\n",
+            ),
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "struct S {\n    a: u32,\n}\n\nfn f() -> S {\n    let x = S { a: 1 };\n    x\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("let-bound literal must join the group");
+        assert!(out.contains("rule=r1"), "got:\n{out}");
+        assert!(out.contains("rule=r2"), "got:\n{out}");
+        assert!(out.contains("- let x = S { a: 1 };"), "got:\n{out}");
+        assert!(
+            out.contains("+ let x = S { a: 1, b: true };"),
+            "got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "struct S {\n    a: u32,\n    b: bool,\n}\n\nfn f() -> S {\n    let x = S { a: 1, b: true };\n    x\n}\n"
+        );
+    }
+
+    #[test]
+    fn follow_rest_pair_declines_group_but_def_fires() {
+        // `..` on either side: no explicit label to add (acceptance:
+        // stays ordinary); the definition still fires alone.
+        let raw = section(
+            "f.rs",
+            concat!(
+                "@@ -2,0 +3 @@\n",
+                "+    b: bool,\n",
+                "@@ -6 +7 @@\n",
+                "-    S { a: 1, ..Default::default() }\n",
+                "+    S { a: 1, b: true, ..Default::default() }\n",
+            ),
+        );
+        let pre = "struct S {\n    a: u32,\n}\n\nfn f() -> S {\n    S { a: 1, ..Default::default() }\n}\n";
+        let mut used = Vec::new();
+        assert!(
+            try_definition_addition_follow(&raw, "f.rs", Some(pre), &mut used).is_none(),
+            "rest-carrying pair must decline the group"
+        );
+        assert!(used.is_empty(), "decline must burn no rules");
+        let mut used = Vec::new();
+        assert!(
+            try_definition_addition(
+                &[],
+                &["    b: bool,"],
+                "f.rs",
+                Some(pre),
+                "@@ -2,0 +3 @@\n+    b: bool,\n",
+                &mut used,
+            )
+            .is_some(),
+            "definition still fires alone"
+        );
+    }
+
+    #[test]
+    fn follow_unrelated_hunk_declines_group() {
+        let raw = section(
+            "f.rs",
+            concat!(
+                "@@ -2,0 +3 @@\n",
+                "+    b: bool,\n",
+                "@@ -6 +7 @@\n",
+                "-    S { a: 1 }\n",
+                "+    S { a: 1, b: true }\n",
+                "@@ -9 +10 @@\n",
+                "-fn one() -> u32 { 1 }\n",
+                "+fn one() -> u32 { 2 }\n",
+            ),
+        );
+        let pre = "struct S {\n    a: u32,\n}\n\nfn f() -> S {\n    S { a: 1 }\n}\n\nfn one() -> u32 { 1 }\n";
+        let mut used = Vec::new();
+        assert!(
+            try_definition_addition_follow(&raw, "f.rs", Some(pre), &mut used).is_none(),
+            "unrelated hunk must decline the group"
+        );
+        assert!(used.is_empty(), "decline must burn no rules");
+    }
+
+    #[test]
+    fn follow_variant_insertion_declines_group() {
+        // Variant additions (match-arm follow-through) are WI-12d.
+        let raw = section(
+            "f.rs",
+            concat!(
+                "@@ -2,0 +3 @@\n",
+                "+    C,\n",
+                "@@ -6 +7 @@\n",
+                "-    S { a: 1 }\n",
+                "+    S { a: 1, b: true }\n",
+            ),
+        );
+        let pre =
+            "enum E {\n    A,\n}\nstruct S {\n    a: u32,\n}\nfn f() -> S {\n    S { a: 1 }\n}\n";
+        let mut used = Vec::new();
+        assert!(
+            try_definition_addition_follow(&raw, "f.rs", Some(pre), &mut used).is_none(),
+            "variant insertion must decline the field group"
+        );
+        assert!(used.is_empty(), "decline must burn no rules");
+    }
+
+    #[test]
+    fn follow_none_pre_image_declines() {
+        let mut used = Vec::new();
+        assert!(
+            try_definition_addition_follow(&follow_section(), "f.rs", None, &mut used).is_none()
+        );
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn follow_scaled_guard_long_name_declines() {
+        // The scaled guard (16 × hunks) still prices absurd headers:
+        // a 60-char struct name over def + 1 construction stays
+        // ordinary as a group.
+        let long = "SWithAVeryLongNameThatExceedsThePrecisionGuardEasily1234";
+        let pre_text = format!(
+            "struct {long} {{\n    a: u32,\n}}\n\nfn f() -> {long} {{\n    {long} {{ a: 1 }}\n}}\n"
+        );
+        let raw = section(
+            "f.rs",
+            &format!(
+                "@@ -2,0 +3 @@\n+    b: bool,\n@@ -6 +7 @@\n-    {long} {{ a: 1 }}\n+    {long} {{ a: 1, b: true }}\n"
+            ),
+        );
+        let mut used = Vec::new();
+        assert!(
+            try_definition_addition_follow(&raw, "f.rs", Some(&pre_text), &mut used).is_none(),
+            "over-guard group must decline"
+        );
+        assert!(used.is_empty(), "decline must burn no rules");
+    }
+
+    #[test]
+    fn literal_addition_classification_matrix() {
+        // Tail-expr fire, hetero values fine.
+        assert!(classify_literal_addition(
+            "S { a: 1 }",
+            "S { a: 1, b: true }",
+            "S",
+            "b"
+        ));
+        assert!(classify_literal_addition(
+            "    S { a: 1 },",
+            "    S { a: 1, b: true },",
+            "S",
+            "b"
+        ));
+        // `let`-bound fire; pat/semi must match.
+        assert!(classify_literal_addition(
+            "let x = S { a: 1 };",
+            "let x = S { a: 1, b: true };",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "let x = S { a: 1 };",
+            "let y = S { a: 1, b: true };",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "let x = S { a: 1 };",
+            "let x = S { a: 1, b: true }",
+            "S",
+            "b"
+        ));
+        // Shorthand fields compare by path value.
+        assert!(classify_literal_addition(
+            "S { a }",
+            "S { a, b: v }",
+            "S",
+            "b"
+        ));
+        // Vetoes: wrong struct, wrong field, rest, changed sibling,
+        // two extras, missing extra.
+        assert!(!classify_literal_addition(
+            "T { a: 1 }",
+            "T { a: 1, b: v }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1 }",
+            "S { a: 1, c: v }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1, ..r }",
+            "S { a: 1, b: v, ..r }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1, ..r }",
+            "S { a: 1, b: v }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1 }",
+            "S { a: 2, b: v }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1 }",
+            "S { a: 1, b: v, c: w }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1 }",
+            "S { a: 1 }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1 }",
+            "T { a: 1, b: v }",
+            "S",
+            "b"
+        ));
+        assert!(!classify_literal_addition(
+            "S { a: 1 }",
+            "S { a: 1, b: v };",
+            "S",
+            "b"
+        ));
     }
 }

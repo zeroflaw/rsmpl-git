@@ -602,5 +602,83 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.contains("rule=r1"),
             "single addition must carry a rule, got: {semantic}"
         );
+    } else if name == "110-field-add-follow-fires" {
+        // WI-12c slice 1: definition-addition + struct-literal
+        // follow-through (def hunk + 2 per-site concrete ranged
+        // construction hunks, hetero values pinned per site).
+        assert!(
+            semantic.contains("  struct S {"),
+            "def header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ b: bool,"),
+            "def member must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1")
+                && semantic.contains("rule=r2")
+                && semantic.contains("rule=r3"),
+            "def + 2 constructions carry rules, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- S { a: 1 }"),
+            "first construction minus, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ S { a: 1, b: true }"),
+            "hetero true value stays per-site, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ S { a: 2, b: false }"),
+            "hetero false value stays per-site, got: {semantic}"
+        );
+    } else if name == "111-field-add-rest-partial" {
+        // WI-12c slice 1: `..`-rest site needs no edit and produces no
+        // diff hunk — the group is def + the edited `let`-bound
+        // literal; the rest site stays byte-identical.
+        assert!(
+            semantic.contains("  struct S {"),
+            "def header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ b: bool,"),
+            "def member must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- let x = S { a: 1 };"),
+            "let-bound construction minus, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ let x = S { a: 1, b: true };"),
+            "let-bound construction plus, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("..Default::default()"),
+            "untouched rest site must not appear, got: {semantic}"
+        );
+    } else if name == "112-variant-add-construction-ordinary" {
+        // WI-12c slice-1 boundary (WI-12d owns it): variant addition
+        // compresses the definition alone; the pure-insertion match
+        // arm stays ordinary.
+        assert!(
+            semantic.contains("  enum E {"),
+            "variant header must be verbatim, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ C,"),
+            "variant plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("rule=r1"),
+            "def addition must carry a rule, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+        E::C => 3,") || semantic.contains("+ E::C => 3,"),
+            "arm insertion stays ordinary, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("rule=r2"),
+            "no follow hunk in slice 1, got: {semantic}"
+        );
     }
 }

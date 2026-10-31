@@ -7073,9 +7073,31 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   N, everything else untouched). Guard is the precision guard
   (semantic ≤ ordinary + 16 bytes). Insertions report
   `reparse-only` (no structural plus re-match for insertions).
-  Construction follow-through (struct-literal and match-arm sites)
-  is WI-12c and stays ordinary here. Detector name
-  `definition_addition`.
+  Construction follow-through is the next bullet (WI-12c slice 1).
+  Detector name `definition_addition`.
+- Definition-addition struct-literal follow-through (WI-12c slice 1):
+  a file section holding exactly one pure-insertion *field* addition
+  (the bullet above) plus K ≥ 1 balanced single-pair hunks whose only
+  delta is adding the new field to a struct literal of the same struct
+  (`S { a: 1 }` → `S { a: 1, b: true }`, bare tail-expr or `let`-bound
+  with a token-equal pattern, semi-ness equal) compresses to the
+  definition hunk plus K per-site concrete ranged construction hunks
+  (`@@ -L,1 @@` citing each changed line). Hetero added values stay
+  per-site concrete (a plus-only hole would be `unbound` under
+  Section 18.6, and ranges pin each value to its line so values cannot
+  cross-apply). Either side carrying `..` rest, a renamed path, a
+  changed sibling field, a second extra field, a variant insertion,
+  multi-line pairs, or any unrelated hunk declines the whole group
+  (all-or-nothing over the section's hunks — the per-hunk fallback
+  then still compresses the definition insertion alone; `..`-rest
+  sites with no diff are untouched by construction of the compare).
+  Totality is the joint scratch-apply byte-compare probe: the emitted
+  hunks must apply with one match each AND reproduce byte-identically
+  the native post. Guard is the precision guard scaled per emitted
+  hunk (semantic ≤ ordinary + 16 × hunks). Variant/match-arm
+  follow-through (`+ E::C => …` pure-insertion arms) is WI-12d and
+  stays ordinary here. Detector names `definition_addition` (def
+  hunk) and `definition_addition_follow` (construction hunks).
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated) differing in

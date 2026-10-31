@@ -956,6 +956,27 @@ fn compress_section_per_hunk(
     if hunks.is_empty() {
         return None;
     }
+    // WI-12c slice 1: definition-addition + struct-literal construction
+    // follow-through (all-or-nothing group over the section's hunks).
+    // `None` falls through to the per-hunk path below, where the
+    // definition insertion still fires alone.
+    if let Some(group) = super::try_definition_addition_follow(section, path, file_old, used_rules)
+    {
+        let mut out = prelude;
+        for h in &group {
+            commit_prov(
+                prov,
+                &h.emitted,
+                &h.native,
+                path,
+                &[(h.rule.clone(), h.detector)],
+                &h.changed,
+                file_old,
+            );
+            out.push_str(&h.emitted);
+        }
+        return Some(out);
+    }
     let mut out = prelude;
     let mut compressed_any = false;
     for hunk in &hunks {

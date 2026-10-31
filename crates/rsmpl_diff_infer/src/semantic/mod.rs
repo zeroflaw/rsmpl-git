@@ -82,7 +82,7 @@ pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
 pub(crate) use attr_sweep::{try_attr_replace_sweep, try_attr_sweep_section};
 pub(crate) use control_template::try_control_template_sweep;
-pub(crate) use definition_addition::try_definition_addition;
+pub(crate) use definition_addition::{try_definition_addition, try_definition_addition_follow};
 pub(crate) use definition_evolution::{try_definition_evolution_sweep, PRECISION_GUARD};
 pub(crate) use general_expr::try_general_expr_sweep;
 pub(crate) use generalized::{
