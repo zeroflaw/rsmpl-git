@@ -15,6 +15,7 @@
 //! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
 //! scope=file cut would match every item in the file.
 pub(crate) mod antiunify;
+mod arg_template;
 mod block_headers;
 mod calls;
 pub(crate) mod chain;
@@ -53,6 +54,7 @@ pub(crate) use prefix::try_use_prefix_sweep;
 pub(crate) use slot::try_fn_slot_sweep;
 pub(crate) use trait_methods::try_trait_method_rename;
 
+pub(crate) use arg_template::{try_call_arg_template_sweep, try_method_arg_template_sweep};
 pub(crate) use calls::{try_call_arg_add_sweep, try_call_sweep};
 pub(crate) use literal::try_call_literal_sweep;
 pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};

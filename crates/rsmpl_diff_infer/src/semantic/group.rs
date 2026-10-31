@@ -14,7 +14,8 @@
 //! `trait_method_rename`, `call_sweep`, `call_peel`,
 //! `qualified_call`, `turbofish`, `macro_rename`, `method_to_method`,
 //! `method_to_fn`, `use_prefix`. Same-callee shapes
-//! (`call_arg_add`, `call_literal`, `method_same_literal`,
+//! (`call_arg_add`, `call_literal`, `call_arg_template`,
+//! `method_arg_template`, `method_same_literal`,
 //! `ref_strip`), template shapes (`let_type_add`, `type_sweep`),
 //! concrete macro interiors (`macro_interior`, no ident delta), and
 //! non-pair shapes (`verbatim`, `delete`, `move`) never group. A

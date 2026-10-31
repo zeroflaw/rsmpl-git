@@ -27,10 +27,10 @@ fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
 }
 
 /// Ordered pair-sweep chain, tightest first (existing order,
-/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more): slot → sig-evolution → trait-method → method-to-fn → method-to-method →
+/// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more, WI-5 one more): slot → sig-evolution → trait-method → method-to-fn → method-to-method →
 /// same-literal → `&`-strip → qualified-call → turbofish →
 /// macro-rename → use-prefix → bare call → call-arg-add →
-/// call-literal → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
+/// call-literal → call-arg-template → method-arg-template → call-peel → let-type-add → type-sweep → let-template → sequence → repeat-fold → partial-strip → single-block. Returns the winning semantic section
 /// plus its WI-2 detector name. No T375 byte guard inside — callers
 /// keep their existing guards so reservation/truncation semantics
 /// stay byte-identical to the pre-split `mod.rs`.
@@ -131,6 +131,20 @@ pub(crate) fn run_pair_chain(
         super::try_call_literal_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         return Some((lit, "call_literal"));
+    }
+    // WI-5: hetero call/method arg templates (wrap/transform migrations
+    // the engine applies but no detector raised) — after the concrete
+    // literal sweeps (those own uniform-concrete classes; this owns
+    // hole/wrapper classes), before the peel sweep.
+    if let Some(arg) =
+        super::try_call_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((arg, "call_arg_template"));
+    }
+    if let Some(marg) =
+        super::try_method_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((marg, "method_arg_template"));
     }
     // T441: hetero-arg array-head-peel call migration
     // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);

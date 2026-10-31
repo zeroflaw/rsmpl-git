@@ -6455,6 +6455,7 @@ provenance for one emitted semantic hunk (empty when fully ordinary):
 saved_bytes, group}`. `detector` is
 the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_to_fn`, `method_to_method`, `method_same_literal`,
+`method_arg_template`, `call_arg_template`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
 `call_literal`, `call_peel`, `call_peel_section`,
@@ -6610,15 +6611,52 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   ordinary). Boolean `!`/`!=` never contain a macro node and keep firing.
   Cross-hunk classes compress non-whole sections (T449: singleton
   `-U0` hunks split by distance or pure additions elsewhere, e.g.
-  spaced `let` sites — peel-driver precedent); all-identical classes
-  stay for verbatim and the emitted bodies are invisible to it. Hunk
-  atomicity (WI-9e, same index-based fixed point as the macro-interior
-  sweep): a class fires only if every balanced hunk holding a member
-  pair is fully covered by passing classes — a class whose member hunk
-  also holds an uncovered pair drops to a fixed point (cascade:
-  dropping uncovers hunks) and the section falls through to ordinary;
-  rules reserve only for survivors.
-- Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
+   spaced `let` sites — peel-driver precedent); all-identical classes
+   stay for verbatim and the emitted bodies are invisible to it. Hunk
+   atomicity (WI-9e, same index-based fixed point as the macro-interior
+   sweep): a class fires only if every balanced hunk holding a member
+   pair is fully covered by passing classes — a class whose member hunk
+   also holds an uncovered pair drops to a fixed point (cascade:
+   dropping uncovers hunks) and the section falls through to ordinary;
+   rules reserve only for survivors.
+ - Hetero call-arg-template sweep (WI-5): N ≥ 2 `-`/`+` pairs, each a
+   bare single-segment call with uniform arity `k` ≥ 1 (turbofish and
+   multi-segment callees stay with their detectors) and a callee that
+   is token-equal across all sites or one shared delta (`O` → `N`,
+   uniform on both sides), where every argument position independently
+   is (a) token-equal concrete on both sides (uniform positions replay
+   the first site's normalized spelling, hetero preserved positions
+   ride `Ej`), (b) a whole-arg hole (`Ej` on both sides, ordered value
+   correspondence per Section 15.7), or (c) a uniform wrapper — one
+   `Ej` occurrence inside a plus template with a literal anchor
+   (method-call `Ej.clone()`, bare-call `f(Ej)`, binary `Ej + 1` /
+   `1 + Ej`, shared reference `&Ej`; every other plus shape vetoes).
+   Plus templates may permute holes (`f(E0, E1)` → `f(E1, E0)`);
+   dropped or duplicated holes veto (a duplicated hole would need
+   repeat-equality the emission cannot state); at least one position
+   carries a real delta (no-delta classes are the callee-only sweep's,
+   never this detector's). An argument hiding a macro invocation
+   anywhere inside vetoes (TokenStream-normalized macro text is
+   unmatchable, WI-9b2-delim precedent); all-identical classes stay
+   for the tighter verbatim sweep (T422 precedent). One `# allow=many`
+   hunk (tight original range, Section D.5) with diet holes
+   (`- old(E0)` / `+ new(E0.clone())`, no declarations, Section 15.8;
+   a leading-uppercase callee rides backticks, Section 15.4).
+   Pre-image totality is the real-pair engine-count check
+   (`template_pair_holds`): the emitted pair must match exactly N
+   sites in the pre-image — an untouched twin vetoes. Detector name
+   `call_arg_template`.
+ - Hetero method-arg-template sweep (WI-5): the method-call sibling —
+   N ≥ 2 `-`/`+` pairs, each `recv.m(args)` with per-site token-equal
+   receivers (hetero across sites, bound as `Receiver`; a per-site
+   receiver delta is the method-to-function domain, never guessed
+   here) and the same method/arity/hole discipline as the bare-call
+   sibling (method token-equal or one shared delta; no turbofish, no
+   `&`-led sides). One `# allow=many` hunk (tight original range):
+   `- Receiver.m(E0)` / `+ Receiver.m(E0.clone())` (uppercase method
+   backticked, Section 15.4). Totality is the same real-pair check.
+   Detector name `method_arg_template`.
+ - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
   its shared string-literal head `H` while the tail replays
