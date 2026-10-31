@@ -114,6 +114,22 @@ pub(crate) fn try_trait_method_rename(
             return None;
         }
     }
+    // WI-22b (D9): trait tails must match — `trait T` decl + `impl U for S`
+    // def are different items (last-segment discipline, D8). Require one
+    // distinct trait name across the class.
+    {
+        use std::collections::HashSet;
+        let mut names: HashSet<String> = HashSet::new();
+        for &site in &trait_lines {
+            names.insert(trait_ident_for_site(pre, site)?);
+        }
+        for &site in &impl_lines {
+            names.insert(impl_trait_ident_for_site(pre, site)?);
+        }
+        if names.len() != 1 {
+            return None;
+        }
+    }
     let trait_groups = super::block_headers::group_sites_by_trait_block(file_old, &trait_lines)?;
     let impl_groups = super::block_headers::group_sites_by_impl_block(file_old, &impl_lines)?;
     // Pair index per site line (whole-section and per-hunk callers
@@ -415,6 +431,69 @@ fn site_in_inherent_impl(pre: &str, site: usize) -> bool {
     walk(&file.items, site, &mut best);
     best.is_some_and(|(_, inherent)| inherent)
 }
+/// Trait ident for the smallest enclosing `trait` block at 1-based `site`
+/// (top-level and inline-mod items). `None` outside every trait block.
+fn trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
+    use syn::spanned::Spanned;
+    let file: syn::File = syn::parse_str(pre).ok()?;
+    fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, String)>) {
+        for it in items {
+            match it {
+                syn::Item::Trait(tr) => {
+                    if tr.span().start().line <= site && site <= tr.span().end().line {
+                        let len = tr.span().end().line - tr.span().start().line;
+                        if best.as_ref().is_none_or(|(bl, _)| len < *bl) {
+                            *best = Some((len, tr.ident.to_string()));
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, site, best);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut best: Option<(usize, String)> = None;
+    walk(&file.items, site, &mut best);
+    best.map(|(_, name)| name)
+}
+/// Last-segment trait tail for the smallest enclosing `impl <Trait> for`
+/// block at 1-based `site`. `None` for inherent impls or outside blocks.
+/// Last-segment discipline (D8): `crate::T` proves `T`.
+fn impl_trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
+    use syn::spanned::Spanned;
+    let file: syn::File = syn::parse_str(pre).ok()?;
+    fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, String)>) {
+        for it in items {
+            match it {
+                syn::Item::Impl(imp) => {
+                    if imp.span().start().line <= site && site <= imp.span().end().line {
+                        if let Some((_, path, _)) = &imp.trait_ {
+                            if let Some(seg) = path.segments.last() {
+                                let len = imp.span().end().line - imp.span().start().line;
+                                if best.as_ref().is_none_or(|(bl, _)| len < *bl) {
+                                    *best = Some((len, seg.ident.to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, site, best);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut best: Option<(usize, String)> = None;
+    walk(&file.items, site, &mut best);
+    best.map(|(_, name)| name)
+}
 
 #[cfg(test)]
 mod tests {
@@ -478,6 +557,40 @@ mod tests {
             .is_none(),
             "trait+inherent mix must stay ordinary"
         );
+    }
+    #[test]
+    fn trait_name_mismatch_declines_to_ordinary() {
+        // WI-22b (D9): `trait T` decl + `impl U for S` def are different
+        // items (`T::old` vs `U::old`) — decline to ordinary, never an
+        // intent, even though both sides are trait-proven.
+        let pre =
+            "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl U for S {\n    fn old(&self) {}\n}\n";
+        assert!(
+            run(
+                &["    fn old(&self);", "    fn old(&self) {"],
+                &["    fn new(&self);", "    fn new(&self) {"],
+                pre,
+                &[2, 6],
+            )
+            .is_none(),
+            "trait-name mismatch must stay ordinary"
+        );
+    }
+    #[test]
+    fn qualified_trait_tail_still_groups() {
+        // WI-22b: last-segment discipline (D8) — `impl crate::T for S`
+        // provably names `trait T`, so the intent still compresses.
+        let pre =
+            "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl crate::T for S {\n    fn old(&self) {\n    }\n}\n";
+        let out = run(
+            &["    fn old(&self);", "    fn old(&self) {"],
+            &["    fn new(&self);", "    fn new(&self) {"],
+            pre,
+            &[2, 6],
+        )
+        .expect("qualified same-trait tail must compress");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        rsmpl_patch::parse_patch(&out).expect("emission must parse");
     }
 
     #[test]

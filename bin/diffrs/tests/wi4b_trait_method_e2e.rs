@@ -260,6 +260,28 @@ fn trait_plus_inherent_impl_stays_ordinary() {
     );
 }
 #[test]
+fn trait_name_mismatch_stays_ordinary() {
+    // WI-22b (D9): `trait T` decl + `impl U for S` def are different
+    // items (`T::old` vs `U::old`) — decline to ordinary, never an intent.
+    let dir = init_repo();
+    let before = "trait T {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\nstruct S;\nimpl U for S {\n    fn old(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32 {\n        0\n    }\n}\n";
+    write(dir.path(), "src/lib.rs", before);
+    commit_all(dir.path());
+    let after = before.replace("fn old", "fn new");
+    write(dir.path(), "src/lib.rs", &after);
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !patch.contains("trait T {"),
+        "no trait-block intent for mismatched traits, got: {patch}"
+    );
+    assert!(
+        !patch.contains("rule=rename_old_to_new"),
+        "no shared intent for mismatched traits, got: {patch}"
+    );
+}
+#[test]
 fn trait_decl_only_stays_ordinary() {
     // WI-4b: trait-side-only renames stay ordinary (no impl side
     // shares the intent) — pinned by design.

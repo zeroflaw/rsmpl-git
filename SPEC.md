@@ -7472,6 +7472,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   twin headers and untouched twins veto to ordinary). WI-22: any def in an
   inherent `impl S` block declines the whole class to ordinary (different
   items, never the K-hunk fallback). Divergent per-pair
+  WI-22b: trait tails must match (last segment, `crate::T` proves `T`) or the whole class declines to ordinary (different items, `T::old` vs `U::old`).
   suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
