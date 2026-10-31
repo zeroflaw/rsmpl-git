@@ -7043,8 +7043,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    extracting through the same position kind (mixed positions
    decline). The subterm columns anti-unify through the WI-6
     general-expression core (same ≤1-hole discipline, same macro/
-    unsupported vetoes); call-shaped subterms stay ordinary in v1
-    (no `Call`/`MethodCall` variant in the core). Emission is the bare
+    unsupported vetoes); call-shaped subterm columns route through
+    the call-arg-template core instead (bare `Call` with a
+    per-side-uniform single-segment callee, `MethodCall` with a
+    per-pair-preserved receiver emitted as `Receiver.m(...)`;
+    qualified/turbofish callees stay ordinary). Emission is the bare
     WI-6 template pair (`- E0 > 0` / `+ E0 >= 0`) in one `# allow=many`
     hunk (tight original range, Section D.5) with diet holes, no
     declarations (field bases infer `expr`, WI-23). Totality is the

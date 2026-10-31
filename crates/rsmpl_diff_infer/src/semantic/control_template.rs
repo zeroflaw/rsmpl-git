@@ -26,11 +26,14 @@
 //! over-match); control frames in emission stay future work.
 //!
 //! Boundaries (stay ordinary): multi-line guards/bodies/diverge blocks,
-//! `if let` conditions (`Expr::Let` has no WI-6 variant), macro or
-//! unsupported subterms (the `shape::probe_expr` gate, same posture as
-//! `try_general_expr_sweep`), all-identical line classes (verbatim
-//! owns them, T422), single pairs (WI-4 N = 1 rule).
+//! `if let` conditions (`Expr::Let` has no WI-6 variant), qualified or
+//! turbofish call callees (single-segment ident callees only, whole-line
+//! `call_parts` parity), macro or unsupported subterms (the
+//! `shape::probe_expr` gate, same posture as `try_general_expr_sweep`),
+//! all-identical line classes (verbatim owns them, T422), single pairs
+//! (WI-4 N = 1 rule).
 
+use super::arg_template::antiunify_call_args;
 use super::general_expr::antiunify_general_exprs;
 use super::shape;
 use super::{strip_one_terminator, unique_rule};
@@ -278,14 +281,143 @@ fn extract_await_try_base(m: &str, p: &str) -> Option<(syn::Expr, syn::Expr)> {
 /// Try one position over all N pairs: every pair must extract (`None`
 /// anywhere declines the position), every extracted sub-expression must
 /// clear the macro/unsupported gate, then the WI-6 core anti-unifies the
-/// two sub-expression columns.
+/// two sub-expression columns. Call-shaped columns (`Call`/`MethodCall`
+/// on both sides) fall back to the call-arg-template core
+/// (`antiunify_call_args`, WI-24): same per-position
+/// concrete/hole/wrapper discipline as the whole-line detectors, bare
+/// `Call` with a per-side-uniform callee and `MethodCall` with a
+/// per-pair-preserved receiver (`Receiver` emission). Mixed variants,
+/// qualified/turbofish callees, and anything the arg core vetoes stay
+/// ordinary.
 fn try_position(minuses: &[syn::Expr], pluses: &[syn::Expr]) -> Option<(String, String)> {
     for e in minuses.iter().chain(pluses.iter()) {
         if !sub_ok(e) {
             return None;
         }
     }
-    antiunify_general_exprs(minuses, pluses)
+    if let Some(pair) = antiunify_general_exprs(minuses, pluses) {
+        return Some(pair);
+    }
+    try_call_position(minuses, pluses)
+}
+
+/// WI-24 fallback: anti-unify all-`Call` or all-`MethodCall` subterm
+/// columns through the call-arg-template core. Returns the bare call /
+/// `Receiver`-method template pair, or `None` (stays ordinary).
+fn try_call_position(minuses: &[syn::Expr], pluses: &[syn::Expr]) -> Option<(String, String)> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    let all_call = minuses
+        .iter()
+        .chain(pluses.iter())
+        .all(|e| matches!(e, syn::Expr::Call(_)));
+    let all_method = minuses
+        .iter()
+        .chain(pluses.iter())
+        .all(|e| matches!(e, syn::Expr::MethodCall(_)));
+    if all_call {
+        let mut old_cal: Option<String> = None;
+        let mut new_cal: Option<String> = None;
+        let mut minus_sets = Vec::with_capacity(minuses.len());
+        let mut plus_sets = Vec::with_capacity(pluses.len());
+        for (m, p) in minuses.iter().zip(pluses.iter()) {
+            let (o, o_args) = super::call_parts(m)?;
+            let (n, n_args) = super::call_parts(p)?;
+            if o_args.len() != n_args.len() {
+                return None;
+            }
+            if old_cal.as_ref().is_some_and(|c| *c != o) {
+                return None;
+            }
+            if new_cal.as_ref().is_some_and(|c| *c != n) {
+                return None;
+            }
+            old_cal = Some(o);
+            new_cal = Some(n);
+            minus_sets.push(o_args);
+            plus_sets.push(n_args);
+        }
+        let (m_tpl, p_tpl) = antiunify_call_args(&minus_sets, &plus_sets)?;
+        let minus_tpl = format!("{}({})", shape::literal_callee(&old_cal?), m_tpl.join(", "));
+        let plus_tpl = format!("{}({})", shape::literal_callee(&new_cal?), p_tpl.join(", "));
+        if minus_tpl == plus_tpl {
+            return None;
+        }
+        // No `syn` re-parse gate here (whole-line detector parity):
+        // backticked literal callees (`` `Old`(E0) ``) are RSmPL
+        // spellings, not Rust, and never re-parse as `syn::Expr`.
+        // Engine-matchability is proven by the `control_pair_holds`
+        // real-pair probe at the call site.
+        return Some((minus_tpl, plus_tpl));
+    }
+    if all_method {
+        let mut method_old: Option<String> = None;
+        let mut method_new: Option<String> = None;
+        let mut minus_sets = Vec::with_capacity(minuses.len());
+        let mut plus_sets = Vec::with_capacity(pluses.len());
+        for (m, p) in minuses.iter().zip(pluses.iter()) {
+            let (o_recv, o_method, o_args) = method_parts(m)?;
+            let (n_recv, n_method, n_args) = method_parts(p)?;
+            // Receivers preserved per site (a receiver delta is the
+            // method-to-function domain, never guessed here).
+            if o_recv != n_recv {
+                return None;
+            }
+            if o_args.len() != n_args.len() {
+                return None;
+            }
+            if method_old.as_ref().is_some_and(|c| *c != o_method) {
+                return None;
+            }
+            if method_new.as_ref().is_some_and(|c| *c != n_method) {
+                return None;
+            }
+            method_old = Some(o_method);
+            method_new = Some(n_method);
+            minus_sets.push(o_args);
+            plus_sets.push(n_args);
+        }
+        let (m_tpl, p_tpl) = antiunify_call_args(&minus_sets, &plus_sets)?;
+        let minus_tpl = format!(
+            "Receiver.{}({})",
+            shape::literal_callee(&method_old?),
+            m_tpl.join(", ")
+        );
+        let plus_tpl = format!(
+            "Receiver.{}({})",
+            shape::literal_callee(&method_new?),
+            p_tpl.join(", ")
+        );
+        if minus_tpl == plus_tpl {
+            return None;
+        }
+        // No `syn` re-parse gate (see the bare-call arm above): the
+        // real-pair probe is the matchability proof.
+        return Some((minus_tpl, plus_tpl));
+    }
+    None
+}
+
+/// Method-call parts of a sub-expression: (receiver token text, method
+/// ident, args). Turbofish and non-ident methods decline (whole-line
+/// `method_arg_template` parity).
+fn method_parts(expr: &syn::Expr) -> Option<(String, String, Vec<syn::Expr>)> {
+    if let syn::Expr::MethodCall(call) = expr {
+        if call.turbofish.is_some() {
+            return None;
+        }
+        let method = call.method.to_string();
+        if super::ident_len(&method)? != method.len() {
+            return None;
+        }
+        return Some((
+            tok(&call.receiver),
+            method,
+            call.args.iter().cloned().collect(),
+        ));
+    }
+    None
 }
 
 /// Whole-file real-pair probe for control templates: the diet pair
@@ -633,10 +765,7 @@ mod tests {
     #[test]
     fn for_iter_sweep_fires() {
         // WI-6 index shape inside the iterable: hetero bases preserved,
-        // uniform `0` → `1` delta. Call-shaped iterables (`foo(a)` →
-        // `foo(a + 1)`) stay ordinary in v1 (no Call variant in the WI-6
-        // core — future work alongside call-arg templates in control
-        // positions).
+        // uniform `0` → `1` delta.
         let pre = "fn f(a: Vec<i32>, b: Vec<i32>) {\n    for x in a[0] {\n    }\n    for y in b[0] {\n    }\n}\n";
         let raw = section(
             "f.rs",
@@ -699,6 +828,159 @@ mod tests {
     }
 
     #[test]
+    fn for_iter_call_sweep_fires_and_round_trips() {
+        // WI-24: call-shaped iterables route through the call-arg core.
+        let pre = "fn f(a: i32, b: i32) {\n    for x in foo(a) {\n    }\n    for y in foo(b) {\n    }\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    for x in foo(a) {\n+    for x in foo(a + 1) {\n@@ -4 +4 @@\n-    for y in foo(b) {\n+    for y in foo(b + 1) {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("for-iter call sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(!out.contains("# expr"), "diet, no declaration: {out}");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ foo(E0 + 1)\n"), "got: {out}");
+        let post = pre
+            .replace("foo(a)", "foo(a + 1)")
+            .replace("foo(b)", "foo(b + 1)");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post);
+    }
+
+    #[test]
+    fn await_base_call_sweep_fires_and_round_trips() {
+        // WI-24: call-shaped await bases route through the call-arg core.
+        let pre = "async fn f(a: i32, b: i32) {\n    let x = foo(a).await;\n    let y = foo(b).await;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let x = foo(a).await;\n+    let x = foo(a + 1).await;\n@@ -3 +3 @@\n-    let y = foo(b).await;\n+    let y = foo(b + 1).await;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("await-base call sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(!out.contains("# expr"), "diet, no declaration: {out}");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ foo(E0 + 1)\n"), "got: {out}");
+        let post = pre
+            .replace("foo(a)", "foo(a + 1)")
+            .replace("foo(b)", "foo(b + 1)");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post);
+    }
+
+    #[test]
+    fn for_iter_method_call_sweep_fires() {
+        // WI-24: method-shaped iterables emit the `Receiver` form with
+        // per-pair-preserved receivers.
+        let pre = "fn f(s: S, t: S, a: i32, b: i32) {\n    for x in s.foo(a) {\n    }\n    for y in t.foo(b) {\n    }\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    for x in s.foo(a) {\n+    for x in s.foo(a + 1) {\n@@ -4 +4 @@\n-    for y in t.foo(b) {\n+    for y in t.foo(b + 1) {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("for-iter method sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- Receiver.foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.foo(E0 + 1)\n"), "got: {out}");
+        let post = pre
+            .replace("s.foo(a)", "s.foo(a + 1)")
+            .replace("t.foo(b)", "t.foo(b + 1)");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post);
+    }
+
+    #[test]
+    fn call_control_mixed_variant_declines() {
+        // One call iterable plus one binary iterable: no uniform
+        // template, stays ordinary.
+        let pre = "fn f(a: i32, b: Vec<i32>) {\n    for x in foo(a) {\n    }\n    for y in b[0] {\n    }\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    for x in foo(a) {\n+    for x in foo(a + 1) {\n@@ -4 +4 @@\n-    for y in b[0] {\n+    for y in b[1] {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map);
+        if let Some(patch) = &out {
+            assert!(
+                !patch.contains("foo(E0)"),
+                "mixed call/non-call must not fuse: {patch}"
+            );
+        }
+    }
+
+    #[test]
+    fn call_control_qualified_callee_declines() {
+        // Qualified callees are outside the single-segment `call_parts`
+        // contract — stays ordinary, never guessed.
+        let pre = "fn f(a: i32, b: i32) {\n    for x in crate::foo(a) {\n    }\n    for y in crate::foo(b) {\n    }\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    for x in crate::foo(a) {\n+    for x in crate::foo(a + 1) {\n@@ -4 +4 @@\n-    for y in crate::foo(b) {\n+    for y in crate::foo(b + 1) {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map);
+        if let Some(patch) = &out {
+            assert!(
+                !patch.contains("foo(E0)"),
+                "qualified callee must not fire: {patch}"
+            );
+        }
+    }
+
+    #[test]
+    fn call_control_uppercase_callee_stays_literal() {
+        // WI-7b parity: a leading-uppercase callee rides backticks so
+        // diet inference never binds it as a hole.
+        let pre = "fn f(a: i32, b: i32) {\n    for x in Old(a) {\n    }\n    for y in Old(b) {\n    }\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    for x in Old(a) {\n+    for x in Old(a + 1) {\n@@ -4 +4 @@\n-    for y in Old(b) {\n+    for y in Old(b + 1) {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("uppercase-callee call sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- `Old`(E0)\n"), "got: {out}");
+        assert!(out.contains("+ `Old`(E0 + 1)\n"), "got: {out}");
+        let post = pre
+            .replace("Old(a)", "Old(a + 1)")
+            .replace("Old(b)", "Old(b + 1)");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post);
+    }
+
+    #[test]
+    fn call_control_untouched_twin_vetoes() {
+        // An untouched `foo(c)` elsewhere counts N+1 in the whole-file
+        // probe and vetoes — the body is never rewritten.
+        let pre = "fn f(a: i32, b: i32) {\n    for x in foo(a) {\n    }\n    for y in foo(b) {\n    }\n}\nfn g(c: i32) {\n    for z in foo(c) {\n    }\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    for x in foo(a) {\n+    for x in foo(a + 1) {\n@@ -4 +4 @@\n-    for y in foo(b) {\n+    for y in foo(b + 1) {\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map);
+        if let Some(patch) = &out {
+            assert!(
+                !patch.contains("foo(E0)"),
+                "twin must veto the call template: {patch}"
+            );
+        }
+    }
+
+    #[test]
     fn single_pair_declines() {
         let raw = section(
             "f.rs",
@@ -710,9 +992,7 @@ mod tests {
     #[test]
     fn await_base_sweep_fires() {
         // WI-6 field shape inside the await base: hetero receivers
-        // preserved, uniform `.a` → `.b` delta. Call-shaped bases
-        // (`foo(a)` → `foo(a + 1)`) stay ordinary in v1 (no Call variant
-        // in the WI-6 core).
+        // preserved, uniform `.a` → `.b` delta.
         let pre = "async fn f(s: S, t: S) {\n    let x = s.a.await;\n    let y = t.a.await;\n}\n";
         let raw = section(
             "f.rs",
