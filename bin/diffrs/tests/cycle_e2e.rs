@@ -439,6 +439,42 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "69-typehole-path",
         "t375: single-site type-hole path rewrite re-infers ordinary",
     ),
+    (
+        "72-tuple-pat-single",
+        "t375: single-site tuple-pat swap re-infers ordinary",
+    ),
+    (
+        "73-some-unwrap-single",
+        "t375: single-site some-unwrap rewrite re-infers ordinary",
+    ),
+    (
+        "74-call-swap-single",
+        "t375: single-site call arg-swap re-infers ordinary",
+    ),
+    (
+        "75-macro-verbatim-single",
+        "t375: single-site macro-verbatim rewrite re-infers ordinary",
+    ),
+    (
+        "76-impl-filter-B",
+        "t375: single-site impl-filter rename re-infers ordinary",
+    ),
+    (
+        "77-variant-nofollow",
+        "t375: single-site variant def-only re-infers ordinary (orphan uses stay ordinary)",
+    ),
+    (
+        "78-method-to-function",
+        "t375: single-site m2f re-infers ordinary",
+    ),
+    (
+        "79-general-expr-single",
+        "t375: single-site general-expr rewrite re-infers ordinary",
+    ),
+    (
+        "80-raw-addr-flip",
+        "t375: single-site raw-addr rewrite re-infers ordinary",
+    ),
 ];
 
 /// Load the fixture pre-image: repo-relative path → file text.

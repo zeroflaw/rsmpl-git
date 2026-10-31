@@ -1,0 +1,6 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=add_bump
+# scope=file
+# expr E
+- E + 1
++ E + 2

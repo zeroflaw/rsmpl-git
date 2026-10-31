@@ -1,0 +1,10 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@ rule=method_to_free_function
+# lang=rust
+# allow=many
+# expr Receiver
+# expr Arg
+- Receiver.grab(Arg)
++ grab_free(Receiver, Arg)

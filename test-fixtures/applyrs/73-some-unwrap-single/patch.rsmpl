@@ -1,0 +1,8 @@
+diff --git src/lib.rs
+@@ -1,1 @@ rule=some_unwrap
+# sweep
+# lang=rust
+# pat P
+# expr E
+- let Some(P) = E;
++ let Some(P) = E.unwrap_or(0);
