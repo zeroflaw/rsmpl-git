@@ -312,10 +312,34 @@ pub(crate) fn try_item_intent_sweep(
     } else {
         None
     };
+    // WI-5 slice 2b-next2b-next: enum rename + variant-addition joint
+    // (same two native shapes; runs only when the attr/evo/field-add
+    // arms decline — struct and enum halves are mutually exclusive by
+    // kind so cross-kind members never joint).
+    let variant_add_joint = if attr_joint.is_none()
+        && field_joint.is_none()
+        && variant_joint.is_none()
+        && add_joint.is_none()
+    {
+        super::item_joint_field_add::find_variant_add_joint(
+            &pairs,
+            def_idx,
+            is_fn_intent,
+            &def_kind,
+            &old_ident,
+            pre,
+            &pair_claimable,
+            &unbals,
+            &shape_bs,
+        )
+    } else {
+        None
+    };
     if attr_joint.is_none()
         && field_joint.is_none()
         && variant_joint.is_none()
         && add_joint.is_none()
+        && variant_add_joint.is_none()
     {
         for pi in &hunk_pairs[def_hunk] {
             if *pi == def_idx {
@@ -363,10 +387,13 @@ pub(crate) fn try_item_intent_sweep(
     if let Some(mpi) = attr_joint.or(field_joint).or(variant_joint) {
         claimed_hunks.insert(pair_hunk[mpi]);
     }
-    // WI-5 2b-next2b-first: the insertion hunk holds no balanced pair
-    // so the loop above skips it; claim it explicitly (shape B re-inserts
-    // the def hunk, idempotent).
+    // WI-5 2b-next2b-first/next2: the insertion hunk holds no balanced
+    // pair so the loop above skips it; claim it explicitly (shape B
+    // re-inserts the def hunk, idempotent).
     if let Some(add) = &add_joint {
+        claimed_hunks.insert(add.hi);
+    }
+    if let Some(add) = &variant_add_joint {
         claimed_hunks.insert(add.hi);
     }
     // Claimed pairs = def + pairs in claimable hunks.
@@ -376,9 +403,11 @@ pub(crate) fn try_item_intent_sweep(
             claimed_idx.push(*pi);
         }
     }
-    // WI-5 2b-next2b-first: shape-B def pairs ride an unbalanced hunk
-    // with no balanced entry — lift the virtual def explicitly.
-    if add_joint.as_ref().is_some_and(|a| a.shape_b) {
+    // WI-5 2b-next2b-first/next2: shape-B def pairs ride an unbalanced
+    // hunk with no balanced entry — lift the virtual def explicitly.
+    if add_joint.as_ref().is_some_and(|a| a.shape_b)
+        || variant_add_joint.as_ref().is_some_and(|a| a.shape_b)
+    {
         claimed_idx.push(def_idx);
     }
     if claimed_idx.len() < 2 {
@@ -456,8 +485,14 @@ pub(crate) fn try_item_intent_sweep(
     // the member delta rides below it — field and variant joints share
     // the def-above-member emit).
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let emission = match (attr_joint, field_joint, variant_joint, add_joint.as_ref()) {
-        (Some(api), None, None, None) => super::item_joint_attr::joint_emit(
+    let emission = match (
+        attr_joint,
+        field_joint,
+        variant_joint,
+        add_joint.as_ref(),
+        variant_add_joint.as_ref(),
+    ) {
+        (Some(api), None, None, None, None) => super::item_joint_attr::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -467,7 +502,7 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[api].minus,
             &pairs[api].plus,
         ),
-        (None, Some(fpi), None, None) => super::item_joint_field_evo::joint_emit(
+        (None, Some(fpi), None, None, None) => super::item_joint_field_evo::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -477,7 +512,7 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[fpi].minus,
             &pairs[fpi].plus,
         ),
-        (None, None, Some(vpi), None) => super::item_joint_field_evo::joint_emit(
+        (None, None, Some(vpi), None, None) => super::item_joint_field_evo::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -487,7 +522,7 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[vpi].minus,
             &pairs[vpi].plus,
         ),
-        (None, None, None, Some(add)) => super::item_joint_field_add::add_emit(
+        (None, None, None, Some(add), None) => super::item_joint_field_add::add_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -497,7 +532,17 @@ pub(crate) fn try_item_intent_sweep(
             add.point,
             &add.member_plus,
         ),
-        (None, None, None, None) => super::item_joint_attr::emit(
+        (None, None, None, None, Some(add)) => super::item_joint_field_add::variant_add_emit(
+            &def.path,
+            &rule,
+            &def_kind,
+            &def_prefix,
+            &old_ident,
+            &new_ident,
+            add.point,
+            &add.member_plus,
+        ),
+        (None, None, None, None, None) => super::item_joint_attr::emit(
             &def.path,
             &rule,
             &def_kind,
@@ -514,8 +559,8 @@ pub(crate) fn try_item_intent_sweep(
     // line, every other line byte-identical (per file, claimed subset).
     // The add joint inserts a line, so it probes composed-emission vs
     // claimed-native full-post equality instead (D13, multi-file).
-    let probed = match &add_joint {
-        Some(_) => {
+    let probed = match (&add_joint, &variant_add_joint) {
+        (Some(_), _) | (_, Some(_)) => {
             let mut claimed_map: HashMap<String, Vec<String>> = HashMap::new();
             for (hi, he) in hunks.iter().enumerate() {
                 if claimed_hunks.contains(&hi) {
@@ -527,7 +572,7 @@ pub(crate) fn try_item_intent_sweep(
             }
             super::item_joint_field_add::probe_add_joint(pre, &emission, &claimed_map)
         }
-        None => probe_reproduces(pre, &emission, &claimed_pairs),
+        (None, None) => probe_reproduces(pre, &emission, &claimed_pairs),
     };
     if !probed {
         used_rules.truncate(checkpoint);

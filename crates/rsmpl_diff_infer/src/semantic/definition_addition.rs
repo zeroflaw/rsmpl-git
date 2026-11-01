@@ -695,7 +695,7 @@ pub(crate) fn struct_spanning(pre: &str, field: &str, point: usize) -> Option<St
 }
 
 /// The `enum E` spanning insertion `point` that lacks `variant`.
-fn enum_spanning(pre: &str, variant: &str, point: usize) -> Option<String> {
+pub(crate) fn enum_spanning(pre: &str, variant: &str, point: usize) -> Option<String> {
     let file: syn::File = syn::parse_str(pre).ok()?;
     let mut found: Option<String> = None;
     fn walk(items: &[syn::Item], variant: &str, point: usize, found: &mut Option<String>) {

@@ -2430,13 +2430,19 @@ lowered diff is the observable truth as always (Section D.2).
    plus exactly one field-addition line in the same file and section —
    either a distant pure-insertion hunk (`@@ -N,0 @@`) or a hunk adjacent
    to the def change (one minus, two plus) — plus claimable uses raises
-   to a shared-rule two-hunk emission (the WI-12b addition hunk naming
-   the old container, then the terse rename follow hunk), proved by the
-   one multi-file full-post probe (D13) under strict T375. Two evolutions,
-   two additions, an addition of another container, bare renames,
-   cross-kind members, alias/const shapes, and variant-addition lines
-   never joint-fire (variant-addition and cross-file-member joints
-   belong to follow-up slices).
+    to a shared-rule two-hunk emission (the WI-12b addition hunk naming
+    the old container, then the terse rename follow hunk), proved by the
+    one multi-file full-post probe (D13) under strict T375. Variant-add
+    joint (WI-5 slice 2b-next2b-next): the enum half of the same ladder
+    — an `enum` rename plus exactly one variant-addition line (unit,
+    tuple-payload, struct-payload, or discriminant) in the same file and
+    section, either a distant pure-insertion hunk or an adjacent
+    (1-minus, 2-plus) hunk, plus claimable uses raises to the same
+    shared-rule shape with the `enum Old {` context. Two evolutions,
+    two additions, an addition of another container, bare renames,
+    cross-kind members, and alias/const shapes never joint-fire (only
+    multi-addition and cross-file-member joints stay out: a member in
+    another file than its container cannot joint by the container law).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
@@ -7595,8 +7601,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     renamed struct) plus claimable uses raises as one follow hunk with
     the member pair below the def pair, proved by the one scratch-apply
     probe (D13) under strict T375. Two evolutions, another container's
-    evolution, variant/alias/const shapes, and variant-addition insertions
-    never joint (field-addition joints raise per 2b-next2b-first).
+    evolution, field-type lines beside an enum rename (cross-kind),
+    variant lines beside a struct rename (cross-kind), and alias/const
+    shapes never joint; multi-addition insertions never joint (field or
+    variant); a member in another file than its container cannot joint
+    (container law non-goal). Field-addition joints raise per
+    2b-next2b-first, variant-addition joints per 2b-next2b-next.
     Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
     the enum half of the same law — a def hunk holding the `enum`
     rename plus exactly one attached variant-evolution pair (tuple
@@ -7608,9 +7618,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     scratch-apply probe (D13) under strict T375. At most one joint fires
     per def hunk (attr, field, and variant joints are mutually
     exclusive). Bare variant renames, field-type lines, another
-    container's evolution, two evolutions, alias/const shapes, and
-    variant-addition insertions never joint; a member in another file than
-    its container cannot joint (container law non-goal).
+    container's evolution, two evolutions, and alias/const shapes never
+    joint; multi-addition insertions never joint (field or variant);
+    a member in another file than its container cannot joint (container
+    law non-goal). Single-addition joints raise per 2b-next2b-first
+    (field) and 2b-next2b-next (variant).
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/
