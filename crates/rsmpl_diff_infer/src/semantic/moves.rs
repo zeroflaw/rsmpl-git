@@ -1722,4 +1722,53 @@ mod tests {
         let out = try_move_sweep(&[a, b], &pre, &mut used).expect("empty trait must fire");
         validated_live(&out.join(""), &pre);
     }
+
+    #[test]
+    fn move_rename_identical_body_fires() {
+        // WI-6 slice 1: the F5 core — a cross-file move+rename with a
+        // token-identical body pairs as an evolved cut/paste.
+        let body = "{\n    let y = x + 1;\n    y * 2\n}\n";
+        let minus = format!("fn foo(x: i32) -> i32 {body}");
+        let plus = format!("fn bar(x: i32) -> i32 {body}");
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let n = minus.lines().count();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n} +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let m = plus.lines().count();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{m} @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("rename-move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved header, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_rename_selfref_body_stays_ordinary() {
+        // WI-6 slice 1: a move+rename whose body renames its own
+        // recursive call is a body delta — no evolved pair may form
+        // (the splice keeps the captured body verbatim), so the whole
+        // sweep declines and the section stays ordinary downstream.
+        let minus = "fn fact(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * fact(n - 1)\n}\n";
+        let plus = "fn factorial(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * factorial(n - 1)\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,6 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,6 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+    }
 }

@@ -915,5 +915,77 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             !semantic.contains("rule=r2"),
             "no follow hunk without a glob anchor, got: {semantic}"
         );
+    } else if name == "122-move-rename-fires" {
+        // WI-6 slice 1: move+rename with an identical body raises as an
+        // evolved cut/paste pair (WI-8 pairing cascade) — the F5 core.
+        assert!(
+            semantic.contains("# bind="),
+            "rename-move cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "rename-move paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved header, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn foo"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("+fn foo"),
+            "no stale plus lines, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "rename-move must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "123-move-rename-caller-fires" {
+        // WI-6 slice 1: move+rename with the caller updated composes as
+        // an evolved cut/paste plus a call sweep over the renamed
+        // callee (the WI-6 acceptance pins the follow form).
+        assert!(
+            semantic.contains("# bind="),
+            "rename-move cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "rename-move paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- foo(E0)") && semantic.contains("+ bar(E0)"),
+            "caller update must ride a call sweep, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn foo"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "composition must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "124-move-rename-selfref-stays-ordinary" {
+        // WI-6 slice 1: a renamed self-reference inside the moved body
+        // is a body delta, so no move pair may claim it (the splice
+        // keeps the captured body verbatim) — honest ordinary, no
+        // bind/use claim, still byte-identical via the harness loop.
+        assert!(
+            !semantic.contains("# bind="),
+            "body-delta move must not cut, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("# use="),
+            "body-delta move must not paste, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+fn factorial"),
+            "renamed item rides ordinary, got: {semantic}"
+        );
     }
 }

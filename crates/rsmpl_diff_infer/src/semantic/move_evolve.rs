@@ -647,6 +647,21 @@ mod tests {
     }
 
     #[test]
+    fn renamed_self_reference_vetoes_evolved_pairing() {
+        // WI-6 slice 1: a move+rename whose body renames its own
+        // recursive call is a body delta, not a header evolution — the
+        // splice keeps the captured body verbatim, so pairing must
+        // decline (the finder yields zero hits) and the section stays
+        // ordinary instead of emitting a lying move.
+        let minus = "fn fact(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * fact(n - 1)\n}";
+        let plus_body: Vec<String> = "fn factorial(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * factorial(n - 1)\n}"
+            .lines()
+            .map(|l| format!("+{l}"))
+            .collect();
+        assert!(find_evolved_hits(minus, &plus_body).is_empty());
+    }
+
+    #[test]
     fn template_shapes() {
         assert_eq!(evolution_template("pub ", "new"), "pub fn new(...) { ... }");
         assert_eq!(evolution_template("", "new"), "fn new(...) { ... }");

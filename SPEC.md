@@ -8814,8 +8814,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    above applies unchanged, except a source file emptied to zero bytes
    (minus hunk covering BOF..EOF) is sound for multi-item cuts (WI-18
    gate: no outside line to double-claim).
-     Everything else (other item kinds, attr/body deltas, multi-line
-     `fn` headers) stays ordinary.
+     Everything else (other item kinds, attr/body deltas — including a
+     renamed self-reference inside the moved body, which the paste
+     cannot carry because the splice keeps the captured body verbatim —
+     multi-line `fn` headers) stays ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -9146,7 +9148,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(120), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
+(123), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
