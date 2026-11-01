@@ -450,10 +450,14 @@ fn apply_inner(
                     }
                     // WI-7d evolution-probe: member evolutions
                     // (`FieldTypeEvolution` /
-                    // `VariantPayloadEvolution`) record their container
-                    // key for the membership probe in
+                    // `VariantPayloadEvolution`, plus the WI-5 joint
+                    // kinds whose member rides the rename) record their
+                    // container key for the membership probe in
                     // `postcheck_move_evo` (one entry per hunk — the
                     // container and member are concrete, never holes).
+                    // Joints record the *new* container: the post-image
+                    // holds the renamed item, which is what
+                    // `member_present` probes.
                     {
                         let evo_kind: Option<crate::postcheck_move::MemberKind> =
                             match &compiled.kind {
@@ -467,6 +471,22 @@ fn apply_inner(
                                     enum_name, variant, ..
                                 } => Some(crate::postcheck_move::MemberKind::Variant {
                                     container: enum_name.clone(),
+                                    member: variant.clone(),
+                                }),
+                                PatternKind::StructRenameFieldEvo {
+                                    new_container,
+                                    field,
+                                    ..
+                                } => Some(crate::postcheck_move::MemberKind::Field {
+                                    container: new_container.clone(),
+                                    member: field.clone(),
+                                }),
+                                PatternKind::EnumRenameVariantEvo {
+                                    new_container,
+                                    variant,
+                                    ..
+                                } => Some(crate::postcheck_move::MemberKind::Variant {
+                                    container: new_container.clone(),
                                     member: variant.clone(),
                                 }),
                                 _ => None,

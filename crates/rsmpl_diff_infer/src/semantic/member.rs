@@ -767,97 +767,17 @@ fn contains_ident(haystack: &str, needle: &str) -> bool {
 /// The `struct S` whose field `old` spans 1-based `site`, or `None`
 /// when the site names no field. WI-14: sibling same-named fields no
 /// longer veto (the anchored follow classifies per-site); the def site
-/// must still resolve to exactly one container.
+/// must still resolve to exactly one container. Shared walk lives in
+/// [`super::carrier`] (`unique_only = false` keeps the relaxed law).
 fn struct_of_field(pre: &str, old: &str, site: usize) -> Option<String> {
-    let file: syn::File = syn::parse_str(pre).ok()?;
-    let mut at_site: Vec<String> = Vec::new();
-    let mut carriers = 0usize;
-    fn walk(
-        items: &[syn::Item],
-        old: &str,
-        site: usize,
-        at_site: &mut Vec<String>,
-        carriers: &mut usize,
-    ) {
-        use syn::spanned::Spanned;
-        for it in items {
-            match it {
-                syn::Item::Struct(s) => {
-                    if let syn::Fields::Named(fields) = &s.fields {
-                        let mut has = false;
-                        for f in &fields.named {
-                            if f.ident.as_ref().is_some_and(|i| i == old) {
-                                has = true;
-                                if f.span().start().line == site {
-                                    at_site.push(s.ident.to_string());
-                                }
-                            }
-                        }
-                        if has {
-                            *carriers += 1;
-                        }
-                    }
-                }
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        walk(inner, old, site, at_site, carriers);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    walk(&file.items, old, site, &mut at_site, &mut carriers);
-    if carriers < 1 || at_site.len() != 1 {
-        return None;
-    }
-    at_site.into_iter().next()
+    super::carrier::struct_carrier(pre, old, site, false)
 }
 
 /// The `enum E` whose variant `old` spans 1-based `site`, or `None`
-/// under the same WI-14 rule as [`struct_of_field`].
+/// under the same WI-14 rule as [`struct_of_field`]. Shared walk lives
+/// in [`super::carrier`] (`unique_only = false` keeps the relaxed law).
 fn enum_of_variant(pre: &str, old: &str, site: usize) -> Option<String> {
-    let file: syn::File = syn::parse_str(pre).ok()?;
-    let mut at_site: Vec<String> = Vec::new();
-    let mut carriers = 0usize;
-    fn walk(
-        items: &[syn::Item],
-        old: &str,
-        site: usize,
-        at_site: &mut Vec<String>,
-        carriers: &mut usize,
-    ) {
-        use syn::spanned::Spanned;
-        for it in items {
-            match it {
-                syn::Item::Enum(e) => {
-                    let mut has = false;
-                    for v in &e.variants {
-                        if v.ident == old {
-                            has = true;
-                            if v.span().start().line == site {
-                                at_site.push(e.ident.to_string());
-                            }
-                        }
-                    }
-                    if has {
-                        *carriers += 1;
-                    }
-                }
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        walk(inner, old, site, at_site, carriers);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    walk(&file.items, old, site, &mut at_site, &mut carriers);
-    if carriers < 1 || at_site.len() != 1 {
-        return None;
-    }
-    at_site.into_iter().next()
+    super::carrier::enum_carrier(pre, old, site, false)
 }
 
 /// Emit the single-hunk follow emission under `rule`: the covering

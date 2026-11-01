@@ -48,51 +48,10 @@ pub(crate) fn parse_field_evo_pair(minus: &str, plus: &str) -> Option<FieldEvo> 
 
 /// The `struct S` carrying field `field` at 1-based `site`, or `None`
 /// under the exactly-one-carrier rule (the `definition_evolution`
-/// discipline: a second same-named field anywhere vetoes).
+/// discipline: a second same-named field anywhere vetoes). Shared walk
+/// lives in [`super::carrier`].
 pub(crate) fn field_carrier(pre: &str, field: &str, site: usize) -> Option<String> {
-    let file: syn::File = syn::parse_str(pre).ok()?;
-    let mut at_site: Vec<String> = Vec::new();
-    let mut carriers = 0usize;
-    fn walk(
-        items: &[syn::Item],
-        field: &str,
-        site: usize,
-        at_site: &mut Vec<String>,
-        carriers: &mut usize,
-    ) {
-        use syn::spanned::Spanned;
-        for it in items {
-            match it {
-                syn::Item::Struct(s) => {
-                    if let syn::Fields::Named(fields) = &s.fields {
-                        let mut has = false;
-                        for f in &fields.named {
-                            if f.ident.as_ref().is_some_and(|i| i == field) {
-                                has = true;
-                                if f.span().start().line == site {
-                                    at_site.push(s.ident.to_string());
-                                }
-                            }
-                        }
-                        if has {
-                            *carriers += 1;
-                        }
-                    }
-                }
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        walk(inner, field, site, at_site, carriers);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    walk(&file.items, field, site, &mut at_site, &mut carriers);
-    if carriers != 1 || at_site.len() != 1 {
-        return None;
-    }
-    at_site.into_iter().next()
+    super::carrier::struct_carrier_unique(pre, field, site)
 }
 
 /// WI-5 joint search over the pre-pass pair/hunk tables: returns the
@@ -242,48 +201,9 @@ pub(crate) fn parse_variant_evo_pair(minus: &str, plus: &str) -> Option<VariantE
 
 /// The `enum E` carrying `variant` at 1-based `site`, or `None`
 /// under the exactly-one-carrier rule (mirrors `field_carrier`).
+/// Shared walk lives in [`super::carrier`].
 pub(crate) fn enum_of_variant(pre: &str, variant: &str, site: usize) -> Option<String> {
-    let file: syn::File = syn::parse_str(pre).ok()?;
-    let mut at_site: Vec<String> = Vec::new();
-    let mut carriers = 0usize;
-    fn walk(
-        items: &[syn::Item],
-        variant: &str,
-        site: usize,
-        at_site: &mut Vec<String>,
-        carriers: &mut usize,
-    ) {
-        use syn::spanned::Spanned;
-        for it in items {
-            match it {
-                syn::Item::Enum(e) => {
-                    let mut has = false;
-                    for v in &e.variants {
-                        if v.ident == variant {
-                            has = true;
-                            if v.span().start().line == site {
-                                at_site.push(e.ident.to_string());
-                            }
-                        }
-                    }
-                    if has {
-                        *carriers += 1;
-                    }
-                }
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        walk(inner, variant, site, at_site, carriers);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    walk(&file.items, variant, site, &mut at_site, &mut carriers);
-    if carriers != 1 || at_site.len() != 1 {
-        return None;
-    }
-    at_site.into_iter().next()
+    super::carrier::enum_carrier_unique(pre, variant, site)
 }
 
 /// WI-5 joint search for the enum half: returns the variant-evo pair

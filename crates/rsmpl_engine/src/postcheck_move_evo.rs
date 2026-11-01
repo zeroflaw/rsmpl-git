@@ -2,7 +2,9 @@
 //! (SPEC 24.6).
 //!
 //! `FieldTypeEvolution` and `VariantPayloadEvolution` (tuple / struct /
-//! discriminant) prove their *content* through the plus re-match
+//! discriminant) — plus the WI-5 joint kinds (`StructRenameFieldEvo`,
+//! `EnumRenameVariantEvo`, recorded under their *new* container by
+//! `plan.rs`) — prove their *content* through the plus re-match
 //! (`postcheck.rs` — the synthesised `[struct S {, field: plus]` /
 //! `[enum E {, variant(payload)]` pattern re-matches at the reported
 //! spans with binding equality). This module adds the second structural

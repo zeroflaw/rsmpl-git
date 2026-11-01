@@ -15,6 +15,7 @@ pub(crate) mod assoc;
 pub(crate) mod attr_sweep;
 mod block_headers;
 mod calls;
+pub(crate) mod carrier;
 pub(crate) mod chain;
 pub(crate) mod control_template;
 pub(crate) mod definition_addition;
