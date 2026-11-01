@@ -7264,18 +7264,33 @@ or last-segment-only, per-site args/receivers token-equal, one shared
 rewrite within the line), and the plus line equals the minus line
 under sequential subterm replacement (any frame delta or unchanged
 same-line twin vetoes), the pair contributes its subterms as sites
-instead of its lines. Single-statement one-line `fn` frames unwrap
-to their inner expression before classification (WI-4): a changed line
-parsing as a `syn::ItemFn` whose body holds exactly one statement
-contributes that statement's expression (`Stmt::Expr` with or without
-`;`, or a `let`-init with `let-else` declined) — the unchanged frame
-check on the full line text vetoes header deltas, and multi-statement
-bodies stay ordinary. Totality then counts occurrences of the minus
+instead of its lines. Frames unwrap to their inner expression before
+classification, tried only after whole-line parses fail (WI-4, widened
+WI-3): a single-statement one-line `fn` frame (a changed line parsing
+as a `syn::ItemFn` whose body holds exactly one statement contributes
+that statement's expression — `Stmt::Expr` with or without `;`, or a
+`let`-init with `let-else` declined); a `let` whose init is a closure,
+`async` block, or bare block holding exactly one statement (which
+contributes its expression; bare closure bodies contribute
+themselves); a one-line `match` arm body after stripping the unchanged
+arm head textually at the first `=>`; a one-line `if`/`else` branch
+body after stripping at the first `{` (the head must name `if` or
+`else`). Multi-statement bodies, macro bodies, and item declarations
+never unwrap and stay ordinary. Emitted hunks carry no frame text —
+the frame is byte-identical on both sides so the subterm rewrite
+reproduces the post-image. Frame equality is proved per pair on the
+full line text: the plus line must equal the minus line under
+sequential subterm replacement of the extracted (rendered) subterms —
+any frame delta (renamed `fn`, rebound closure parameter, changed arm
+pattern, changed branch keyword, changed `let` wrapper) or unchanged
+same-line twin vetoes. The same per-pair check guards the whole-line
+general-expression sweep (framed lines included) and the control
+positions (guard, arm body, closure body, condition, iterable,
+diverge, await/`?` base), whose templates likewise rewrite only the
+subterm. Totality then counts occurrences of the minus
 subterm in the pre-image (engine-count probe, as verbatim does), not
 changed lines — two calls per line count twice. The emission is the
-same bare-subterm hunk as the whole-line shape (no frame is emitted;
-the frame is byte-identical on both sides so the subterm rewrite
-reproduces the post-image). Single-pair sections stay ordinary for
+same bare-subterm hunk as the whole-line shape. Single-pair sections stay ordinary for
 call/method/use shapes even with two sites (T375: one pair never wins
 as a sweep) — except whole-arg permutation with ≥ 2 subterm sites
 (WI-6 slice 2, `call_arg_template`): `swap(x, y) + swap(y, x)` →

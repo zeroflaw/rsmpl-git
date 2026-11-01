@@ -1,3 +1,13 @@
+diff --git a/src/arms.rs b/src/arms.rs
+--- a/src/arms.rs
++++ b/src/arms.rs
+@@ -3,3 +3,3 @@ fn m(x: i32) {
+-        1 => foo(1),
+-        2 => foo(2),
+-        _ => foo(3),
++        1 => bar(1),
++        2 => bar(2),
++        _ => bar(3),
 diff --git a/src/calls.rs b/src/calls.rs
 --- a/src/calls.rs
 +++ b/src/calls.rs

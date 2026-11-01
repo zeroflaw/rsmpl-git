@@ -76,7 +76,7 @@ fn side_expr(line: &str) -> Option<syn::Expr> {
             }
             Some(*init.expr)
         }
-        _ => super::frame::fn_frame_inner(line),
+        _ => super::frame::frame_inner(line),
     }
 }
 
@@ -210,7 +210,11 @@ pub(crate) fn all_identical_pairs(minuses: &[&str], pluses: &[&str]) -> bool {
 
 /// Frame check: flat plus equals flat minus under sequential subterm
 /// replacement (WI-9b2b discipline lifted to N subterms per line).
-fn frame_holds(minus_line: &str, plus_line: &str, pairs: &[(String, String)]) -> bool {
+/// `pub(crate)` so the whole-line general sweep and the control driver
+/// prove frame equality on the full line text through the same check
+/// (a frame delta alongside the inner rewrite vetoes — never a partial
+/// claim).
+pub(crate) fn frame_holds(minus_line: &str, plus_line: &str, pairs: &[(String, String)]) -> bool {
     let mut cur = super::flat_ws(minus_line.trim());
     for (m, p) in pairs {
         let mf = super::flat_ws(m);

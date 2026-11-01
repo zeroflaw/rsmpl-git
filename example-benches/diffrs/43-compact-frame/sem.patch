@@ -1,10 +1,15 @@
+diff --git src/arms.rs
+@@ -3,3 @@ rule=rename_foo_to_bar
+# allow=many
+- foo(E0)
++ bar(E0)
 diff --git src/calls.rs
-@@ -1,3 @@ rule=r1
+@@ -1,3 @@ rule=rename_foo_to_bar
 # allow=many
 - foo(E0)
 + bar(E0)
 diff --git src/ops.rs
-@@ -1,3 @@ rule=r2
+@@ -1,3 @@ rule=r3
 # allow=many
 - E0 > 0
 + E0 >= 0

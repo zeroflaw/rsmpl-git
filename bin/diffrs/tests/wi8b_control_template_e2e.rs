@@ -166,3 +166,63 @@ fn control_untouched_twin_vetoes() {
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(!patch.contains("E0 > 0"), "twin must veto, got: {patch}");
 }
+
+// WI-3: match-arm call bodies compress and re-apply byte-identical
+// (arms are raising context, never pattern syntax — D14).
+#[test]
+fn wi3_arm_call_compresses_and_reapplies() {
+    let dir = init_repo();
+    let before = "fn m(x: i32) {\n    match x {\n        1 => foo(1),\n        2 => foo(2),\n        _ => foo(3),\n    }\n}\n";
+    write(dir.path(), "src/lib.rs", before);
+    commit_all(dir.path());
+    let after = "fn m(x: i32) {\n    match x {\n        1 => bar(1),\n        2 => bar(2),\n        _ => bar(3),\n    }\n}\n";
+    write(dir.path(), "src/lib.rs", after);
+
+    let patch = diffrs_and_reapply(dir.path(), after);
+    assert!(patch.contains("- foo(E0)\n"), "got: {patch}");
+    assert!(patch.contains("+ bar(E0)\n"), "got: {patch}");
+    assert!(patch.contains("# allow=many\n"), "got: {patch}");
+}
+
+// WI-3: an arm-pattern delta alongside the body rewrite vetoes to
+// ordinary (the body-only template would leave the pattern stale).
+#[test]
+fn wi3_arm_pattern_delta_vetoes() {
+    let dir = init_repo();
+    let before = "fn m(x: i32) {\n    match x {\n        1 => foo(1),\n        2 => foo(2),\n        _ => foo(3),\n    }\n}\n";
+    write(dir.path(), "src/lib.rs", before);
+    commit_all(dir.path());
+    let after = "fn m(x: i32) {\n    match x {\n        9 => bar(1),\n        8 => bar(2),\n        _ => bar(3),\n    }\n}\n";
+    write(dir.path(), "src/lib.rs", after);
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !patch.contains("foo(E0)"),
+        "pattern delta must veto, got: {patch}"
+    );
+}
+
+// WI-3: a closure-binder delta alongside the body rewrite never claims
+// a body-only template (the binder would go stale). The sound joint
+// (`let P0` covering the whole line) may still raise.
+#[test]
+fn wi3_closure_binder_delta_never_claims_body_only() {
+    let dir = init_repo();
+    let before =
+        "fn m() {\n    let f0 = |x| x > 0;\n    let f1 = |x| x > 1;\n    let f2 = |x| x > 2;\n}\n";
+    write(dir.path(), "src/lib.rs", before);
+    commit_all(dir.path());
+    let after =
+        "fn m() {\n    let f0 = |y| y > 0;\n    let f1 = |y| y > 1;\n    let f2 = |y| y > 2;\n}\n";
+    write(dir.path(), "src/lib.rs", after);
+
+    let out = run(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !patch.contains("- x > E0"),
+        "binder delta must never ride a body-only template, got: {patch}"
+    );
+}

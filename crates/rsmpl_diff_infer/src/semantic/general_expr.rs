@@ -441,10 +441,11 @@ pub(crate) fn antiunify_general_exprs(
 
 /// Parse one changed line as a whole-line expression (one trailing
 /// `;`/`,` tolerated — the terminator never reaches the pattern).
-/// Single-statement one-line `fn` frames unwrap to their inner
-/// expression (WI-4 `frame`); the frame itself never reaches the
-/// template — `frame_holds`-style totality plus the engine probe own
-/// it, exactly as the sub-line extractors do.
+/// Single-statement one-line `fn` frames — and, since WI-3,
+/// `let`-closure/async/block, match-arm, and `if`/`else`-branch frames
+/// — unwrap to their inner expression (WI-4 `frame` ladder); the frame
+/// itself never reaches the template — `frame_holds`-style totality
+/// plus the engine probe own it, exactly as the sub-line extractors do.
 /// `pub(crate)` so the WI-7 slice-19 sub-line single reuses the same
 /// whole-line entry for its owns-shape decline (no mirrored parser).
 pub(crate) fn parse_line_expr(line: &str) -> Option<syn::Expr> {
@@ -458,7 +459,7 @@ pub(crate) fn parse_line_expr(line: &str) -> Option<syn::Expr> {
             return Some(expr);
         }
     }
-    super::frame::fn_frame_inner(line)
+    super::frame::frame_inner(line)
 }
 
 /// One `let`-init sub-expression (WI-5): `let PAT[: TY] = INIT;` with
@@ -531,6 +532,19 @@ pub(crate) fn try_general_expr_sweep(
             }
         }
         if let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_exprs, &plus_exprs) {
+            // Frame equality (WI-3): when a pair parsed through a frame
+            // (`fn`/closure/block/arm/branch rung), the frame text must
+            // be identical per pair — the template rewrites only the
+            // inner subterm, so a frame delta alongside (renamed `fn`,
+            // rebound closure param, changed arm pattern) vetoes instead
+            // of silently dropping the frame delta. Unframed lines pass
+            // trivially (the rendered subterm is the line itself).
+            for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
+                let pair = vec![(tok(&minus_exprs[i]), tok(&plus_exprs[i]))];
+                if !super::subline::frame_holds(m, p, &pair) {
+                    return None;
+                }
+            }
             if is_anchored(&minus_tpl, &plus_tpl)
                 && crate::totality::template_pair_holds(
                     path,
@@ -565,6 +579,17 @@ pub(crate) fn try_general_expr_sweep(
         }
     }
     let (minus_tpl, plus_tpl) = antiunify_general_exprs(&minus_inits, &plus_inits)?;
+    // Frame equality (WI-3): the `let` wrapper (pattern, type) rides
+    // each site's own line — the template rewrites only the init, so a
+    // wrapper delta alongside (renamed binding, added ascription)
+    // vetoes instead of silently dropping the wrapper delta. Uniform
+    // wrappers pass trivially.
+    for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
+        let pair = vec![(tok(&minus_inits[i]), tok(&plus_inits[i]))];
+        if !super::subline::frame_holds(m, p, &pair) {
+            return None;
+        }
+    }
     if !is_anchored(&minus_tpl, &plus_tpl) {
         return None;
     }
@@ -1196,6 +1221,86 @@ mod tests {
             super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2], &mut used)
                 .is_none(),
             "single pair must never sweep (WI-7 owns N=1)"
+        );
+    }
+
+    #[test]
+    fn wi3_fn_header_delta_vetoes_sweep() {
+        // WI-3 frame equality: a `fn` name delta alongside the inner
+        // operator rewrite vetoes the whole-line sweep — the bare
+        // template would leave the renamed definition behind.
+        let pre =
+            "fn f0() -> bool { v0 > 0 }\nfn f1() -> bool { v1 > 0 }\nfn f2() -> bool { v2 > 0 }\n";
+        let mut used = Vec::new();
+        let minuses = [
+            "fn f0() -> bool { v0 > 0 }",
+            "fn f1() -> bool { v1 > 0 }",
+            "fn f2() -> bool { v2 > 0 }",
+        ];
+        let pluses = [
+            "fn g0() -> bool { v0 >= 0 }",
+            "fn g1() -> bool { v1 >= 0 }",
+            "fn g2() -> bool { v2 >= 0 }",
+        ];
+        assert!(
+            super::try_general_expr_sweep(
+                &minuses,
+                &pluses,
+                "f.rs",
+                Some(pre),
+                &[1, 2, 3],
+                &mut used
+            )
+            .is_none(),
+            "fn header delta must veto"
+        );
+        // Uniform headers still sweep.
+        let pluses_same = [
+            "fn f0() -> bool { v0 >= 0 }",
+            "fn f1() -> bool { v1 >= 0 }",
+            "fn f2() -> bool { v2 >= 0 }",
+        ];
+        let mut used = Vec::new();
+        let out = super::try_general_expr_sweep(
+            &minuses,
+            &pluses_same,
+            "f.rs",
+            Some(pre),
+            &[1, 2, 3],
+            &mut used,
+        )
+        .expect("uniform frames must still sweep");
+        assert!(out.contains("- E0 > 0"), "got: {out}");
+    }
+
+    #[test]
+    fn wi3_let_wrapper_delta_vetoes_sweep() {
+        // WI-3 frame equality on the `let`-init fallback: renamed
+        // bindings alongside the init rewrite veto — the bare init
+        // template would leave the wrappers stale.
+        let pre = "fn m() {\n    let a = v0 > 0;\n    let b = v1 > 0;\n    let c = v2 > 0;\n}\n";
+        let mut used = Vec::new();
+        let minuses = [
+            "    let a = v0 > 0;",
+            "    let b = v1 > 0;",
+            "    let c = v2 > 0;",
+        ];
+        let pluses = [
+            "    let d = v0 >= 0;",
+            "    let e = v1 >= 0;",
+            "    let f = v2 >= 0;",
+        ];
+        assert!(
+            super::try_general_expr_sweep(
+                &minuses,
+                &pluses,
+                "f.rs",
+                Some(pre),
+                &[2, 3, 4],
+                &mut used
+            )
+            .is_none(),
+            "wrapper delta must veto"
         );
     }
     #[test]

@@ -514,6 +514,23 @@ pub(crate) fn try_control_template_sweep(
         let Some((minus_tpl, plus_tpl)) = try_position(&minus_subs, &plus_subs) else {
             continue;
         };
+        // Frame equality (WI-3): the template rewrites only the
+        // extracted subterm, so the surrounding frame (arm pattern,
+        // closure header and `let` wrapper, `if`/`while` keyword, `for`
+        // pattern, diverge head, await wrapper) must be identical per
+        // pair — a frame delta alongside vetoes instead of silently
+        // dropping the frame delta. Uniform frames pass trivially.
+        let mut frames_hold = true;
+        for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
+            let pair = vec![(tok(&minus_subs[i]), tok(&plus_subs[i]))];
+            if !super::subline::frame_holds(m, p, &pair) {
+                frames_hold = false;
+                break;
+            }
+        }
+        if !frames_hold {
+            continue;
+        }
         if !control_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
             return None;
         }
@@ -1006,5 +1023,126 @@ mod tests {
         assert!(!out.contains("# expr"), "diet, no declaration: {out}");
         assert!(out.contains("- E0.a\n"), "got: {out}");
         assert!(out.contains("+ E0.b\n"), "got: {out}");
+    }
+
+    // WI-3 frame equality: the template rewrites only the extracted
+    // subterm, so a frame delta alongside vetoes at the driver level
+    // (per-pair full-line check), never a partial claim.
+    #[test]
+    fn wi3_closure_binder_delta_vetoes_at_driver() {
+        // `|x|` → `|y|` alongside the body rewrite: the body-only
+        // template would leave the binder stale.
+        let minuses = [
+            "    let f0 = |x| x > 0;",
+            "    let f1 = |x| x > 1;",
+            "    let f2 = |x| x > 2;",
+        ];
+        let pluses = [
+            "    let f0 = |y| y > 0;",
+            "    let f1 = |y| y > 1;",
+            "    let f2 = |y| y > 2;",
+        ];
+        let mut used = Vec::new();
+        assert!(
+            super::try_control_template_sweep(
+                &minuses,
+                &pluses,
+                "f.rs",
+                None,
+                &[2, 3, 4],
+                &mut used
+            )
+            .is_none(),
+            "binder delta must veto the closure position"
+        );
+        // Uniform binders still fire (the gate only vetoes per-pair
+        // frame deltas).
+        let pluses_same = [
+            "    let f0 = |x| x >= 0;",
+            "    let f1 = |x| x >= 1;",
+            "    let f2 = |x| x >= 2;",
+        ];
+        let mut used = Vec::new();
+        let out = super::try_control_template_sweep(
+            &minuses,
+            &pluses_same,
+            "f.rs",
+            None,
+            &[2, 3, 4],
+            &mut used,
+        )
+        .expect("uniform closure frames must still fire");
+        assert!(out.contains("- x > E0"), "got: {out}");
+        assert!(out.contains("+ x >= E0"), "got: {out}");
+    }
+
+    #[test]
+    fn wi3_arm_pattern_delta_vetoes_at_driver() {
+        // `1` → `9` alongside the body rewrite: the body-only template
+        // would leave the pattern stale.
+        let minuses = [
+            "        1 => v0 > 0,",
+            "        2 => v1 > 0,",
+            "        _ => v2 > 0,",
+        ];
+        let pluses = [
+            "        9 => v0 >= 0,",
+            "        8 => v1 >= 0,",
+            "        _ => v2 >= 0,",
+        ];
+        let mut used = Vec::new();
+        assert!(
+            super::try_control_template_sweep(
+                &minuses,
+                &pluses,
+                "f.rs",
+                None,
+                &[3, 4, 5],
+                &mut used
+            )
+            .is_none(),
+            "arm pattern delta must veto the arm-body position"
+        );
+        // Uniform patterns still fire.
+        let pluses_same = [
+            "        1 => v0 >= 0,",
+            "        2 => v1 >= 0,",
+            "        _ => v2 >= 0,",
+        ];
+        let mut used = Vec::new();
+        let out = super::try_control_template_sweep(
+            &minuses,
+            &pluses_same,
+            "f.rs",
+            None,
+            &[3, 4, 5],
+            &mut used,
+        )
+        .expect("uniform arm frames must still fire");
+        assert!(out.contains("- E0 > 0"), "got: {out}");
+    }
+
+    #[test]
+    fn wi3_if_while_keyword_delta_vetoes_at_driver() {
+        // `if` → `while` alongside the condition rewrite.
+        let minuses = ["    if v0 > 0 {", "    if v1 > 0 {", "    if v2 > 0 {"];
+        let pluses = [
+            "    while v0 >= 0 {",
+            "    while v1 >= 0 {",
+            "    while v2 >= 0 {",
+        ];
+        let mut used = Vec::new();
+        assert!(
+            super::try_control_template_sweep(
+                &minuses,
+                &pluses,
+                "f.rs",
+                None,
+                &[2, 3, 4],
+                &mut used
+            )
+            .is_none(),
+            "keyword delta must veto the condition position"
+        );
     }
 }
