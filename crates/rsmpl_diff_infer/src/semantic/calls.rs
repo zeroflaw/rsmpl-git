@@ -193,6 +193,50 @@ pub(crate) fn try_call_sweep(
     ))
 }
 
+/// WI-7 slice-1: whole-line bare-call callee-only single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair parses whole-line as
+/// `Old(args)` → `New(args)` with identical args, `old != new`, a
+/// pre-image is present (`None` vetoes — uniqueness needs the whole
+/// file, D3), and `call_holds` proves exactly one `old_cal/arity`
+/// site file-wide with zero opaque hits (conditions (a)+(b); (c) is
+/// structural: the bare-call template always carries the callee token
+/// beyond the `E` holes). Emission is the WI-19b allow-one spelling
+/// (tight range, directive-free, default `allow=one`).
+pub(crate) fn try_call_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    file_old?;
+    let (old_cal, new_cal, arity) = parse_call_pair(minuses[0], pluses[0])?;
+    if old_cal == new_cal {
+        return None;
+    }
+    if !crate::totality::call_holds(file_old, &old_cal, arity, minuses, changed) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
+    let mut vars = Vec::with_capacity(arity);
+    for i in 0..arity {
+        vars.push(format!("E{i}"));
+    }
+    let args = vars.join(", ");
+    let old_lit = super::shape::literal_callee(&old_cal);
+    let new_lit = super::shape::literal_callee(&new_cal);
+    // Allow-one: directive-free ranged hunk (59/77 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {old_lit}({args})\n+ {new_lit}({args})\n"));
+    Some(hunk)
+}
+
 /// Shared emission for the whole-line and sub-line bare-call paths
 /// (identical hunks: the frame is byte-identical on both sides, so the
 /// bare subterm rewrite reproduces the post-image).
@@ -326,4 +370,107 @@ fn parse_call_pair(old_line: &str, new_line: &str) -> Option<(String, String, us
         }
     }
     Some((o_cal, n_cal, o_args.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::infer_semantic_with_pre_images;
+    use std::collections::HashMap;
+
+    fn section(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn applied(pre: &HashMap<String, String>, patch: &str) -> HashMap<String, String> {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
+        files
+    }
+
+    #[test]
+    fn wi7_call_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-1: unique single `foo(1)` → `bar(1)` raises to an
+        // allow-one hunk and real-applies byte-identical.
+        let pre = "fn m() {\n    foo(1);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(1);\n+    bar(1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("unique call single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0)\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(files["f.rs"], "fn m() {\n    bar(1);\n}\n");
+    }
+
+    #[test]
+    fn wi7_call_single_twin_vetoes() {
+        // An untouched same-callee twin anywhere vetoes (totality).
+        let pre = "fn m() {\n    foo(1);\n    foo(9);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(1);\n+    bar(1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_call_single_different_arity_twin_keeps_firing() {
+        // Totality keys on callee+arity: a different-arity twin never
+        // matches the emitted pattern and never vetoes.
+        let pre = "fn m() {\n    foo(1);\n    foo(1, 2);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(1);\n+    bar(1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("different-arity twin must not veto");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi7_call_single_no_pre_image_vetoes() {
+        // No whole-file evidence → no guessing (D3).
+        assert!(
+            super::try_call_single(
+                &["    foo(1);"],
+                &["    bar(1);"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_call_single_uppercase_fires_literal() {
+        // Uppercase callees ride backticks (literal), else the engine
+        // would infer them as `expr` holes.
+        let pre = "fn m() {\n    Foo(1);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    Foo(1);\n+    Bar(1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("uppercase single must fire");
+        assert!(out.contains("`Foo`(E0)"), "got: {out}");
+        assert!(out.contains("`Bar`(E0)"), "got: {out}");
+    }
 }

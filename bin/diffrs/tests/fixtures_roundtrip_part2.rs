@@ -86,12 +86,12 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "[{name}] ordinary passthrough must equal normalized native"
         );
     } else if name == "48-single-call-stays-ordinary" {
-        // T484: single bare-call rename veto miniature --
-        // one `foo(1);` -> `bar(1);` line costs more as a
-        // semantic hunk than the ordinary hunk it replaces:
-        // pure ordinary passthrough (unit gate
-        // `single_call_site_stays_passthrough`, veto side of
-        // fixture 01, the 3-site foo_to_bar fire).
+        // T484 + WI-7 slice-1: single bare-call rename veto miniature --
+        // one `foo(1);` -> `bar(1);` line with an untouched `foo(9);`
+        // twin stays ordinary via `call_holds` totality (2 sites vs 1
+        // diff pair). Unique singles now fire as allow-one precision
+        // singles (see `calls::tests::wi7_*`); this fixture pins the
+        // twin veto, veto side of fixture 01 (3-site foo_to_bar fire).
         assert!(
             !semantic.contains("rule="),
             "single call edit must stay ordinary, got: {semantic}"

@@ -7656,6 +7656,17 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
+- Call-sweep precision single (WI-7 slice-1, `PrecisionUnique`): N == 1
+  whole-line bare-call callee-only pair with a pre-image, where
+  `call_holds` proves exactly one `old_callee/arity` site file-wide
+  with zero opaque hits. The callee token is the anchor beyond the
+  `E` holes (uppercase rides backticks, same rule as above). Emission
+  is the ranged allow-one spelling (tight original range,
+  directive-free, default `allow=one`); guard is the precision guard
+  (semantic ≤ ordinary + 16). `None` pre-image vetoes (no guessing);
+  an untouched same-callee same-arity twin vetoes; different-arity
+  twins never count. Remaining families (method/general/let,
+  sub-line calls) keep `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

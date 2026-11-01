@@ -79,7 +79,9 @@ pub(crate) use trait_methods::try_inherent_method_rename;
 pub(crate) use trait_methods::try_trait_method_rename;
 
 pub(crate) use arg_template::{try_call_arg_template_sweep, try_method_arg_template_sweep};
-pub(crate) use calls::{try_call_arg_add_sweep, try_call_perm_sweep, try_call_sweep};
+pub(crate) use calls::{
+    try_call_arg_add_sweep, try_call_perm_sweep, try_call_single, try_call_sweep,
+};
 pub(crate) use literal::try_call_literal_sweep;
 pub(crate) use macro_rules::{try_macro_rules_def_only, try_macro_rules_rename};
 pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};

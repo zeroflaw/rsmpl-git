@@ -518,7 +518,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "100-call-sweep-single",
-        "t375: single-site call-sweep rewrite re-infers ordinary",
+        "WI-7 slice-1: single-site call-sweep re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "102-use-rename-single",
