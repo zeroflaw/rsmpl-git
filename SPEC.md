@@ -2246,6 +2246,22 @@ Example (add visibility, generics, and a return type in one hunk, params and bod
   }
 ```
 
+#### Raised joints (`fn_joint`)
+
+`diffrs` raises a rename+evolution joint as one intent (SPEC D.4):
+exactly one column-0 `fn` definition renamed while its params or
+return slot evolves, joined with its call-callee uses in the same
+file, emits the single header-pair hunk with `# sweep` +
+`# follow=uses` carrying both deltas. The authored spelling is the
+same pair an agent would write by hand (explicit slots, `{ ... }`
+body). Fire requires callee-only calls; anything else in the joint
+shape (body/attr delta, arg-delta calls, vis/qual/generics/where
+delta) suppresses the old callee name for the file, so the section
+stays wholly ordinary — the fragmented fallback (ordinary definition
+plus a rename-claiming call sweep) is unrepresentable by
+construction. Attr joints, arg-delta call compositions, and
+multi-file joints stay ordinary (future work).
+
 #### Slot removal
 
 Omitting a slot on the `+` side deletes it **only when the `-` side
@@ -7325,7 +7341,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
     `call_literal`, `call_peel`, `call_peel_section`,
-    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
+    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `fn_joint`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -7407,6 +7423,27 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   veto the whole intent (never a partial claim); the probe doubles as
   the uniqueness guard (an off-diff same-name call or same-tail `use`
   fails the unchanged-leg).
+- Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
+  one column-0 `fn`-header pair with a name delta *plus* a params or
+  return slot delta (a pure rename is `item_intent`'s, never joint)
+  joined with N-1 call-callee use lines of the old name (bare,
+  qualified, turbofish, `let`-wrapped) in the same file compresses to
+  the single header-pair hunk with `# sweep` + `# follow=uses`, the
+  pair carrying both deltas (`- fn foo(x: i32) { ... }` /
+  `+ fn bar(x: u32) { ... }`, native spacing preserved). The vis stays
+  in the WI-1 closed set and preserved; qual/generics/where are
+  preserved; only the call-callee-only class fires (arguments
+  token-identical — the follow pass never adds arguments, so a hunk
+  claiming otherwise would fail its own probe). Totality is the same
+  scratch-apply probe plus the unique-definition guard and the
+  byte-win guard. Claim-then-veto suppresses instead of fragmenting:
+  a joint shape that fails any fire gate (body/attr delta, arg-delta
+  calls, vis/qual/generics/where delta, twin defs, probe or byte-win
+  fail) suppresses its old callee name for the file, so the call
+  hunks stay wholly ordinary instead of emitting a rename-claiming
+  sweep over a definition delta they cannot see. Out of scope (stays
+  ordinary): multi-file groups, attr-joint raising, and arg-delta
+  call compositions (two-hunk shared-rule form, future work).
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
   decline — there is no file to join) joined with N-1 same-delta
@@ -8980,7 +9017,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(116), all example benches (32 applyrs, 44 diffrs), plus the history_e2e pins. Out of scope
+(118), all example benches (32 applyrs, 45 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

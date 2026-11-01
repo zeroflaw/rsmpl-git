@@ -503,6 +503,7 @@ pub(crate) fn compress_section(
     used_rules: &mut Vec<String>,
     pre: &std::collections::HashMap<String, String>,
     prov: &mut Vec<HunkProvenance>,
+    suppressed: &std::collections::HashSet<(String, String)>,
 ) -> Option<String> {
     let header = section.lines().next()?;
     // T385: CRLF content stays ordinary passthrough — detectors strip
@@ -816,7 +817,7 @@ pub(crate) fn compress_section(
                 used_rules.truncate(impl_checkpoint);
             }
         }
-        return compress_section_per_hunk(section, path, file_old, used_rules, prov);
+        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
     }
     if !whole {
         // T441: hetero-arg peel cross-hunk sweep before verbatim
@@ -912,7 +913,7 @@ pub(crate) fn compress_section(
         // T403: non-whole sections try the cross-hunk verbatim sweep
         // before per-hunk (whole-section detectors need balance) —
         // already attempted above on the unmodified section.
-        return compress_section_per_hunk(section, path, file_old, used_rules, prov);
+        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
     }
     // N >= 2 whole-section pair sweeps in chain order; a losing shape
     // truncates its reserved rule and falls through to verbatim, so
@@ -1168,7 +1169,7 @@ pub(crate) fn compress_section(
     // T403: verbatim sweep after the whole-section detectors fail.
     // Per-hunk fallback (T349): pairwise-disjoint hunks merge by
     // construction (SPEC 10.6 option-1).
-    compress_section_per_hunk(section, path, file_old, used_rules, prov)
+    compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed)
 }
 
 /// Per-hunk fallback for `compress_section`: compress each balanced
@@ -1181,6 +1182,7 @@ fn compress_section_per_hunk(
     file_old: Option<&str>,
     used_rules: &mut Vec<String>,
     prov: &mut Vec<HunkProvenance>,
+    suppressed: &std::collections::HashSet<(String, String)>,
 ) -> Option<String> {
     // Split the prelude (`diff --git`/`index`/`---`/`+++`) from the
     // native hunks; a section without hunks has nothing to compress.
@@ -1262,6 +1264,25 @@ fn compress_section_per_hunk(
             } else if line.starts_with('+') && !line.starts_with("+++") {
                 pluses.push(&line[1..]);
             }
+        }
+        // WI-4a: a vetoed fn joint suppresses its old callee name for
+        // this file — a hunk of pure call-callee sites of a suppressed
+        // `(path, old)` stays ordinary instead of emitting a
+        // rename-claiming sweep over a definition delta it cannot see.
+        // The def hunk itself never matches (headers are not calls),
+        // and mixed hunks fall through to the chain below (which
+        // declines hetero shapes on its own).
+        if !suppressed.is_empty()
+            && !minuses.is_empty()
+            && minuses.len() == pluses.len()
+            && minuses.iter().all(|m| {
+                suppressed
+                    .iter()
+                    .any(|(p, o)| p == path && super::fn_joint::is_call_callee_of(m, o))
+            })
+        {
+            out.push_str(hunk);
+            continue;
         }
         // T465: partial item-deletion (whole-item minus-heavy hunks only).
         let partial_before = used_rules.len();
@@ -1495,8 +1516,14 @@ mod tests {
         let mut used = Vec::new();
         let mut prov = Vec::new();
         let pre = pre_map();
-        let out =
-            compress_section(section, &mut used, &pre, &mut prov).expect("partition must fire");
+        let out = compress_section(
+            section,
+            &mut used,
+            &pre,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("partition must fire");
         assert_eq!(out.matches("rule=").count(), 4, "got:\n{out}");
         assert_eq!(prov.len(), 4, "one provenance entry per hunk: {prov:?}");
         assert!(prov.iter().all(|p| p.detector == "item_rename"), "{prov:?}");
@@ -1520,8 +1547,14 @@ mod tests {
         pre.insert("g.rs".to_string(), tiny.to_string());
         let mut used = Vec::new();
         let mut prov = Vec::new();
-        let out = compress_section(section, &mut used, &pre, &mut prov)
-            .expect("precision guard must fire");
+        let out = compress_section(
+            section,
+            &mut used,
+            &pre,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("precision guard must fire");
         assert_eq!(out.matches("rule=").count(), 3, "got:\n{out}");
         assert!(prov.iter().all(|p| p.detector == "item_rename"), "{prov:?}");
         let mut files = pre.clone();
@@ -1549,7 +1582,14 @@ mod tests {
         files.insert("f.rs".to_string(), pre.to_string());
         let mut used = Vec::new();
         let mut prov = Vec::new();
-        assert!(compress_section(section, &mut used, &files, &mut prov).is_none());
+        assert!(compress_section(
+            section,
+            &mut used,
+            &files,
+            &mut prov,
+            &std::collections::HashSet::new()
+        )
+        .is_none());
         assert!(used.is_empty());
         assert!(prov.is_empty());
         // Function level: the same single mixed hunk declines partial too.
@@ -1562,5 +1602,36 @@ mod tests {
         )
         .is_none());
         assert!(used.is_empty());
+    }
+
+    #[test]
+    fn suppressed_joint_callee_stays_ordinary() {
+        // WI-4a: a vetoed joint suppresses its old callee name for the
+        // file — the per-hunk fallback leaves the pure call hunk
+        // ordinary instead of emitting a rename-claiming sweep.
+        let pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+fn bar(x: i32) -> i32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n";
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        let suppressed: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::from([("f.rs".to_string(), "foo".to_string())]);
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        assert!(compress_section(section, &mut used, &files, &mut prov, &suppressed).is_none());
+        assert!(used.is_empty());
+        assert!(prov.is_empty());
+        // Without the suppression the same call hunk still sweeps (the
+        // veto is what makes it ordinary, never a blanket call decline).
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = compress_section(
+            section,
+            &mut used,
+            &files,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("unsuppressed call hunk must sweep");
+        assert!(out.contains("- foo(E0)"), "got:\n{out}");
     }
 }

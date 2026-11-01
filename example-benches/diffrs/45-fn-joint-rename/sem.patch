@@ -1,0 +1,6 @@
+diff --git src.rs
+@@ -1,1 @@ rule=r1
+# sweep
+# follow=uses
+- fn foo(x: i32) -> i32 { ... }
++ fn bar(x: i32) -> u32 { ... }

@@ -52,12 +52,12 @@ struct SectionPairs {
 }
 
 /// One native pair at its old-side site.
-struct Pair {
-    sec: usize,
-    path: String,
-    minus: String,
-    plus: String,
-    site: usize,
+pub(crate) struct Pair {
+    pub(crate) sec: usize,
+    pub(crate) path: String,
+    pub(crate) minus: String,
+    pub(crate) plus: String,
+    pub(crate) site: usize,
 }
 
 /// Whole-patch item-intent pre-pass: returns the rebuilt section list
@@ -587,7 +587,7 @@ fn is_dedicated_expr(expr: &syn::Expr, old: &str) -> bool {
 
 /// Count `split_item` definitions of (`kind`, `ident`) across the
 /// involved pre-images (one line per definition).
-fn count_kind_defs(
+pub(crate) fn count_kind_defs(
     pre: &HashMap<String, String>,
     pairs: &[Pair],
     kind: &str,
@@ -631,7 +631,11 @@ fn emit(path: &str, rule: &str, kind: &str, prefix: &str, old: &str, new: &str) 
 
 /// Scratch-apply probe: the emission applied to a `pre` clone must show
 /// each claimed plus line at its site with every other line identical.
-fn probe_reproduces(pre: &HashMap<String, String>, emission: &str, pairs: &[Pair]) -> bool {
+pub(crate) fn probe_reproduces(
+    pre: &HashMap<String, String>,
+    emission: &str,
+    pairs: &[Pair],
+) -> bool {
     let Ok(parsed) = rsmpl_patch::parse_patch(emission) else {
         return false;
     };

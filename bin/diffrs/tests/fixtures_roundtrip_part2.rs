@@ -756,6 +756,37 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.contains("+ E::C => 30,"),
             "second hetero body stays per-site, got: {semantic}"
         );
+    } else if name == "118-fn-joint-params-fires" {
+        // WI-4a: `fn foo(x: i32)` → `fn bar(x: u32)` + callee-only call
+        // updates raise to the single follow hunk whose header pair
+        // carries the rename+slot delta (engine follow rewrites the
+        // callees; the harness asserts byte-identical re-apply).
+        assert!(
+            semantic.contains("# follow=uses"),
+            "joint must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- fn foo(x: i32) { ... }"),
+            "joint header minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn bar(x: u32) { ... }"),
+            "joint header plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "119-fn-joint-body-stays-ordinary" {
+        // WI-4a veto: rename+body-literal stays wholly ordinary — the
+        // fragmented fallback (ordinary def + rename-claiming call
+        // sweep) is suppressed, so no `rule=` hunk may appear.
+        assert!(
+            !semantic.contains("rule="),
+            "body veto must stay wholly ordinary, got: {semantic}"
+        );
     } else if name == "116-assoc-rename-fires" {
         // WI-28 + WI-3: trait decl + 2 impl decls + `::Item` use tails
         // sharing one delta compress to the single trait follow hunk

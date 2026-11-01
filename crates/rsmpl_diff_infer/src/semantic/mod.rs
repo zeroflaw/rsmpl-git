@@ -27,6 +27,7 @@ pub(crate) mod definition_addition;
 pub(crate) mod definition_arm_follow;
 pub(crate) mod definition_evolution;
 mod deletes;
+mod fn_joint;
 pub(crate) mod frame;
 pub(crate) mod general_expr;
 pub(crate) mod general_subline;
@@ -236,9 +237,69 @@ pub fn infer_semantic_with_provenance(
             }
             None => sections,
         };
+    // WI-4a whole-patch fn-joint pre-pass (single `fn` rename+slot
+    // definition + callee-only call uses in one file collapse to one
+    // follow hunk; vetoed joints suppress their old callee name so the
+    // per-hunk fallback stays wholly ordinary). Runs on the item-intent
+    // output (disjoint: pure renames never candidates, never suppressed).
+    let joint_owned: Vec<String>;
+    let joint_rules_before = used_rules.len();
+    let mut joint_suppressed: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    let sections: &[String] = match fn_joint::try_fn_joint_intent(sections, pre, &mut used_rules) {
+        Some((rewritten, def_path, rule, suppressed)) => {
+            joint_suppressed = suppressed;
+            if rule.is_empty() {
+                joint_owned = rewritten;
+                &joint_owned
+            } else {
+                compressed_any = true;
+                let emitted = rewritten
+                    .iter()
+                    .find(|s| {
+                        s.lines().next().is_some_and(|h| {
+                            h.starts_with("diff --git ")
+                                && crate::b_side_path(&h["diff --git ".len()..])
+                                    .is_some_and(|p| p == def_path)
+                        })
+                    })
+                    .cloned()
+                    .unwrap_or_default();
+                let original: String = sections
+                    .iter()
+                    .filter(|s| !rewritten.iter().any(|r| r == *s))
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("");
+                let changed: Vec<usize> = sections
+                    .iter()
+                    .filter(|s| !rewritten.iter().any(|r| r == *s))
+                    .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
+                    .collect();
+                if !emitted.is_empty() && !original.is_empty() {
+                    let detector_of: Vec<(String, &'static str)> = used_rules[joint_rules_before..]
+                        .iter()
+                        .map(|r| (r.clone(), "fn_joint"))
+                        .collect();
+                    prov::commit_prov(
+                        prov,
+                        &emitted,
+                        &original,
+                        &def_path,
+                        &detector_of,
+                        &changed,
+                        pre.get(&def_path).map(String::as_str),
+                    );
+                }
+                joint_owned = rewritten;
+                &joint_owned
+            }
+        }
+        None => sections,
+    };
     // WI-15b whole-patch member-intent pre-pass (single member definition
     // + same-delta uses across files, file/section-pure partial); runs on
-    // the item-intent output (disjoint def shapes, no double-claim).
+    // the fn-joint output (disjoint def shapes, no double-claim).
     let member_owned: Vec<String>;
     let member_rules_before = used_rules.len();
     let sections: &[String] = match member::try_member_intent_sweep(sections, pre, &mut used_rules)
@@ -340,7 +401,7 @@ pub fn infer_semantic_with_provenance(
             None => sections,
         };
     for section in sections {
-        match chain::compress_section(section, &mut used_rules, pre, prov) {
+        match chain::compress_section(section, &mut used_rules, pre, prov, &joint_suppressed) {
             Some(semantic) => {
                 compressed_any = true;
                 out.push_str(&semantic);
