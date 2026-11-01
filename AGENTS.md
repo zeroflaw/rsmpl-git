@@ -61,7 +61,7 @@ per the 14.8 table — or one `# follow=uses` hunk for workspace uses; a definit
 - struct Old
 + struct New
 ```
-Rename + field-type evolution (SPEC 14.8): def pair above its member pair, no header — struct-only, single-evo (`@@ -1,1 @@ rule=r1` + `# sweep` + `# follow=uses` + both pairs).
+Rename + member evolution (SPEC 14.8): def pair above its member pair, no header — struct-only field-type (`- struct Old`/`+ struct New` + `- x: u32`/`+ x: u64`) or enum-only variant-evolution (`- enum Old`/`+ enum New` + `- A(u32)`/`+ A(u64)`, struct-payload/discriminant likewise), single-evo (`@@ -1,1 @@ rule=r1` + `# sweep` + `# follow=uses` + both pairs).
 
 Call rewrite — needs `# allow=many` for multiple sites, `# optional` to
 tolerate zero (SPEC 17). Add `# repeat` to fold nested same-rule matches

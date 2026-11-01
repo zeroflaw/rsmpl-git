@@ -446,6 +446,14 @@ pub(crate) fn classify(
     {
         return Ok(joint);
     }
+    // WI-5 slice 2b-next joint (enum rename + variant evolution,
+    // bare-def + member, no header). Disjoint from the struct joint by
+    // def-kind/member-shape.
+    if let Some(joint) =
+        crate::pattern_item_joint::classify_enum_rename_variant_evo(m, p, c, table)?
+    {
+        return Ok(joint);
+    }
     if let Some(evo) = crate::pattern_member_evo::classify_member_evolution(m, p, c, table)? {
         return Ok(evo);
     }

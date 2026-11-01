@@ -257,6 +257,7 @@ pub(crate) fn gate_directives(
             | PatternKind::VariantRename { .. }
             | PatternKind::AssocRename { .. }
             | PatternKind::StructRenameFieldEvo { .. }
+            | PatternKind::EnumRenameVariantEvo { .. }
     ) || matches!(&compiled.kind, PatternKind::ImplContext { .. }
         if crate::use_graph_method::method_follow_target(rh, compiled).is_some());
     if rh.follows_uses() && !follow_allowed {

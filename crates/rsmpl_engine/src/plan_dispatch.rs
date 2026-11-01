@@ -151,6 +151,16 @@ pub(crate) fn apply_rsmpl_hunk(
                 edits,
             )
         }
+        PatternKind::EnumRenameVariantEvo { .. } => {
+            matcher_item_joint::apply_enum_rename_variant_evo_hunk(
+                parsed,
+                &state.original,
+                &state.index,
+                rh,
+                compiled,
+                edits,
+            )
+        }
         PatternKind::VariantPayloadEvolution { .. } => {
             matcher_member_evo::apply_variant_payload_hunk(
                 parsed,

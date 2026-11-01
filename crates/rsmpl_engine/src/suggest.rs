@@ -35,6 +35,7 @@ pub(crate) fn candidate_preview(
             | PatternKind::ConstEvolution { .. }
             | PatternKind::FieldTypeEvolution { .. }
             | PatternKind::StructRenameFieldEvo { .. }
+            | PatternKind::EnumRenameVariantEvo { .. }
             | PatternKind::VariantPayloadEvolution { .. }
             | PatternKind::FieldAddition { .. }
             | PatternKind::VariantAddition { .. }
@@ -105,6 +106,9 @@ pub(crate) fn candidate_preview(
                 }
                 PatternKind::StructRenameFieldEvo { old_container, .. } => {
                     Some(("struct ".to_string(), Some(old_container.clone())))
+                }
+                PatternKind::EnumRenameVariantEvo { old_container, .. } => {
+                    Some(("enum ".to_string(), Some(old_container.clone())))
                 }
                 PatternKind::FieldAddition { struct_name, .. } => {
                     Some(("struct ".to_string(), Some(struct_name.clone())))
@@ -193,7 +197,8 @@ fn head_token(kind: &PatternKind) -> Option<String> {
         | PatternKind::AssocEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
         PatternKind::FieldTypeEvolution { minus_sub, .. } => longest_concrete_ident(minus_sub),
         PatternKind::StructRenameFieldEvo { minus_sub, .. } => longest_concrete_ident(minus_sub),
-        PatternKind::VariantPayloadEvolution { payload, .. } => match payload {
+        PatternKind::VariantPayloadEvolution { payload, .. }
+        | PatternKind::EnumRenameVariantEvo { payload, .. } => match payload {
             rsmpl_pattern::VariantPayload::Tuple { minus_subs, .. } => minus_subs
                 .iter()
                 .filter_map(|s| longest_concrete_ident(s))

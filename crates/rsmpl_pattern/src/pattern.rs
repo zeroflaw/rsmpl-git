@@ -174,6 +174,22 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// WI-5 slice 2b-next: enum rename + variant-evolution joint
+    /// (`- enum Old` / `+ enum New` plus `- A(u32)` / `+ A(u64)`,
+    /// `- A { x: u32 }` / `+ A { x: u64 }`, or `- A = 1` / `+ A = 2`,
+    /// no container header — the def pair names the container, the
+    /// member pair rides it). The variant name is concrete and
+    /// preserved, the payload/discriminant is concrete text (v1: no
+    /// templates). `# follow=uses` is allowed (the rename half owns
+    /// uses; pure evolutions stay C17).
+    EnumRenameVariantEvo {
+        old_container: String,
+        new_container: String,
+        variant: String,
+        payload: VariantPayload,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// Enum-variant payload/discriminant evolution (`enum E {` context):
     /// the variant name is concrete and preserved, exactly one region
     /// evolves — tuple payload types, struct payload field types (field
@@ -660,6 +676,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::ConstEvolution { .. } => "const/static evolution",
             PatternKind::FieldTypeEvolution { .. } => "field-type evolution",
             PatternKind::StructRenameFieldEvo { .. } => "struct-rename-field-evolution",
+            PatternKind::EnumRenameVariantEvo { .. } => "enum-rename-variant-evolution",
             PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
             PatternKind::FieldAddition { .. } => "field addition",
             PatternKind::VariantAddition { .. } => "variant addition",

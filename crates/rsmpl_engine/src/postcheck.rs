@@ -482,64 +482,33 @@ pub(crate) fn plus_instantiated_parsed(
         // evolved field type directly in the post-image (the two edits
         // report two spans but the pure-evo plus re-match owns only the
         // type span — a shared re-match would fail the rename span).
+        // Arms live in `postcheck_item_joint` (D5 line gate).
         PatternKind::StructRenameFieldEvo {
             new_container,
             field,
             plus_raw,
             ..
-        } => {
-            let parsed = post_parsed?;
-            let _ = post_index;
-            let want_ty: syn::Type = syn::parse_str(plus_raw).ok()?;
-            let want_norm = quote::quote!(#want_ty)
-                .to_string()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let mut ident_spans: Vec<(u32, u32)> = Vec::new();
-            let mut ty_spans: Vec<(u32, u32)> = Vec::new();
-            let mut found = false;
-            for it in &parsed.items {
-                if let syn::Item::Struct(s) = it {
-                    if s.ident == *new_container {
-                        let (a, b) = span_lines(&s.ident);
-                        ident_spans.push((a as u32, b as u32));
-                        if let syn::Fields::Named(fields) = &s.fields {
-                            for f in &fields.named {
-                                if f.ident.as_ref().is_some_and(|i| i == field) {
-                                    let fty = &f.ty;
-                                    let got = quote::quote!(#fty)
-                                        .to_string()
-                                        .split_whitespace()
-                                        .collect::<Vec<_>>()
-                                        .join(" ");
-                                    if got == want_norm {
-                                        found = true;
-                                        let (a, b) = span_lines(&f.ty);
-                                        ty_spans.push((a as u32, b as u32));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if !found {
-                return Some(false);
-            }
-            // Rename-posture counting (WI-1.4, not all-spans): follow
-            // edits ride the same hunk's span list, so require one span
-            // on the renamed ident and one on the evolved type.
-            let on_ident = spans
-                .iter()
-                .filter(|sp| ident_spans.iter().any(|pr| spans_overlap(**sp, *pr)))
-                .count();
-            let on_ty = spans
-                .iter()
-                .filter(|sp| ty_spans.iter().any(|pr| spans_overlap(**sp, *pr)))
-                .count();
-            Some(on_ident >= 1 && on_ty >= 1)
-        }
+        } => crate::postcheck_item_joint::verify_struct_joint(
+            new_container,
+            field,
+            plus_raw,
+            post_parsed,
+            spans,
+        ),
+        // WI-5 slice 2b-next joint: verify the renamed enum ident AND
+        // the evolved variant region directly in the post-image.
+        PatternKind::EnumRenameVariantEvo {
+            new_container,
+            variant,
+            payload,
+            ..
+        } => crate::postcheck_item_joint::verify_enum_joint(
+            new_container,
+            variant,
+            payload,
+            post_parsed,
+            spans,
+        ),
         PatternKind::VariantPayloadEvolution {
             enum_name,
             variant,
@@ -718,7 +687,7 @@ fn is_member_container_header(line: &str) -> bool {
 }
 
 /// Line-range intersection (1-based inclusive on both sides).
-fn spans_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
+pub(crate) fn spans_overlap(a: (u32, u32), b: (u32, u32)) -> bool {
     a.0 <= b.1 && b.0 <= a.1
 }
 
@@ -955,7 +924,7 @@ struct DefIdent {
     end_line: usize,
 }
 
-fn span_lines<S: syn::spanned::Spanned>(node: &S) -> (usize, usize) {
+pub(crate) fn span_lines<S: syn::spanned::Spanned>(node: &S) -> (usize, usize) {
     let s = node.span();
     let start = s.start().line.max(1);
     let end = s.end().line.max(start);

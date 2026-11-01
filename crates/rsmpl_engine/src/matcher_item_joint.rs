@@ -1,18 +1,19 @@
-//! WI-5 slice 2b: struct rename + field-type evolution joint.
+//! WI-5 slice 2b (+next): struct/enum rename + member-evolution joint.
 //!
 //! Atomic application of the composed spelling (bare-def + member, no
-//! container header — SPEC 14.8): the `ItemStruct Old` ident is renamed
-//! to `New` and the named field's type span is replaced, in one matcher
-//! pass over the pre-image. Twin `Old` definitions veto (0 matches —
-//! the raiser's probe owns the error, never a partial rename). Field
-//! vis must agree (subset posture, like the pure field-evo matcher).
+//! container header — SPEC 14.8): the `ItemStruct`/`ItemEnum Old` ident
+//! is renamed to `New` and the named member's evolved region span(s)
+//! are replaced, in one matcher pass over the pre-image. Twin `Old`
+//! definitions veto (0 matches — the raiser's probe owns the error,
+//! never a partial rename). Field vis must agree (subset posture, like
+//! the pure field-evo matcher).
 
 use std::collections::HashMap;
 
 use syn::spanned::Spanned;
 
 use rsmpl_patch::{Allow, ErrorCode, RsmplHunk, Scope, StructuredError};
-use rsmpl_pattern::{CompiledPattern, PatternKind};
+use rsmpl_pattern::{CompiledPattern, PatternKind, VariantPayload};
 
 use crate::edits::TextEdit;
 use crate::lines::LineIndex;
@@ -213,6 +214,325 @@ pub fn apply_struct_rename_field_evo_hunk(
     Ok((matched, all_bindings))
 }
 
+/// One enum-joint candidate: the enum ident plus the named variant's
+/// payload spans.
+struct EnumJointCandidate<'ast> {
+    ident_span: proc_macro2::Span,
+    tuple_tys: Vec<&'ast syn::Type>,
+    struct_fields: Vec<(String, &'ast syn::Type)>,
+    discriminant: Option<&'ast syn::Expr>,
+    is_tuple: bool,
+    is_struct: bool,
+    variant_attrs: Vec<syn::Attribute>,
+    container_start: u32,
+    container_end: u32,
+    anchor_line: u32,
+}
+
+fn collect_enum_joint<'ast>(
+    items: &'ast [syn::Item],
+    old_container: &str,
+    variant: &str,
+    out: &mut Vec<EnumJointCandidate<'ast>>,
+) {
+    use syn::visit::{visit_item, Visit};
+    struct V<'a, 'ast> {
+        old: &'a str,
+        variant: &'a str,
+        out: &'a mut Vec<EnumJointCandidate<'ast>>,
+    }
+    impl<'ast> Visit<'ast> for V<'_, 'ast> {
+        fn visit_item(&mut self, it: &'ast syn::Item) {
+            if let syn::Item::Enum(e) = it {
+                if e.ident == self.old {
+                    for v in &e.variants {
+                        if v.ident == self.variant {
+                            let (tuple_tys, struct_fields, is_tuple, is_struct) = match &v.fields {
+                                syn::Fields::Unnamed(u) => (
+                                    u.unnamed.iter().map(|f| &f.ty).collect(),
+                                    Vec::new(),
+                                    true,
+                                    false,
+                                ),
+                                syn::Fields::Named(n) => (
+                                    Vec::new(),
+                                    n.named
+                                        .iter()
+                                        .filter_map(|f| {
+                                            f.ident.as_ref().map(|i| (i.to_string(), &f.ty))
+                                        })
+                                        .collect(),
+                                    false,
+                                    true,
+                                ),
+                                syn::Fields::Unit => (Vec::new(), Vec::new(), false, false),
+                            };
+                            self.out.push(EnumJointCandidate {
+                                ident_span: e.ident.span(),
+                                tuple_tys,
+                                struct_fields,
+                                discriminant: v.discriminant.as_ref().map(|(_, e)| e),
+                                is_tuple,
+                                is_struct,
+                                variant_attrs: v.attrs.clone(),
+                                container_start: e.span().start().line as u32,
+                                container_end: e.span().end().line as u32,
+                                anchor_line: v.ident.span().start().line as u32,
+                            });
+                        }
+                    }
+                }
+            }
+            visit_item(self, it);
+        }
+    }
+    let mut v = V {
+        old: old_container,
+        variant,
+        out,
+    };
+    for it in items {
+        v.visit_item(it);
+    }
+}
+
+/// Apply the enum joint hunk: rename the `ItemEnum Old` ident to `New`
+/// and replace the evolved variant region span(s), in one pass.
+pub fn apply_enum_rename_variant_evo_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
+    let (old_container, new_container, variant, payload, minus_attrs) = match &compiled.kind {
+        PatternKind::EnumRenameVariantEvo {
+            old_container,
+            new_container,
+            variant,
+            payload,
+            minus_attrs,
+            ..
+        } => (
+            old_container.clone(),
+            new_container.clone(),
+            variant.clone(),
+            payload.clone(),
+            minus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected enum-rename-variant-evolution pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    let (minus_subs, plus_raws, disc_minus, disc_plus, placeholders, mode) = match &payload {
+        VariantPayload::Tuple {
+            minus_subs,
+            plus_raws,
+            placeholders,
+        } => (
+            minus_subs.clone(),
+            plus_raws.clone(),
+            None,
+            None,
+            placeholders.clone(),
+            "tuple",
+        ),
+        VariantPayload::Struct {
+            minus_subs,
+            plus_raws,
+            placeholders: sph,
+            ..
+        } => (
+            minus_subs.clone(),
+            plus_raws.clone(),
+            None,
+            None,
+            sph.clone(),
+            "struct",
+        ),
+        VariantPayload::Discriminant {
+            minus_sub,
+            plus_raw,
+            placeholders,
+        } => (
+            vec![minus_sub.clone()],
+            vec![plus_raw.clone()],
+            Some(minus_sub.clone()),
+            Some(plus_raw.clone()),
+            placeholders.clone(),
+            "disc",
+        ),
+    };
+    // Concrete-only v1: placeholders stay empty, but wire the reverse
+    // map anyway (matches the struct-joint shape).
+    let mut candidates = Vec::new();
+    collect_enum_joint(&parsed.items, &old_container, &variant, &mut candidates);
+    candidates.sort_by_key(|c| (c.container_start, c.anchor_line));
+    let reverse: HashMap<String, String> = placeholders
+        .iter()
+        .map(|(n, ph)| (ph.clone(), n.clone()))
+        .collect();
+    let pat_tys: Vec<syn::Type> = if mode == "disc" {
+        Vec::new()
+    } else {
+        minus_subs
+            .iter()
+            .map(|s| {
+                syn::parse_str::<syn::Type>(s).map_err(|e| {
+                    StructuredError::new(
+                        ErrorCode::PatternConflict,
+                        format!("invalid joint variant payload type pattern: {e}"),
+                    )
+                    .with_rule(rule.clone())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if mode != "disc" {
+        for s in &plus_raws {
+            syn::parse_str::<syn::Type>(s).map_err(|e| {
+                StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("substituted joint variant payload type does not parse: {e}"),
+                )
+                .with_rule(rule.clone())
+            })?;
+        }
+    }
+    let pat_disc: Option<syn::Expr> = if mode == "disc" {
+        Some(
+            syn::parse_str::<syn::Expr>(disc_minus.as_ref().expect("disc")).map_err(|e| {
+                StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("invalid joint discriminant pattern: {e}"),
+                )
+                .with_rule(rule.clone())
+            })?,
+        )
+    } else {
+        None
+    };
+    if mode == "disc" {
+        if let Some(p) = &disc_plus {
+            syn::parse_str::<syn::Expr>(p).map_err(|e| {
+                StructuredError::new(
+                    ErrorCode::PatternConflict,
+                    format!("substituted joint discriminant does not parse: {e}"),
+                )
+                .with_rule(rule.clone())
+            })?;
+        }
+    }
+    let old_start = hunk.header.old_start;
+    let old_len = hunk.header.old_len;
+    let mut matched = 0;
+    let mut all_bindings = Vec::new();
+    for c in &candidates {
+        if !in_scope(
+            c.container_start,
+            c.container_end,
+            c.anchor_line,
+            hunk.scope(),
+            old_start,
+            old_len,
+        ) {
+            continue;
+        }
+        if hunk.attrs_policy() == rsmpl_patch::AttrsPolicy::Preserve
+            && !minus_attrs.is_empty()
+            && !attrs_equal(&minus_attrs, &c.variant_attrs)
+        {
+            continue;
+        }
+        check_attrs(
+            &c.variant_attrs,
+            hunk.attrs_policy(),
+            &minus_attrs,
+            &rule,
+            "",
+        )?;
+        let mut cx =
+            crate::matcher_general::MatchCx::with_reverse(original, index, reverse.clone());
+        let ok = match mode {
+            "tuple" => {
+                if !c.is_tuple || c.tuple_tys.len() != pat_tys.len() {
+                    false
+                } else {
+                    pat_tys
+                        .iter()
+                        .zip(c.tuple_tys.iter())
+                        .all(|(p, t)| crate::matcher_types::match_type(p, t, &mut cx))
+                }
+            }
+            "struct" => {
+                if !c.is_struct {
+                    false
+                } else {
+                    let want: Vec<String> = match &payload {
+                        VariantPayload::Struct { fields, .. } => fields.clone(),
+                        _ => Vec::new(),
+                    };
+                    let have: Vec<String> =
+                        c.struct_fields.iter().map(|(n, _)| n.clone()).collect();
+                    if want != have {
+                        false
+                    } else {
+                        pat_tys
+                            .iter()
+                            .zip(c.struct_fields.iter().map(|(_, t)| *t))
+                            .all(|(p, t)| crate::matcher_types::match_type(p, t, &mut cx))
+                    }
+                }
+            }
+            _ => match (&pat_disc, c.discriminant) {
+                (Some(p), Some(t)) => crate::matcher_general::match_expr(p, t, &mut cx),
+                _ => false,
+            },
+        };
+        if !ok {
+            continue;
+        }
+        let (a, b) = span_bytes(original, index, c.ident_span)
+            .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+        edits.push(TextEdit::new(a, b, new_container.clone()).with_label("rename"));
+        match mode {
+            "tuple" => {
+                for (i, target) in c.tuple_tys.iter().enumerate() {
+                    let (a, b) = span_bytes(original, index, target.span())
+                        .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                    edits.push(TextEdit::new(a, b, plus_raws[i].clone()).with_label("payload"));
+                }
+            }
+            "struct" => {
+                for (i, (_, target)) in c.struct_fields.iter().enumerate() {
+                    let (a, b) = span_bytes(original, index, target.span())
+                        .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                    edits.push(TextEdit::new(a, b, plus_raws[i].clone()).with_label("payload"));
+                }
+            }
+            _ => {
+                let target = c.discriminant.expect("checked above");
+                let (a, b) = span_bytes(original, index, target.span())
+                    .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                edits.push(
+                    TextEdit::new(a, b, disc_plus.clone().expect("disc")).with_label("payload"),
+                );
+            }
+        }
+        all_bindings.push(cx.bindings);
+        matched += 1;
+        if hunk.allow() == Allow::One && matched > 1 {
+            break;
+        }
+    }
+    Ok((matched, all_bindings))
+}
+
 fn range_err(rule: &str, line: u32) -> StructuredError {
     StructuredError::new(
         ErrorCode::RangeConflict,
@@ -276,5 +596,47 @@ mod tests {
         let parsed_patch = rsmpl_patch::parse_patch(&joint_patch()).expect("must parse");
         let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
         assert!(crate::apply_patch_to_tree(&mut files, &parsed_patch).is_err());
+    }
+
+    fn enum_joint_patch(member_minus: &str, member_plus: &str) -> String {
+        format!(
+            "diff --git f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n# follow=uses\n- enum Old\n+ enum New\n- {member_minus}\n+ {member_plus}\n"
+        )
+    }
+
+    #[test]
+    fn enum_joint_tuple_renames_container_and_payload_with_follow() {
+        let pre = "enum Old {\n    A(u32),\n}\nfn f(x: Old) {\n}\n";
+        let post = apply(&enum_joint_patch("A(u32)", "A(u64)"), pre);
+        assert!(post.contains("enum New"), "got:\n{post}");
+        assert!(post.contains("A(u64)"), "got:\n{post}");
+        assert!(post.contains("fn f(x: New)"), "got:\n{post}");
+        assert!(!post.contains("Old"), "got:\n{post}");
+    }
+
+    #[test]
+    fn enum_joint_discriminant_applies() {
+        let pre = "enum Old {\n    A = 1,\n}\nfn f(x: Old) {\n}\n";
+        let post = apply(&enum_joint_patch("A = 1", "A = 2"), pre);
+        assert!(post.contains("enum New"), "got:\n{post}");
+        assert!(post.contains("A = 2"), "got:\n{post}");
+        assert!(!post.contains("Old"), "got:\n{post}");
+    }
+
+    #[test]
+    fn enum_joint_struct_payload_applies() {
+        let pre = "enum Old {\n    A { x: u32 },\n}\nfn f(x: Old) {\n}\n";
+        let post = apply(&enum_joint_patch("A { x: u32 }", "A { x: u64 }"), pre);
+        assert!(post.contains("enum New"), "got:\n{post}");
+        assert!(post.contains("x: u64"), "got:\n{post}");
+        assert!(!post.contains("Old"), "got:\n{post}");
+    }
+
+    #[test]
+    fn enum_joint_twin_containers_both_match() {
+        let pre = "enum Old {\n    A(u32),\n}\nenum Old {\n    A(u32),\n}\n";
+        let post = apply(&enum_joint_patch("A(u32)", "A(u64)"), pre);
+        assert_eq!(post.matches("enum New").count(), 2, "got:\n{post}");
+        assert!(!post.contains("Old"), "got:\n{post}");
     }
 }

@@ -46,6 +46,7 @@ mod postcheck;
 mod postcheck_assoc;
 mod postcheck_attr;
 mod postcheck_follow;
+mod postcheck_item_joint;
 mod postcheck_move;
 mod postcheck_move_evo;
 mod postcheck_namehole;

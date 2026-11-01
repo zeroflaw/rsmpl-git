@@ -1,13 +1,13 @@
-//! WI-5 slice 2b (first): item rename + field-type evolution joint.
+//! WI-5 slice 2b (first) + 2b-next: item rename + member-evolution joint.
 //!
 //! The detection branch lives in the item-intent pre-pass (it owns the
 //! pair/hunk tables); this module holds the pure helpers so the intent
-//! file stays under the D5 line gate: the field-evo classifier (same
-//! field, types differ, both parse), the same-container carrier check
-//! (the field's pre-image carrier is the renamed struct), and the joint
-//! follow emission (def pair above the member pair, `# sweep` +
-//! `# follow=uses` — the rename half owns uses; pure evolutions stay
-//! C17).
+//! file stays under the D5 line gate: the field-evo and variant-evo
+//! classifiers (same member, types/payload differ, both parse), the
+//! same-container carrier checks (the member's pre-image carrier is the
+//! renamed struct/enum), and the joint follow emission (def pair above
+//! the member pair, `# sweep` + `# follow=uses` — the rename half owns
+//! uses; pure evolutions stay C17).
 
 /// A parsed field-evolution pair: same field, differing concrete types.
 pub(crate) struct FieldEvo {
@@ -144,6 +144,275 @@ pub(crate) fn find_field_evo_joint(
         return None;
     }
     Some(pi)
+}
+
+/// A parsed variant-evolution pair: same variant, single-region delta.
+pub(crate) struct VariantEvo {
+    /// Variant name (concrete, preserved).
+    pub(crate) variant: String,
+}
+
+/// Parse one balanced pair as a variant evolution (tuple payload,
+/// struct payload, or discriminant), or `None`. Bare renames,
+/// field-type lines, insertions, and hetero shapes decline.
+pub(crate) fn parse_variant_evo_pair(minus: &str, plus: &str) -> Option<VariantEvo> {
+    let mut m = minus.trim();
+    let mut p = plus.trim();
+    m = m.strip_suffix(',').map(str::trim).unwrap_or(m);
+    p = p.strip_suffix(',').map(str::trim).unwrap_or(p);
+    m = m.strip_suffix(';').map(str::trim).unwrap_or(m);
+    p = p.strip_suffix(';').map(str::trim).unwrap_or(p);
+    if m.is_empty() || p.is_empty() || m.starts_with("#[") || p.starts_with("#[") {
+        return None;
+    }
+    // Field lines are the struct joint's domain (except struct-payload
+    // members, which carry both `{` and `:`).
+    if (m.contains(':') || p.contains(':')) && !(m.contains('{') && p.contains('{')) {
+        return None;
+    }
+    if m.contains('$') || p.contains('$') {
+        return None;
+    }
+    let (m_ident, m_tail) = split_variant(m)?;
+    let (p_ident, p_tail) = split_variant(p)?;
+    if m_ident != p_ident || m_ident.is_empty() || !is_ident(&m_ident) {
+        return None;
+    }
+    let mt = m_tail.trim();
+    let pt = p_tail.trim();
+    // Discriminant: `= expr` both sides, exprs differ, both parse.
+    if mt.starts_with('=') && pt.starts_with('=') {
+        let me = mt.strip_prefix('=').unwrap_or("").trim();
+        let pe = pt.strip_prefix('=').unwrap_or("").trim();
+        if me.is_empty() || pe.is_empty() || me == pe {
+            return None;
+        }
+        let _: syn::Expr = syn::parse_str(me).ok()?;
+        let _: syn::Expr = syn::parse_str(pe).ok()?;
+        return Some(VariantEvo { variant: m_ident });
+    }
+    // Tuple payload: `(…)` both sides, arity-equal, ≥1 differs.
+    if mt.starts_with('(') && pt.starts_with('(') {
+        let mi = mt.strip_prefix('(')?.strip_suffix(')')?;
+        let pi = pt.strip_prefix('(')?.strip_suffix(')')?;
+        let m_tys = split_top_commas(mi)?;
+        let p_tys = split_top_commas(pi)?;
+        if m_tys.len() != p_tys.len() || m_tys.is_empty() || m_tys == p_tys {
+            return None;
+        }
+        for t in m_tys.iter().chain(p_tys.iter()) {
+            let _: syn::Type = syn::parse_str(t).ok()?;
+        }
+        return Some(VariantEvo { variant: m_ident });
+    }
+    // Struct payload: `{ f: T, … }` both sides, names equal, ≥1 differs.
+    if mt.starts_with('{') && pt.starts_with('{') {
+        let mi = mt.strip_prefix('{')?.strip_suffix('}')?;
+        let pi = pt.strip_prefix('{')?.strip_suffix('}')?;
+        let m_fs = split_struct_fields(mi)?;
+        let p_fs = split_struct_fields(pi)?;
+        if m_fs.len() != p_fs.len() || m_fs.is_empty() {
+            return None;
+        }
+        let m_names: Vec<&str> = m_fs.iter().map(|(n, _)| n.as_str()).collect();
+        let p_names: Vec<&str> = p_fs.iter().map(|(n, _)| n.as_str()).collect();
+        if m_names != p_names {
+            return None;
+        }
+        let m_tys: Vec<&str> = m_fs.iter().map(|(_, t)| t.as_str()).collect();
+        let p_tys: Vec<&str> = p_fs.iter().map(|(_, t)| t.as_str()).collect();
+        if m_tys == p_tys {
+            return None;
+        }
+        for t in m_tys.iter().chain(p_tys.iter()) {
+            let _: syn::Type = syn::parse_str(t).ok()?;
+        }
+        return Some(VariantEvo { variant: m_ident });
+    }
+    None
+}
+
+/// The `enum E` carrying `variant` at 1-based `site`, or `None`
+/// under the exactly-one-carrier rule (mirrors `field_carrier`).
+pub(crate) fn enum_of_variant(pre: &str, variant: &str, site: usize) -> Option<String> {
+    let file: syn::File = syn::parse_str(pre).ok()?;
+    let mut at_site: Vec<String> = Vec::new();
+    let mut carriers = 0usize;
+    fn walk(
+        items: &[syn::Item],
+        variant: &str,
+        site: usize,
+        at_site: &mut Vec<String>,
+        carriers: &mut usize,
+    ) {
+        use syn::spanned::Spanned;
+        for it in items {
+            match it {
+                syn::Item::Enum(e) => {
+                    let mut has = false;
+                    for v in &e.variants {
+                        if v.ident == variant {
+                            has = true;
+                            if v.span().start().line == site {
+                                at_site.push(e.ident.to_string());
+                            }
+                        }
+                    }
+                    if has {
+                        *carriers += 1;
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, variant, site, at_site, carriers);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(&file.items, variant, site, &mut at_site, &mut carriers);
+    if carriers != 1 || at_site.len() != 1 {
+        return None;
+    }
+    at_site.into_iter().next()
+}
+
+/// WI-5 joint search for the enum half: returns the variant-evo pair
+/// index when the def hunk holds exactly one attached variant-evo pair
+/// (same file and section, carrier is the renamed enum) plus claimable
+/// uses otherwise. Mirrors `find_field_evo_joint` (`enum`-only).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn find_variant_evo_joint(
+    pairs: &[super::item_intent::Pair],
+    hunk_pairs: &[Vec<usize>],
+    def_hunk: usize,
+    def_idx: usize,
+    is_fn: bool,
+    def_kind: &str,
+    old: &str,
+    pre: &std::collections::HashMap<String, String>,
+    pair_claimable: &dyn Fn(&super::item_intent::Pair) -> bool,
+) -> Option<usize> {
+    if is_fn || def_kind != "enum" {
+        return None;
+    }
+    let mut bad: Vec<usize> = Vec::new();
+    for pi in &hunk_pairs[def_hunk] {
+        if *pi == def_idx {
+            continue;
+        }
+        if !pair_claimable(&pairs[*pi]) {
+            bad.push(*pi);
+        }
+    }
+    if bad.len() != 1 {
+        return None;
+    }
+    let pi = bad[0];
+    if pairs[pi].path != pairs[def_idx].path || pairs[pi].sec != pairs[def_idx].sec {
+        return None;
+    }
+    let evo = parse_variant_evo_pair(&pairs[pi].minus, &pairs[pi].plus)?;
+    let pre_text = pre.get(&pairs[pi].path)?;
+    if enum_of_variant(pre_text, &evo.variant, pairs[pi].site)? != old {
+        return None;
+    }
+    Some(pi)
+}
+
+/// Split `Variant` + tail (`(…)`, `{ … }`, `= …`, or bare).
+fn split_variant(line: &str) -> Option<(String, String)> {
+    let t = line.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let len = t
+        .char_indices()
+        .take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_')
+        .map(|(i, c)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+    if len == 0 {
+        return None;
+    }
+    let (ident, tail) = t.split_at(len);
+    Some((ident.to_string(), tail.trim().to_string()))
+}
+
+/// Top-level comma split (concrete types; `<…>`/`(…)`/`[…]` nest).
+fn split_top_commas(s: &str) -> Option<Vec<String>> {
+    if s.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for c in s.chars() {
+        match c {
+            '<' | '(' | '[' => {
+                depth += 1;
+                cur.push(c);
+            }
+            '>' | ')' | ']' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => {
+                out.push(cur.trim().to_string());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    Some(out)
+}
+
+/// Split `{ f: T, … }` inner into (name, type) pairs.
+fn split_struct_fields(s: &str) -> Option<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    let flush = |seg: &str, out: &mut Vec<(String, String)>| -> Option<()> {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            return Some(());
+        }
+        let colon = seg.find(':')?;
+        let (n, t) = seg.split_at(colon);
+        let t = t.strip_prefix(':')?.trim();
+        if !is_ident(n.trim()) || t.is_empty() {
+            return None;
+        }
+        out.push((n.trim().to_string(), t.to_string()));
+        Some(())
+    };
+    for c in s.chars() {
+        match c {
+            '<' | '(' | '[' | '{' => {
+                depth += 1;
+                cur.push(c);
+            }
+            '>' | ')' | ']' | '}' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => {
+                let seg = cur.clone();
+                flush(&seg, &mut out)?;
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() {
+        let seg = cur.clone();
+        flush(&seg, &mut out)?;
+    }
+    Some(out)
 }
 
 /// Joint follow emission: the terse def pair above the member pair.
@@ -368,6 +637,86 @@ mod tests {
         assert!(
             out.is_none() || !out.as_ref().unwrap().contains("rule="),
             "fn defs must never item-joint-fire, got:\n{}",
+            out.unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn variant_pair_matrix() {
+        assert!(parse_variant_evo_pair("A(u32)", "A(u64)").is_some());
+        assert!(parse_variant_evo_pair("A { x: u32 }", "A { x: u64 }").is_some());
+        assert!(parse_variant_evo_pair("A = 1", "A = 2").is_some());
+        // Bare rename: not an evolution.
+        assert!(parse_variant_evo_pair("A", "B").is_none());
+        // Same payload: not an evolution.
+        assert!(parse_variant_evo_pair("A(u32)", "A(u32)").is_none());
+        // Field line declines.
+        assert!(parse_variant_evo_pair("x: u32", "x: u64").is_none());
+        // Arity mismatch declines.
+        assert!(parse_variant_evo_pair("A(u32)", "A(u32, u64)").is_none());
+    }
+
+    #[test]
+    fn variant_carrier_matrix() {
+        let pre = "enum Old {\n    A(u32),\n}\nenum Other {\n    A(u32),\n}\n";
+        // Two same-named variants: no unique carrier.
+        assert_eq!(enum_of_variant(pre, "A", 2), None);
+        // Unique variant resolves.
+        let pre2 = "enum Old {\n    A(u32),\n    B(u32),\n}\n";
+        assert_eq!(enum_of_variant(pre2, "B", 3).as_deref(), Some("Old"));
+    }
+
+    #[test]
+    fn enum_joint_fires_end_to_end() {
+        let pre = "enum Old {\n    A(u32),\n}\nfn f(x: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n-enum Old {\n-    A(u32),\n+enum New {\n+    A(u64),\n }\n-fn f(x: Old) {\n+fn f(x: New) {\n";
+        let out = infer(section, pre).expect("enum joint must fire");
+        assert!(out.contains("rule="), "got:\n{out}");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- enum Old"), "got:\n{out}");
+        assert!(out.contains("+ enum New"), "got:\n{out}");
+        assert!(out.contains("- A(u32)"), "got:\n{out}");
+        assert!(out.contains("+ A(u64)"), "got:\n{out}");
+        // Real-apply byte-identical.
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(files["f.rs"].contains("enum New"), "got: {}", files["f.rs"]);
+        assert!(files["f.rs"].contains("A(u64)"), "got: {}", files["f.rs"]);
+        assert!(files["f.rs"].contains("x: New"), "got: {}", files["f.rs"]);
+        assert!(!files["f.rs"].contains("Old"), "got: {}", files["f.rs"]);
+    }
+
+    #[test]
+    fn enum_joint_discriminant_fires() {
+        let pre = "enum Old {\n    A = 1,\n}\nfn f(x: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n-enum Old {\n-    A = 1,\n+enum New {\n+    A = 2,\n }\n-fn f(x: Old) {\n+fn f(x: New) {\n";
+        let out = infer(section, pre).expect("disc joint must fire");
+        assert!(out.contains("- enum Old"), "got:\n{out}");
+        assert!(out.contains("A = 2"), "got:\n{out}");
+    }
+
+    #[test]
+    fn enum_joint_another_container_stays_ordinary() {
+        let pre = "enum Old {\n    A(u32),\n}\nenum Other {\n    B(u32),\n}\nfn f(x: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-enum Old {\n+enum New {\n@@ -5,2 +5,2 @@\n-    B(u32),\n+    B(u64),\n-fn f(x: Old) {\n+fn f(x: New) {\n";
+        let out = infer(section, pre);
+        assert!(
+            out.is_none() || !out.as_ref().unwrap().contains("follow=uses"),
+            "another-container variant evo must not joint-fire, got:\n{}",
+            out.unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn enum_joint_cross_kind_stays_ordinary() {
+        // Field line + enum rename: cross-kind, never the enum joint.
+        let pre = "enum Old {\n    A(u32),\n}\nfn f(x: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n-enum Old {\n-    x: u32,\n+enum New {\n+    x: u64,\n }\n-fn f(x: Old) {\n+fn f(x: New) {\n";
+        let out = infer(section, pre);
+        assert!(
+            out.is_none() || !out.as_ref().unwrap().contains("follow=uses"),
+            "cross-kind member must not enum-joint-fire, got:\n{}",
             out.unwrap_or_default()
         );
     }

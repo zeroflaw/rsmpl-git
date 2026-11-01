@@ -2411,17 +2411,22 @@ lowered diff is the observable truth as always (Section D.2).
   evolution delta shares its native hunk with the rename's use raises
   nothing — the bare rename single is suppressed and the section stays
   wholly ordinary (the item analogue of the WI-4 claim-then-veto law).
-  Composed rename+evolution joints (WI-5 slice 2b, first): a `struct`
-  rename pair may carry exactly one attached field-type evolution pair
-  written below it on its own diff lines (same field, types differ and
-  both parse, no container header — the def pair names the container,
-  the member pair rides it; `# follow=uses` allowed, the rename half
-  owns uses). The hunk applies and verifies atomically (rename ident +
-  field-type span + follow in one matcher pass; twin containers veto at
-  the raiser, never half-applied), and raising emits that spelling for
-  single-hunk same-container sections. Two evolutions, an evolution of
-  another container, variant/alias/const shapes, and additions stay
-  ordinary (follow-up slices).
+   Composed rename+evolution joints (WI-5 slice 2b, first + 2b-next,
+   first): a `struct` rename pair may carry exactly one attached
+   field-type evolution pair, and an `enum` rename pair may carry
+   exactly one attached variant-evolution pair (tuple payload with equal
+   arity and ≥1 differing type, struct payload with equal field names
+   and ≥1 differing type, or discriminant with differing exprs), each
+   written below the def pair on its own diff lines (same member, no
+   container header — the def pair names the container, the member pair
+   rides it; `# follow=uses` allowed, the rename half owns uses). Each
+   hunk applies and verifies atomically (rename ident + member span(s)
+   + follow in one matcher pass; twin containers veto at the raiser,
+   never half-applied), and raising emits that spelling for single-hunk
+   same-container sections (at most one joint per def hunk). Two
+   evolutions, an evolution of another container, bare renames,
+   cross-kind members, alias/const shapes, and additions stay ordinary
+   (follow-up slices).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
@@ -7459,9 +7464,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   above the def pair (the authored Preserve-delta spelling). Double
   attr deltas, detached attr hunks, non-attr co-residents, `fn` defs
   (WI-4 B2 owns those), and attr+def without a use stay ordinary
-  (a detached attr hunk falls back to the pure rename intent with the
-  attr left ordinary). Field-add, variant-add, and field-type
-  evolution joints stay ordinary (future slices).
+   (a detached attr hunk falls back to the pure rename intent with the
+   attr left ordinary). Field-add, variant-add, multi-hunk, and
+   cross-file joints stay ordinary (future slices).
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)
@@ -7574,13 +7579,26 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    item analogue of the WI-4 claim-then-veto suppression). Pure
    definition + pure evolution hunks (no stranded use) still partition;
    `fn` definitions never trigger this veto.
-   Struct rename + field-type joint (WI-5 slice 2b, first): a def hunk
-   holding the `struct` rename plus exactly one attached field-type
-   evolution pair (same file/section, field's pre-image carrier is the
-   renamed struct) plus claimable uses raises as one follow hunk with
-   the member pair below the def pair, proved by the one scratch-apply
-   probe (D13) under strict T375. Two evolutions, another container's
-   evolution, variant/alias/const shapes, and insertions never joint.
+    Struct rename + field-type joint (WI-5 slice 2b, first): a def hunk
+    holding the `struct` rename plus exactly one attached field-type
+    evolution pair (same file/section, field's pre-image carrier is the
+    renamed struct) plus claimable uses raises as one follow hunk with
+    the member pair below the def pair, proved by the one scratch-apply
+    probe (D13) under strict T375. Two evolutions, another container's
+    evolution, variant/alias/const shapes, and insertions never joint.
+    Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
+    the enum half of the same law — a def hunk holding the `enum`
+    rename plus exactly one attached variant-evolution pair (tuple
+    payload with equal arity and ≥1 differing type, struct payload with
+    equal field names and ≥1 differing type, or discriminant with
+    differing exprs; same file/section, variant's pre-image carrier is
+    the renamed enum) plus claimable uses raises as one follow hunk
+    with the member pair below the def pair, proved by the one
+    scratch-apply probe (D13) under strict T375. At most one joint fires
+    per def hunk (attr, field, and variant joints are mutually
+    exclusive). Bare variant renames, field-type lines, another
+    container's evolution, two evolutions, alias/const shapes,
+    insertions, multi-hunk joints, and cross-file joints never joint.
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/
