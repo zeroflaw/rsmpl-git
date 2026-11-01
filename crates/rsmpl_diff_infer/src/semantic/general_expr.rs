@@ -1416,23 +1416,39 @@ mod tests {
         assert!(out.contains("- E0 + 1\n"), "got: {out}");
     }
     #[test]
-    fn wi7_general_single_call_anchor_drift_stays_ordinary() {
+    fn wi7_general_single_call_anchor_drift_vetoes_general_arm() {
         // 116 miniature: the single-pair anti-unification proves one
         // site (`use_it (a) + E0` matches once), but the TokenStream
         // anchor spacing is not the source spelling -- real-apply
         // would rewrite `use_it(a)` as `use_it (a . clone ())`. The
-        // T361 byte-compare vetoes the drift; the class stays
-        // ordinary (the multi path shares the latent drift: TASKS).
+        // T361 byte-compare vetoes the drift in the general arm (the
+        // multi path shares the latent drift: TASKS). The pair now
+        // raises via the WI-7 slice-23 sub-line bare-wrap single,
+        // whose call-template emission carries no drifted anchor and
+        // real-applies byte-identical (D10 upgrade pin).
         let pre = "fn f(a: i32, b: i32) -> i32 {\n    use_it(a) + other(b)\n}\n";
+        assert!(
+            super::try_general_expr_single(
+                &["    use_it(a) + other(b)"],
+                &["    use_it(a.clone()) + other(b)"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "drifted general single must stay vetoed"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    use_it(a) + other(b)\n+    use_it(a.clone()) + other(b)\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "spacing-drifted single must stay ordinary"
-        );
+                .expect("slice-23 bare-wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(E0.clone())\n"), "got: {out}");
+        validated_live(&out, &pre_map);
     }
 }

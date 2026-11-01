@@ -692,6 +692,26 @@ pub(crate) fn compress_balanced_pair_body(
             }
             used_rules.truncate(checkpoint);
         }
+        // WI-7 slice-23: sub-line bare-arg-template wrap single under
+        // the precision guard (whole-line pairs decline here — slice-6
+        // owns them; uniqueness proved by `template_pair_holds` at n=1
+        // over the emitted holed pair plus the T361 byte-compare,
+        // `guard_for("call_arg_template")` stays Strict for multis).
+        // Sits with the slice-22 wrap arm before the literal arms: a
+        // holed wrap beats the concrete literal spelling where both
+        // prove the same site set (D10); the general arm above declines
+        // wraps by construction (Call / MethodCall subterms are never
+        // general sites), and the literal arms keep every pair the wrap
+        // core declines.
+        if let Some(single) = semantic::try_subline_bare_wrap_single(
+            minuses, pluses, path, file_old, changed, used_rules,
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "call_arg_template"));
+            }
+            used_rules.truncate(checkpoint);
+        }
         // WI-7 slice-20: sub-line bare trailing-literal single under
         // the precision guard (whole-line pairs with `prefix >= 1`
         // decline here — slice-12 owns them; uniqueness proved by

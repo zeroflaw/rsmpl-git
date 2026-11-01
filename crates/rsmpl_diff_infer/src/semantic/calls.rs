@@ -312,6 +312,99 @@ pub(crate) fn try_subline_call_single(
     Some(hunk)
 }
 
+/// WI-7 slice-23: sub-line bare-arg-template wrap single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair does NOT form a whole-line
+/// bare wrap pair (slice-6 owns that shape via the same parser plus
+/// the shared core, so there is no bypass around its twin veto via a
+/// second counter), but `subline::extract_bare_wrap_sites` yields
+/// exactly one site — a same-level wrap (`foo(alpha)` →
+/// `foo(bar(alpha))` inside a frame) or a deep-inner wrap
+/// (`foo(bar(alpha))` → `foo(bar(alpha.clone()))` where the outer
+/// wrapper is frame) — and the frame rule holds. Uniqueness is proved
+/// by `template_pair_holds` at n=1 over the emitted holed pair (same
+/// probe as the slice-6 multi — one site file-wide, zero opaque hits;
+/// twin discipline keys on callee+arity: any same-callee same-arity
+/// twin vetoes, even with different args — slice-6 precedent). The
+/// T361 byte-compare pre-reservation (`single_reproduces`, shared with
+/// the general-expr singles) vetoes any TokenStream spacing drift.
+/// Callee deltas stay with the slice-14 single; pure-concrete deltas
+/// stay with the literal singles; permuted holes stay with the perm
+/// singles (all veto in the extractor — never partially claimed).
+/// Multi-subterm lines decline (`sites.len() == 1` only — uniform
+/// two-site lines are multi territory by site count, even at one
+/// pair). Emission is the slice-6 allow-one spelling (tight range,
+/// directive-free, default `allow=one`). Detector name
+/// `call_arg_template` (same family, provenance unchanged).
+pub(crate) fn try_subline_bare_wrap_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    // Whole-line-owned pairs belong to the slice-6 single — decline
+    // here even when it vetoed (shared counter, no bypass). Callee
+    // deltas never parse here as owned (the extractor vetoes them).
+    if let Some((o_cal, n_cal, o_args, n_args)) =
+        super::arg_template::parse_bare_pair(minuses[0], pluses[0])
+    {
+        if o_cal == n_cal
+            && super::arg_template::antiunify_call_args_single(&o_args, &n_args).is_some()
+        {
+            return None;
+        }
+    }
+    let sites = super::subline::extract_bare_wrap_sites(minuses[0], pluses[0])?;
+    if sites.len() != 1 {
+        return None;
+    }
+    let site = &sites[0];
+    // WI-7b: uppercase callee rides backticks (literal), else it
+    // infers as an `expr` hole and over-matches.
+    let lit = super::shape::literal_callee(&site.cal);
+    let minus_call = format!("{lit}({})", site.minus_tpl.join(", "));
+    let plus_call = format!("{lit}({})", site.plus_tpl.join(", "));
+    // Defensive: both sides must re-parse as calls (the totality probe
+    // re-checks, but a non-parsing template must never leave this core).
+    // The check runs on the raw callee: backticks are RSmPL-level
+    // literal spelling (SPEC 15.4), not Rust syntax (TOOL-5).
+    let raw_minus = format!("{}({})", site.cal, site.minus_tpl.join(", "));
+    let raw_plus = format!("{}({})", site.cal, site.plus_tpl.join(", "));
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
+        return None;
+    }
+    // T361 byte gate: the sub-expression rewrite must reproduce the
+    // native line swap byte-identical.
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minuses[0],
+        pluses[0],
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{}_wrap", site.cal));
+    // Allow-one: directive-free ranged hunk (slices-1-6 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
 /// Shared emission for the whole-line and sub-line bare-call paths
 /// (identical hunks: the frame is byte-identical on both sides, so the
 /// bare subterm rewrite reproduces the post-image).
@@ -697,6 +790,363 @@ mod tests {
             )
             .is_none(),
             "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_deep_clone_fires_and_round_trips() {
+        // WI-7 slice-23: unique sub-line deep-inner single
+        // `foo(bar(alpha_argument));` → `foo(bar(alpha_argument.clone()));`
+        // raises to an allow-one hunk and real-applies byte-identical
+        // (fixed point `S″ == S′` checked below).
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("unique sub-line bare-wrap single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0.clone())\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    foo(bar(alpha_argument.clone()));\n}\n"
+        );
+        // Fixed point: re-diffing the applied tree re-emits the same
+        // single (canonical `S″ == S′`).
+        let re = infer_semantic_with_pre_images(
+            std::slice::from_ref(&section(
+                "f.rs",
+                "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument.clone()));\n",
+            )),
+            &pre_map,
+        )
+        .expect("re-raise must fire");
+        assert_eq!(out, re);
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_deep_reference_fires_holed() {
+        // Reference wrappers fire holed (the slice-20 concrete spelling
+        // never owns this pair — zero-hole skip).
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(&alpha_argument));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("deep reference wrap must fire");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(&E0)\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    foo(bar(&alpha_argument));\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_deep_binary_fires_holed() {
+        // Binary wrappers fire holed through the shared single core.
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument + 1));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("deep binary wrap must fire");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0 + 1)\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    foo(bar(alpha_argument + 1));\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_deep_bare_fires_holed() {
+        // Bare-call wrappers fire holed through the shared single core.
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(baz(alpha_argument)));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("deep bare wrap must fire");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(baz(E0))\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    foo(bar(baz(alpha_argument)));\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_same_level_fires() {
+        // Same-level wrap inside a frame: `foo(alpha)` →
+        // `foo(bar(alpha))` where the binary frame keeps the whole-line
+        // single from parsing.
+        let pre = "fn m() {\n    let x = foo(alpha_argument) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let x = foo(alpha_argument) + 1;\n+    let x = foo(bar(alpha_argument)) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("same-level sub-line bare-wrap must fire");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ foo(bar(E0))\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let x = foo(bar(alpha_argument)) + 1;\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_let_init_deep_fires() {
+        // `let`-init framing shares the `side_expr` entry.
+        let pre = "fn m() {\n    let x = foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let x = foo(bar(alpha_argument));\n+    let x = foo(bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("let-init deep bare-wrap must fire");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0.clone())\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let x = foo(bar(alpha_argument.clone()));\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_uppercase_fires_literal() {
+        // Uppercase callees ride backticks (literal), else the engine
+        // would infer them as `expr` holes.
+        let pre = "fn m() {\n    foo(Bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(Bar(alpha_argument));\n+    foo(Bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("uppercase deep bare-wrap must fire");
+        assert!(out.contains("`Bar`(E0)"), "got: {out}");
+        assert!(out.contains("`Bar`(E0.clone())"), "got: {out}");
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_twin_vetoes() {
+        // An untouched same-callee same-arity twin anywhere vetoes, even
+        // with different args (slice-6 totality precedent).
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n    bar(different_value);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_different_arity_twin_keeps_firing() {
+        // Totality keys on callee+arity: a different-arity twin never
+        // matches the emitted pattern and never vetoes.
+        let pre =
+            "fn m() {\n    foo(bar(alpha_argument));\n    bar(alpha_argument, beta_value);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("different-arity twin must not veto");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_different_callee_twin_keeps_firing() {
+        // A different-callee twin never matches the emitted pattern.
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n    qux(alpha_argument);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("different-callee twin must not veto");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_whole_line_declines() {
+        // Whole-line pairs belong to the slice-6 arm, never this one.
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    bar(alpha_argument);"],
+                &["    bar(alpha_argument.clone());"],
+                "f.rs",
+                Some("fn m() {\n    bar(alpha_argument);\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "whole-line pair must decline"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_callee_delta_declines() {
+        // Callee deltas are slice-14 territory, never partially claimed.
+        let pre = "fn m() {\n    foo(bar(alpha_argument)) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument)) + 1;\n+    foo(qux(alpha_argument)) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "callee delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_pure_concrete_declines() {
+        // Pure-concrete deltas are literal territory (slice-20 owns the
+        // spelling where it fires; here it vetoes as zero-hole).
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(beta_value));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "pure-concrete delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_perm_declines() {
+        // Permuted holes are perm territory (slice-17), never claimed
+        // here.
+        let pre = "fn m() {\n    foo(bar(alpha_argument, beta_value));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument, beta_value));\n+    foo(bar(beta_value, alpha_argument));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "perm delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_no_pre_image_vetoes() {
+        // No whole-file evidence → no guessing (D3).
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(bar(alpha_argument));"],
+                &["    foo(bar(alpha_argument.clone()));"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_macro_vetoes() {
+        // Macro-hiding args would inline unmatchable text (the engine
+        // never binds inside macro bodies).
+        let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(concat!(alpha_argument)));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "macro arg must veto"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_two_site_line_declines() {
+        // Uniform two-site lines are multi territory by site count, even
+        // at one pair (the multi needs N>=2 pairs).
+        let pre = "fn m() {\n    foo(bar(alpha_value)) + foo(bar(beta_value));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha_value)) + foo(bar(beta_value));\n+    foo(bar(alpha_value.clone())) + foo(bar(beta_value.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "two-site line must decline"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_hetero_outer_inner_stays_ordinary() {
+        // A same-level wrap plus a deep-inner wrap on one line: the
+        // frame check vetoes the partial claim (never partially
+        // claimed).
+        let pre = "fn m() {\n    foo(alpha_argument) + foo(bar(beta_value));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(alpha_argument) + foo(bar(beta_value));\n+    foo(bar(alpha_argument)) + foo(bar(beta_value.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "hetero line must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn wi23_subline_bare_wrap_method_frame_fires() {
+        // Method-call frames are transparent: the inner bare wrap
+        // sites while the outer method descends as frame (slice-22
+        // declines the pair -- the shared core proves no method wrap).
+        let pre = "fn m() {\n    svc.process(bar(alpha_argument));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    svc.process(bar(alpha_argument));\n+    svc.process(bar(alpha_argument.clone()));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("method-frame bare wrap must fire");
+        assert!(out.contains("- bar(E0)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0.clone())\n"), "got: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    svc.process(bar(alpha_argument.clone()));\n}\n"
         );
     }
 }

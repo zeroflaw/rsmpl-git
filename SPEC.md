@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-     Precision singles (WI-7 slices 1-22, `PrecisionUnique`): N == 1
+     Precision singles (WI-7 slices 1-23, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7776,8 +7776,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     count); uniqueness proved by `template_expr_holds` at n=1 over the
     emitted `Receiver.old(E0…)` template plus the T361 byte-compare;
     uppercase idents ride backticks with the raw-probe re-parse check
-    on both sides (TOOL-5). Remaining families (sub-line general/
-    literal/perm/wrap) keep `N ≥ 2` until their WI-7 slices land. Slice-17
+    on both sides (TOOL-5). Slices 17-23 land the remaining sub-line
+    families (general, literal, perm, wrap -- see below). Slice-17
     adds sub-line bare perm pairs (`swap(alpha_arg, beta_arg) + 1` ->
     `swap(beta_arg, alpha_arg) + 1`, bare-statement and `let`-init
     framings via the shared `side_expr` entry): the pair must not parse
@@ -7876,13 +7876,39 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     territory by site count); uniqueness proved by
     `template_pair_holds` at n=1 over the emitted holed pair plus the
     T361 byte-compare; uppercase methods ride backticks with the
-    raw-method re-parse check (TOOL-5). The arm sits BEFORE the literal
-    arms: a holed wrap beats the concrete literal spelling where both
-    prove the same site set (reference/binary wrappers upgrade from the
-    slice-20/21 concrete spelling); the general arm above declines wraps
-    by construction (`Call`/`MethodCall` subterms are never general
-    sites). Remaining family (sub-line bare-wrap) keeps `N ≥ 2` until
-    its WI-7 slice lands.
+    raw-method re-parse check (TOOL-5). Both wrap arms sit BEFORE the
+    literal arms: a holed wrap beats the concrete literal spelling
+    where both prove the same site set (reference/binary wrappers
+    upgrade from the slice-20/21 concrete spelling); the general arm
+    above declines wraps by construction (`Call`/`MethodCall` subterms
+    are never general sites). Slice-23 adds sub-line bare-arg-template
+    wrap pairs (`foo(bar(alpha_arg));` ->
+    `foo(bar(alpha_arg.clone()));` and the same-level twin
+    `foo(alpha_arg) + 1` -> `foo(bar(alpha_arg)) + 1`, bare-statement
+    and `let`-init framings via the shared `side_expr` entry, detector
+    inline in `calls.rs` -- the sub-line bare-call owner, well under
+    the D5 gates): the pair must not form a whole-line bare wrap pair
+    (slice-6 owns that shape via the same parser plus the shared core,
+    so no bypass around its twin veto via a second counter),
+    `extract_bare_wrap_sites` yields exactly one site via a recursive
+    structural worker: same-callee pairs whose args anti-unify to
+    exactly one wrap plus holes site at their own level; pairs the
+    core declines descend into their args pairwise (deep-inner wraps
+    add a plus-side bare level, so flat pairing would veto them on
+    counts); binary and method-call frames are transparent, with any
+    frame delta left behind vetoing via the frame rule (never
+    partially claimed); pure-concrete deltas veto the line (literal
+    territory), permuted holes veto the line (perm territory),
+    callee/arity deltas veto the line (slice-14 territory); unchanged
+    pairs are skipped, never vetoed (twin-counting is the engine
+    totality over the emitted holed pair, which keys on callee +
+    arity, so any same-callee same-arity twin vetoes even with
+    different args -- slice-6 precedent); multi-subterm lines decline
+    (multi territory by site count); uniqueness proved by
+    `template_pair_holds` at n=1 over the emitted holed pair plus the
+    T361 byte-compare; uppercase callees ride backticks with the
+    raw-callee re-parse check (TOOL-5). The sub-line wrap family is
+    closed (whole-line slices 6-9 plus sub-line slices 22-23).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

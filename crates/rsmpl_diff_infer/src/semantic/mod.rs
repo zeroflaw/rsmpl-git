@@ -88,7 +88,7 @@ pub(crate) use arg_template::{
 };
 pub(crate) use calls::{
     try_call_arg_add_sweep, try_call_perm_sweep, try_call_single, try_call_sweep,
-    try_subline_call_single,
+    try_subline_bare_wrap_single, try_subline_call_single,
 };
 pub(crate) use literal::{
     try_call_literal_single, try_call_literal_sweep, try_subline_literal_single,

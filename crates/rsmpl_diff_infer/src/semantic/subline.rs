@@ -1073,7 +1073,163 @@ pub(crate) fn extract_method_wrap_sites(minus: &str, plus: &str) -> Option<Vec<M
     }
     Some(sites)
 }
+/// Qualifying bare-call name (WI-7 slice-23): single-segment,
+/// no-turbofish, ident-only callee — the same class `bare_calls`
+/// collects. Turbofish/non-ident/qualified calls never qualify.
+fn bare_qualifying_name(call: &syn::ExprCall) -> Option<String> {
+    if let syn::Expr::Path(p) = call.func.as_ref() {
+        if p.qself.is_none()
+            && p.path.leading_colon.is_none()
+            && p.path.segments.len() == 1
+            && matches!(p.path.segments[0].arguments, syn::PathArguments::None)
+        {
+            let name = p.path.segments[0].ident.to_string();
+            if super::ident_len(&name).is_some_and(|l| l == name.len()) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
 
+/// Recursive pair worker (WI-7 slice-23): returns `false` to veto the
+/// LINE. Token-equal subtrees hold no delta and return `true`
+/// (unchanged twins/frames are skipped, never vetoed — twin-counting
+/// is the engine totality over the emitted holed pair). Same-callee
+/// same-arity qualifying bare calls whose args anti-unify via the
+/// shared core become sites (the pair is fully explained — holes are
+/// token-equal positions, so nothing hides deeper); same-callee pairs
+/// the core declines descend into their args pairwise (the site may
+/// hide one level deeper — deep-inner wraps add a plus-side bare
+/// subterm, so flat pairing would veto them on counts). Binary and
+/// method-call frames are transparent (any frame delta left behind
+/// vetoes via the frame rule — never partially claimed); a method
+/// delta proper stays with the slice-15/m2f singles. Everything else
+/// (callee/arity deltas, turbofish/qualified interiors, macro-hiding
+/// args, unknown frames) vetoes. Recursion is strictly structural, so
+/// it always terminates.
+fn collect_bare_wrap(
+    m: &syn::Expr,
+    p: &syn::Expr,
+    sites: &mut Vec<BareWrapSite>,
+    pairs: &mut Vec<(String, String)>,
+) -> bool {
+    if super::arg_template::tok(m) == super::arg_template::tok(p) {
+        return true;
+    }
+    if let (syn::Expr::Call(mc), syn::Expr::Call(pc)) = (m, p) {
+        let (Some(o_cal), Some(n_cal)) = (bare_qualifying_name(mc), bare_qualifying_name(pc))
+        else {
+            return false;
+        };
+        if o_cal != n_cal || mc.args.len() != pc.args.len() {
+            return false;
+        }
+        for arg in mc.args.iter().chain(pc.args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return false;
+            }
+        }
+        let o_args: Vec<syn::Expr> = mc.args.iter().cloned().collect();
+        let n_args: Vec<syn::Expr> = pc.args.iter().cloned().collect();
+        if let Some((m_tpl, p_tpl)) =
+            super::arg_template::antiunify_call_args_single(&o_args, &n_args)
+        {
+            sites.push(BareWrapSite {
+                cal: o_cal,
+                minus_tpl: m_tpl,
+                plus_tpl: p_tpl,
+            });
+            pairs.push((super::arg_template::tok(m), super::arg_template::tok(p)));
+            return true;
+        }
+        for (a, b) in mc.args.iter().zip(pc.args.iter()) {
+            if !collect_bare_wrap(a, b, sites, pairs) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if let (syn::Expr::Binary(mb), syn::Expr::Binary(pb)) = (m, p) {
+        return collect_bare_wrap(&mb.left, &pb.left, sites, pairs)
+            && collect_bare_wrap(&mb.right, &pb.right, sites, pairs);
+    }
+    if let (syn::Expr::MethodCall(mm), syn::Expr::MethodCall(pm)) = (m, p) {
+        if mm.method != pm.method
+            || super::arg_template::tok(&mm.receiver) != super::arg_template::tok(&pm.receiver)
+            || mm.args.len() != pm.args.len()
+        {
+            return false;
+        }
+        for arg in mm.args.iter().chain(pm.args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return false;
+            }
+        }
+        for (a, b) in mm.args.iter().zip(pm.args.iter()) {
+            if !collect_bare_wrap(a, b, sites, pairs) {
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// One bare-arg-template wrap subterm site (WI-7 slice-23): the inner
+/// bare call whose args anti-unify to exactly one wrap plus holes
+/// (rendered template texts feed the totality probe and the emission).
+pub(crate) struct BareWrapSite {
+    pub(crate) cal: String,
+    pub(crate) minus_tpl: Vec<String>,
+    pub(crate) plus_tpl: Vec<String>,
+}
+
+/// Extract bare-arg-template wrap sites from one line pair (WI-7
+/// slice-23): the recursive worker pairs the two sides structurally —
+/// same-level wraps (`foo(alpha)` → `foo(bar(alpha))` inside a frame)
+/// site at their own level, deep-inner wraps (`foo(bar(alpha))` →
+/// `foo(bar(alpha.clone()))` or `foo(bar(baz(alpha)))`) site where the
+/// inner call pair anti-unifies while the outer wrapper descends as
+/// frame. Only pairs whose args anti-unify via the shared
+/// single-pair core become sites (pure-concrete deltas are literal
+/// territory, permuted holes perm territory, callee/arity/method
+/// deltas their singles' territory — all veto here, never partially
+/// claimed). Within-line uniformity is on the full class key
+/// (cross-line uniformity is the caller's single-site gate). Frame
+/// deltas veto via the frame rule over the delta pairs.
+pub(crate) fn extract_bare_wrap_sites(minus: &str, plus: &str) -> Option<Vec<BareWrapSite>> {
+    if minus.trim().starts_with('&') || plus.trim().starts_with('&') {
+        return None;
+    }
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    if !collect_bare_wrap(&m_expr, &p_expr, &mut sites, &mut pairs) {
+        return None;
+    }
+    if sites.is_empty() {
+        return None;
+    }
+    let (c0, o0, n0) = (
+        sites[0].cal.clone(),
+        sites[0].minus_tpl.clone(),
+        sites[0].plus_tpl.clone(),
+    );
+    if sites
+        .iter()
+        .any(|s| s.cal != c0 || s.minus_tpl != o0 || s.plus_tpl != n0)
+    {
+        return None;
+    }
+    if !frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;
