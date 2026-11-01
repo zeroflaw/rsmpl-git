@@ -49,6 +49,7 @@ mod suggest;
 mod use_graph;
 mod use_graph_anchor;
 mod use_graph_assoc;
+mod use_graph_local;
 mod use_graph_macro;
 pub(crate) mod use_graph_member;
 mod use_graph_method;

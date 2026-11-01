@@ -651,7 +651,7 @@ fn apply_inner(
                             }
                             PatternKind::FieldRename {
                                 struct_name, old, ..
-                            } => member_orphans(
+                            } => crate::use_graph_local::member_orphans(
                                 &states,
                                 &file_edits,
                                 path,
@@ -660,22 +660,24 @@ fn apply_inner(
                                 struct_name,
                                 old,
                             ),
-                            PatternKind::VariantRename { enum_name, old, .. } => member_orphans(
-                                &states,
-                                &file_edits,
-                                path,
-                                edits_before,
-                                crate::use_graph_member::MemberKind::Variant,
-                                enum_name,
-                                old,
-                            ),
+                            PatternKind::VariantRename { enum_name, old, .. } => {
+                                crate::use_graph_local::member_orphans(
+                                    &states,
+                                    &file_edits,
+                                    path,
+                                    edits_before,
+                                    crate::use_graph_member::MemberKind::Variant,
+                                    enum_name,
+                                    old,
+                                )
+                            }
                             PatternKind::AssocRename {
                                 impl_header,
                                 want_trait,
                                 is_type,
                                 minus_name,
                                 ..
-                            } => assoc_orphans(
+                            } => crate::use_graph_local::assoc_orphans(
                                 &states,
                                 &file_edits,
                                 path,
@@ -729,7 +731,13 @@ fn apply_inner(
                                     *kind == rsmpl_pattern::ItemKind::MacroRules,
                                 )
                             }
-                            _ => Vec::new(),
+                            _ => crate::use_graph_local::general_orphans(
+                                &states,
+                                &file_edits,
+                                path,
+                                edits_before,
+                                &compiled,
+                            ),
                         }
                     } else {
                         Vec::new()
@@ -742,7 +750,10 @@ fn apply_inner(
                     let sweep_gate_ran = found > 0 && sweep_hunk_needs_postcheck(rh, &compiled);
                     let (provisional, needs_probe) = if found == 0 {
                         (RuleSemantics::NotApplicable, false)
-                    } else if !is_rewrite_kind(&compiled) {
+                    } else if !is_rewrite_kind(&compiled)
+                        || (!orphans.is_empty()
+                            && crate::use_graph_local::is_let_binder_rename(&compiled))
+                    {
                         (RuleSemantics::ReparseOnly, false)
                     } else if sweep_gate_ran {
                         (RuleSemantics::Postcondition, true)
@@ -1031,79 +1042,6 @@ fn apply_inner(
 /// exact same dispatch (no predicate duplication, no drift). File context
 /// (`with_file`) is applied by the caller, not here, so real and probe
 /// runs share error shapes.
-/// WI-9a: orphan evidence for definition-only member renames (SPEC
-/// 14.8). Mirrors the scalar orphan block: the definition hunk's own
-/// ident-span edits plus every loaded `.rs` file feed the member
-/// collector.
-#[allow(clippy::too_many_arguments)]
-fn member_orphans(
-    states: &HashMap<String, FileState>,
-    file_edits: &HashMap<String, Vec<TextEdit>>,
-    path: &str,
-    edits_before: usize,
-    kind: crate::use_graph_member::MemberKind,
-    container: &str,
-    old: &str,
-) -> Vec<crate::OrphanReport> {
-    let renamed: Vec<(usize, usize)> = file_edits
-        .get(path)
-        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
-        .unwrap_or_default();
-    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
-    let mut paths: Vec<&String> = states.keys().collect();
-    paths.sort();
-    for p in paths {
-        if let Some(st) = states.get(p) {
-            if let Some(parsed) = st.parsed.as_ref() {
-                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
-            }
-        }
-    }
-    crate::use_graph_member::collect_member_orphans(&refs, kind, container, old, path, &renamed)
-}
-
-/// WI-27: orphan evidence for definition-only assoc renames (SPEC
-/// 14.8). Without follow, orphans list every container-proven use site
-/// (`Self::`, `S::`, `Tr::`, qself tails) the rename leaves behind.
-/// Mirrors `member_orphans`: the definition hunk's own ident-span edits
-/// plus every loaded `.rs` file feed the assoc collector. An
-/// unparseable header yields no orphans (the definition hunk itself
-/// matches nothing, so the run already fails loud there).
-#[allow(clippy::too_many_arguments)]
-fn assoc_orphans(
-    states: &HashMap<String, FileState>,
-    file_edits: &HashMap<String, Vec<TextEdit>>,
-    path: &str,
-    edits_before: usize,
-    impl_header: &str,
-    want_trait: bool,
-    is_type: bool,
-    old: &str,
-) -> Vec<crate::OrphanReport> {
-    let Some(domain) = crate::use_graph_assoc::assoc_domain(impl_header, want_trait, is_type, old)
-    else {
-        return Vec::new();
-    };
-    let Some(filter) = rsmpl_pattern::parse_impl_header(impl_header) else {
-        return Vec::new();
-    };
-    let renamed: Vec<(usize, usize)> = file_edits
-        .get(path)
-        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
-        .unwrap_or_default();
-    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
-    let mut paths: Vec<&String> = states.keys().collect();
-    paths.sort();
-    for p in paths {
-        if let Some(st) = states.get(p) {
-            if let Some(parsed) = st.parsed.as_ref() {
-                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
-            }
-        }
-    }
-    crate::use_graph_assoc::collect_assoc_orphans(&refs, &domain, &filter, path, &renamed)
-}
-
 pub(crate) fn apply_rsmpl_hunk(
     state: &FileState,
     path: &str,

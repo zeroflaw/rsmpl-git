@@ -2445,6 +2445,7 @@ and text mode prints one `orphans:` stderr line with each entry as
 the first diagnostic names the first orphan `file:line` alongside the
 `applied` flag. A `# follow=uses` hunk never carries `orphans` (its
 uses rewrite; `follow_skipped_details` owns that signal).
+WI-2a extends orphan evidence to `let`-binder renames: a general-statement `let old = E;` -> `let new = E;` hunk (same init, single ident binder) lists leftover same-name uses as `orphans` (`off-target`, macro interiors and inline `{old}` format captures `macro-hidden`) and caps at `reparse-only` (global `partial`) while leftovers exist; zero leftovers stays `instantiated`.
 
 Skip and orphan reason vocabulary (WI-2): every structured skip and
 every orphan carries a machine `reason`, one of `shadowed` (another
@@ -4895,7 +4896,7 @@ if:
     Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
     including verified follow-only entries), `postcondition` (sweep gate
     + plus-pattern both ran), `reparse-only` (insertions, cuts, pastes,
-    unverified follow-only extras, or unverifiable plus),
+    unverified follow-only extras, unverifiable plus, or a `let`-binder rename with leftover-use orphans (WI-2a)),
     `not-applicable` (`optional` zero-edit hunks).
     The global `checked.semantics` is `verified` iff every rule is
     `instantiated`/`postcondition` and no ordinary hunk is present;
