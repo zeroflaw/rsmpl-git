@@ -7,7 +7,10 @@ diff --git a/a.rs b/a.rs
 diff --git a/b.rs b/b.rs
 --- a/b.rs
 +++ b/b.rs
-@@ -2,2 +2,2 @@ fn main() {
+@@ -1 +1 @@
+-use crate::a::foo;
++use crate::a::bar;
+@@ -3,2 +3,2 @@ fn main() {
 -    let a = foo(1);
 -    let b = m::foo(2);
 +    let a = bar(1);

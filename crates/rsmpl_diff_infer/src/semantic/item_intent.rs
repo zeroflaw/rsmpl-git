@@ -8,21 +8,24 @@
 //! the rest at apply time (workspace-wide, WI-7a), so the emission is
 //! one hunk.
 //!
-//! WI-9 `fn` arm (widened WI-1): a top-level `fn old` pure-rename
+//! WI-9 `fn` arm (widened WI-1, WI-2): a top-level `fn old` pure-rename
 //! definition with a concrete vis from the closed set (`""`, `pub`,
 //! `pub(crate)`, `pub(super)`, `pub(in <path>)`), equal
 //! qualifier/signature suffixes (any signature incl. `->`, generics,
 //! `where`), joined with N-1 *call-callee* use lines of `old` (bare,
-//! qualified, turbofish; `let`-wrapped included) emits the same single
-//! hunk in the terse `- [pub …] fn old` / `+ [pub …] fn new` diet
-//! form with `# sweep` + `# follow=uses` — never a `V` hole, because
-//! the intent proved one concrete vis. One-line definitions join the
-//! same way (the `split_delta` suffix covers the identical body).
-//! `pub(…)` paths naming the old ident itself, vis changes, method
-//! calls, fields, bare value paths, macro heads, and `use` lines veto
-//! the whole intent (never a partial follow claim); the scratch-apply
-//! probe below is the uniqueness guard (an off-diff same-name call
-//! fails the unchanged-leg).
+//! qualified, turbofish; `let`-wrapped included) *or* `use`-tail deltas
+//! (`use crate::a::old;` → `use crate::a::new;`, grouped members,
+//! `as`-preserving, `pub use` included) emits the same single hunk in
+//! the terse `- [pub …] fn old` / `+ [pub …] fn new` diet form with
+//! `# sweep` + `# follow=uses` — never a `V` hole, because the intent
+//! proved one concrete vis. One-line definitions join the same way
+//! (the `split_delta` suffix covers the identical body). `pub(…)`
+//! paths naming the old ident itself, vis changes, method calls,
+//! fields, bare value paths, macro heads, glob/suffix `use` shapes, and
+//! second-hop re-exports veto the whole intent (never a partial follow
+//! claim); the scratch-apply probe below is the uniqueness guard (an
+//! off-diff same-name call *or* same-tail `use` fails the
+//! unchanged-leg).
 //!
 //! Totality is a cross-file scratch-apply probe (member-rename
 //! posture, WI-9b): the authored emission applied to an in-memory
@@ -159,8 +162,10 @@ pub(crate) fn try_item_intent_sweep(
     if def_kind == "macro_rules!" || def_kind == "mod" {
         return None;
     }
-    // WI-9: `fn` intents claim call-callee uses (the follow domain);
-    // every other shape keeps the item gate (any same-delta use line).
+    // WI-9: `fn` intents claim call-callee uses (the follow domain)
+    // plus `use`-tail deltas (WI-2: the cross-file import is part of
+    // the definition set, D9); every other shape keeps the item gate
+    // (any same-delta use line).
     let is_fn_intent = def_kind == "fn";
     // Use-line gate per non-def pair (cheap, ident-boundary): the probe
     // below is authoritative.
@@ -174,7 +179,10 @@ pub(crate) fn try_item_intent_sweep(
         if !contains_ident(&pair.minus, &old_ident) || !contains_ident(&pair.plus, &new_ident) {
             return None;
         }
-        if is_fn_intent && !is_fn_call_use_site(&pair.minus, &old_ident) {
+        if is_fn_intent
+            && !is_fn_call_use_site(&pair.minus, &old_ident)
+            && !is_fn_use_tail_site(&pair.minus, &pair.plus, &old_ident, &new_ident)
+        {
             return None;
         }
     }
@@ -440,6 +448,106 @@ fn is_fn_call_use_site(minus: &str, old: &str) -> bool {
         }
     }
     false
+}
+
+/// WI-2: true when the pair is a `use`-tail delta renaming exactly one
+/// leaf ident `old` → `new` at a tail-or-direct-group-member position:
+/// plain tails (`use crate::a::foo;`), grouped members
+/// (`use crate::a::{foo, Other};`), `as`-preserving
+/// (`use crate::a::foo as f;`), and `pub use` re-export forms. Both
+/// lines must parse as `syn::ItemUse` with equal vis/attrs; glob trees,
+/// nested member paths (`crate::{x::foo}` suffix), intermediate-segment
+/// changes (`crate::foo::Bar`), and vis/attr deltas all return false.
+/// The workspace scratch-apply probe below stays authoritative
+/// (second-hop re-exports and off-diff same-tail uses veto there).
+fn is_fn_use_tail_site(minus: &str, plus: &str, old: &str, new: &str) -> bool {
+    let minus_item: syn::ItemUse = match syn::parse_str(minus.trim()) {
+        Ok(item) => item,
+        Err(_) => return false,
+    };
+    let plus_item: syn::ItemUse = match syn::parse_str(plus.trim()) {
+        Ok(item) => item,
+        Err(_) => return false,
+    };
+    let minus_vis = &minus_item.vis;
+    let plus_vis = &plus_item.vis;
+    if quote::quote!(#minus_vis).to_string() != quote::quote!(#plus_vis).to_string() {
+        return false;
+    }
+    if minus_item.leading_colon != plus_item.leading_colon {
+        return false;
+    }
+    if minus_item.attrs.len() != plus_item.attrs.len() {
+        return false;
+    }
+    for (a, b) in minus_item.attrs.iter().zip(plus_item.attrs.iter()) {
+        if quote::quote!(#a).to_string() != quote::quote!(#b).to_string() {
+            return false;
+        }
+    }
+    match use_tree_single_tail_delta(&minus_item.tree, &plus_item.tree, old, new, false) {
+        Some(count) => count == 1,
+        None => false,
+    }
+}
+
+/// Single-tail delta walk over two `use` trees: `Some(n)` when the trees
+/// are structurally identical except for `n` leaf `old` → `new` swaps at
+/// allowed tail positions, `None` on any other divergence (glob, vis
+/// already checked above, mismatched variants, intermediate changes).
+/// `in_group` is true inside a `{…}` member list: a change under a
+/// nested `Path` there (`{x::foo}`) is a suffix and vetoes.
+fn use_tree_single_tail_delta(
+    minus: &syn::UseTree,
+    plus: &syn::UseTree,
+    old: &str,
+    new: &str,
+    in_group: bool,
+) -> Option<u32> {
+    match (minus, plus) {
+        (syn::UseTree::Path(m), syn::UseTree::Path(p)) => {
+            if m.ident != p.ident {
+                return None;
+            }
+            let inner = use_tree_single_tail_delta(&m.tree, &p.tree, old, new, in_group)?;
+            if inner > 0 && in_group {
+                return None;
+            }
+            Some(inner)
+        }
+        (syn::UseTree::Name(m), syn::UseTree::Name(p)) => {
+            if m.ident == p.ident {
+                Some(0)
+            } else if m.ident == old && p.ident == new {
+                Some(1)
+            } else {
+                None
+            }
+        }
+        (syn::UseTree::Rename(m), syn::UseTree::Rename(p)) => {
+            if m.rename != p.rename {
+                return None;
+            }
+            if m.ident == p.ident {
+                Some(0)
+            } else if m.ident == old && p.ident == new {
+                Some(1)
+            } else {
+                None
+            }
+        }
+        (syn::UseTree::Group(m), syn::UseTree::Group(p)) => {
+            if m.items.len() != p.items.len() {
+                return None;
+            }
+            let mut total = 0u32;
+            for (mm, pp) in m.items.iter().zip(p.items.iter()) {
+                total += use_tree_single_tail_delta(mm, pp, old, new, true)?;
+            }
+            Some(total)
+        }
+        _ => None,
+    }
 }
 
 /// True for call callees naming `old` (qualified and turbofish
@@ -768,9 +876,10 @@ mod tests {
 
     #[test]
     fn fn_call_head_gate() {
-        // The `fn` follow domain is call callees only (bare,
+        // The `fn` call domain is call callees only (bare,
         // qualified, `let`-wrapped); methods, fields, value paths,
-        // macro heads, and `use` lines veto.
+        // macro heads, and `use` lines are not calls (WI-2 `use`
+        // tails join through `is_fn_use_tail_site` instead).
         assert!(is_fn_call_use_site("    foo(1);", "foo"));
         assert!(is_fn_call_use_site("    m::foo(2);", "foo"));
         assert!(is_fn_call_use_site("    let a = foo(1);", "foo"));
@@ -781,6 +890,207 @@ mod tests {
         assert!(!is_fn_call_use_site("    let b = foo!(2);", "foo"));
         assert!(!is_fn_call_use_site("use m::foo;", "foo"));
         assert!(!is_fn_call_use_site("    Some(foo);", "foo"));
+    }
+
+    #[test]
+    fn fn_use_tail_gate() {
+        // WI-2: plain, grouped-member, `as`, and `pub use` tails join;
+        // globs, suffix members, intermediate changes, and vis deltas
+        // veto.
+        assert!(is_fn_use_tail_site(
+            "use crate::a::foo;",
+            "use crate::a::bar;",
+            "foo",
+            "bar"
+        ));
+        assert!(is_fn_use_tail_site(
+            "use crate::a::{foo, Other};",
+            "use crate::a::{bar, Other};",
+            "foo",
+            "bar"
+        ));
+        assert!(is_fn_use_tail_site(
+            "use crate::a::foo as f;",
+            "use crate::a::bar as f;",
+            "foo",
+            "bar"
+        ));
+        assert!(is_fn_use_tail_site(
+            "pub use crate::a::foo;",
+            "pub use crate::a::bar;",
+            "foo",
+            "bar"
+        ));
+        assert!(is_fn_use_tail_site("use foo;", "use bar;", "foo", "bar"));
+        assert!(!is_fn_use_tail_site(
+            "use crate::a::*;",
+            "use crate::a::*;",
+            "foo",
+            "bar"
+        ));
+        assert!(!is_fn_use_tail_site(
+            "use crate::{x::foo};",
+            "use crate::{x::bar};",
+            "foo",
+            "bar"
+        ));
+        assert!(!is_fn_use_tail_site(
+            "use crate::foo::Bar;",
+            "use crate::bar::Bar;",
+            "foo",
+            "bar"
+        ));
+        assert!(!is_fn_use_tail_site(
+            "use crate::a::foo;",
+            "pub use crate::a::bar;",
+            "foo",
+            "bar"
+        ));
+        assert!(!is_fn_use_tail_site(
+            "use crate::a::foo;",
+            "use crate::a::foo;",
+            "foo",
+            "bar"
+        ));
+        assert!(!is_fn_use_tail_site(
+            "use crate::a::foo;",
+            "fn bar() {}",
+            "foo",
+            "bar"
+        ));
+    }
+
+    #[test]
+    fn fn_intent_use_tail_cross_file_fires() {
+        // WI-2 F2: def + `use` tail + call across files → one hunk.
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) -> i32 {\n+pub fn bar(x: i32) -> i32 {\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,3 @@\n-use crate::a::foo;\n+use crate::a::bar;\n@@ -3,1 +3,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "pub fn foo(x: i32) -> i32 {\n    x + 1\n}\n"),
+            (
+                "b.rs",
+                "use crate::a::foo;\nfn m() {\n    let a = foo(1);\n}\n",
+            ),
+        ]);
+        let mut used = Vec::new();
+        let (out, path, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("use-tail must fire");
+        assert_eq!(path, "a.rs");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("- pub fn foo"), "got:\n{}", out[0]);
+        assert!(out[0].contains("+ pub fn bar"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["b.rs"].contains("use crate::a::bar;"),
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(!files["b.rs"].contains("foo"), "got: {}", files["b.rs"]);
+    }
+
+    #[test]
+    fn fn_intent_use_tail_grouped_and_as_fire() {
+        for (use_minus, use_plus) in [
+            ("use crate::a::{foo, Other};", "use crate::a::{bar, Other};"),
+            ("use crate::a::foo as f;", "use crate::a::bar as f;"),
+            ("pub use crate::a::foo;", "pub use crate::a::bar;"),
+            (
+                "pub(crate) use crate::a::foo;",
+                "pub(crate) use crate::a::bar;",
+            ),
+        ] {
+            let sections = vec![format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {{\n+fn bar(x: i32) -> i32 {{\n@@ -5,2 +5,2 @@\n-{use_minus}\n-    let a = foo(1);\n+{use_plus}\n+    let a = bar(1);\n"
+            )];
+            let pre_text = format!(
+                "fn foo(x: i32) -> i32 {{\n    x + 1\n}}\nfn m() {{\n{use_minus}\n    let a = foo(1);\n}}\n"
+            );
+            let pre = pre_map(&[("src/lib.rs", pre_text.as_str())]);
+            let mut used = Vec::new();
+            let (out, _, _) = try_item_intent_sweep(&sections, &pre, &mut used)
+                .unwrap_or_else(|| panic!("{use_minus} must fire"));
+            assert!(out[0].contains("- fn foo"), "got:\n{}", out[0]);
+            validated_live(&out[0], &pre);
+        }
+    }
+
+    #[test]
+    fn fn_intent_use_tail_vetoes() {
+        // Glob, suffix-member, and intermediate-segment deltas never join.
+        for (use_minus, use_plus) in [
+            ("use crate::a::*;", "use crate::a::*;"),
+            ("use crate::{x::foo};", "use crate::{x::bar};"),
+            ("use crate::foo::Bar;", "use crate::bar::Bar;"),
+        ] {
+            let sections = vec![format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {{\n+fn bar(x: i32) -> i32 {{\n@@ -5,1 +5,1 @@\n-{use_minus}\n+{use_plus}\n"
+            )];
+            let pre = pre_map(&[(
+                "src/lib.rs",
+                "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n}\n",
+            )]);
+            let mut used = Vec::new();
+            assert!(
+                try_item_intent_sweep(&sections, &pre, &mut used).is_none(),
+                "{use_minus} must veto"
+            );
+            assert!(used.is_empty());
+        }
+    }
+
+    #[test]
+    fn fn_intent_second_hop_vetoes() {
+        // A re-export chain through two hops is not a proven one-hop
+        // tail: the engine's follow vetoes, so the scratch probe fails
+        // and the whole intent stays ordinary (never a partial claim).
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) -> i32 {\n+pub fn bar(x: i32) -> i32 {\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-pub use crate::a::foo;\n+pub use crate::a::bar;\n"
+                .to_string(),
+            "diff --git a/c.rs b/c.rs\n--- a/c.rs\n+++ b/c.rs\n@@ -1,1 +1,1 @@\n-pub use crate::b::foo;\n+pub use crate::b::bar;\n"
+                .to_string(),
+            "diff --git a/d.rs b/d.rs\n--- a/d.rs\n+++ b/d.rs\n@@ -1,1 +1,1 @@\n-use crate::c::foo;\n+use crate::c::bar;\n@@ -3,1 +3,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "pub fn foo(x: i32) -> i32 {\n    x + 1\n}\n"),
+            ("b.rs", "pub use crate::a::foo;\n"),
+            ("c.rs", "pub use crate::b::foo;\n"),
+            (
+                "d.rs",
+                "use crate::c::foo;\nfn m() {\n    let a = foo(1);\n}\n",
+            ),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_off_diff_use_tail_vetoes() {
+        // An untouched same-tail `use` elsewhere fails the unchanged-leg.
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-use crate::a::foo;\n+use crate::a::bar;\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "fn foo(x: i32) -> i32 {\n    x + 1\n}\n"),
+            ("b.rs", "use crate::a::foo;\n"),
+            ("c.rs", "use crate::a::foo;\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
     }
 
     #[test]

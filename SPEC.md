@@ -2883,8 +2883,14 @@ Rules:
   skipped, never guessed: a divergent plus prefix skips grouped members
   (non-grouped sites still rewrite), a shrinking plus (empty replacement
   text) skips, and `crate::{x::old}` never matches minus `crate::old`
-  (members match from member start only — no suffix overreach). Genuinely
-  ambiguous member shapes are ordinary-hunk territory.
+   (members match from member start only — no suffix overreach). Genuinely
+   ambiguous member shapes are ordinary-hunk territory. Raising
+   cross-reference (no law change): the `fn` item-intent raiser (SPEC D.4)
+   claims exactly these tail-or-direct-group-member `use` deltas
+   (`use crate::a::old;`, `use crate::a::{old, Other};`,
+   `use crate::a::old as f;`, `pub use` forms) as part of a rename intent;
+   suffix members like `crate::{x::old}` never join the intent, mirroring
+   the no-suffix-overreach law above.
 - Matching reuses the item scope modes (`scope=contained/anchor/overlap/
   exact`, anchor on the prefix-start line), attribute policies
   (`# attrs=...`), and `allow`/`optional` count validation. A file with
@@ -7372,6 +7378,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `::`-separated ident segments) and equal qualifier/signature
   suffixes (any signature) joined with N-1 call-callee use lines of
   the old name (bare, qualified, turbofish; `let`-wrapped included)
+  or `use`-tail deltas (`use crate::a::old;` → `use crate::a::new;`,
+  direct group members, `as`-preserving, `pub use` re-export forms)
   emits the terse `- [vis] fn Old` / `+ [vis] fn New` diet form with
   `# sweep` + `# follow=uses` (never a `V` hole — the intent proved
   one concrete vis; `# sweep` already carries file scope at any
@@ -7379,9 +7387,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   the same way when the bodies are token-identical (the suffix covers
   the body). `pub(…)` paths naming the old ident itself, vis changes,
   signature evolutions, method calls, fields, bare value paths, macro
-  heads, and `use` lines veto the whole intent (never a partial
-  claim); the probe doubles as the uniqueness guard (an off-diff
-  same-name call fails the unchanged-leg).
+  heads, glob `use` shapes, nested member paths (`crate::{x::old}`
+  suffixes), intermediate-segment changes, and second-hop re-exports
+  veto the whole intent (never a partial claim); the probe doubles as
+  the uniqueness guard (an off-diff same-name call or same-tail `use`
+  fails the unchanged-leg).
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
   decline — there is no file to join) joined with N-1 same-delta
