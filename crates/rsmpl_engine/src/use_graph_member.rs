@@ -23,7 +23,6 @@
 
 use std::collections::HashMap;
 
-use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::edits::TextEdit;
@@ -661,29 +660,41 @@ impl<'ast> Visit<'ast> for MemberCollector<'_> {
 
     fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
         // `qself` (`<T as E>::Old`) is opaque, mirroring scalar.
-        if self.kind == MemberKind::Variant
-            && node.qself.is_some()
-            && node.path.segments.iter().any(|s| s.ident == self.old)
-        {
-            self.opaque.push((
-                node.path.span().start().line as u32,
-                "a qself path".to_string(),
-            ));
-            return;
+        // One entry per matching ident line (WI-2b ident-line parity —
+        // not the path start line). Single-line paths are unchanged.
+        if self.kind == MemberKind::Variant && node.qself.is_some() {
+            let mut hit = false;
+            for seg in &node.path.segments {
+                if seg.ident == self.old {
+                    self.opaque.push((
+                        seg.ident.span().start().line as u32,
+                        "a qself path".to_string(),
+                    ));
+                    hit = true;
+                }
+            }
+            if hit {
+                return;
+            }
         }
         visit::visit_type_path(self, node);
     }
 
     fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
-        if self.kind == MemberKind::Variant
-            && node.qself.is_some()
-            && node.path.segments.iter().any(|s| s.ident == self.old)
-        {
-            self.opaque.push((
-                node.path.span().start().line as u32,
-                "a qself path".to_string(),
-            ));
-            return;
+        if self.kind == MemberKind::Variant && node.qself.is_some() {
+            let mut hit = false;
+            for seg in &node.path.segments {
+                if seg.ident == self.old {
+                    self.opaque.push((
+                        seg.ident.span().start().line as u32,
+                        "a qself path".to_string(),
+                    ));
+                    hit = true;
+                }
+            }
+            if hit {
+                return;
+            }
         }
         visit::visit_expr_path(self, node);
     }
@@ -776,5 +787,22 @@ mod tests {
     fn single_line_macro_reports_same_line() {
         let src = "fn f() { println!(\"{}\", Item); }\n";
         assert_eq!(ident_lines_for_tokens(src, "Item"), vec![1]);
+    }
+
+    fn opaque_lines_for(src: &str, container: &str, old: &str) -> Vec<u32> {
+        let parsed: syn::File = syn::parse_str(src).expect("test src must parse");
+        let mut c = MemberCollector::new(MemberKind::Variant, container, old);
+        use syn::visit::Visit;
+        c.visit_file(&parsed);
+        let mut lines: Vec<u32> = c.opaque.into_iter().map(|(l, _)| l).collect();
+        lines.sort_unstable();
+        lines
+    }
+
+    #[test]
+    fn multiline_qself_reports_ident_line() {
+        // `Old` sits on line 3; the `<...>::a::` starts on line 2.
+        let src = "enum E { Old }\nfn f(x: <T as Tr>::a::\n    Old) {}\n";
+        assert_eq!(opaque_lines_for(src, "E", "Old"), vec![3]);
     }
 }

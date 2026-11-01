@@ -12,7 +12,6 @@
 //! trees, `qself`/macro/attribute opacity). A follow matcher change that
 //! adds a use shape needs a mirror here, pinned by `orphan_e2e.rs`.
 
-use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::lines::LineIndex;
@@ -118,12 +117,17 @@ impl Collector<'_> {
     }
 
     fn push_qself_path(&mut self, path: &syn::Path) -> bool {
-        if path.segments.iter().any(|s| s.ident == self.old) {
-            self.opaque
-                .push((path.span().start().line as u32, "a qself path".to_string()));
-            return true;
+        let mut hit = false;
+        for seg in &path.segments {
+            if seg.ident == self.old {
+                self.opaque.push((
+                    seg.ident.span().start().line as u32,
+                    "a qself path".to_string(),
+                ));
+                hit = true;
+            }
         }
-        false
+        hit
     }
 }
 
@@ -225,9 +229,15 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
-        if node.path().segments.iter().any(|s| s.ident == self.old) {
-            self.opaque
-                .push((node.span().start().line as u32, "an attribute".to_string()));
+        // One entry per matching ident line (WI-2b ident-line parity —
+        // not the attribute start line). Single-line attributes unchanged.
+        for seg in node.path().segments.iter() {
+            if seg.ident == self.old {
+                self.opaque.push((
+                    seg.ident.span().start().line as u32,
+                    "an attribute".to_string(),
+                ));
+            }
         }
     }
 }
@@ -270,5 +280,31 @@ mod tests {
             "struct Old",
         );
         assert!(out.iter().any(|o| o.line == 3), "got: {out:?}");
+    }
+
+    #[test]
+    fn multiline_attribute_reports_ident_line() {
+        // `Old` sits on line 3; the attribute starts on line 2.
+        let out = orphans_for(
+            "pub struct Old;\n#[a::\nOld]\nfn f() {}\n",
+            "Old",
+            "struct Old",
+        );
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert_eq!(out[0].line, 3, "got: {out:?}");
+        assert_eq!(out[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn multiline_qself_reports_ident_line() {
+        // `Old` sits on line 3; the `<...>` starts on line 2.
+        let out = orphans_for(
+            "pub struct Old;\nfn f(x: <T as Tr>::a::\n    Old) {}\n",
+            "Old",
+            "struct Old",
+        );
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert_eq!(out[0].line, 3, "got: {out:?}");
+        assert_eq!(out[0].reason, "macro-hidden");
     }
 }

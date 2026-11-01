@@ -688,6 +688,25 @@ fn tokens_mention(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
     })
 }
 
+/// Per-ident opaque lines for macro interiors naming `old`: one entry
+/// per ident line (WI-2b ident-line parity — not the macro start line).
+/// Single-line macros are unchanged.
+fn macro_ident_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for t in tokens.clone() {
+        match t {
+            proc_macro2::TokenTree::Ident(id) if id == old => {
+                out.push(id.span().start().line as u32);
+            }
+            proc_macro2::TokenTree::Group(g) => {
+                out.extend(macro_ident_lines(&g.stream(), old));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 struct Collector<'a> {
     old: &'a str,
     /// WI-7b: also collect macro-invocation paths (`Old!…`) as uses.
@@ -759,12 +778,17 @@ impl Collector<'_> {
     /// the `qself` type still resolve. Returns true when the site was
     /// consumed as opaque.
     fn push_qself_path(&mut self, path: &syn::Path) -> bool {
-        if path.segments.iter().any(|s| s.ident == self.old) {
-            self.opaque
-                .push((path.span().start().line as u32, "a qself path".to_string()));
-            return true;
+        let mut hit = false;
+        for seg in &path.segments {
+            if seg.ident == self.old {
+                self.opaque.push((
+                    seg.ident.span().start().line as u32,
+                    "a qself path".to_string(),
+                ));
+                hit = true;
+            }
         }
-        false
+        hit
     }
 
     /// WI-7b: `pub use` trees additionally record re-export edges (explicit
@@ -989,11 +1013,10 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         if self.macro_paths {
             self.push_path_use(&node.path);
         }
-        if tokens_mention(&node.tokens, self.old) {
-            self.opaque.push((
-                node.span().start().line as u32,
-                "a macro invocation".to_string(),
-            ));
+        // One entry per ident line (WI-2b ident-line parity — not the
+        // macro start line). Single-line macros are unchanged.
+        for line in macro_ident_lines(&node.tokens, self.old) {
+            self.opaque.push((line, "a macro invocation".to_string()));
         }
     }
 
@@ -1001,9 +1024,15 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         // Attribute paths (`#[derive(Old)]`) live outside the item/value
         // namespaces the resolver proves; a mention is opaque, and there
         // is nothing to recurse into that the resolver would claim.
-        if node.path().segments.iter().any(|s| s.ident == self.old) {
-            self.opaque
-                .push((node.span().start().line as u32, "an attribute".to_string()));
+        // One entry per matching ident line (WI-2b ident-line parity —
+        // not the attribute start line). Single-line attributes unchanged.
+        for seg in node.path().segments.iter() {
+            if seg.ident == self.old {
+                self.opaque.push((
+                    seg.ident.span().start().line as u32,
+                    "an attribute".to_string(),
+                ));
+            }
         }
     }
 }
@@ -1537,10 +1566,33 @@ mod tests {
 
     #[test]
     fn qself_mention_is_opaque() {
-        let src =
-            "struct Old;\nfn f<T: Tr>() where T: Tr {\n    let x = <T as Tr>::Old;\n    x\n}\n";
+        let src = "struct Old;\nfn f<T: Tr>() where T: Tr {\n    let x = <T as Tr>::Old;\n    x\n}";
         let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
         assert!(err.reason.contains("qself"), "got: {}", err.reason);
+    }
+
+    #[test]
+    fn multiline_macro_reports_ident_line() {
+        // `Old` sits on line 4; the macro starts on line 2.
+        let src = "struct Old;\nfn f() {\n    m!(\n        Old\n    );\n}\n";
+        let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("line 4"), "got: {}", err.reason);
+    }
+
+    #[test]
+    fn multiline_attribute_reports_ident_line() {
+        // `Old` sits on line 3; the attribute starts on line 2.
+        let src = "struct Old;\n#[a::\nOld]\nfn f() {}\n";
+        let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("line 3"), "got: {}", err.reason);
+    }
+
+    #[test]
+    fn multiline_qself_reports_ident_line() {
+        // `Old` sits on line 3; the `<...>` starts on line 2.
+        let src = "struct Old;\nfn f(x: <T as Tr>::a::\n    Old) {}\n";
+        let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
+        assert!(err.reason.contains("line 3"), "got: {}", err.reason);
     }
 
     #[test]

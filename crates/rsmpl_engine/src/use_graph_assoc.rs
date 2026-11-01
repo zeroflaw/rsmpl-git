@@ -21,7 +21,6 @@
 
 use std::collections::HashMap;
 
-use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::edits::TextEdit;
@@ -930,14 +929,15 @@ impl<'ast> Visit<'ast> for AssocWalker<'_> {
 
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
         // No recursion: attribute paths are opaque, never claimed.
-        if node
-            .path()
-            .segments
-            .iter()
-            .any(|s| s.ident == self.domain.old)
-        {
-            self.opaque
-                .push((node.span().start().line as u32, "an attribute".to_string()));
+        // One entry per matching ident line (WI-2b ident-line parity —
+        // not the attribute start line). Single-line attributes unchanged.
+        for seg in node.path().segments.iter() {
+            if seg.ident == self.domain.old {
+                self.opaque.push((
+                    seg.ident.span().start().line as u32,
+                    "an attribute".to_string(),
+                ));
+            }
         }
     }
 }
@@ -973,5 +973,32 @@ mod tests {
     fn single_line_macro_reports_same_line() {
         let src = "fn f() { println!(\"{}\", Item); }\n";
         assert_eq!(ident_lines_for_tokens(src, "Item"), vec![1]);
+    }
+
+    fn opaque_lines_for_attr(src: &str, old: &str) -> Vec<u32> {
+        let parsed: syn::File = syn::parse_str(src).expect("test src must parse");
+        let index = crate::lines::LineIndex::new(src);
+        let domain = AssocDomain {
+            old: old.to_string(),
+            trait_name: Some("Tr".to_string()),
+            self_name: None,
+            is_type: true,
+        };
+        let filter = rsmpl_pattern::parse_impl_header("trait Tr {").expect("header must parse");
+        let refs = [("src/a.rs".to_string(), &parsed, src, &index)];
+        let census = AssocCensus::collect(&refs, &domain, &filter);
+        let mut w = AssocWalker::new(&domain, &filter, &census);
+        use syn::visit::Visit;
+        w.visit_file(&parsed);
+        let mut lines: Vec<u32> = w.opaque.into_iter().map(|(l, _)| l).collect();
+        lines.sort_unstable();
+        lines
+    }
+
+    #[test]
+    fn multiline_attribute_reports_ident_line() {
+        // `Item` sits on line 3; the attribute starts on line 2.
+        let src = "trait Tr { type Item; }\n#[a::\nItem]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "Item"), vec![3]);
     }
 }

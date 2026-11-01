@@ -230,38 +230,59 @@ fn interior_reports(
             syn::visit::visit_path(self, node);
         }
         fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
-            if node.qself.is_some() && node.path.segments.iter().any(|s| s.ident == self.old) {
-                let line = node.span().start().line as u32;
-                if let Some((a, b)) =
-                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
-                {
-                    if self
-                        .scopes
-                        .iter()
-                        .any(|(rs, _)| rs.iter().any(|(s, e)| *s <= a && b <= *e))
-                    {
-                        self.opaque_lines.push(line);
+            if node.qself.is_some() {
+                let mut hit = false;
+                for seg in &node.path.segments {
+                    if seg.ident == self.old {
+                        hit = true;
+                        // One entry per matching ident line (WI-2b
+                        // ident-line parity — not the qself start line),
+                        // gated on the ident itself sitting in scope.
+                        if let Some((a, b)) = crate::matcher_item::span_bytes(
+                            self.original,
+                            self.index,
+                            seg.ident.span(),
+                        ) {
+                            if self
+                                .scopes
+                                .iter()
+                                .any(|(rs, _)| rs.iter().any(|(s, e)| *s <= a && b <= *e))
+                            {
+                                self.opaque_lines.push(seg.ident.span().start().line as u32);
+                            }
+                        }
                     }
                 }
-                return;
+                if hit {
+                    return;
+                }
             }
             syn::visit::visit_type_path(self, node);
         }
         fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
-            if node.qself.is_some() && node.path.segments.iter().any(|s| s.ident == self.old) {
-                let line = node.span().start().line as u32;
-                if let Some((a, b)) =
-                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
-                {
-                    if self
-                        .scopes
-                        .iter()
-                        .any(|(rs, _)| rs.iter().any(|(s, e)| *s <= a && b <= *e))
-                    {
-                        self.opaque_lines.push(line);
+            if node.qself.is_some() {
+                let mut hit = false;
+                for seg in &node.path.segments {
+                    if seg.ident == self.old {
+                        hit = true;
+                        if let Some((a, b)) = crate::matcher_item::span_bytes(
+                            self.original,
+                            self.index,
+                            seg.ident.span(),
+                        ) {
+                            if self
+                                .scopes
+                                .iter()
+                                .any(|(rs, _)| rs.iter().any(|(s, e)| *s <= a && b <= *e))
+                            {
+                                self.opaque_lines.push(seg.ident.span().start().line as u32);
+                            }
+                        }
                     }
                 }
-                return;
+                if hit {
+                    return;
+                }
             }
             syn::visit::visit_expr_path(self, node);
         }
@@ -826,6 +847,17 @@ mod tests {
         let src = "fn main() {\n    for total in 0..3 {\n        println!(\n            \"{total}\"\n        );\n    }\n}\n";
         let orphans = expr_orphans(src, Wi2dExprKind::For);
         assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "macro-hidden");
+        assert_eq!(orphans[0].line, 4);
+    }
+
+    #[test]
+    fn for_multiline_qself_reports_ident_line() {
+        // WI-2b ident-line parity: the `<...>` starts line 3 but `total`
+        // sits on line 4 — the orphan reports line 4.
+        let src = "fn main() {\n    for total in 0..3 {\n        let x: <T as Tr>::a::\n            total = make();\n        let _ = x;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
         assert_eq!(orphans[0].reason, "macro-hidden");
         assert_eq!(orphans[0].line, 4);
     }
