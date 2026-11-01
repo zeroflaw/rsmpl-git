@@ -38,6 +38,7 @@ pub use pattern::{
     split_leading_attrs, trait_header_ident, CompiledPattern, GeneralShape, ImplHeaderFilter,
     PatternKind, VariantPayload,
 };
+pub use pattern_member_evo::norm_arm_expr;
 pub use quote_utils::{
     char_col_to_byte, char_lit_len, count_ellipsis_markers, has_ellipsis_marker,
     is_ellipsis_marker_ident, mask_literal_spans, qualifier_leads_to_fn, string_end,

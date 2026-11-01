@@ -636,12 +636,8 @@ fn member_present(post_file: &syn::File, kind: &MemberKind) -> bool {
             }
             impl<'ast> syn::visit::Visit<'ast> for ArmProbe {
                 fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
-                    let scrut = &*node.expr;
-                    let got: String = quote::quote!(#scrut)
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                    // Shared with the `ArmAddition` classifier.
+                    let got: String = rsmpl_pattern::norm_arm_expr(&node.expr);
                     if got == self.scrutinee {
                         for arm in &node.arms {
                             let name: Option<String> = match &arm.pat {
@@ -1911,3 +1907,7 @@ mod tests {
         assert_eq!(rules[1].semantics, RuleSemantics::Postcondition);
     }
 }
+
+#[cfg(test)]
+#[path = "postcheck_move_sweep_tests.rs"]
+mod sweep_tests;

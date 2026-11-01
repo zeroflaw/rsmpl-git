@@ -1061,7 +1061,10 @@ fn starts_upper(s: &str) -> bool {
         .is_some_and(|c| c.is_ascii_uppercase())
 }
 
-fn norm_arm_expr(e: &syn::Expr) -> String {
+/// Token-normalise an expression for arm-scrutinee comparison, shared
+/// by the `ArmAddition` classifier and the member-addition postcheck
+/// probe (`quote!`-rendered, whitespace-joined).
+pub fn norm_arm_expr(e: &syn::Expr) -> String {
     quote::quote!(#e)
         .to_string()
         .split_whitespace()
