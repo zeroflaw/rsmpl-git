@@ -41,6 +41,7 @@ pub(crate) enum Workspace {
 pub(crate) fn joint_workspace_candidate(
     parsed: &[(usize, String, Vec<HunkPairs>)],
     pre: &HashMap<String, String>,
+    hunk_texts: &HashMap<(usize, usize), String>,
 ) -> Workspace {
     // Path-aware flat pairs plus per-section unbalanced flags.
     struct WPair {
@@ -52,11 +53,13 @@ pub(crate) fn joint_workspace_candidate(
         site: usize,
     }
     let mut flat: Vec<WPair> = Vec::new();
-    let mut unbalanced_secs: HashSet<usize> = HashSet::new();
+    // WI-4f-next2: unbalanced hunks become leftovers unless they carry a
+    // header delta (ambiguity → suppress). Tracked per (sec, hunk).
+    let mut unbalanced_hunks: Vec<(usize, usize)> = Vec::new();
     for (sec, path, hunks) in parsed {
         for (h, hp) in hunks.iter().enumerate() {
             if !hp.balanced {
-                unbalanced_secs.insert(*sec);
+                unbalanced_hunks.push((*sec, h));
                 continue;
             }
             for ((m, p), s) in hp.minuses.iter().zip(hp.pluses.iter()).zip(hp.sites.iter()) {
@@ -167,30 +170,97 @@ pub(crate) fn joint_workspace_candidate(
     if !def_single {
         return Workspace::Suppress(involved_paths, old);
     }
-    if involved.iter().any(|s| unbalanced_secs.contains(s)) {
-        return Workspace::Suppress(involved_paths, old);
+    // WI-4f-next2 hunk-level partition: the def hunk is claimed; other
+    // hunks in involved sections are claimed iff every pair is a call
+    // site, left over iff no pair is a call site, and suppress on a
+    // mixed hunk (half a hunk cannot be claimed). Unbalanced hunks in
+    // involved sections are leftovers unless they carry a header delta.
+    let mut hunk_members: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (i, fp) in flat.iter().enumerate() {
+        hunk_members.entry((fp.sec, fp.hunk)).or_default().push(i);
     }
-    // Every pair in every involved section must be the def or a call
-    // site (mixed sections suppress — hunk-level partition is WI-4e).
-    for fp in &flat {
-        if !involved.contains(&fp.sec) {
+    let mut claimed_hunks: HashSet<(usize, usize)> = HashSet::new();
+    claimed_hunks.insert((ds, dh));
+    let mut leftover: HashMap<usize, Vec<String>> = HashMap::new();
+    for ((sec, h), members) in &hunk_members {
+        if *sec == ds && *h == dh {
             continue;
         }
-        let is_def = fp.sec == ds
-            && fp.hunk == dh
-            && fp.minus == flat[def_idx].minus
-            && fp.plus == flat[def_idx].plus;
-        if is_def {
+        if !involved.contains(sec) {
             continue;
         }
-        if !is_call_site_of(&fp.minus, &fp.plus, &old, &new) {
+        let n_call = members
+            .iter()
+            .filter(|i| is_call_site_of(&flat[**i].minus, &flat[**i].plus, &old, &new))
+            .count();
+        if n_call == members.len() {
+            claimed_hunks.insert((*sec, *h));
+        } else if n_call == 0 {
+            if let Some(t) = hunk_texts.get(&(*sec, *h)) {
+                leftover.entry(*sec).or_default().push(t.clone());
+            }
+        } else {
             return Workspace::Suppress(involved_paths, old);
         }
     }
-    // Joint-A only: callee-only calls + header slot gates. Arg-add,
-    // attr, and hetero shapes suppress (B cross-file stays ordinary).
+    for (sec, h) in &unbalanced_hunks {
+        if !involved.contains(sec) {
+            continue;
+        }
+        let mut has_header = false;
+        if let Some(hp) = parsed
+            .iter()
+            .find(|(s, _, _)| s == sec)
+            .and_then(|(_, _, hs)| hs.get(*h))
+        {
+            for m in &hp.minuses {
+                for p in &hp.pluses {
+                    if header_name_delta(m, p).is_some() {
+                        has_header = true;
+                    }
+                }
+            }
+        }
+        if has_header {
+            return Workspace::Suppress(involved_paths, old);
+        }
+        if let Some(t) = hunk_texts.get(&(*sec, *h)) {
+            leftover.entry(*sec).or_default().push(t.clone());
+        }
+    }
+    // WI-4f-next2 soundness: leftovers are sound only in the def file
+    // (same-file ordinary+follow composition, single-file precedent).
+    // A leftover in any call file suppresses the whole group — the
+    // engine follow does not rewrite a call file the patch also edits
+    // ordinarily, so the call rewrites would be silently lost (probe
+    // of the emission alone cannot see the composed loss).
+    if leftover.keys().any(|s| *s != ds) {
+        return Workspace::Suppress(involved_paths, old);
+    }
+    // No claimable call hunk beyond the def → nothing to join (raw
+    // calls existed only inside mixed/leftover hunks → suppress so the
+    // fallback stays wholly ordinary).
+    if claimed_hunks.len() < 2 {
+        let raw_calls = flat
+            .iter()
+            .enumerate()
+            .filter(|(i, fp)| *i != def_idx && is_call_site_of(&fp.minus, &fp.plus, &old, &new))
+            .count();
+        if raw_calls > 0 {
+            return Workspace::Suppress(involved_paths, old);
+        }
+        return Workspace::None;
+    }
+    // Joint-A only: callee-only calls + header slot gates over the
+    // claimed subset. Arg-add, attr, and hetero shapes suppress (B
+    // cross-file stays ordinary).
+    let claimed_idx: HashSet<usize> = hunk_members
+        .iter()
+        .filter(|(k, _)| claimed_hunks.contains(*k))
+        .flat_map(|(_, v)| v.iter().copied())
+        .collect();
     let callee_only = flat.iter().enumerate().all(|(i, fp)| {
-        if i == def_idx || !involved.contains(&fp.sec) {
+        if i == def_idx || !claimed_idx.contains(&i) {
             return true;
         }
         is_callee_only(&fp.minus, &fp.plus, &old, &new)
@@ -203,8 +273,9 @@ pub(crate) fn joint_workspace_candidate(
     }
     let claims: Vec<FlatPair> = flat
         .into_iter()
-        .filter(|fp| involved.contains(&fp.sec))
-        .map(|fp| FlatPair {
+        .enumerate()
+        .filter(|(i, _)| claimed_idx.contains(i))
+        .map(|(_, fp)| FlatPair {
             sec: fp.sec,
             hunk: fp.hunk,
             minus: fp.minus,
@@ -212,7 +283,16 @@ pub(crate) fn joint_workspace_candidate(
             site: fp.site,
         })
         .collect();
-    let claimed_secs: Vec<usize> = involved.into_iter().collect();
+    let claimed_secs: Vec<usize> = claimed_hunks
+        .iter()
+        .map(|(s, _)| *s)
+        .collect::<HashSet<usize>>()
+        .into_iter()
+        .collect();
+    let claimed_hunk_bytes: usize = claimed_hunks
+        .iter()
+        .map(|k| hunk_texts.get(k).map(|t| t.len()).unwrap_or(0))
+        .sum();
     Workspace::Ready(
         Box::new(Fire {
             old,
@@ -229,8 +309,8 @@ pub(crate) fn joint_workspace_candidate(
                 .unwrap_or_default(),
             claims,
             claimed_secs,
-            leftover: std::collections::HashMap::new(),
-            claimed_hunk_bytes: 0,
+            leftover,
+            claimed_hunk_bytes,
             joint: Joint::A,
         }),
         def_path,

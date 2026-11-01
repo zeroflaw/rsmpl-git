@@ -282,7 +282,7 @@ pub(crate) fn try_fn_joint_intent(
             // saw only their own file, so this shape declined silently
             // above; the per-hunk fallback would otherwise fragment it
             // into an ordinary def plus a rename-claiming call sweep.
-            match joint_workspace_candidate(&parsed, pre) {
+            match joint_workspace_candidate(&parsed, pre, &hunk_texts) {
                 Workspace::None => {}
                 Workspace::Suppress(paths, old) => {
                     for p in paths {
@@ -311,13 +311,23 @@ pub(crate) fn try_fn_joint_intent(
                         })
                         .collect();
                     let probed = probe_reproduces(pre, &emission, &pairs);
-                    // WI-4e: native-view bytes.
-                    let claimed_bytes: usize = f
-                        .claimed_secs
-                        .iter()
-                        .map(|s| native_lens.get(s).copied().unwrap_or(0))
-                        .sum();
-                    if probed && emission.len() < claimed_bytes {
+                    // WI-4e native-view bytes; WI-4f-next2 subset bytes
+                    // when leftovers are nonempty (shared header stays).
+                    let (claimed_bytes, emission_bytes) = if f.leftover.is_empty() {
+                        let claimed: usize = f
+                            .claimed_secs
+                            .iter()
+                            .map(|s| native_lens.get(s).copied().unwrap_or(0))
+                            .sum();
+                        (claimed, emission.len())
+                    } else {
+                        let eh: usize = super::emission_hunks(&emission)
+                            .iter()
+                            .map(|h| h.len())
+                            .sum();
+                        (f.claimed_hunk_bytes, eh)
+                    };
+                    if probed && emission_bytes < claimed_bytes {
                         let claimed: HashSet<usize> = f.claimed_secs.iter().copied().collect();
                         let first = *claimed.iter().min().unwrap_or(&0);
                         let new_hunks = super::emission_hunks(&emission);
@@ -327,12 +337,13 @@ pub(crate) fn try_fn_joint_intent(
                                 out.push(sec.clone());
                                 continue;
                             }
+                            let rest = f.leftover.get(&i).cloned().unwrap_or_default();
                             if i == first {
                                 let keep = preserved
                                     .get(&i)
                                     .map(|(_, h)| h.clone())
                                     .unwrap_or_default();
-                                if keep.is_empty() {
+                                if keep.is_empty() && rest.is_empty() {
                                     out.push(emission.clone());
                                 } else {
                                     let (prelude, _) =
@@ -344,13 +355,25 @@ pub(crate) fn try_fn_joint_intent(
                                     for h in &new_hunks {
                                         rebuilt.push_str(h);
                                     }
+                                    for h in &rest {
+                                        rebuilt.push_str(h);
+                                    }
                                     out.push(rebuilt);
                                 }
-                            } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
-                                let (prelude, keep) =
-                                    preserved.get(&i).cloned().unwrap_or_default();
+                            } else {
+                                let keep = preserved
+                                    .get(&i)
+                                    .map(|(_, h)| h.clone())
+                                    .unwrap_or_default();
+                                if keep.is_empty() && rest.is_empty() {
+                                    continue;
+                                }
+                                let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
                                 let mut rebuilt = prelude;
                                 for h in &keep {
+                                    rebuilt.push_str(h);
+                                }
+                                for h in &rest {
                                     rebuilt.push_str(h);
                                 }
                                 out.push(rebuilt);
@@ -1822,6 +1845,88 @@ mod tests {
             files["src.rs"].contains("let z = 2;"),
             "got: {}",
             files["src.rs"]
+        );
+    }
+
+    #[test]
+    fn joint_workspace_mixed_def_section_claims_subset_leaves_leftover() {
+        // WI-4f-next2: workspace Joint-A with an unrelated hunk in the
+        // DEF file fires on the claimed subset (same-file ordinary+follow
+        // composition), leftover stays verbatim, both files round-trip.
+        let a_pre = "fn foo(x: i32) {\n    x\n}\nfn z() {\n    let q = 1;\n}\n";
+        let b_pre = "fn n() {\n    foo(2);\n    foo(3);\n}\n";
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n@@ -5,1 +5,1 @@\n-    let q = 1;\n+    let q = 2;\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -2,2 +2,2 @@\n-    foo(2);\n-    foo(3);\n+    bar(2);\n+    bar(3);\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
+        let mut used = Vec::new();
+        let Some((out, def_path, rule, _)) = try_fn_joint_intent(&sections, &pre, &mut used) else {
+            panic!("workspace mixed subset must fire");
+        };
+        assert_eq!(def_path, "a.rs");
+        assert!(!rule.is_empty());
+        assert!(
+            out.iter().any(|s| s.contains("# follow=uses")),
+            "got: {out:?}"
+        );
+        assert!(
+            out.iter().any(|s| s.contains("-    let q = 1;")),
+            "leftover verbatim, got: {out:?}"
+        );
+        validated_live(&out.join(""), &pre);
+        let parsed = rsmpl_patch::parse_patch(&out.join("")).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["a.rs"].contains("fn bar(x: u32)"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(
+            files["a.rs"].contains("let q = 2;"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(files["b.rs"].contains("bar(2)"), "got: {}", files["b.rs"]);
+        assert!(!files["b.rs"].contains("foo("), "got: {}", files["b.rs"]);
+    }
+
+    #[test]
+    fn joint_workspace_mixed_call_section_suppresses() {
+        // WI-4f-next2 soundness: an unrelated hunk in a CALL file
+        // suppresses the workspace group (wholly ordinary) — the engine
+        // follow does not rewrite a call file the patch also edits
+        // ordinarily, so firing would silently lose the call rewrites.
+        let a_pre = "fn foo(x: i32) {\n    x\n}\n";
+        let b_pre = "fn n() {\n    foo(2);\n    foo(3);\n    let x = 1;\n}\n";
+        let sections = vec![
+            section("a.rs", "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n"),
+            section(
+                "b.rs",
+                "@@ -2,2 +2,2 @@\n-    foo(2);\n-    foo(3);\n+    bar(2);\n+    bar(3);\n@@ -4,1 +4,1 @@\n-    let x = 1;\n+    let x = 2;\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
+        let mut used = Vec::new();
+        let out = try_fn_joint_intent(&sections, &pre, &mut used);
+        let Some((rewritten, rule, _, suppressed)) = out else {
+            panic!("call-file mixed group must suppress, not decline silently");
+        };
+        assert!(rule.is_empty(), "suppress-only carries no rule");
+        assert_eq!(rewritten, sections, "suppress-only leaves bytes identical");
+        assert!(suppressed.contains(&("a.rs".to_string(), "foo".to_string())));
+        assert!(suppressed.contains(&("b.rs".to_string(), "foo".to_string())));
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "veto must stay wholly ordinary, got: {full:?}"
         );
     }
 

@@ -30,15 +30,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::{split_item, try_item_rename, unique_rule};
 
-/// One parsed eligible pair section.
-struct SecPairs {
-    idx: usize,
-    path: String,
-    minuses: Vec<String>,
-    pluses: Vec<String>,
-    changed: Vec<usize>,
-}
-
 /// One native pair at its old-side site.
 struct Pair {
     sec: usize,
@@ -63,7 +54,16 @@ pub(crate) fn try_mod_rename_intent_sweep(
     // Partition: headers-only rename sections aside (preserved verbatim,
     // never pair sources), eligible `.rs` pair sections parsed.
     let mut rename_secs: Vec<usize> = Vec::new();
-    let mut parsed: Vec<SecPairs> = Vec::new();
+    struct HunkEntry {
+        sec: usize,
+        text: String,
+        minuses: Vec<String>,
+        pluses: Vec<String>,
+        sites: Vec<usize>,
+        balanced: bool,
+        path: String,
+    }
+    let mut hunks: Vec<HunkEntry> = Vec::new();
     let mut eligible: Vec<usize> = Vec::new();
     // WI-4e: preserved semantic hunks + native lens per section.
     let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
@@ -99,43 +99,43 @@ pub(crate) fn try_mod_rename_intent_sweep(
         eligible.push(i);
         preserved.insert(i, (prelude, semantic_hunks));
         native_lens.insert(i, native_sec.len());
-        let (minuses, pluses, balanced) = section_pairs(&native_sec);
-        if !balanced || minuses.is_empty() {
-            return None;
+        for nh in super::split_native_hunks(&native_sec).into_iter() {
+            hunks.push(HunkEntry {
+                sec: i,
+                text: nh.text,
+                minuses: nh.minuses,
+                pluses: nh.pluses,
+                sites: nh.sites,
+                balanced: nh.balanced,
+                path: path.clone(),
+            });
         }
-        let changed = crate::totality::changed_old_lines(&native_sec);
-        if changed.len() != minuses.len() {
-            return None;
-        }
-        parsed.push(SecPairs {
-            idx: i,
-            path,
-            minuses,
-            pluses,
-            changed,
-        });
     }
     if rename_secs.len() > 1 {
         return None;
     }
-    if parsed.is_empty() {
+    if hunks.is_empty() {
         return None;
     }
     let mut pairs: Vec<Pair> = Vec::new();
-    for sp in &parsed {
-        for ((m, p), s) in sp
-            .minuses
-            .iter()
-            .zip(sp.pluses.iter())
-            .zip(sp.changed.iter())
-        {
+    let mut pair_hunk: Vec<usize> = Vec::new();
+    for (hi, he) in hunks.iter().enumerate() {
+        if !he.balanced {
+            continue;
+        }
+        if he.minuses.len() != he.sites.len() {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+        for ((m, p), s) in he.minuses.iter().zip(he.pluses.iter()).zip(he.sites.iter()) {
             pairs.push(Pair {
-                sec: sp.idx,
-                path: sp.path.clone(),
+                sec: he.sec,
+                path: he.path.clone(),
                 minus: m.clone(),
                 plus: p.clone(),
                 site: *s,
             });
+            pair_hunk.push(hi);
         }
     }
     if pairs.len() < 2 {
@@ -178,36 +178,74 @@ pub(crate) fn try_mod_rename_intent_sweep(
         used_rules.truncate(checkpoint);
         return None;
     }
-    for (i, pair) in pairs.iter().enumerate() {
-        if i == def_idx {
-            continue;
-        }
+    // WI-4f-next2: per-hunk cheap partition; unclaimable balanced
+    // hunks + unbalanced hunks in touched sections become leftovers.
+    // Def hunk must hold exactly the def pair.
+    let mut hunk_pairs: Vec<Vec<usize>> = vec![Vec::new(); hunks.len()];
+    for (pi, hi) in pair_hunk.iter().enumerate() {
+        hunk_pairs[*hi].push(pi);
+    }
+    let def_hunk = pair_hunk[def_idx];
+    // No partial-def-hunk claiming: co-resident pairs in the def hunk
+    // must be claimable uses (adjacent def+use lines share one hunk) —
+    // an unclaimable co-resident declines the whole intent.
+    let pair_claimable = |pair: &Pair| -> bool {
         if pair.minus.trim() == pair.plus.trim() {
-            return None;
+            return false;
         }
         if !contains_ident(&pair.minus, &old_ident) || !contains_ident(&pair.plus, &new_ident) {
+            return false;
+        }
+        !is_dedicated_use_site(&pair.minus, &old_ident)
+    };
+    for pi in &hunk_pairs[def_hunk] {
+        if *pi == def_idx {
+            continue;
+        }
+        if !pair_claimable(&pairs[*pi]) {
             return None;
         }
     }
-    for pair in &pairs {
+    let mut claimed_hunks: HashSet<usize> = HashSet::new();
+    claimed_hunks.insert(def_hunk);
+    for (hi, pis) in hunk_pairs.iter().enumerate() {
+        if pis.is_empty() || hi == def_hunk {
+            continue;
+        }
+        if pis.iter().all(|pi| pair_claimable(&pairs[*pi])) {
+            claimed_hunks.insert(hi);
+        }
+    }
+    if claimed_hunks.len() < 2 {
+        return None;
+    }
+    let mut claimed_idx: Vec<usize> = Vec::new();
+    for hi in claimed_hunks.iter() {
+        claimed_idx.extend(hunk_pairs[*hi].iter().copied());
+    }
+    claimed_idx.sort_unstable();
+    let mut claimed_pairs: Vec<Pair> = claimed_idx
+        .iter()
+        .map(|pi| Pair {
+            sec: pairs[*pi].sec,
+            path: pairs[*pi].path.clone(),
+            minus: pairs[*pi].minus.clone(),
+            plus: pairs[*pi].plus.clone(),
+            site: pairs[*pi].site,
+        })
+        .collect();
+    let def_pos = claimed_idx.iter().position(|pi| *pi == def_idx)?;
+    // Twin-`mod` census runs on the claimed subset (unclaimed hunks
+    // never join the follow, so they never confuse the census).
+    for pair in &claimed_pairs {
         if !pre.contains_key(&pair.path) {
             return None;
         }
     }
     // Twin-`mod` veto (unique-definition rule, SPEC 14.8): exactly one
     // `mod old;` declaration across the involved pre-images.
-    if count_mod_defs(pre, &pairs, &old_ident) != 1 {
+    if count_mod_defs(pre, &claimed_pairs, &old_ident) != 1 {
         return None;
-    }
-    // Dedicated-position carve (same as `item_intent`): call callees and
-    // macro heads naming `old` belong to their detectors.
-    for (i, pair) in pairs.iter().enumerate() {
-        if i == def_idx {
-            continue;
-        }
-        if is_dedicated_use_site(&pair.minus, &old_ident) {
-            return None;
-        }
     }
     // Rename gate: a present file move must name the `mod` delta
     // (flat or `mod.rs` layouts, dirs otherwise equal).
@@ -231,12 +269,32 @@ pub(crate) fn try_mod_rename_intent_sweep(
         std::slice::from_ref(&def.site),
         &mut probe_used,
     )?;
-    // Single-section two-pair shapes stay with the per-section path
-    // (that path owns the one-section win; canonical bytes stay stable).
-    if parsed.len() == 1 {
-        let sp = &parsed[0];
-        if sp.minuses.len() == pairs.len() {
-            return None;
+    // Single-section pure shapes stay with the per-section path; a lone
+    // mixed section (leftovers present) fires here.
+    {
+        let mut touched: HashSet<usize> = HashSet::new();
+        for hi in claimed_hunks.iter() {
+            touched.insert(hunks[*hi].sec);
+        }
+        let mut has_leftover = false;
+        for (hi, he) in hunks.iter().enumerate() {
+            if claimed_hunks.contains(&hi) {
+                continue;
+            }
+            if touched.contains(&he.sec) && preserved.contains_key(&he.sec) {
+                has_leftover = true;
+            }
+        }
+        if !has_leftover {
+            let mut all: HashSet<usize> = HashSet::new();
+            for he in &hunks {
+                if preserved.contains_key(&he.sec) {
+                    all.insert(he.sec);
+                }
+            }
+            if all.len() == 1 && claimed_pairs.len() == pairs.len() {
+                return None;
+            }
         }
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
@@ -252,8 +310,8 @@ pub(crate) fn try_mod_rename_intent_sweep(
         used_rules.truncate(checkpoint);
         return None;
     }
-    let mut proven = vec![false; pairs.len()];
-    for (i, pair) in pairs.iter().enumerate() {
+    let mut proven = vec![false; claimed_pairs.len()];
+    for (i, pair) in claimed_pairs.iter().enumerate() {
         let Some(post) = files.get(&pair.path) else {
             used_rules.truncate(checkpoint);
             return None;
@@ -265,7 +323,7 @@ pub(crate) fn try_mod_rename_intent_sweep(
         };
         proven[i] = got.trim() == pair.plus.trim();
     }
-    if !proven[def_idx] {
+    if !proven[def_pos] {
         used_rules.truncate(checkpoint);
         return None;
     }
@@ -273,34 +331,58 @@ pub(crate) fn try_mod_rename_intent_sweep(
         used_rules.truncate(checkpoint);
         return None;
     }
-    // Section purity: every section holding a proven pair must be fully
-    // proven (else the emission rewrites a line the ordinary remainder
-    // also rewrites). Mixed sections veto the whole intent.
-    let mut sec_all: HashMap<usize, bool> = HashMap::new();
-    let mut sec_has: HashMap<usize, bool> = HashMap::new();
-    for (i, pair) in pairs.iter().enumerate() {
-        let e = sec_all.entry(pair.sec).or_insert(true);
-        if !proven[i] {
-            *e = false;
+    // Hunk purity (WI-4f-next2): a claimed non-def hunk with an
+    // unproven pair is demoted to leftover (probe-authoritative partial);
+    // the def hunk must stay fully proven.
+    {
+        let mut hunk_all: HashMap<usize, bool> = HashMap::new();
+        for (ci, pi) in claimed_idx.iter().enumerate() {
+            let hi = pair_hunk[*pi];
+            let e = hunk_all.entry(hi).or_insert(true);
+            if !proven[ci] {
+                *e = false;
+            }
         }
-        if proven[i] {
-            sec_has.insert(pair.sec, true);
-        }
-    }
-    for (sec, has) in &sec_has {
-        if *has && !sec_all.get(sec).copied().unwrap_or(false) {
+        if !hunk_all.get(&def_hunk).copied().unwrap_or(false) {
             used_rules.truncate(checkpoint);
             return None;
         }
+        let bad: Vec<usize> = hunk_all
+            .iter()
+            .filter(|(hi, ok)| **hi != def_hunk && !**ok)
+            .map(|(hi, _)| *hi)
+            .collect();
+        if !bad.is_empty() {
+            let bad_set: HashSet<usize> = bad.into_iter().collect();
+            claimed_hunks.retain(|hi| !bad_set.contains(hi));
+            let mut new_pairs: Vec<Pair> = Vec::new();
+            let mut new_proven: Vec<bool> = Vec::new();
+            for (ci, pi) in claimed_idx.iter().enumerate() {
+                let hi = pair_hunk[*pi];
+                if bad_set.contains(&hi) {
+                    continue;
+                }
+                new_pairs.push(Pair {
+                    sec: claimed_pairs[ci].sec,
+                    path: claimed_pairs[ci].path.clone(),
+                    minus: claimed_pairs[ci].minus.clone(),
+                    plus: claimed_pairs[ci].plus.clone(),
+                    site: claimed_pairs[ci].site,
+                });
+                new_proven.push(proven[ci]);
+            }
+            claimed_pairs = new_pairs;
+            proven = new_proven;
+            if claimed_hunks.len() < 2 || proven.iter().filter(|&&p| p).count() < 2 {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+        }
     }
-    let claimed_secs: HashSet<usize> = sec_has
-        .iter()
-        .filter(|(_, h)| **h)
-        .map(|(s, _)| *s)
-        .collect();
+    let claimed_secs: HashSet<usize> = claimed_hunks.iter().map(|hi| hunks[*hi].sec).collect();
     // Unclaimed files byte-identical under emission; claimed files clean
     // outside claimed sites.
-    let claimed_files: HashSet<&str> = pairs
+    let claimed_files: HashSet<&str> = claimed_pairs
         .iter()
         .enumerate()
         .filter(|(i, _)| proven[*i])
@@ -325,7 +407,7 @@ pub(crate) fn try_mod_rename_intent_sweep(
             return None;
         }
         let mut claimed_sites: HashSet<usize> = HashSet::new();
-        for (i, pair) in pairs.iter().enumerate() {
+        for (i, pair) in claimed_pairs.iter().enumerate() {
             if proven[i] && pair.path == *path {
                 claimed_sites.insert(pair.site);
             }
@@ -340,15 +422,32 @@ pub(crate) fn try_mod_rename_intent_sweep(
             }
         }
     }
-    // T375 over the claimed pair sections only (the rename prelude is
-    // preserved, not replaced, so its bytes never count; WI-4e counts
-    // native-view bytes so preserved hunks never tax the win).
-    let claimed_bytes: usize = parsed
-        .iter()
-        .filter(|sp| claimed_secs.contains(&sp.idx))
-        .map(|sp| native_lens.get(&sp.idx).copied().unwrap_or(0))
-        .sum();
-    if emission.len() >= claimed_bytes {
+    // T375 (the rename prelude is preserved, never counted): pure path
+    // keeps native-view bytes; mixed path compares emission hunks vs
+    // claimed hunk-text bytes.
+    let has_leftover = hunks.iter().enumerate().any(|(hi, he)| {
+        if claimed_hunks.contains(&hi) {
+            return false;
+        }
+        claimed_secs.contains(&he.sec) && preserved.contains_key(&he.sec)
+    });
+    let claimed_bytes: usize = if has_leftover {
+        claimed_hunks.iter().map(|hi| hunks[*hi].text.len()).sum()
+    } else {
+        claimed_secs
+            .iter()
+            .map(|s| native_lens.get(s).copied().unwrap_or(0))
+            .sum()
+    };
+    let emission_bytes: usize = if has_leftover {
+        super::emission_hunks(&emission)
+            .iter()
+            .map(|h| h.len())
+            .sum()
+    } else {
+        emission.len()
+    };
+    if emission_bytes >= claimed_bytes {
         used_rules.truncate(checkpoint);
         return None;
     }
@@ -356,6 +455,17 @@ pub(crate) fn try_mod_rename_intent_sweep(
     // WI-4e: hybrid sections keep pre-existing semantic hunks ahead of
     // the new emission hunks; non-def claimed hybrids re-emit theirs.
     let new_hunks = super::emission_hunks(&emission);
+    // Leftover native hunks per claimed section, in original order.
+    let mut leftovers: HashMap<usize, Vec<String>> = HashMap::new();
+    for (hi, he) in hunks.iter().enumerate() {
+        if claimed_hunks.contains(&hi) {
+            continue;
+        }
+        if !claimed_secs.contains(&he.sec) {
+            continue;
+        }
+        leftovers.entry(he.sec).or_default().push(he.text.clone());
+    }
     let mut out: Vec<String> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
         if rename_set.contains(&i) {
@@ -375,7 +485,8 @@ pub(crate) fn try_mod_rename_intent_sweep(
                 .get(&i)
                 .map(|(_, h)| h.clone())
                 .unwrap_or_default();
-            if keep.is_empty() {
+            let rest = leftovers.get(&i).cloned().unwrap_or_default();
+            if keep.is_empty() && rest.is_empty() {
                 out.push(emission.clone());
             } else {
                 let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
@@ -386,61 +497,33 @@ pub(crate) fn try_mod_rename_intent_sweep(
                 for h in &new_hunks {
                     rebuilt.push_str(h);
                 }
+                for h in &rest {
+                    rebuilt.push_str(h);
+                }
                 out.push(rebuilt);
             }
-        } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
-            let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+        } else {
+            let keep = preserved
+                .get(&i)
+                .cloned()
+                .map(|(_, h)| h)
+                .unwrap_or_default();
+            let rest = leftovers.get(&i).cloned().unwrap_or_default();
+            if keep.is_empty() && rest.is_empty() {
+                continue;
+            }
+            let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
             let mut rebuilt = prelude;
             for h in &keep {
+                rebuilt.push_str(h);
+            }
+            for h in &rest {
                 rebuilt.push_str(h);
             }
             out.push(rebuilt);
         }
     }
     Some((out, def.path.clone(), rule))
-}
-
-/// One section's minus/plus lines plus the balanced gate (same walk as
-/// `chain.rs` / `item_intent.rs`: every hunk balanced, global counts
-/// equal, non-empty).
-fn section_pairs(section: &str) -> (Vec<String>, Vec<String>, bool) {
-    let mut minuses: Vec<String> = Vec::new();
-    let mut pluses: Vec<String> = Vec::new();
-    let mut hunk_minus = 0usize;
-    let mut hunk_plus = 0usize;
-    let mut balanced = true;
-    let mut in_hunk = false;
-    let mut saw_hunk = false;
-    for line in section.lines().skip(1) {
-        if line.starts_with("@@") {
-            if in_hunk && hunk_minus != hunk_plus {
-                balanced = false;
-            }
-            in_hunk = true;
-            saw_hunk = true;
-            hunk_minus = 0;
-            hunk_plus = 0;
-            continue;
-        }
-        if !in_hunk {
-            if line.starts_with("old mode ") || line.starts_with("new mode ") {
-                balanced = false;
-            }
-            continue;
-        }
-        if line.starts_with('-') && !line.starts_with("---") {
-            minuses.push(line[1..].to_string());
-            hunk_minus += 1;
-        } else if line.starts_with('+') && !line.starts_with("+++") {
-            pluses.push(line[1..].to_string());
-            hunk_plus += 1;
-        }
-    }
-    if in_hunk && hunk_minus != hunk_plus {
-        balanced = false;
-    }
-    let ok = balanced && saw_hunk && minuses.len() == pluses.len() && !minuses.is_empty();
-    (minuses, pluses, ok)
 }
 
 /// A `mod old;` declaration delta, or `None` for use lines and inline
@@ -806,6 +889,67 @@ mod tests {
         assert!(out[1].contains("\"new\""), "got:\n{}", out[1]);
         let joint = out.join("");
         validated_live(&joint, &pre);
+    }
+
+    #[test]
+    fn mixed_section_claims_subset_leaves_leftover() {
+        // WI-4f-next2: def + use hunks claimed, unrelated hunk in the
+        // same section stays verbatim in place.
+        let lib =
+            "mod old;\nuse crate::old::f;\nfn m() {\n    crate::old::f();\n    let x = 1;\n}\n";
+        let raw = section(
+            "src/lib.rs",
+            concat!(
+                "@@ -1,1 +1,1 @@\n",
+                "-mod old;\n",
+                "+mod new;\n",
+                "@@ -2,1 +2,1 @@\n",
+                "-use crate::old::f;\n",
+                "+use crate::new::f;\n",
+                "@@ -4,1 +4,1 @@\n",
+                "-    crate::old::f();\n",
+                "+    crate::new::f();\n",
+                "@@ -5,1 +5,1 @@\n",
+                "-    let x = 1;\n",
+                "+    let x = 2;\n",
+            ),
+        );
+        let raw2 = section(
+            "src/b.rs",
+            "@@ -1,1 +1,1 @@\n-use crate::old::f;\n+use crate::new::f;\n",
+        );
+        let sections = vec![raw, raw2];
+        let pre = pre_map(&[("src/lib.rs", lib), ("src/b.rs", "use crate::old::f;\n")]);
+        let mut used = Vec::new();
+        let (out, path, _) = try_mod_rename_intent_sweep(&sections, &pre, &mut used)
+            .expect("mixed subset must fire");
+        assert_eq!(path, "src/lib.rs");
+        assert_eq!(out.len(), 1, "one rebuilt section, got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(
+            out[0].contains("-    let x = 1;"),
+            "leftover verbatim:\n{}",
+            out[0]
+        );
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["src/lib.rs"].contains("mod new;"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            files["src/lib.rs"].contains("let x = 2;"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            files["src/b.rs"].contains("crate::new::f"),
+            "got: {}",
+            files["src/b.rs"]
+        );
     }
 
     #[test]
