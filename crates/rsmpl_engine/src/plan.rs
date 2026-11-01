@@ -334,6 +334,17 @@ fn apply_inner(
                     &mut captures,
                     file_edits.get_mut(path).expect("file state"),
                 )?;
+                // WI-7b: collection cuts join the move-pair probe per
+                // item (same capture name links cut to bare paste);
+                // the empty-collection cut binds nothing to move.
+                if !targets.is_empty() {
+                    move_cuts.push(crate::postcheck_move::MoveCut {
+                        rule: rh.rule_name(),
+                        file: path.clone(),
+                        spans: targets.clone(),
+                        name: binds[0].to_string(),
+                    });
+                }
                 rule_order.push(((sec_idx, hunk_idx), report));
             } else {
                 let (sl, el) = targets[0];

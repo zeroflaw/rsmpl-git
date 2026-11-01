@@ -1,23 +1,24 @@
-//! WI-7a cut+paste move verification (SPEC 24.6).
+//! WI-7a + WI-7b cut+paste move verification (SPEC 24.6).
 //!
-//! A scalar verbatim move pair — one item cut (`- I` + `# bind=N`) and one
-//! bare paste (`+ N` + `# use=N`, template trims to the name) — earns
-//! `postcondition` on **both** entries iff two span-local checks hold in
-//! the post-image:
+//! A verbatim move pair — one item cut (`- I` + `# bind=N`, scalar or
+//! `# allow=many` collection in source order) and one bare paste
+//! (`+ N` + `# use=N`, template trims to the name) — earns
+//! `postcondition` on **both** entries iff two span-local checks hold
+//! in the post-image:
 //!
-//! * presence: the pasted bytes equal the captured item text
-//!   (`captured.trim_end() + "\n"`) at the paste edit's byte-exact
-//!   post-image offset (WI-6b `post_starts_for` machinery — occurrence
-//!   elsewhere never counts);
-//! * absence: no same-kind same-ident item starts inside the cut span
-//!   translated to post-image coordinates (structural, never a substring
-//!   search).
+//! * presence: the pasted bytes equal the joined captured item texts
+//!   (per-item `trim_end`, `"\n\n"` join, trailing `"\n"`) at the
+//!   paste edit's byte-exact post-image offset (WI-6b
+//!   `post_starts_for` machinery — occurrence elsewhere never counts);
+//! * absence per item: no same-kind same-ident item starts inside the
+//!   cut spans translated to post-image coordinates (structural,
+//!   never a substring search).
 //!
-//! Everything else stays `reparse-only`: evolving pastes, collections,
-//! pure insertions, unpaired cuts, multi-pastes sharing one anchor
-//! (T249 blank-join), unparseable post-images, and unnameable items
-//! (`impl` blocks and friends). Out-of-range probe math abstains (skip,
-//! never fail); in-range mismatch fails loud with
+//! Everything else stays `reparse-only`: evolving pastes, pure
+//! insertions, unpaired cuts, empty collections, multi-pastes sharing
+//! one anchor (T249 blank-join), unparseable post-images, and
+//! unnameable items (`impl` blocks and friends). Out-of-range probe
+//! math abstains (skip, never fail); in-range mismatch fails loud with
 //! `RSMPL_MATCH_CONFLICT` (a planner bug, never a user error — WI-6
 //! tamper doctrine).
 
@@ -32,7 +33,9 @@ use crate::lines::FileState;
 use crate::{RuleReport, RuleSemantics};
 
 /// WI-7a pending scalar cut: rule/file/spans plus the capture name that
-/// links it to its paste. Collection cuts never enter (WI-7b owns them).
+/// links it to its paste. WI-7b records collection cuts identically
+/// (all target spans, source order); the probe pairs by name and
+/// verifies per item.
 pub(crate) struct MoveCut {
     pub(crate) rule: String,
     pub(crate) file: String,
@@ -51,12 +54,13 @@ pub(crate) struct MovePaste {
     pub(crate) bare: bool,
 }
 
-/// WI-7a: upgrade verified cut+paste pairs to `postcondition`.
+/// WI-7a + WI-7b: upgrade verified cut+paste pairs to `postcondition`.
 ///
-/// Pairing is by capture name. Each pair verifies presence (paste bytes
-/// equal the captured item at the byte-exact post offset) and absence
-/// (no same-kind same-ident item starts in the translated cut span).
-/// Skips stay `reparse-only`; in-range mismatches fail loud.
+/// Pairing is by capture name. Presence checks the joined paste bytes
+/// (scalar and 1-item collections share the single-item form) at the
+/// byte-exact post offset; absence checks every captured item's
+/// kind+ident against the translated cut spans. Skips stay
+/// `reparse-only`; in-range mismatches fail loud.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn upgrade_verified_moves(
     cuts: &[MoveCut],
@@ -76,18 +80,26 @@ pub(crate) fn upgrade_verified_moves(
             Some(c) => c,
             None => continue,
         };
-        let (texts, collection) = match captures.get_all(&p.name, &p.rule, &p.file) {
+        let (texts, _collection) = match captures.get_all(&p.name, &p.rule, &p.file) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if collection || texts.len() != 1 {
+        if texts.is_empty() {
             continue;
         }
-        let captured = texts[0].trim_end().to_string();
-        if captured.is_empty() {
+        // WI-7b joined insertion text: per-item `trim_end`, `"\n\n"`
+        // join, trailing `"\n"` — exactly what `paste_capture` splices
+        // for a bare collection paste; the scalar single-item form
+        // coincides (`trim_end + "\n"`).
+        let joined = texts
+            .iter()
+            .map(|t| t.trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if joined.is_empty() {
             continue;
         }
-        let expected = format!("{captured}\n");
+        let expected = format!("{joined}\n");
         // Single edit at the paste position: the T249 same-anchor join
         // (WI-7b) and any same-pos sibling insertion abstain.
         let edits = full_edits.get(&p.file).map(Vec::as_slice).unwrap_or(&[]);
@@ -129,12 +141,24 @@ pub(crate) fn upgrade_verified_moves(
             }
             None => continue,
         }
-        // Cut absence: the translated cut span must not start a same-kind
-        // same-ident item in the post-image parse.
-        let (kind, ident) = match named_item(&captured) {
-            Some(v) => v,
-            None => continue,
-        };
+        // Cut absence per item: every captured text must name an item,
+        // and no same-kind same-ident item may start inside the
+        // translated cut spans. Unnameable captures (`impl`/exotic)
+        // abstain the pair, never verify it.
+        let mut wanted: Vec<(&'static str, String)> = Vec::with_capacity(texts.len());
+        let mut nameable = true;
+        for t in texts {
+            match named_item(t) {
+                Some(v) => wanted.push(v),
+                None => {
+                    nameable = false;
+                    break;
+                }
+            }
+        }
+        if !nameable {
+            continue;
+        }
         let state = match states.get(&cut.file) {
             Some(s) => s,
             None => continue,
@@ -146,13 +170,35 @@ pub(crate) fn upgrade_verified_moves(
             Some(f) => f,
             None => continue,
         };
+        // WI-7b same-file exclusion: the pasted block itself starts
+        // inside (or exactly over) the translated cut spans whenever
+        // the move stays in one file — the absence scan must ignore
+        // the paste it just proved, or every same-file collection
+        // move fails loud on its own output. Byte offset → start
+        // line, block length = newline count of `expected` (trailing
+        // `"\n"` included, blank separators counted).
+        let paste_block: Option<(u32, u32)> = if p.file == cut.file {
+            post_text.get(..post[0].0).map(|prefix| {
+                let start = prefix.matches('\n').count() as u32 + 1;
+                let len = expected.matches('\n').count() as u32;
+                (start, start + len.saturating_sub(1))
+            })
+        } else {
+            None
+        };
         for item in &post_file.items {
             let (k2, id2) = match named_item_of(item) {
                 Some(v) => v,
                 None => continue,
             };
-            if k2 != kind || id2 != ident {
+            if !wanted.iter().any(|(k, id)| *k == k2 && *id == id2) {
                 continue;
+            }
+            let line = item.span().start().line as u32;
+            if let Some((bs, be)) = paste_block {
+                if line >= bs && line <= be {
+                    continue;
+                }
             }
             let line = item.span().start().line as u32;
             if translated.iter().any(|(s, e)| line >= *s && line <= *e) {
@@ -304,12 +350,145 @@ mod tests {
     }
 
     #[test]
-    fn collection_paste_stays_reparse_only() {
-        // WI-7b owns collections: multi-item capture abstains.
+    fn collection_move_verifies_postcondition_per_item() {
+        // WI-7b: a 3-item collection cut + bare paste verifies per
+        // item — joined presence plus per-item absence.
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,0 @@ rule=paste_all\n# lang=rust\n# use=Helpers\n+ Helpers\n\n@@ -1,3 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n";
         let (files, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
+        assert_eq!(
+            files["src/lib.rs"], "fn a() {}\n\nfn helper() {}\n\nfn z() {}\n",
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "cut_all"), "postcondition");
+        assert_eq!(semantics_of(&report, "paste_all"), "postcondition");
+    }
+
+    #[test]
+    fn collection_cross_file_move_verifies_postcondition() {
+        // WI-7b cross-file: presence in the paste file, absence per
+        // item in the cut file.
+        let patch = "diff --git a/src/old.rs b/src/old.rs\n--- a/src/old.rs\n+++ b/src/old.rs\n@@ -1,2 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n\ndiff --git a/src/new.rs b/src/new.rs\n--- a/src/new.rs\n+++ b/src/new.rs\n@@ -1,0 @@ rule=paste_all\n# lang=rust\n# use=Helpers\n+ Helpers\n";
+        let (files, report) = apply_report(
+            patch,
+            vec![("src/old.rs", SRC), ("src/new.rs", "fn main() {}\n")],
+        );
+        assert_eq!(files["src/old.rs"], "fn z() {}\n");
+        assert_eq!(
+            files["src/new.rs"],
+            "fn main() {}\nfn a() {}\n\nfn helper() {}\n"
+        );
+        assert_eq!(semantics_of(&report, "cut_all"), "postcondition");
+        assert_eq!(semantics_of(&report, "paste_all"), "postcondition");
+    }
+
+    #[test]
+    fn tampered_collection_post_fails_loud() {
+        // WI-7b in-range mismatch fails loud: forge a hand-built pair
+        // whose post-image drops the middle item at the paste offset.
+        let original = "fn a() {}\nfn helper() {}\nfn z() {}\n";
+        let index = LineIndex::new(original);
+        let cut_start = index.line_start(1).unwrap();
+        let cut_end = index.line_start(3).unwrap();
+        let t1 = original[index.line_start(1).unwrap()..index.line_start(2).unwrap()].to_string();
+        let t2 = original[index.line_start(2).unwrap()..index.line_start(3).unwrap()].to_string();
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![
+                TextEdit::new(
+                    original.len(),
+                    original.len(),
+                    format!("{}\n\n{}", t1.trim_end(), t2.trim_end()) + "\n",
+                ),
+                TextEdit::new(cut_start, cut_end, String::new()),
+            ],
+        )]);
+        // Post swaps the second item: the presence slice stays in
+        // range but mismatches, so the probe fails loud.
+        let post_text = format!("fn z() {{}}\n{}\nfn tampered() {{}}\n", t1.trim_end());
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(&post_text).expect("post parses"),
+        )]);
+        let mut captures = CaptureStore::default();
+        captures
+            .define_collection("H", vec![t1, t2], "cut_h", "f.rs")
+            .expect("bind");
+        let cuts = vec![MoveCut {
+            rule: "cut_h".to_string(),
+            file: "f.rs".to_string(),
+            spans: vec![(1, 1), (2, 2)],
+            name: "H".to_string(),
+        }];
+        let pastes = vec![MovePaste {
+            rule: "paste_h".to_string(),
+            file: "f.rs".to_string(),
+            name: "H".to_string(),
+            pos: original.len(),
+            bare: true,
+        }];
+        let mut rules = vec![
+            RuleReport {
+                rule: "cut_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+            RuleReport {
+                rule: "paste_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+        ];
+        let states = HashMap::from([(
+            "f.rs".to_string(),
+            FileState {
+                original: original.to_string(),
+                index: LineIndex::new(original),
+                parsed: Some(syn::parse_str::<syn::File>(original).expect("pre parses")),
+            },
+        )]);
+        let files = HashMap::from([("f.rs".to_string(), post_text)]);
+        let err = upgrade_verified_moves(
+            &cuts,
+            &pastes,
+            &captures,
+            &states,
+            &full_edits,
+            &files,
+            &post_parsed,
+            &mut rules,
+        )
+        .unwrap_err();
         assert!(
-            files["src/lib.rs"].matches("fn helper").count() >= 1,
+            err.render().contains("RSMPL_MATCH_CONFLICT"),
+            "got: {}",
+            err.render()
+        );
+    }
+
+    #[test]
+    fn same_anchor_double_paste_stays_reparse_only() {
+        // T249 blank-join mutates the replacement, so two bare pastes
+        // of one capture at one anchor abstain (WI-7b skip).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,0 @@ rule=paste_one\n# lang=rust\n# use=Helper\n+ Helper\n\n@@ -3,0 @@ rule=paste_two\n# lang=rust\n# use=Helper\n+ Helper\n\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n";
+        let (_, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
+        assert_eq!(semantics_of(&report, "cut_helper"), "reparse-only");
+        assert_eq!(semantics_of(&report, "paste_one"), "reparse-only");
+        assert_eq!(semantics_of(&report, "paste_two"), "reparse-only");
+    }
+
+    #[test]
+    fn unnameable_collection_stays_reparse_only() {
+        // `impl` items decline `named_item`: the pair abstains.
+        let src = "struct S;\nimpl S {\n    fn m(&self) {}\n}\nfn z() {}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -4,0 @@ rule=paste_all\n# lang=rust\n# use=Helpers\n+ Helpers\n\n@@ -1,4 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", src)]);
+        // The pair applies (items move) but abstains: `impl` has no
+        // named-item identity, so no structural verdict.
+        assert!(
+            files["src/lib.rs"].contains("impl S"),
             "got: {}",
             files["src/lib.rs"]
         );
