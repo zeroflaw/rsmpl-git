@@ -784,6 +784,15 @@ pub(crate) fn is_rename_header(header: &str) -> bool {
     old != new
 }
 
+/// WI-4d: true when a section is a pre-pass emission (any `@@` header
+/// carries `rule=`). Native `git diff` never emits `rule=`, so the marker
+/// is unambiguous; only `@@` lines are inspected (a `rule=` string inside
+/// code never marks a section).
+pub(crate) fn is_semantic_section(sec: &str) -> bool {
+    sec.lines()
+        .any(|l| l.starts_with("@@") && l.contains("rule="))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,6 +819,35 @@ mod tests {
             .expect("emitted patch must apply cleanly");
     }
 
+    #[test]
+    fn wi4d_semantic_sections_skip_reprocessing() {
+        // WI-4d: pre-pass emissions bypass the per-section chain.
+        assert!(is_semantic_section(
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- foo(E0)\n+ bar(E0)\n"
+        ));
+        assert!(!is_semantic_section("diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-    foo(1);\n+    bar(1);\n"));
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let native = vec![section(
+            "src.rs",
+            "--- a/src.rs\n+++ b/src.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+        )];
+        let out = infer_semantic_with_pre_images(&native, &pre).expect("N=2 joint must fire");
+        let mut used = Vec::new();
+        assert!(
+            super::fn_joint::try_fn_joint_intent(std::slice::from_ref(&out), &pre, &mut used)
+                .is_none()
+        );
+        assert!(used.is_empty());
+        assert!(super::item_intent::try_item_intent_sweep(
+            std::slice::from_ref(&out),
+            &pre,
+            &mut used
+        )
+        .is_none());
+    }
     #[test]
     fn rename_sections_stay_ordinary_passthrough() {
         // T377 headers-only renames stay passthrough (no content to

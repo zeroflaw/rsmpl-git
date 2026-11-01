@@ -590,6 +590,14 @@ pub(crate) fn compress_section(
     let file_old = pre.get(path.as_str()).map(String::as_str);
     // Group changed lines per `@@` hunk: unified diff lists each
     // hunk's `-` block before its `+` block, so global order pairing
+    // WI-4d: pre-pass emissions bypass whole-section detectors and go
+    // straight to the per-hunk fallback (which skips `rule=` hunks below).
+    // Whole-section pair sweeps would re-harvest the call-template hunk
+    // of a joint emission as a second rule; per-hunk leftovers (e.g. a
+    // delete sweep in a move section) still compress.
+    if super::is_semantic_section(section) {
+        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
+    }
     // is only sound when every hunk is a pure modification.
     let mut minuses: Vec<&str> = Vec::new();
     let mut pluses: Vec<&str> = Vec::new();
@@ -1257,6 +1265,12 @@ fn compress_section_per_hunk(
     let mut compressed_any = false;
     for hunk in &hunks {
         let mut minuses: Vec<&str> = Vec::new();
+        // WI-4d: already-semantic (`rule=`) hunks are never re-harvested,
+        // so pre-pass emissions keep their rule and leftovers still compress.
+        if hunk.lines().next().is_some_and(|h| h.contains("rule=")) {
+            out.push_str(hunk);
+            continue;
+        }
         let mut pluses: Vec<&str> = Vec::new();
         for line in hunk.lines().skip(1) {
             if line.starts_with('-') && !line.starts_with("---") {

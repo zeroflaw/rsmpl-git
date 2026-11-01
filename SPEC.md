@@ -7463,8 +7463,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   turbofish). The whole-composition scratch-apply probe is
   authoritative (for B2 a splice-aware probe: the attr insertion
   shifts lines); each fired shape also clears the byte-win guard, and
-  N=1 joints suppress (the unique-single detector would re-harvest
-  the call-template hunk and fragment the intent — pinned). The
+  N=1 joints suppress (the two-hunk emission never beats the byte-win
+  guard at N=1 — pinned; pre-pass emissions skip per-section
+  re-processing (WI-4d), so N≥2 survival is structural and the
+  unique-single detector never sees the call-template hunk). The
   composed report is `partial` with the def hunk's orphans naming
   exactly the sibling call sites (sibling-covered by construction —
   the agent's next action is the sibling hunk under the same rule).

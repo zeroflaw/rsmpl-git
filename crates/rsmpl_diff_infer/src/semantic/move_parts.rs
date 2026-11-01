@@ -263,6 +263,10 @@ pub(crate) fn split_section(section: &str, orig_idx: usize) -> Option<SectionPar
     if is_rename_section(header) {
         return None;
     }
+    // WI-4d: pre-pass emissions never re-enter later pre-passes.
+    if super::is_semantic_section(section) {
+        return None;
+    }
     let path = super::super::b_side_path(header.strip_prefix("diff --git ")?)?;
     if !path.ends_with(".rs") {
         return None;

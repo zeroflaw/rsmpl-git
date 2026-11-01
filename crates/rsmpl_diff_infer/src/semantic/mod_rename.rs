@@ -83,6 +83,10 @@ pub(crate) fn try_mod_rename_intent_sweep(
             rename_secs.push(i);
             continue;
         }
+        // WI-4d: pre-pass emissions never re-enter later pre-passes.
+        if super::is_semantic_section(sec) {
+            continue;
+        }
         let rest = header.strip_prefix("diff --git ")?;
         let path = crate::b_side_path(rest)?;
         if !path.ends_with(".rs") {

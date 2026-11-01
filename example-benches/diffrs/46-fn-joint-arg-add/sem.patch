@@ -1,11 +1,9 @@
 diff --git src.rs
---- a/src.rs
-+++ b/src.rs
-@@ -1 +1 @@
--fn foo(x: i32) {
-+fn bar(x: i32, y: i32) {
-@@ -5,2 +5,2 @@
--    foo(1);
--    foo(2);
-+    bar(1, 0);
-+    bar(2, 0);
+@@ -1,1 @@ rule=r1
+# sweep
+- fn foo(x: i32) { ... }
++ fn bar(x: i32, y: i32) { ... }
+@@ -1,1 @@ rule=r1
+# sweep
+- foo(E0)
++ bar(E0, 0)
