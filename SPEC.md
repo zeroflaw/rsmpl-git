@@ -4924,15 +4924,25 @@ if:
         byte-exact post offset and the container holds the member in the
         re-parsing post-image (struct holds the field / enum holds the
         variant / a same-scrutinee `match` holds the arm).
+        A member evolution (`FieldTypeEvolution` /
+        `VariantPayloadEvolution` tuple / struct / discriminant, ranged
+        or file-scope) verifies as `postcondition` when its plus-pattern
+        re-match passed and the container holds the member in the
+        re-parsing post-image (struct holds the field / enum holds the
+        variant; discriminant content is proven by the plus re-match, so
+        variant presence completes the verdict). A membership miss
+        abstains to `instantiated` (the plus gate already fails loud on
+        content mismatch; an unparseable or macro-hidden post-image
+        never vetoes).
         An unpaired cut (a scalar or collection cut with no same-name
         paste — a deletion) verifies as `postcondition` when, per
         captured item, no same-kind same-ident item starts inside the
         cut spans translated to post-image coordinates and the file
         re-parses.
      Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
-     including verified follow-only entries), `postcondition` (sweep gate
-     + plus-pattern both ran, or a verified move / insertion / cut /
-     member-addition structural probe),
+      including verified follow-only entries), `postcondition` (sweep gate
+      + plus-pattern both ran, or a verified move / insertion / cut /
+      member-addition / member-evolution structural probe),
      `reparse-only` (unverified insertions, cuts, pastes,
     unverified follow-only extras, unverifiable plus, or a local-binder
     (`let`/closure-param/match-arm/for/`if let`/`while let`/fn-param) rename with leftover-use orphans

@@ -46,6 +46,7 @@ mod postcheck_assoc;
 mod postcheck_attr;
 mod postcheck_follow;
 mod postcheck_move;
+mod postcheck_move_evo;
 mod postcheck_namehole;
 mod postcheck_synth;
 mod suggest;
@@ -83,7 +84,9 @@ pub use validate::{ensure_match_count, ZeroMatchHint};
 pub enum RuleSemantics {
     /// Plus-instantiation probe re-matched in the post-image (rewrite only).
     Instantiated,
-    /// Sweep change gate + instantiation both ran (file-scope sweeps).
+    /// Sweep change gate + instantiation both ran (file-scope sweeps),
+    /// or a verified structural probe (moves, insertions, cuts,
+    /// member additions/evolutions).
     Postcondition,
     /// Only reparse validated (insertions, cuts, pastes, unverified
     /// follow-only extras).

@@ -1106,19 +1106,19 @@ mod tests {
     }
 
     #[test]
-    fn field_type_concrete_fire_instantiated() {
+    fn field_type_concrete_fire_verifies_postcondition() {
         let patch = field_patch("old: Vec<u8>", "old: Box<[u8]>");
         let (out, report) = apply_report(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap();
         assert!(out.contains("old: Box<[u8]>"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
     }
 
     #[test]
-    fn field_type_hole_fire() {
+    fn field_type_hole_fire_verifies_postcondition() {
         let patch = field_patch("old: Vec<T>", "old: Box<[T]>");
         let (out, report) = apply_report(&patch, "struct S {\n    old: Vec<u8>,\n}\n").unwrap();
         assert!(out.contains("old: Box<[u8]>"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
         assert_eq!(
             report.rules[0].sites[0].bindings,
             vec![("T".to_string(), "u8".to_string())]
@@ -1169,11 +1169,11 @@ mod tests {
     }
 
     #[test]
-    fn tuple_payload_concrete_fire() {
+    fn tuple_payload_concrete_fire_verifies_postcondition() {
         let patch = var_patch("Old(Vec<u8>)", "Old(Box<[u8]>)");
         let (out, report) = apply_report(&patch, "enum E {\n    Old(Vec<u8>),\n}\n").unwrap();
         assert!(out.contains("Old(Box<[u8]>)"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
     }
 
     #[test]
@@ -1192,11 +1192,11 @@ mod tests {
     }
 
     #[test]
-    fn struct_payload_fire_preserving_names() {
+    fn struct_payload_fire_verifies_postcondition() {
         let patch = var_patch("Old { f: Vec<T> }", "Old { f: Box<[T]> }");
         let (out, report) = apply_report(&patch, "enum E {\n    Old { f: Vec<u8> },\n}\n").unwrap();
         assert!(out.contains("Old { f: Box<[u8]> }"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
     }
 
     #[test]
@@ -1207,11 +1207,11 @@ mod tests {
     }
 
     #[test]
-    fn discriminant_fire_instantiated() {
+    fn discriminant_fire_verifies_postcondition() {
         let patch = var_patch("Old = E", "Old = E + 1");
         let (out, report) = apply_report(&patch, "enum E {\n    Old = 1,\n}\n").unwrap();
         assert!(out.contains("Old = 1 + 1"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::Instantiated);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
         assert_eq!(
             report.rules[0].sites[0].bindings,
             vec![("E".to_string(), "1".to_string())]

@@ -575,7 +575,7 @@ pub(crate) fn upgrade_member_additions(
 /// member-addition verdict (mirrors the matcher-side naming discipline:
 /// field ident equality, variant last-segment equality, arm
 /// last-segment equality under a token-normalised scrutinee).
-fn member_present(post_file: &syn::File, kind: &MemberKind) -> bool {
+pub(crate) fn member_present(post_file: &syn::File, kind: &MemberKind) -> bool {
     match kind {
         MemberKind::Field { container, member } => {
             struct FieldProbe<'ast> {

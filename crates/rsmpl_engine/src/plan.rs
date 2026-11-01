@@ -226,6 +226,9 @@ fn apply_inner(
     let mut move_pastes: Vec<crate::postcheck_move::MovePaste> = Vec::new();
     let mut pure_inserts: Vec<crate::postcheck_move::PureInsert> = Vec::new();
     let mut member_additions: Vec<crate::postcheck_move::MemberAddition> = Vec::new();
+    // WI-7d evolution-probe: member evolutions await their container probe
+    // (`postcheck_move_evo`, sibling per D5).
+    let mut member_evos: Vec<crate::postcheck_move_evo::MemberEvo> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     // D5 sibling: the loop lives in `plan_cut.rs` (dispatch precedent:
@@ -441,6 +444,37 @@ fn apply_inner(
                                     }
                                 }
                             }
+                        }
+                    }
+                    // WI-7d evolution-probe: member evolutions
+                    // (`FieldTypeEvolution` /
+                    // `VariantPayloadEvolution`) record their container
+                    // key for the membership probe in
+                    // `postcheck_move_evo` (one entry per hunk — the
+                    // container and member are concrete, never holes).
+                    {
+                        let evo_kind: Option<crate::postcheck_move::MemberKind> =
+                            match &compiled.kind {
+                                PatternKind::FieldTypeEvolution {
+                                    struct_name, field, ..
+                                } => Some(crate::postcheck_move::MemberKind::Field {
+                                    container: struct_name.clone(),
+                                    member: field.clone(),
+                                }),
+                                PatternKind::VariantPayloadEvolution {
+                                    enum_name, variant, ..
+                                } => Some(crate::postcheck_move::MemberKind::Variant {
+                                    container: enum_name.clone(),
+                                    member: variant.clone(),
+                                }),
+                                _ => None,
+                            };
+                        if let Some(kind) = evo_kind {
+                            member_evos.push(crate::postcheck_move_evo::MemberEvo {
+                                rule: rule.clone(),
+                                file: path.clone(),
+                                kind,
+                            });
                         }
                     }
                     // WI-6b1 workspace follow before spans: def-file spans
@@ -1048,6 +1082,13 @@ fn apply_inner(
             &post_parsed,
             &mut report.rules,
         )?;
+        // WI-7d evolution-probe: plus-verified member evolutions earn
+        // `postcondition` via container membership (sibling per D5).
+        crate::postcheck_move_evo::upgrade_member_evolutions(
+            &member_evos,
+            &post_parsed,
+            &mut report.rules,
+        );
         crate::postcheck_move::upgrade_unpaired_cuts(
             &move_cuts,
             &move_pastes,
