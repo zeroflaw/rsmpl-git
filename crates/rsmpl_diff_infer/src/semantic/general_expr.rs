@@ -450,9 +450,36 @@ fn parse_line_expr(line: &str) -> Option<syn::Expr> {
         return None;
     }
     if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
-        return Some(expr);
+        if !matches!(expr, syn::Expr::Let(_)) {
+            return Some(expr);
+        }
     }
     super::frame::fn_frame_inner(line)
+}
+
+/// One `let`-init sub-expression (WI-5): `let PAT[: TY] = INIT;` with
+/// init present and no `let-else` diverge. The pattern/type ride each
+/// site's own wrapper — the bare general template rewrites the init
+/// subterm in place, preserving them (closure-let precedent).
+/// `pub(crate)` so the `literal_frame` veto reuses the same parser
+/// (REVIEW: no mirrored duplicate).
+pub(crate) fn parse_let_init(line: &str) -> Option<syn::Expr> {
+    let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(line.trim()) else {
+        return None;
+    };
+    let init = local.init?;
+    if init.diverge.is_some() {
+        return None;
+    }
+    Some(*init.expr)
+}
+
+/// True when both template sides are anchored (WI-5 D10): neither side
+/// is a bare literal — the template states its frame. Anchorless
+/// shapes never jump the literal queue.
+fn is_anchored(minus_tpl: &str, plus_tpl: &str) -> bool {
+    syn::parse_str::<syn::Lit>(minus_tpl.trim()).is_err()
+        && syn::parse_str::<syn::Lit>(plus_tpl.trim()).is_err()
 }
 
 /// N-site (N ≥ 2) general-expression sweep: every changed line parses
@@ -476,24 +503,67 @@ pub(crate) fn try_general_expr_sweep(
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
         return None;
     }
+    // Whole-line first (tightest): every pair parses whole-line.
     let mut minus_exprs = Vec::with_capacity(minuses.len());
     let mut plus_exprs = Vec::with_capacity(pluses.len());
+    let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let me = parse_line_expr(m)?;
-        let pe = parse_line_expr(p)?;
-        // Macro/unsupported veto (T448 precedent): the engine never
-        // binds inside macro bodies, so a template inlining macro text
-        // cannot re-match.
-        for e in [&me, &pe] {
+        match (parse_line_expr(m), parse_line_expr(p)) {
+            (Some(me), Some(pe)) => {
+                minus_exprs.push(me);
+                plus_exprs.push(pe);
+            }
+            _ => {
+                whole_ok = false;
+                break;
+            }
+        }
+    }
+    if whole_ok {
+        for e in minus_exprs.iter().chain(plus_exprs.iter()) {
             let probe = shape::probe_expr(e);
             if probe.macros > 0 || probe.unsupported > 0 {
                 return None;
             }
         }
-        minus_exprs.push(me);
-        plus_exprs.push(pe);
+        if let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_exprs, &plus_exprs) {
+            if is_anchored(&minus_tpl, &plus_tpl)
+                && crate::totality::template_pair_holds(
+                    path,
+                    file_old,
+                    &minus_tpl,
+                    &plus_tpl,
+                    minuses.len(),
+                )
+            {
+                let rule = unique_rule(used_rules, "general_expr");
+                let mut hunk = crate::emission_header(path, &rule, changed);
+                hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+                return Some(hunk);
+            }
+        }
+        return None;
     }
-    let (minus_tpl, plus_tpl) = antiunify_general_exprs(&minus_exprs, &plus_exprs)?;
+    // WI-5 `let`-init subterm fallback: whole-line declined uniformly,
+    // every pair carries its delta inside a `let` init. Anti-unify the
+    // init column through the same WI-6 core; emission stays the bare
+    // anchored template (the engine rewrites it inside each `let`).
+    let mut minus_inits = Vec::with_capacity(minuses.len());
+    let mut plus_inits = Vec::with_capacity(pluses.len());
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        minus_inits.push(parse_let_init(m)?);
+        plus_inits.push(parse_let_init(p)?);
+    }
+    for e in minus_inits.iter().chain(plus_inits.iter()) {
+        let probe = shape::probe_expr(e);
+        if probe.macros > 0 || probe.unsupported > 0 {
+            return None;
+        }
+    }
+    let (minus_tpl, plus_tpl) = antiunify_general_exprs(&minus_inits, &plus_inits)?;
+    if !is_anchored(&minus_tpl, &plus_tpl) {
+        return None;
+    }
     if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
         return None;
     }
@@ -746,5 +816,115 @@ mod tests {
         let out = anti(&["a + 1", "b + 1"], &["a + 2", "b + 2"]).expect("must fire");
         assert!(syn::parse_str::<syn::Expr>(&out.0).is_ok());
         assert!(syn::parse_str::<syn::Expr>(&out.1).is_ok());
+    }
+
+    #[test]
+    fn wi5_let_init_binary_fires_and_round_trips() {
+        // WI-5 F5 probe: three `let`-init `x + 1` → `x + 2` sites raise
+        // as the anchored `- E0 + 1` / `+ E0 + 2` template, never bare
+        // `- 1` / `+ 2`, and real-apply byte-identical.
+        let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 1;\n    let c = z + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n-    let a = x + 1;\n-    let b = y + 1;\n-    let c = z + 1;\n+    let a = x + 2;\n+    let b = y + 2;\n+    let c = z + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("let-init anchored sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(out.contains("+ E0 + 2\n"), "got: {out}");
+        assert!(
+            !out.contains("- 1\n"),
+            "bare literal must not fire, got: {out}"
+        );
+        let post = pre.replace("+ 1", "+ 2");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post);
+    }
+
+    #[test]
+    fn wi5_whole_line_still_preferred() {
+        // Whole-line expressions keep their winner: no `let` wrapper,
+        // same anchored shape via the whole-line path.
+        let pre = "fn m() {\n    x + 1;\n    y + 1;\n    z + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n-    x + 1;\n-    y + 1;\n-    z + 1;\n+    x + 2;\n+    y + 2;\n+    z + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("whole-line anchored sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(out.contains("+ E0 + 2\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi5_anchorless_bare_ident_stays_ordinary() {
+        // Anchorless single-hole shapes never jump the literal queue:
+        // bare-ident inits have no variant, so neither path claims.
+        let pre = "fn m() {\n    let a = x;\n    let b = y;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let a = x;\n-    let b = y;\n+    let a = p;\n+    let b = q;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "anchorless inits must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn wi5_macro_init_vetoes() {
+        // Macro inits never raise: the engine cannot match inside them.
+        let pre = "fn m() {\n    let a = m!(x + 1);\n    let b = m!(y + 1);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let a = m!(x + 1);\n-    let b = m!(y + 1);\n+    let a = m!(x + 2);\n+    let b = m!(y + 2);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let mut used = Vec::new();
+        let minuses = ["    let a = m!(x + 1);", "    let b = m!(y + 1);"];
+        let pluses = ["    let a = m!(x + 2);", "    let b = m!(y + 2);"];
+        assert!(
+            super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2, 3], &mut used)
+                .is_none(),
+            "macro init must veto"
+        );
+        let _ = (raw, pre_map);
+    }
+
+    #[test]
+    fn wi5_mixed_let_and_non_let_vetoes_general() {
+        // Non-`let` statements stay bare in this slice: a mixed class
+        // declines the `let`-init fallback (the `?` on `parse_let_init`).
+        let pre = "fn m() {\n    let a = x + 1;\n    y + 1;\n}\n";
+        let mut used = Vec::new();
+        let minuses = ["    let a = x + 1;", "    y + 1;"];
+        let pluses = ["    let a = x + 2;", "    y + 2;"];
+        assert!(
+            super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2, 3], &mut used)
+                .is_none(),
+            "mixed let/non-let must veto general"
+        );
+    }
+
+    #[test]
+    fn wi5_single_pair_stays_ordinary() {
+        // N ≥ 2 gate: one `let`-init pair never sweeps.
+        let pre = "fn m() {\n    let a = x + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = x + 1;\n+    let a = x + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
+            "single pair must stay ordinary (WI-7 owns N=1)"
+        );
     }
 }

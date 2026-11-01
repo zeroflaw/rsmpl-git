@@ -188,6 +188,14 @@ pub(crate) fn try_literal_frame_sweep(
             None => uniform = Some((kind, old, new)),
         }
     }
+    // WI-5 extracted-subterm veto: a lone literal inside a `let` init
+    // that an anchored general template also proves belongs to the
+    // anchored form (D10) — decline the bare pair so `general_expr`
+    // claims it. Whole-line literal sites never parse as `let` inits
+    // with a general template, so they keep the bare emission.
+    if anchored_let_init_proves(minuses, pluses, path, file_old) {
+        return None;
+    }
     let (_, old_tok, new_tok) = uniform?;
     if !crate::totality::template_pair_holds(path, file_old, &old_tok, &new_tok, minuses.len()) {
         return None;
@@ -196,6 +204,45 @@ pub(crate) fn try_literal_frame_sweep(
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {old_tok}\n+ {new_tok}\n"));
     Some(hunk)
+}
+
+/// True when the `let`-init column anti-unifies to an anchored general
+/// template proving N (WI-5 D10). The bare literal must not shadow it.
+fn anchored_let_init_proves(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+) -> bool {
+    let mut minus_inits = Vec::with_capacity(minuses.len());
+    let mut plus_inits = Vec::with_capacity(pluses.len());
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let (Some(me), Some(pe)) = (
+            super::general_expr::parse_let_init(m),
+            super::general_expr::parse_let_init(p),
+        ) else {
+            return false;
+        };
+        for e in [&me, &pe] {
+            let probe = super::shape::probe_expr(e);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return false;
+            }
+        }
+        minus_inits.push(me);
+        plus_inits.push(pe);
+    }
+    let Some((minus_tpl, plus_tpl)) =
+        super::general_expr::antiunify_general_exprs(&minus_inits, &plus_inits)
+    else {
+        return false;
+    };
+    if syn::parse_str::<syn::Lit>(minus_tpl.trim()).is_ok()
+        || syn::parse_str::<syn::Lit>(plus_tpl.trim()).is_ok()
+    {
+        return false;
+    }
+    crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len())
 }
 
 #[cfg(test)]
@@ -521,5 +568,83 @@ mod chain_tests {
             "@@ -1,3 +1,3 @@\n fn m() {\n-    return \"old\";\n+    return \"new\";\n }\n",
         );
         assert!(crate::semantic::infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn wi5_let_init_anchored_declines_bare_literal() {
+        // WI-5 D10: the F5 `let`-init class proves an anchored general
+        // template, so the bare literal pair declines even though its
+        // uniform `(1, 2)` gate holds — the chain emits `E0 + 1`.
+        let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 1;\n    let c = z + 1;\n}\n";
+        let minuses = [
+            "    let a = x + 1;",
+            "    let b = y + 1;",
+            "    let c = z + 1;",
+        ];
+        let pluses = [
+            "    let a = x + 2;",
+            "    let b = y + 2;",
+            "    let c = z + 2;",
+        ];
+        let mut used = Vec::new();
+        assert!(
+            super::try_literal_frame_sweep(
+                &minuses,
+                &pluses,
+                "f.rs",
+                Some(pre),
+                &[2, 3, 4],
+                &mut used
+            )
+            .is_none(),
+            "anchored let-init class must veto the bare literal"
+        );
+        // End to end: the same section raises as the anchored form.
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n-    let a = x + 1;\n-    let b = y + 1;\n-    let c = z + 1;\n+    let a = x + 2;\n+    let b = y + 2;\n+    let c = z + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("anchored general must claim F5");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(
+            !out.contains("- 1\n"),
+            "bare literal must not win, got: {out}"
+        );
+    }
+
+    #[test]
+    fn wi5_authored_bare_rediffs_to_anchored() {
+        // Cycle fixed point (SPEC D.5): an authored bare `1` → `2`
+        // hunk applied inside `let` inits re-diffs as the anchored
+        // `E0 + 1` form — `S″ == S′` at the anchored spelling.
+        let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 1;\n    let c = z + 1;\n}\n";
+        let authored = "diff --git f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- 1\n+ 2\n";
+        let parsed = rsmpl_patch::parse_patch(authored).expect("authored bare must parse");
+        let pre_files = pre_map(&[("f.rs", pre)]);
+        let mut files = pre_files.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("bare must apply");
+        let post = files["f.rs"].clone();
+        assert_eq!(
+            post,
+            pre.replace("x + 1", "x + 2")
+                .replace("y + 1", "y + 2")
+                .replace("z + 1", "z + 2")
+        );
+        // Re-diff pre → post through the native section shape.
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n-    let a = x + 1;\n-    let b = y + 1;\n-    let c = z + 1;\n+    let a = x + 2;\n+    let b = y + 2;\n+    let c = z + 2;\n",
+        );
+        let out =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_files)
+                .expect("must re-diff");
+        assert!(
+            out.contains("- E0 + 1\n"),
+            "fixed point is anchored, got: {out}"
+        );
     }
 }

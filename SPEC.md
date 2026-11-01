@@ -7738,23 +7738,36 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `- Receiver.m(E0)` / `+ Receiver.m(E0.clone())` (uppercase method
    backticked, Section 15.4). Totality is the same real-pair check.
    Detector name `method_arg_template`.
- - General-expression sweep (WI-6): N ≥ 2 `-`/`+` pairs, each parsing
-   whole-line as one `syn::Expr` of the same variant (binary, unary,
-   cast, field, index, reference, await — `Call`/`MethodCall`/macro
-   whole-line shapes stay with their tighter detectors; macro or
-   unsupported subterms veto), anti-unified to one template pair with
-   at most one `E{i}` hole. Hole positions are subterms token-equal
-   within each pair but hetero across sites (ordered value
-   correspondence, Section 15.7); every other position is a literal
-   anchor token-equal across all sites on its side; at least one
-   anchor carries the delta (`E0 + 1` → `E0 + 2`, `E0.timeout` →
-   `E0.timeout2`, `&E0` → `&mut E0`). No-delta and multi-hole
-   classes stay ordinary. One `# allow=many` hunk (tight original
-   range, Section D.5) with diet holes, no declarations. Pre-image
-   totality is the real-pair engine-count check
-   (`template_pair_holds`): the emitted pair must match exactly N
-   subterms in the pre-image — an untouched twin vetoes. Detector
-   name `general_expr`.
+  - General-expression sweep (WI-6): N ≥ 2 `-`/`+` pairs, each parsing
+    whole-line as one `syn::Expr` of the same variant (binary, unary,
+    cast, field, index, reference, await — `Call`/`MethodCall`/macro
+    whole-line shapes stay with their tighter detectors; macro or
+    unsupported subterms veto), anti-unified to one template pair with
+    at most one `E{i}` hole. Hole positions are subterms token-equal
+    within each pair but hetero across sites (ordered value
+    correspondence, Section 15.7); every other position is a literal
+    anchor token-equal across all sites on its side; at least one
+    anchor carries the delta (`E0 + 1` → `E0 + 2`, `E0.timeout` →
+    `E0.timeout2`, `&E0` → `&mut E0`). No-delta and multi-hole
+    classes stay ordinary. One `# allow=many` hunk (tight original
+    range, Section D.5) with diet holes, no declarations. Pre-image
+    totality is the real-pair engine-count check
+    (`template_pair_holds`): the emitted pair must match exactly N
+    subterms in the pre-image — an untouched twin vetoes. `let`-init
+    subterm fallback (WI-5): when no pair parses whole-line but every
+    pair parses as `let PAT[: TY] = INIT;` with init present and no
+    `let-else` diverge, the init column anti-unifies through the same
+    core (same ≤1-hole, macro/unsupported vetoes); the template must
+    be anchored (neither side a bare literal) and prove N through the
+    same totality check, and emission is the bare anchored template
+    (the engine rewrites it inside each `let`, preserving pat/ty).
+    Whole-line classes keep their winner — the fallback only fires
+    when whole-line declines uniformly. Detector name `general_expr`.
+    Preference (WI-5/D10): where an anchored general template and a
+    bare literal prove the same site set, the anchored form wins —
+    a bare-literal emission is legal only when the literal is the
+    whole matched unit, never when extracted as a subterm of a larger
+    expression an anchored template proves.
   - Control-position sweep (WI-8b): N ≥ 2 `-`/`+` pairs whose changed
    lines each carry the changed subterm in one uniform single-line
    control position — match-arm guard (`_ if GUARD => …`), arm body
@@ -7780,24 +7793,30 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    of rewriting the body (position-scoped counting and control
    frames in emission stay future work). Detector name
    `control_template`.
-  - Literal-frame sweep (WI-7): N ≥ 2 `-`/`+` pairs, each parsing as
-  one `syn::Stmt` (expression statements, `let`s, `return`s, `const`/
-  `static` items via `Stmt::Item`; header/attr/control lines fail to
-  parse and stay ordinary) and differing from its partner in exactly
-  one literal token — string, char, number, or bool, same kind on both
-  sides (byte/C/raw-string spellings veto; macro-body deltas contribute
-  no literals and veto) — with a uniform `(old, new)` pair across
-  sites while the surrounding frames stay hetero. One `# allow=many`
-  hunk (tight original range, Section D.5) with the bare literal pair
-  (`- "old"` / `+ "new"`), which the engine matches as literal
-  subterms wherever they sit. Guards: all-identical line classes stay
-  for the tighter verbatim sweep (T422 precedent); the old literal
-  occurs exactly once per minus line (one template application must
-  reproduce the plus line); single-site classes stay ordinary. Pre-image
-  totality is the same real-pair engine-count check
-  (`template_pair_holds`): macro interiors and string-in-string never
-  count (the engine never enters them), an untouched twin vetoes.
-  Detector name `literal_frame`.
+   - Literal-frame sweep (WI-7): N ≥ 2 `-`/`+` pairs, each parsing as
+   one `syn::Stmt` (expression statements, `let`s, `return`s, `const`/
+   `static` items via `Stmt::Item`; header/attr/control lines fail to
+   parse and stay ordinary) and differing from its partner in exactly
+   one literal token — string, char, number, or bool, same kind on both
+   sides (byte/C/raw-string spellings veto; macro-body deltas contribute
+   no literals and veto) — with a uniform `(old, new)` pair across
+   sites while the surrounding frames stay hetero. One `# allow=many`
+   hunk (tight original range, Section D.5) with the bare literal pair
+   (`- "old"` / `+ "new"`), which the engine matches as literal
+   subterms wherever they sit. Guards: all-identical line classes stay
+   for the tighter verbatim sweep (T422 precedent); the old literal
+   occurs exactly once per minus line (one template application must
+   reproduce the plus line); single-site classes stay ordinary.
+   Extracted-subterm veto (WI-5/D10): when every pair parses as a
+   `let` with init and the init column anti-unifies to an anchored
+   general template proving N, the bare pair declines so `general_expr`
+   claims it. Pre-image
+   totality is the same real-pair engine-count check
+   (`template_pair_holds`): macro interiors and string-in-string never
+   count (the engine never enters them), an untouched twin vetoes.
+   Detector name `literal_frame`. Non-`let` statements (e.g.
+   `return x + 1;`) stay bare in this slice (named residue for a
+   `return`/general subterm follow-up).
  - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
   `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
@@ -8623,7 +8642,10 @@ stripping is deliberate. Equalities per origin close the contract:
   re-diffing the post-tree and re-inferring yields `S′` with
   `canonicalize_with_tree(S′) == canonicalize_with_tree(S)` under the
   pre-image, and one further iteration is a fixed point
-  (`S″ == S′` byte-identical).
+  (`S″ == S′` byte-identical). Anchored fixed point (WI-5/D10):
+  where an anchored general template and a bare literal prove the
+  same site set, `S′` is the anchored spelling and an authored bare
+  form re-diffs to it (like terse→sweep normalisation).
 - Semantic → native → semantic, single-site under the WI-19 guards
   (defined equality, not an exclusion): sweep singles stay ordinary
   under strict T375 while definition-shape singles re-infer under the
