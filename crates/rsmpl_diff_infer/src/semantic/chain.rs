@@ -645,6 +645,26 @@ pub(crate) fn compress_section(
     let checkpoint = used_rules.len();
     // T411: old-side changed lines for the line-aware opaque veto.
     let changed = crate::totality::changed_old_lines(section);
+    // WI-4c: a vetoed fn joint suppresses its old callee name
+    // workspace-wide — a section of pure call-callee sites of a
+    // suppressed `(path, old)` stays ordinary instead of emitting a
+    // rename-claiming sweep over a definition delta it cannot see. The
+    // per-hunk fallback below carries the same gate per hunk; this
+    // whole-section gate stops the pure-call section (e.g. the call
+    // file of a cross-file veto) from sweeping before it ever reaches
+    // the per-hunk path. Mixed sections fall through (their pure-call
+    // hunks still hit the per-hunk gate; other hunks compress alone).
+    if !suppressed.is_empty()
+        && !minuses.is_empty()
+        && minuses.len() == pluses.len()
+        && minuses.iter().all(|m| {
+            suppressed
+                .iter()
+                .any(|(p, o)| p == path && super::fn_joint::is_call_callee_of(m, o))
+        })
+    {
+        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
+    }
     if whole && minuses.len() == 1 {
         // Single pair: fn/item rename under the precision guard
         // (`guard_for("item_rename") == Precision`: the engine

@@ -7432,8 +7432,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)
-  joined with N-1 call-callee use lines of the old name (bare,
-  qualified, turbofish, `let`-wrapped) in the same file compresses to
+   joined with N-1 call-callee use lines of the old name (bare,
+   qualified, turbofish, `let`-wrapped) in the same file — or across
+   files (WI-4c: the def in one file with callee-only calls across
+   files raises to the same one follow hunk at the def; Joint-B
+   cross-file shapes stay ordinary, see below) — compresses to
   the single header-pair hunk with `# sweep` + `# follow=uses`, the
   pair carrying both deltas (`- fn foo(x: i32) { ... }` /
   `+ fn bar(x: u32) { ... }`, native spacing preserved). The vis stays
@@ -7443,9 +7446,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   claiming otherwise would fail its own probe). Totality is the same
   scratch-apply probe plus the unique-definition guard and the
   byte-win guard. Claim-then-veto suppresses instead of fragmenting:
-  a joint shape that fails any fire gate (body/attr delta, arg-delta
-  calls, vis/qual/generics/where delta, twin defs, probe or byte-win
-  fail) suppresses its old callee name for the file, so the call
+   a joint shape that fails any fire gate (body/attr delta, arg-delta
+   calls, vis/qual/generics/where delta, twin defs, probe or byte-win
+   fail) suppresses its old callee name for each involved file, so the call
   hunks stay wholly ordinary instead of emitting a rename-claiming
   sweep over a definition delta they cannot see.
 - Joint-B composition raising (WI-4b, detector `fn_joint`): the two
@@ -7470,7 +7473,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   composed report is `partial` with the def hunk's orphans naming
   exactly the sibling call sites (sibling-covered by construction —
   the agent's next action is the sibling hunk under the same rule).
-  Out of scope (stays ordinary): multi-file groups, return-plus-
+   Out of scope (stays ordinary): Joint-B multi-file groups (a
+   cross-file rename+arg-add/attr shape suppresses to ordinary via the
+   involved-path set — the call-template sweep is file-scoped, so no
+   two-section emission; never a fragment — WI-4c), return-plus-
   arg-add doubles, slot-plus-attr doubles, and hetero call shapes.
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies

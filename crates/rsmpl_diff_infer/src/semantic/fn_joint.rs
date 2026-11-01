@@ -19,39 +19,38 @@
 //! see (the F4b/F4d false-completeness shape). Suppression is keyed per
 //! `(path, old)`: only sections that took part in the vetoed candidate.
 //!
-//! Scope (WI-4b landed, WI-4c residue): single-file groups only
-//! (multi-file candidate groups decline silently); Joint-A fires on
-//! evolving ⊆ {params, return} with callee-only calls; Joint-B1 fires
-//! on a params-only evolution with a uniform arg-add call template;
-//! Joint-B2 fires on an attr add/remove + rename with a uniform
-//! callee-only call template (each a shared-rule two-hunk composition,
-//! no follow — a follow would overlap the call hunk's sites). Body
-//! deltas, return-plus-arg-add doubles, slot-plus-attr doubles, and
-//! hetero call shapes suppress without raising (their composition has
-//! no probe-sound two-hunk form).
+//! Scope (WI-4b landed, WI-4c landed Joint-A): single-file groups fire
+//! Joint-A/B1/B2; workspace groups fire Joint-A only (def in one file,
+//! callee-only calls across files, one follow hunk at the def). Joint-B
+//! cross-file shapes suppress to ordinary (their call-template sweep is
+//! file-scoped; no two-section emission in this slice). Body deltas,
+//! return-plus-arg-add doubles, slot-plus-attr doubles, and hetero call
+//! shapes suppress without raising (their composition has no
+//! probe-sound two-hunk form).
 
 use std::collections::{HashMap, HashSet};
 
+use super::fn_joint_ws::{joint_workspace_candidate, Workspace};
 use super::generalized::parse_sig_slots;
 use super::item_intent::{count_kind_defs, probe_reproduces, Pair};
 use super::unique_rule;
 
 /// One paired hunk inside a section.
-struct HunkPairs {
-    minuses: Vec<String>,
-    pluses: Vec<String>,
-    balanced: bool,
-    sites: Vec<usize>,
+pub(crate) struct HunkPairs {
+    pub(crate) minuses: Vec<String>,
+    pub(crate) pluses: Vec<String>,
+    pub(crate) balanced: bool,
+    pub(crate) sites: Vec<usize>,
 }
 
 /// One flattened native pair at its old-side site.
 #[derive(Clone)]
-struct FlatPair {
-    sec: usize,
-    hunk: usize,
-    minus: String,
-    plus: String,
-    site: usize,
+pub(crate) struct FlatPair {
+    pub(crate) sec: usize,
+    pub(crate) hunk: usize,
+    pub(crate) minus: String,
+    pub(crate) plus: String,
+    pub(crate) site: usize,
 }
 
 /// The whole-patch pre-pass outcome: rebuilt sections, the definition
@@ -60,7 +59,7 @@ struct FlatPair {
 type JointOutcome = (Vec<String>, String, String, HashSet<(String, String)>);
 
 /// Which joint shape fired.
-enum Joint {
+pub(crate) enum Joint {
     /// WI-4a: header pair + callee-only calls → one follow hunk.
     A,
     /// WI-4b B1: header pair (params evolve, return preserved) +
@@ -85,14 +84,14 @@ enum Joint {
 /// one file. Joint-A claims ride one follow hunk; Joint-B claims ride
 /// the shared-rule two-hunk composition (def hunk + call-template hunk
 /// under one rule name).
-struct Fire {
-    old: String,
-    new: String,
-    def_minus: String,
-    def_plus: String,
-    claims: Vec<FlatPair>,
-    claimed_secs: Vec<usize>,
-    joint: Joint,
+pub(crate) struct Fire {
+    pub(crate) old: String,
+    pub(crate) new: String,
+    pub(crate) def_minus: String,
+    pub(crate) def_plus: String,
+    pub(crate) claims: Vec<FlatPair>,
+    pub(crate) claimed_secs: Vec<usize>,
+    pub(crate) joint: Joint,
 }
 
 /// Whole-patch fn-joint pre-pass: returns the rebuilt section list plus
@@ -212,6 +211,69 @@ pub(crate) fn try_fn_joint_intent(
             Some((out, def_path, rule, suppressed))
         }
         None => {
+            // WI-4c: Joint-A workspace fallback (def in one file,
+            // callee-only calls across files). Single-file groups each
+            // saw only their own file, so this shape declined silently
+            // above; the per-hunk fallback would otherwise fragment it
+            // into an ordinary def plus a rename-claiming call sweep.
+            match joint_workspace_candidate(&parsed, pre) {
+                Workspace::None => {}
+                Workspace::Suppress(paths, old) => {
+                    for p in paths {
+                        suppressed.insert((p, old.clone()));
+                    }
+                }
+                Workspace::Ready(f, def_path) => {
+                    let rule = unique_rule(used_rules, &format!("rename_{}_to_{}", f.old, f.new));
+                    let emission = emit(&def_path, &rule, &f);
+                    let pairs: Vec<Pair> = f
+                        .claims
+                        .iter()
+                        .map(|c| {
+                            let path = parsed
+                                .iter()
+                                .find(|(sec, _, _)| *sec == c.sec)
+                                .map(|(_, p, _)| p.clone())
+                                .unwrap_or_else(|| def_path.clone());
+                            Pair {
+                                sec: 0,
+                                path,
+                                minus: c.minus.clone(),
+                                plus: c.plus.clone(),
+                                site: c.site,
+                            }
+                        })
+                        .collect();
+                    let probed = probe_reproduces(pre, &emission, &pairs);
+                    let claimed_bytes: usize =
+                        f.claimed_secs.iter().map(|s| sections[*s].len()).sum();
+                    if probed && emission.len() < claimed_bytes {
+                        let claimed: HashSet<usize> = f.claimed_secs.iter().copied().collect();
+                        let first = *claimed.iter().min().unwrap_or(&0);
+                        let mut out: Vec<String> = Vec::new();
+                        for (i, sec) in sections.iter().enumerate() {
+                            if !claimed.contains(&i) {
+                                out.push(sec.clone());
+                                continue;
+                            }
+                            if i == first {
+                                out.push(emission.clone());
+                            }
+                        }
+                        return Some((out, def_path, rule, suppressed));
+                    }
+                    used_rules.truncate(checkpoint);
+                    // Probe/T375 fail: suppress the involved files so the
+                    // fallback stays wholly ordinary (same posture as the
+                    // single-file veto).
+                    let involved: HashSet<usize> = f.claimed_secs.iter().copied().collect();
+                    for (sec, path, _) in &parsed {
+                        if involved.contains(sec) {
+                            suppressed.insert((path.clone(), f.old.clone()));
+                        }
+                    }
+                }
+            }
             if suppressed.is_empty() {
                 used_rules.truncate(checkpoint);
                 None
@@ -439,7 +501,7 @@ fn joint_candidate(
 /// Split one native section into per-hunk minus/plus runs with their
 /// old-side sites (0-context `-U0` hunks hold pure `-`/`+` runs, but
 /// context lines are skipped soundly when present).
-fn split_hunks(section: &str) -> Vec<HunkPairs> {
+pub(crate) fn split_hunks(section: &str) -> Vec<HunkPairs> {
     let mut out: Vec<HunkPairs> = Vec::new();
     let mut current: Option<(Vec<String>, Vec<String>, Vec<String>)> = None;
     for line in section.lines().skip(1) {
@@ -487,7 +549,7 @@ fn finish_hunk(raw: Vec<String>, minuses: Vec<String>, pluses: Vec<String>) -> H
 /// headers with differing names, else `None`. Column-0 only: indented
 /// headers are methods (WI-13 residue), and `split_item` def lines
 /// (`struct`/`type`/…) never parse as `fn` headers.
-fn header_name_delta(minus: &str, plus: &str) -> Option<(String, String)> {
+pub(crate) fn header_name_delta(minus: &str, plus: &str) -> Option<(String, String)> {
     if minus.is_empty()
         || plus.is_empty()
         || minus.starts_with([' ', '\t'])
@@ -505,7 +567,7 @@ fn header_name_delta(minus: &str, plus: &str) -> Option<(String, String)> {
 
 /// True when both lines parse as `fn` headers whose every slot matches
 /// (a pure rename — item_intent's domain, never joint).
-fn slots_equal_except_name(minus: &str, plus: &str) -> bool {
+pub(crate) fn slots_equal_except_name(minus: &str, plus: &str) -> bool {
     let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
         return false;
     };
@@ -520,7 +582,7 @@ fn slots_equal_except_name(minus: &str, plus: &str) -> bool {
 /// Fire gates on the def header pair: vis in the WI-1 closed set and
 /// preserved; qual/generics/where preserved; evolving ⊆ {params,
 /// return} and nonempty.
-fn header_fire_gates(minus: &str, plus: &str) -> bool {
+pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
     let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
         return false;
     };
@@ -910,7 +972,7 @@ fn contains_ident(haystack: &str, needle: &str) -> bool {
 /// swaps `old`→`new` with an equal qualifier. Argument deltas are
 /// allowed here (they force suppress-only downstream); use lines,
 /// method calls, fields, and macro heads return false.
-fn is_call_site_of(minus: &str, plus: &str, old: &str, new: &str) -> bool {
+pub(crate) fn is_call_site_of(minus: &str, plus: &str, old: &str, new: &str) -> bool {
     let (Some((qm, cm, _, _)), Some((qp, cp, _, _))) = (call_parts(minus), call_parts(plus)) else {
         return false;
     };
@@ -919,7 +981,7 @@ fn is_call_site_of(minus: &str, plus: &str, old: &str, new: &str) -> bool {
 
 /// True when the pair is a callee-only rename of `old`→`new`:
 /// qualifier, turbofish, and every argument token-identical.
-fn is_callee_only(minus: &str, plus: &str, old: &str, new: &str) -> bool {
+pub(crate) fn is_callee_only(minus: &str, plus: &str, old: &str, new: &str) -> bool {
     if !is_call_site_of(minus, plus, old, new) {
         return false;
     }
@@ -1547,6 +1609,130 @@ mod tests {
         // `s.foo()` is not a call-callee site of `foo`, so the joint
         // shape is absent entirely (no def+call group): silent decline.
         assert!(out.is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn joint_cross_file_fires_with_follow() {
+        // WI-4c: def in a.rs, callee-only calls in a.rs + b.rs raise to
+        // one follow hunk at the def, real-apply byte-identical in both
+        // files (the single-file loop alone would fragment this).
+        let a_pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n}\n";
+        let b_pre = "fn n() {\n    foo(2);\n    foo(3);\n}\n";
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1);\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -2,2 +2,2 @@\n-    foo(2);\n-    foo(3);\n+    bar(2);\n+    bar(3);\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("cross-file joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- fn foo(x: i32) { ... }"), "got:\n{out}");
+        assert!(out.contains("+ fn bar(x: u32) { ... }"), "got:\n{out}");
+        assert_eq!(
+            out.matches("rule=").count(),
+            1,
+            "one follow hunk, got:\n{out}"
+        );
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["a.rs"], "fn bar(x: u32) {\n    x\n}\nfn m() {\n    bar(1);\n}\n",
+            "a.rs must round-trip byte-identical"
+        );
+        assert_eq!(
+            files["b.rs"], "fn n() {\n    bar(2);\n    bar(3);\n}\n",
+            "b.rs must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn joint_cross_file_b1_stays_ordinary() {
+        // WI-4c: rename+arg-add across files stays wholly ordinary (the
+        // call-template sweep is file-scoped; no two-section emission in
+        // this slice) — honest, never a fragment.
+        let a_pre = "fn foo(x: i32) {\n    x\n}\n";
+        let b_pre = "fn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: i32, y: i32) {\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -2,2 +2,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "B1 cross-file must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn joint_cross_file_veto_suppresses_fragment() {
+        // WI-4c: vis-changing def with callee-only cross-file calls
+        // suppresses instead of fragmenting into ordinary def +
+        // rename-claiming call sweep.
+        let a_pre = "fn foo(x: i32) {\n    x\n}\n";
+        let b_pre = "fn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+pub(crate) fn bar(x: u32) {\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -2,2 +2,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
+        let mut used = Vec::new();
+        let out = try_fn_joint_intent(&sections, &pre, &mut used);
+        let Some((rewritten, rule, _, suppressed)) = out else {
+            panic!("cross-file veto must suppress, not decline silently");
+        };
+        assert!(rule.is_empty(), "suppress-only carries no rule");
+        assert_eq!(rewritten, sections, "suppress-only leaves bytes identical");
+        assert!(suppressed.contains(&("a.rs".to_string(), "foo".to_string())));
+        assert!(suppressed.contains(&("b.rs".to_string(), "foo".to_string())));
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "veto must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn joint_cross_file_twin_defs_decline_silent() {
+        // Two `fn foo` defs across files: unique-definition guard declines
+        // silently (no suppression — an unrelated sweep elsewhere stays).
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n",
+            ),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "fn foo(x: i32) {\n    x\n}\n"),
+            ("b.rs", "fn foo(x: i32) {\n    x\n}\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_fn_joint_intent(&sections, &pre, &mut used).is_none());
         assert!(used.is_empty());
     }
 

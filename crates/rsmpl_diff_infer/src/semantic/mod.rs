@@ -28,6 +28,7 @@ pub(crate) mod definition_arm_follow;
 pub(crate) mod definition_evolution;
 mod deletes;
 mod fn_joint;
+mod fn_joint_ws;
 pub(crate) mod frame;
 pub(crate) mod general_expr;
 pub(crate) mod general_subline;
