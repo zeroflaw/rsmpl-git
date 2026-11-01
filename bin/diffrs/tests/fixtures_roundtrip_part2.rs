@@ -162,22 +162,32 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "[{name}] ordinary passthrough must equal normalized native"
         );
     } else if name == "52-single-call-literal-stays-ordinary" {
-        // T486: single call-literal site veto miniature --
-        // one `make_call("alpha", first_count, false);` ->
-        // `make_call("alpha", first_count, "100644");` costs more
-        // as a semantic hunk than the ordinary hunk it replaces:
-        // pure ordinary passthrough (veto side of fixture 25,
-        // the multi-site literal fire).
+        // T486 + WI-7 slice-12: unique single call-literal delta now
+        // fires as an allow-one precision single (sweep-vs-single
+        // canonically distinct until WI-8 site-set equality). The twin
+        // veto is pinned by the `wi12_*_twin_vetoes` unit gates; this
+        // fixture pins the unique fire (contrast to fixture 25, the
+        // multi-site literal fire).
         assert!(
-            !semantic.contains("rule="),
-            "single call-literal edit must stay ordinary, got: {semantic}"
+            semantic.contains("rule=r1"),
+            "unique literal single must fire, got: {semantic}"
         );
-        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
-        assert!(context.is_empty(), "zero-context, got: {context:?}");
-        let normalized = normalize_native(native_input);
         assert!(
-            semantic == normalized,
-            "[{name}] ordinary passthrough must equal normalized native"
+            !semantic.contains("# allow=many"),
+            "allow-one, no allow=many: {semantic}"
+        );
+        assert!(!semantic.contains("# sweep"), "ranged single: {semantic}");
+        assert!(
+            semantic.contains("- make_call(E0, E1, false)\n"),
+            "anchored minus template, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ make_call(E0, E1, \"100644\")\n"),
+            "anchored plus template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-    make_call("),
+            "native minus must be consumed, got: {semantic}"
         );
     } else if name == "53-single-let-stays-ordinary" {
         // T487: single let-sweep site veto miniature --
@@ -244,23 +254,33 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             native_input.len()
         );
     } else if name == "56-single-let-call-literal-stays-ordinary" {
-        // T488: single let-bound call-literal site veto miniature --
-        // one `let a = make_call("alpha", first_count, false);` ->
-        // `let a = make_call("alpha", first_count, "100644");` costs
-        // more as a semantic hunk than the ordinary hunk it replaces:
-        // pure ordinary passthrough (veto side of fixture 26, the
-        // let-bound cross-hunk fire; fixture 52 pins the same veto for
-        // the bare-statement shape of fixture 25).
+        // T488 + WI-7 slice-12: unique let-bound call-literal delta now
+        // fires as an allow-one precision single via the shared T449
+        // `let`-init entry (emission stays the bare-call pattern; the
+        // engine rewrites the call sub-expression in place). The twin
+        // veto is pinned by the `wi12_*_twin_vetoes` unit gates; this
+        // fixture pins the unique let-init fire (contrast to fixture
+        // 26, the let-bound cross-hunk fire).
         assert!(
-            !semantic.contains("rule="),
-            "single let-bound call-literal edit must stay ordinary, got: {semantic}"
+            semantic.contains("rule=r1"),
+            "unique let-init literal single must fire, got: {semantic}"
         );
-        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
-        assert!(context.is_empty(), "zero-context, got: {context:?}");
-        let normalized = normalize_native(native_input);
         assert!(
-            semantic == normalized,
-            "[{name}] ordinary passthrough must equal normalized native"
+            !semantic.contains("# allow=many"),
+            "allow-one, no allow=many: {semantic}"
+        );
+        assert!(!semantic.contains("# sweep"), "ranged single: {semantic}");
+        assert!(
+            semantic.contains("- make_call(E0, E1, false)\n"),
+            "anchored minus template, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ make_call(E0, E1, \"100644\")\n"),
+            "anchored plus template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-    let a = make_call("),
+            "native minus must be consumed, got: {semantic}"
         );
     } else if name == "57-single-verbatim-stays-ordinary" {
         // T489: single verbatim site veto miniature --

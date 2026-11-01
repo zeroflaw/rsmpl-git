@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-    Precision singles (WI-7 slices 1-11, `PrecisionUnique`): N == 1
+    Precision singles (WI-7 slices 1-12, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7726,8 +7726,19 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     literal spelling, never Rust syntax); the emission keeps the
     backticked literal. `None` pre-image vetoes (no guessing); an
     untouched same-shape twin vetoes (same-arity for call/method
-    shapes, same-template for general); non-matching twins never
-    count. Remaining families (literal, sub-line) keep `N ≥ 2` until
+    shapes, same-template for general, same-trailing-literal for
+    literal); non-matching twins never count. Slice-12 adds
+    whole-line bare-call trailing-literal pairs
+    (`make_widget(E0, E1, false)` → `make_widget(E0, E1, "100644")`,
+    whole-line plus `let`-init via the shared T449 entry): same
+    callee, uniform arity k+1 with k ≥ 1 (zero-hole pure-concrete
+    pairs veto — verbatim-shaped, general-expr single precedent;
+    fixture 57 `foo(&x)` → `foo(x)` stays ordinary), leading k args
+    token-equal minus-vs-plus, trailing old/new concrete literals with
+    a real delta; callee deltas, leading-arg deltas, identity, and
+    macro/unsupported args veto; uniqueness proved by
+    `call_literal_holds` at n=1 keyed on the trailing old literal.
+    Remaining families (method-literal, sub-line) keep `N ≥ 2` until
     their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,

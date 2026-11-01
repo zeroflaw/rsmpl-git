@@ -384,6 +384,137 @@ fn split_section_hunks(section: &str) -> (String, Vec<String>) {
 /// (`call_literal_holds`, T420-style): same-arity sites with a
 /// different trailing literal (7025a14's `true` site next to the 2x
 /// `false` prize group) never match the pattern and must not veto.
+/// WI-7 slice-12: whole-line bare-call trailing-literal single (N=1)
+/// under `PrecisionUnique`. Fires iff the pair parses (whole-line or
+/// the shared T449 `let`-init entry — the emission stays the bare-call
+/// pattern and the engine rewrites the call sub-expression in place)
+/// as one same-callee call with uniform arity `k + 1` whose leading `k`
+/// args token-equal minus-vs-plus and whose trailing arg is a real
+/// old/new concrete delta (never a plus-only metavar, T442-safe by
+/// construction), a pre-image is present (`None` vetoes — uniqueness
+/// needs the whole file, D3), and `call_literal_holds` proves exactly
+/// one trailing-literal site file-wide (conditions (a)+(b); (c) is
+/// structural: the callee token plus the trailing literal anchor beyond
+/// the `E{i}` holes). The T361 byte-compare pre-reservation
+/// (`single_reproduces`, shared with the wrap/perm singles) vetoes any
+/// TokenStream spacing drift. Emission is the WI-19b allow-one spelling
+/// (tight range, directive-free, default `allow=one`). Detector name
+/// `call_literal` (same family, provenance unchanged). The N ≥ 2
+/// literal sweep (`try_call_literal_sweep`) keeps its hetero classes
+/// untouched.
+pub(crate) fn try_call_literal_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    use quote::ToTokens;
+    let tok = |e: &syn::Expr| e.to_token_stream().to_string();
+    let (o_cal, o_args) = call_parts(&parse_call_expr(minuses[0])?)?;
+    let (n_cal, n_args) = call_parts(&parse_call_expr(pluses[0])?)?;
+    // Callee deltas stay with the slice-1 single.
+    if o_cal != n_cal || o_args.len() != n_args.len() || o_args.is_empty() {
+        return None;
+    }
+    if !o_args[..o_args.len() - 1]
+        .iter()
+        .zip(n_args[..n_args.len() - 1].iter())
+        .all(|(a, b)| tok(a) == tok(b))
+    {
+        return None;
+    }
+    for arg in o_args.iter().chain(n_args.iter()) {
+        let probe = super::shape::probe_expr(arg);
+        if probe.macros > 0 || probe.unsupported > 0 {
+            return None;
+        }
+    }
+    let (o_last, n_last) = (
+        tok(&o_args[o_args.len() - 1]),
+        tok(&n_args[n_args.len() - 1]),
+    );
+    if o_last == n_last {
+        return None;
+    }
+    let k = o_args.len() - 1;
+    // Zero-hole templates never raise: with no leading args the pair is
+    // pure concrete text (`foo(&x)` → `foo(x)`), a verbatim-shaped
+    // rewrite with no hole to anchor generalization (general-expr
+    // single precedent: zero-hole vetoes). The multi literal sweep
+    // likewise never owns k=0 (uniform trailing ⇒ all-identical ⇒
+    // verbatim, T422). This keeps single-site verbatim miniatures
+    // (fixture 57) ordinary.
+    if k == 0 {
+        return None;
+    }
+    if !crate::totality::call_literal_holds(
+        file_old,
+        &o_cal,
+        o_args.len(),
+        &o_last,
+        minuses,
+        changed,
+    ) {
+        return None;
+    }
+    let mut vars = Vec::with_capacity(k);
+    for i in 0..k {
+        vars.push(format!("E{i}"));
+    }
+    let head = vars.join(", ");
+    // WI-7b: uppercase same callee rides backticks (literal).
+    let lit = super::shape::literal_callee(&o_cal);
+    let (minus_call, plus_call) = if head.is_empty() {
+        (format!("{lit}({o_last})"), format!("{lit}({n_last})"))
+    } else {
+        (
+            format!("{lit}({head}, {o_last})"),
+            format!("{lit}({head}, {n_last})"),
+        )
+    };
+    // Defensive: both sides must re-parse as calls (the totality probe
+    // re-checks, but a non-parsing template must never leave this core).
+    // The check runs on the raw callee: backticks are RSmPL-level
+    // literal spelling (SPEC 15.4), not Rust syntax (TOOL-5).
+    let (raw_minus, raw_plus) = if head.is_empty() {
+        (format!("{o_cal}({o_last})"), format!("{o_cal}({n_last})"))
+    } else {
+        (
+            format!("{o_cal}({head}, {o_last})"),
+            format!("{o_cal}({head}, {n_last})"),
+        )
+    };
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minuses[0],
+        pluses[0],
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{o_cal}_literal"));
+    // Allow-one: directive-free ranged hunk (slices-1-11 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
 pub(crate) fn try_call_literal_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -817,6 +948,201 @@ mod tests {
             crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
                 .is_none()
         );
+    }
+
+    fn lsingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+        super::try_call_literal_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
+    }
+
+    #[test]
+    fn wi12_literal_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-12: unique single trailing-literal delta raises to
+        // an allow-one hunk and real-applies byte-identical. Long names
+        // clear the precision guard (`body <= hunk + 16`); short shapes
+        // stay ordinary by design (pinned by the direct-core twin
+        // below, which bypasses the guard).
+        let pre = "fn m() {\n    make_widget_with_long_name_here(alpha_argument_1, first_value_foo, false);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    make_widget_with_long_name_here(alpha_argument_1, first_value_foo, false);\n+    make_widget_with_long_name_here(alpha_argument_1, first_value_foo, \"100644\");\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique literal single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        assert!(!out.contains("# sweep"), "ranged single: {out}");
+        assert!(
+            out.contains("- make_widget_with_long_name_here(E0, E1, false)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ make_widget_with_long_name_here(E0, E1, \"100644\")\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains(
+                "make_widget_with_long_name_here(alpha_argument_1, first_value_foo, \"100644\");"
+            ),
+            "got: {}",
+            files["f.rs"]
+        );
+        // Fixed point: re-diff of the applied tree is itself.
+        let out2 =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("must fire");
+        assert_eq!(out, out2, "fixed point");
+    }
+
+    #[test]
+    fn wi12_literal_single_let_init_fires() {
+        let pre = "fn m() {\n    let v = make_widget_with_long_name_here(alpha_argument_1, first_value_foo, false);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let v = make_widget_with_long_name_here(alpha_argument_1, first_value_foo, false);\n+    let v = make_widget_with_long_name_here(alpha_argument_1, first_value_foo, \"100644\");\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("let-init literal single must fire");
+        assert!(
+            out.contains("- make_widget_with_long_name_here(E0, E1, false)\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi12_literal_single_zero_prefix_vetoes() {
+        // Zero-hole templates never raise (verbatim-shaped pure concrete
+        // pair, general-expr single precedent) — fixture 57
+        // (`foo(&state.parsed)` → `foo(parsed)`) stays ordinary.
+        assert!(
+            lsingle(
+                "    make_widget_with_long_name_here(false);",
+                "    make_widget_with_long_name_here(\"100644\");",
+                Some("fn m() {\n    make_widget_with_long_name_here(false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "zero-prefix (hole-free) literal single must veto"
+        );
+        assert!(
+            lsingle(
+                "    foo(&state.parsed);",
+                "    foo(parsed);",
+                Some("fn m() {\n    foo(&state.parsed);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "verbatim-shaped strip must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn wi12_literal_single_twin_vetoes() {
+        assert!(
+            lsingle(
+                "    make_widget(a, 1, false);",
+                "    make_widget(a, 1, \"100644\");",
+                Some("fn m() {\n    make_widget(a, 1, false);\n    make_widget(g, 3, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "same-trailing twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi12_literal_single_different_trailing_twin_fires() {
+        // Totality keys on the trailing old literal: a same-arity site
+        // with a different trailing literal never matches and never
+        // vetoes (7025a14 precedent).
+        let out = lsingle(
+            "    make_widget(a, 1, false);",
+            "    make_widget(a, 1, \"100644\");",
+            Some("fn m() {\n    make_widget(a, 1, false);\n    make_widget(g, 3, true);\n}\n"),
+            &[2],
+        )
+        .expect("different-trailing twin must not veto");
+        assert!(out.contains("- make_widget(E0, E1, false)"), "got: {out}");
+    }
+
+    #[test]
+    fn wi12_literal_single_callee_and_prefix_deltas_decline() {
+        assert!(
+            lsingle(
+                "    foo(a, false);",
+                "    bar(a, \"100644\");",
+                Some("fn m() {\n    foo(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "callee delta must decline here"
+        );
+        assert!(
+            lsingle(
+                "    make_widget(a, false);",
+                "    make_widget(b, \"100644\");",
+                Some("fn m() {\n    make_widget(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "leading-arg delta must decline here"
+        );
+    }
+
+    #[test]
+    fn wi12_literal_single_none_identity_macro_veto() {
+        assert!(
+            lsingle(
+                "    make_widget(a, false);",
+                "    make_widget(a, \"100644\");",
+                None,
+                &[2]
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+        assert!(
+            lsingle(
+                "    make_widget(a, false);",
+                "    make_widget(a, false);",
+                Some("fn m() {\n    make_widget(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "identity must veto"
+        );
+        assert!(
+            lsingle(
+                "    make_widget(m!(x), false);",
+                "    make_widget(m!(x), \"100644\");",
+                Some("fn m() {\n    make_widget(m!(x), false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro arg must veto"
+        );
+    }
+
+    #[test]
+    fn wi12_literal_single_uppercase_fires_literal() {
+        let out = lsingle(
+            "    MakeWidget(a, false);",
+            "    MakeWidget(a, \"100644\");",
+            Some("fn m() {\n    MakeWidget(a, false);\n}\n"),
+            &[2],
+        )
+        .expect("uppercase literal single must fire");
+        assert!(out.contains("`MakeWidget`(E0, false)"), "got: {out}");
+        assert!(out.contains("`MakeWidget`(E0, \"100644\")"), "got: {out}");
     }
 
     #[test]
