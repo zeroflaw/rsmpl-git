@@ -531,12 +531,13 @@ pub(crate) fn try_method_arg_template_sweep(
     Some(hunk)
 }
 
-/// Single-pair structural wrapper (WI-7 slice-8): the N ≥ 2
+/// Single-pair structural wrapper (WI-7 slices 8-9): the N ≥ 2
 /// `wrapper_tpl` column-uniformity gates are vacuous-but-blocking at
 /// N=1 (every one-element column is trivially uniform, so the hole
-/// column `continue`s past the wrap and the bare-call/binary arms can
-/// never bind). This helper proves the same two vocabularies
-/// structurally from one pair, with no uniformity gates:
+/// column `continue`s past the wrap and the bare-call/binary/method
+/// one-arg-hole arms can never bind). This helper proves the same
+/// three vocabularies structurally from one pair, with no uniformity
+/// gates:
 ///
 /// * bare call: `plus` is `Expr::Call`, exactly one arg position
 ///   token-equals `minus` (the hole), every other arg rides verbatim
@@ -547,11 +548,20 @@ pub(crate) fn try_method_arg_template_sweep(
 /// * binary: `plus` is `Expr::Binary`, exactly one side token-equals
 ///   `minus`, the operator plus the other side are concrete anchors
 ///   (`E + 1` / `1 + E`); both/neither sides equal vetoes.
+/// * method call: `plus` is `Expr::MethodCall`, either receiver-is-hole
+///   (`E.foo(anchor…)` — structurally complete here, though in practice
+///   `wrapper_tpl` already proves it at N=1 via direct token-equality
+///   so the fallback only fires where the multi declines) or
+///   one-arg-is-hole (`r.foo(E, anchor…)` — the slice-9 shape whose
+///   multi column gate is vacuous-but-blocking at N=1). Exactly one
+///   hole total: receiver-plus-arg double-match (`x.foo(x)`) and two
+///   arg holes (`r.foo(x, x)`) veto (one-hole discipline). The receiver
+///   (or the method ident plus uniform args in the receiver-hole case)
+///   is the anchor beyond the hole (condition (c)).
 ///
-/// Every other plus shape (method-call, reference, unary, cast, field,
+/// Every other plus shape (reference, unary, cast, field,
 /// index, await) declines here: reference keeps its `wrapper_tpl`
-/// path (direct token-equality, no uniformity gate) and the method
-/// one-arg-hole wrap stays ordinary for slice-9.
+/// path (direct token-equality, no uniformity gate).
 fn wrapper_tpl_single(minus: &syn::Expr, plus: &syn::Expr, hole: &str) -> Option<String> {
     if let syn::Expr::Call(call) = plus {
         let mut found = false;
@@ -585,21 +595,56 @@ fn wrapper_tpl_single(minus: &syn::Expr, plus: &syn::Expr, hole: &str) -> Option
             _ => return None,
         }
     }
+    if let syn::Expr::MethodCall(call) = plus {
+        let method = call.method.to_string();
+        if method.is_empty() {
+            return None;
+        }
+        let turbo = tok(&call.turbofish);
+        let recv = tok(&call.receiver);
+        let m = tok(minus);
+        let recv_is_hole = recv == m;
+        let mut found = false;
+        let mut rendered = Vec::with_capacity(call.args.len());
+        for arg in call.args.iter() {
+            if tok(arg) == m {
+                if found {
+                    return None;
+                }
+                found = true;
+                rendered.push(hole.to_string());
+            } else {
+                rendered.push(tok(arg));
+            }
+        }
+        match (recv_is_hole, found) {
+            // Receiver is the hole: no arg may also match (two holes).
+            (true, false) => {
+                return Some(format!("{hole}.{method}{turbo}({})", rendered.join(", ")));
+            }
+            // One arg is the hole: the receiver token anchors it.
+            (false, true) => {
+                return Some(format!("{recv}.{method}{turbo}({})", rendered.join(", ")));
+            }
+            // Zero holes (pure concrete) or two holes (receiver + arg,
+            // or two args) never prove from one pair.
+            _ => return None,
+        }
+    }
     None
 }
 
-/// Single-pair anti-unification (WI-7 slices 6+8): one minus/plus arg
+/// Single-pair anti-unification (WI-7 slices 6+8+9): one minus/plus arg
 /// vector pair of uniform arity `k ≥ 1` yields a template arg pair with
 /// holes on every token-equal position and a wrapper on exactly one
 /// differing position, or `None` (stays ordinary). Within-pair rule: a
 /// position token-equal across minus/plus binds hole `E{i}`; the single
 /// differing position must be a structural wrap via `wrapper_tpl`
 /// (method-receiver and reference wraps, same vocabulary as the multi)
-/// or via `wrapper_tpl_single` (bare-call and binary wraps, whose
-/// multi column-uniformity gates are vacuous-but-blocking at N=1 —
-/// no new template language, no substring surgery). Method one-arg-hole
-/// wraps still need cross-site evidence and stay ordinary (slice-9).
-/// Zero wraps (callee/perm territory), two wraps, pure concrete deltas
+/// or via `wrapper_tpl_single` (bare-call, binary, and method
+/// one-arg-hole wraps, whose multi column-uniformity gates are
+/// vacuous-but-blocking at N=1 — no new template language, no substring
+/// surgery). Zero wraps (callee/perm territory), two wraps, pure concrete deltas
 /// (`1` → `2`, literal territory), and permuted holes all veto, as do
 /// macro/unsupported args (multi precedent).
 fn antiunify_call_args_single(
@@ -627,6 +672,21 @@ fn antiunify_call_args_single(
         let hole = format!("E{i}");
         let w = wrapper_tpl(std::slice::from_ref(m), std::slice::from_ref(p), &hole)
             .or_else(|| wrapper_tpl_single(m, p, &hole))?;
+        // N=1 soundness fence (slice-9): the multi `wrapper_tpl`
+        // receiver-hole path treats uniform args as concrete anchors,
+        // which is vacuous at N=1 — a concrete arg coincidentally
+        // token-equal to the minus (`x.foo(x)`) would slip through as a
+        // second hole in disguise. Enforce one-hole discipline
+        // structurally: the minus may appear exactly once across
+        // receiver + args.
+        if let syn::Expr::MethodCall(call) = p {
+            let m_tok = tok(m);
+            let recv_eq = tok(&call.receiver) == m_tok;
+            let arg_eqs = call.args.iter().filter(|a| tok(a) == m_tok).count();
+            if (recv_eq as usize) + arg_eqs != 1 {
+                return None;
+            }
+        }
         minus_tpl.push(format!("E{i}"));
         plus_tpl.push(w);
         wraps += 1;
@@ -643,7 +703,8 @@ fn antiunify_call_args_single(
 /// pattern and the engine rewrites the call sub-expression in place)
 /// as one same-callee call whose args anti-unify to exactly one wrap
 /// plus holes (slice-6 shapes via `wrapper_tpl`, slice-8 bare-call and
-/// binary inner wraps via `wrapper_tpl_single`), a pre-image is present (`None` vetoes — uniqueness needs
+/// binary plus slice-9 method one-arg-hole inner wraps via
+/// `wrapper_tpl_single`), a pre-image is present (`None` vetoes — uniqueness needs
 /// the whole file, D3), and `template_pair_holds` proves exactly one
 /// site file-wide with zero opaque hits (conditions (a)+(b); (c) is
 /// structural: the callee token plus the wrapper anchor beyond the
@@ -712,8 +773,8 @@ pub(crate) fn try_call_arg_template_single(
 /// `Receiver.m(...)` pattern and the engine rewrites the method-call
 /// sub-expression in place) as one same-receiver same-method call whose
 /// args anti-unify to exactly one wrap plus holes (slice-7 shapes via
-/// `wrapper_tpl`, slice-8 bare-call and binary inner wraps via
-/// `wrapper_tpl_single`), a pre-image is
+/// `wrapper_tpl`, slice-8 bare-call/binary plus slice-9 method one-arg-hole
+/// inner wraps via `wrapper_tpl_single`), a pre-image is
 /// present (`None` vetoes — uniqueness needs the whole file, D3), and
 /// `template_pair_holds` proves exactly one site file-wide with zero
 /// opaque hits (conditions (a)+(b); (c) is structural: the method ident
@@ -1620,6 +1681,182 @@ mod tests {
             )
             .is_none(),
             "macro arg must veto"
+        );
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-9: unique single `use_it(x)` -> `use_it(r.foo(x))`
+        // raises to an allow-one hunk and real-applies byte-identical
+        // (the N>=2 column-uniformity gate is vacuous at N=1, so the
+        // structural `wrapper_tpl_single` method arm carries this shape).
+        let pre = "fn use_it(x: i32) -> i32 { x }\nfn m(x: i32) -> i32 {\n    use_it(x)\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -3 +3 @@\n-    use_it(x)\n+    use_it(r.foo(x))\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique method inner wrap single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(r.foo(E0))\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn use_it(x: i32) -> i32 { x }\nfn m(x: i32) -> i32 {\n    use_it(r.foo(x))\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_let_init_fires() {
+        let out = single(
+            "    let a = use_it(x);",
+            "    let a = use_it(r.foo(x));",
+            Some("fn m() {\n    let a = use_it(x);\n}\n"),
+            &[2],
+        )
+        .expect("let-init method inner wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(r.foo(E0))\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    let a = use_it(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_second_arg_fires() {
+        // Hole at arg 1 with a leading concrete anchor.
+        let out = single(
+            "    use_it(x);",
+            "    use_it(r.foo(1, x));",
+            Some("fn m() {\n    use_it(x);\n}\n"),
+            &[2],
+        )
+        .expect("second-arg method inner wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(r.foo(1, E0))\n"), "got: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    use_it(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_twin_vetoes() {
+        let pre = "fn m() {\n    use_it(x);\n    use_it(y);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(r.foo(x));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_two_hole_vetoes() {
+        // Two holes need a two-hole template — never guessed at N=1.
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(r.foo(x, x));",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "two holes must veto"
+        );
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_recv_plus_arg_vetoes() {
+        // `x.foo(x)` binds the hole twice — duplicated-hole territory.
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(x.foo(x));",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "receiver+arg double match must veto"
+        );
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_zero_hole_vetoes() {
+        // No position carries the minus — pure concrete territory.
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(r.foo(1));",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "zero-hole method wrapper must veto"
+        );
+    }
+
+    #[test]
+    fn wi9_method_inner_wrap_single_macro_interior_vetoes() {
+        // A wrapper carrying macro text never raises (multi precedent).
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(r.foo(m!(x)));",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro interior must veto"
+        );
+    }
+
+    #[test]
+    fn wi9_method_entry_inner_wrap_single_fires_and_round_trips() {
+        // The shared single-pair core serves the method outer entry too.
+        let pre = "fn m() {\n    r.use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    r.use_it(x);\n+    r.use_it(q.foo(x));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique method-entry inner wrap single must fire");
+        assert!(out.contains("- Receiver.use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.use_it(q.foo(E0))\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    r.use_it(q.foo(x));\n}\n");
+    }
+
+    #[test]
+    fn wi9_method_entry_inner_wrap_single_twin_vetoes() {
+        assert!(
+            msingle(
+                "    r.use_it(x);",
+                "    r.use_it(q.foo(x));",
+                Some("fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "twin must veto"
         );
     }
 }
