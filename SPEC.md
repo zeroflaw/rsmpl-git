@@ -2445,7 +2445,7 @@ and text mode prints one `orphans:` stderr line with each entry as
 the first diagnostic names the first orphan `file:line` alongside the
 `applied` flag. A `# follow=uses` hunk never carries `orphans` (its
 uses rewrite; `follow_skipped_details` owns that signal).
-WI-2a extends orphan evidence to `let`-binder renames: a general-statement `let old = E;` -> `let new = E;` hunk (same init, single ident binder) lists leftover same-name uses as `orphans` (`off-target`, macro interiors and inline `{old}` format captures `macro-hidden`) and caps at `reparse-only` (global `partial`) while leftovers exist; zero leftovers stays `instantiated`. WI-2b completes the same shape in-block: unshadowed value uses of `old` after the binder inside its smallest enclosing block rewrite in the same hunk (labelled `follow`); inner `let old` / closure-param `old` shadows, nested-`fn` bodies, and macro interiors never rewrite (stay orphans); any other same-name binder (for-loop, match arm, ...) vetoes completion.
+WI-2a extends orphan evidence to `let`-binder renames: a general-statement `let old = E;` -> `let new = E;` hunk (same init, single ident binder) lists leftover same-name uses as `orphans` (`off-target`, macro interiors and inline `{old}` format captures `macro-hidden`) and caps at `reparse-only` (global `partial`) while leftovers exist; zero leftovers stays `instantiated`. WI-2b completes the same shape in-block: unshadowed value uses of `old` after the binder inside its smallest enclosing block rewrite in the same hunk (labelled `follow`); inner `let old` / closure-param `old` shadows, nested-`fn` bodies, and macro interiors never rewrite (stay orphans); any other same-name binder (for-loop, match arm, ...) vetoes completion. WI-2c extends the same duty to closure-parameter and match-arm binder renames (general-expression `|old| Body` -> `|new| Body` and `match S { old => B, ... }` -> `match S { new => B, ... }` hunks with binder-only diffs, single ident binder): leftover uses *inside* the rewritten node — the only places that can dangle, i.e. hole-preserved body (closure) or guard/body (arm) regions — are `orphans` (`off-target`, uses past an inner same-name binder `shadowed`, in-scope macro interiors and inline `{old}` format captures `macro-hidden`) and cap at `reparse-only` (global `partial`) while any exist; the scrutinee, other arms, and all uses outside the node can never dangle and are never orphans; zero leftovers stays `instantiated`. WI-2c performs no completion (a future item owns block completion for these positions); `move`-capture deltas are ignored per the engine's qualifier discipline (pinned for parity, not endorsed as pure).
 
 Skip and orphan reason vocabulary (WI-2): every structured skip and
 every orphan carries a machine `reason`, one of `shadowed` (another
@@ -4896,7 +4896,9 @@ if:
     Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
     including verified follow-only entries), `postcondition` (sweep gate
     + plus-pattern both ran), `reparse-only` (insertions, cuts, pastes,
-    unverified follow-only extras, unverifiable plus, or a `let`-binder rename with leftover-use orphans (WI-2a)),
+    unverified follow-only extras, unverifiable plus, or a local-binder
+    (`let`/closure-param/match-arm) rename with leftover-use orphans
+    (WI-2a/WI-2c)),
     `not-applicable` (`optional` zero-edit hunks).
     The global `checked.semantics` is `verified` iff every rule is
     `instantiated`/`postcondition` and no ordinary hunk is present;

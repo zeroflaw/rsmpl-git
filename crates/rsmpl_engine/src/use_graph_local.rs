@@ -95,6 +95,16 @@ pub fn is_let_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {
     let_binder_rename(&compiled.kind).is_some()
 }
 
+/// WI-2c: true when `compiled` renames exactly one local binder — a
+/// `let` binder (WI-2a), a closure parameter, or a match-arm pattern —
+/// and nothing else in the pattern changes. The downgrade gate uses
+/// this: any leftover use forces `reparse-only` (global `partial`).
+pub fn is_local_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {
+    is_let_binder_rename(compiled)
+        || closure_param_rename(&compiled.kind).is_some()
+        || match_arm_binder_rename(&compiled.kind).is_some()
+}
+
 /// `(old, new)` binder idents when `kind` is a plain `let old = E;` →
 /// `let new = E;` rename with identical init and type annotation.
 /// Anything else (destructuring, init/type change, `let-else`,
@@ -148,6 +158,175 @@ pub fn let_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
     Some((old_id, new_id))
 }
 
+/// WI-2c: `(old, new)` when `kind` is a closure-parameter rename —
+/// `|old| Body` → `|new| Body` (or an annotated `|old: T| Body` pair
+/// with the same `T`) with placeholder-normalized-equal bodies.
+/// Qualifiers (async/move/capture/lifetimes/return type) must match;
+/// exactly one parameter may differ, and the differing pair must be a
+/// single ident with the same `P: T` annotation discipline as `let`
+/// (bare `P` never drops/adds an annotation). A full interior
+/// old→new rewrite is deliberately NOT detected: nothing can dangle
+/// outside the closure, so it needs no evidence and stays today's
+/// `instantiated`.
+pub fn closure_param_rename(kind: &PatternKind) -> Option<(String, String)> {
+    let PatternKind::General {
+        shape: GeneralShape::Expr,
+        minus_sub,
+        plus_body,
+        placeholders,
+        minus_attrs,
+        plus_attrs,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    if *minus_attrs != *plus_attrs {
+        return None;
+    }
+    let Ok(syn::Expr::Closure(minus)) = syn::parse_str::<syn::Expr>(minus_sub) else {
+        return None;
+    };
+    let Ok(syn::Expr::Closure(plus)) = syn::parse_str::<syn::Expr>(plus_body) else {
+        return None;
+    };
+    // Qualifiers compare strictly (a different qualifier is a
+    // different closure). Fields are rendered via locals: `#m.f`
+    // in `quote!` would interpolate `m`, not the field.
+    if crate::matcher_general::render(&minus.asyncness)
+        != crate::matcher_general::render(&plus.asyncness)
+    {
+        return None;
+    }
+    if crate::matcher_general::render(&minus.movability)
+        != crate::matcher_general::render(&plus.movability)
+    {
+        return None;
+    }
+    if crate::matcher_general::render(&minus.lifetimes)
+        != crate::matcher_general::render(&plus.lifetimes)
+    {
+        return None;
+    }
+    if crate::matcher_general::render(&minus.constness)
+        != crate::matcher_general::render(&plus.constness)
+    {
+        return None;
+    }
+    if crate::matcher_general::render(&minus.output) != crate::matcher_general::render(&plus.output)
+    {
+        return None;
+    }
+    if minus.inputs.len() != plus.inputs.len() {
+        return None;
+    }
+    let ph_map: HashMap<&str, &str> = placeholders
+        .iter()
+        .map(|(name, ph)| (ph.as_str(), name.as_str()))
+        .collect();
+    let mut diff: Option<(String, String)> = None;
+    for (mp, pp) in minus.inputs.iter().zip(plus.inputs.iter()) {
+        let mn = normalize_placeholders(&quote::quote!(#mp).to_string(), &ph_map);
+        let pn = normalize_placeholders(&quote::quote!(#pp).to_string(), &ph_map);
+        if mn == pn {
+            continue;
+        }
+        let (old_id, old_mut) = single_ident_binder(mp)?;
+        let (new_id, new_mut) = single_ident_binder(pp)?;
+        if old_id == new_id || old_mut != new_mut {
+            return None;
+        }
+        if normalize_ty(mp, &ph_map) != normalize_ty(pp, &ph_map) {
+            return None;
+        }
+        if diff.replace((old_id, new_id)).is_some() {
+            return None;
+        }
+    }
+    let (old, new) = diff?;
+    let minus_body = crate::matcher_general::render(&*minus.body);
+    let plus_raw_body = crate::matcher_general::render(&*plus.body);
+    if normalize_placeholders(&minus_body, &ph_map) != plus_raw_body {
+        return None;
+    }
+    Some((old, new))
+}
+
+/// WI-2c: `(old, new)` when `kind` is a match-arm binder rename —
+/// `match S { old => B, … }` → `match S { new => B, … }` with the same
+/// scrutinee, arm count, guard, and body (placeholder-normalized).
+/// Only a single-ident arm pattern may change; destructuring,
+/// scrutinee/guard/body deltas, and multi-arm diffs veto (today's
+/// behaviour is kept).
+pub fn match_arm_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
+    let PatternKind::General {
+        shape: GeneralShape::Expr,
+        minus_sub,
+        plus_body,
+        placeholders,
+        minus_attrs,
+        plus_attrs,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    if *minus_attrs != *plus_attrs {
+        return None;
+    }
+    let Ok(syn::Expr::Match(minus)) = syn::parse_str::<syn::Expr>(minus_sub) else {
+        return None;
+    };
+    let Ok(syn::Expr::Match(plus)) = syn::parse_str::<syn::Expr>(plus_body) else {
+        return None;
+    };
+    let ph_map: HashMap<&str, &str> = placeholders
+        .iter()
+        .map(|(name, ph)| (ph.as_str(), name.as_str()))
+        .collect();
+    let minus_scrut = crate::matcher_general::render(&*minus.expr);
+    let plus_scrut = crate::matcher_general::render(&*plus.expr);
+    if normalize_placeholders(&minus_scrut, &ph_map) != plus_scrut {
+        return None;
+    }
+    if minus.arms.len() != plus.arms.len() {
+        return None;
+    }
+    let mut diff: Option<(String, String)> = None;
+    for (ma, pa) in minus.arms.iter().zip(plus.arms.iter()) {
+        let mn = normalize_placeholders(&quote::quote!(#ma).to_string(), &ph_map);
+        let pn = quote::quote!(#pa).to_string();
+        if mn == pn {
+            continue;
+        }
+        let (old_id, old_mut) = single_ident_binder(&ma.pat)?;
+        let (new_id, new_mut) = single_ident_binder(&pa.pat)?;
+        if old_id == new_id || old_mut != new_mut {
+            return None;
+        }
+        match (&ma.guard, &pa.guard) {
+            (None, None) => {}
+            (Some((_, mg)), Some((_, pg))) => {
+                let mgs = crate::matcher_general::render(&**mg);
+                let pgs = crate::matcher_general::render(&**pg);
+                if normalize_placeholders(&mgs, &ph_map) != pgs {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+        let minus_arm_body = crate::matcher_general::render(&*ma.body);
+        let plus_arm_body = crate::matcher_general::render(&*pa.body);
+        if normalize_placeholders(&minus_arm_body, &ph_map) != plus_arm_body {
+            return None;
+        }
+        if diff.replace((old_id, new_id)).is_some() {
+            return None;
+        }
+    }
+    diff
+}
+
 /// Report-only orphans for the general-statement binder-rename shape.
 /// Empty for every other shape (never alters existing verdicts).
 pub fn general_orphans(
@@ -157,9 +336,44 @@ pub fn general_orphans(
     edits_before: usize,
     compiled: &rsmpl_pattern::CompiledPattern,
 ) -> Vec<crate::OrphanReport> {
-    let Some((old, _)) = let_binder_rename(&compiled.kind) else {
-        return Vec::new();
-    };
+    if let Some((old, _)) = let_binder_rename(&compiled.kind) {
+        return let_binder_orphans(states, file_edits, path, edits_before, &old);
+    }
+    // WI-2c: closure-param / match-arm binder renames. Scope-interior
+    // scan only (see `closure_or_arm_orphans`): outside uses can never
+    // dangle, so the file-wide collector would over-report.
+    if let Some((old, _)) = closure_param_rename(&compiled.kind) {
+        return crate::use_graph_scope::closure_or_arm_orphans(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            &old,
+            true,
+        );
+    }
+    if let Some((old, _)) = match_arm_binder_rename(&compiled.kind) {
+        return crate::use_graph_scope::closure_or_arm_orphans(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            &old,
+            false,
+        );
+    }
+    Vec::new()
+}
+
+/// WI-2a file-wide orphan scan for `let`-binder renames (block scope:
+/// uses after the binder anywhere in the file may dangle).
+fn let_binder_orphans(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    old: &str,
+) -> Vec<crate::OrphanReport> {
     let renamed: Vec<(usize, usize)> = file_edits
         .get(path)
         .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
@@ -174,13 +388,13 @@ pub fn general_orphans(
             }
         }
     }
-    let mut out = collect_orphans(&refs, &old, path, &renamed, false);
+    let mut out = collect_orphans(&refs, old, path, &renamed, false);
     // Inline format-string captures (`println!("{total}")`) hide the
     // ident inside a string literal — no `Ident` token for the path
     // collector above. Scan macro interiors for `{old}` captures and
     // report them as `macro-hidden` (safe direction: downgrade).
     for (fpath, parsed, original, index) in &refs {
-        for line in format_capture_lines(parsed, old.as_str()) {
+        for line in format_capture_lines(parsed, old) {
             out.push(crate::OrphanReport {
                 file: (*fpath).clone(),
                 line,
@@ -226,68 +440,6 @@ pub fn let_binder_follow_edits(
         let_defs: Vec<usize>,
         closure_params: Vec<usize>,
         all_pats: Vec<usize>,
-    }
-
-    fn pat_old_offsets(pat: &syn::Pat, old: &str, original: &str, index: &LineIndex) -> Vec<usize> {
-        fn walk(
-            pat: &syn::Pat,
-            old: &str,
-            original: &str,
-            index: &LineIndex,
-            out: &mut Vec<usize>,
-        ) {
-            match pat {
-                syn::Pat::Ident(pid) => {
-                    if pid.ident == old {
-                        let sp = pid.ident.span();
-                        let (Some(a), Some(b)) = (
-                            index.offset(sp.start().line as u32, sp.start().column),
-                            index.offset(sp.end().line as u32, sp.end().column),
-                        ) else {
-                            return;
-                        };
-                        if original.get(a..b) == Some(old) {
-                            out.push(a);
-                        }
-                    }
-                    if let Some((_, sub)) = &pid.subpat {
-                        walk(sub, old, original, index, out);
-                    }
-                }
-                syn::Pat::Type(pt) => walk(&pt.pat, old, original, index, out),
-                syn::Pat::Reference(pr) => walk(&pr.pat, old, original, index, out),
-                syn::Pat::Paren(pp) => walk(&pp.pat, old, original, index, out),
-                syn::Pat::Slice(ps) => {
-                    for e in &ps.elems {
-                        walk(e, old, original, index, out);
-                    }
-                }
-                syn::Pat::Tuple(pt) => {
-                    for e in &pt.elems {
-                        walk(e, old, original, index, out);
-                    }
-                }
-                syn::Pat::TupleStruct(pts) => {
-                    for e in &pts.elems {
-                        walk(e, old, original, index, out);
-                    }
-                }
-                syn::Pat::Struct(pst) => {
-                    for f in &pst.fields {
-                        walk(&f.pat, old, original, index, out);
-                    }
-                }
-                syn::Pat::Or(po) => {
-                    for c in &po.cases {
-                        walk(c, old, original, index, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut out = Vec::new();
-        walk(pat, old, original, index, &mut out);
-        out
     }
 
     impl<'ast, 'a> Visit<'ast> for Scopes<'a> {
@@ -592,7 +744,7 @@ fn format_capture_lines(parsed: &syn::File, old: &str) -> Vec<u32> {
 
 /// True when a string-literal token text contains an inline `{old}`
 /// capture (next char after `old` is not an ident continue).
-fn literal_captures(lit_text: &str, old: &str) -> bool {
+pub(crate) fn literal_captures(lit_text: &str, old: &str) -> bool {
     let needle = format!("{{{old}");
     let mut search: &str = lit_text;
     while let Some(pos) = search.find(needle.as_str()) {
@@ -607,7 +759,11 @@ fn literal_captures(lit_text: &str, old: &str) -> bool {
     false
 }
 
-fn orphan_line_text(original: &str, index: &crate::lines::LineIndex, line: u32) -> String {
+pub(crate) fn orphan_line_text(
+    original: &str,
+    index: &crate::lines::LineIndex,
+    line: u32,
+) -> String {
     let Some(start) = index.line_start(line) else {
         return String::new();
     };
@@ -619,6 +775,70 @@ fn orphan_line_text(original: &str, index: &crate::lines::LineIndex, line: u32) 
         .trim()
         .to_string()
 }
+/// Byte starts of every `old` ident bound by `pat` (destructuring
+/// walked structurally). Shared by the WI-2b completion scopes and the
+/// WI-2c interior orphan scan.
+pub(crate) fn pat_old_offsets(
+    pat: &syn::Pat,
+    old: &str,
+    original: &str,
+    index: &LineIndex,
+) -> Vec<usize> {
+    fn walk(pat: &syn::Pat, old: &str, original: &str, index: &LineIndex, out: &mut Vec<usize>) {
+        match pat {
+            syn::Pat::Ident(pid) => {
+                if pid.ident == old {
+                    let sp = pid.ident.span();
+                    let (Some(a), Some(b)) = (
+                        index.offset(sp.start().line as u32, sp.start().column),
+                        index.offset(sp.end().line as u32, sp.end().column),
+                    ) else {
+                        return;
+                    };
+                    if original.get(a..b) == Some(old) {
+                        out.push(a);
+                    }
+                }
+                if let Some((_, sub)) = &pid.subpat {
+                    walk(sub, old, original, index, out);
+                }
+            }
+            syn::Pat::Type(pt) => walk(&pt.pat, old, original, index, out),
+            syn::Pat::Reference(pr) => walk(&pr.pat, old, original, index, out),
+            syn::Pat::Paren(pp) => walk(&pp.pat, old, original, index, out),
+            syn::Pat::Slice(ps) => {
+                for e in &ps.elems {
+                    walk(e, old, original, index, out);
+                }
+            }
+            syn::Pat::Tuple(pt) => {
+                for e in &pt.elems {
+                    walk(e, old, original, index, out);
+                }
+            }
+            syn::Pat::TupleStruct(pts) => {
+                for e in &pts.elems {
+                    walk(e, old, original, index, out);
+                }
+            }
+            syn::Pat::Struct(pst) => {
+                for f in &pst.fields {
+                    walk(&f.pat, old, original, index, out);
+                }
+            }
+            syn::Pat::Or(po) => {
+                for c in &po.cases {
+                    walk(c, old, original, index, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(pat, old, original, index, &mut out);
+    out
+}
+
 /// Single `x` binder (no subpattern); returns `(ident, has_mut)`.
 fn single_ident_binder(pat: &syn::Pat) -> Option<(String, bool)> {
     match pat {
@@ -925,5 +1145,443 @@ mod tests {
     fn follow_aborts_on_for_loop_shadow() {
         let src = "fn main() {\n    let total = 1;\n    for total in 0..3 {\n        let x = total;\n    }\n}\n";
         assert!(follow_edits_for(src).is_empty());
+    }
+
+    // WI-2c: closure-param / match-arm binder evidence (orphans +
+    // downgrade, no completion).
+
+    fn general_expr(minus_sub: &str, plus_body: &str) -> PatternKind {
+        PatternKind::General {
+            shape: GeneralShape::Expr,
+            minus_sub: minus_sub.to_string(),
+            plus_raw: plus_body.to_string(),
+            plus_body: plus_body.to_string(),
+            placeholders: vec![("E".to_string(), "__RSMPL_E0".to_string())],
+            literals: Vec::new(),
+            minus_attrs: Vec::new(),
+            plus_attrs: Vec::new(),
+            had_semi: false,
+        }
+    }
+
+    fn general_expr2(
+        minus_sub: &str,
+        plus_body: &str,
+        placeholders: Vec<(String, String)>,
+    ) -> PatternKind {
+        PatternKind::General {
+            shape: GeneralShape::Expr,
+            minus_sub: minus_sub.to_string(),
+            plus_raw: plus_body.to_string(),
+            plus_body: plus_body.to_string(),
+            placeholders,
+            literals: Vec::new(),
+            minus_attrs: Vec::new(),
+            plus_attrs: Vec::new(),
+            had_semi: false,
+        }
+    }
+
+    #[test]
+    fn closure_param_plain_fires() {
+        let kind = general_expr("|total| __RSMPL_E0", "|sum| E");
+        assert_eq!(
+            closure_param_rename(&kind),
+            Some(("total".to_string(), "sum".to_string()))
+        );
+        let c = compiled(kind);
+        assert!(is_local_binder_rename(&c));
+        assert!(!is_let_binder_rename(&c));
+    }
+
+    #[test]
+    fn closure_param_annotated_fires() {
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
+        assert_eq!(
+            closure_param_rename(&kind),
+            Some(("total".to_string(), "sum".to_string()))
+        );
+    }
+
+    #[test]
+    fn closure_param_annotation_change_vetoes() {
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u64| E");
+        assert_eq!(closure_param_rename(&kind), None);
+        // Bare `P` never drops an annotation.
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum| E");
+        assert_eq!(closure_param_rename(&kind), None);
+    }
+
+    #[test]
+    fn closure_param_body_change_vetoes() {
+        let kind = general_expr("|total| __RSMPL_E0", "|sum| E + 1");
+        assert_eq!(closure_param_rename(&kind), None);
+    }
+
+    #[test]
+    fn closure_param_static_vetoes() {
+        // `movability` is syn's `static` qualifier; a delta there is a
+        // different closure.
+        let kind = general_expr("|total| __RSMPL_E0", "static |sum| E");
+        assert_eq!(closure_param_rename(&kind), None);
+    }
+
+    #[test]
+    fn closure_param_move_delta_fires_like_engine() {
+        // syn 2.x keeps `move` in `capture`, which the engine's
+        // `match_closure` does not compare — the hunk still applies as
+        // a closure rewrite, so the detector fires too (orphan duty is
+        // about the dangling body uses, which the `move` delta does not
+        // affect). Pinned for engine parity, not endorsed as pure.
+        let kind = general_expr("|total| __RSMPL_E0", "move |sum| E");
+        assert_eq!(
+            closure_param_rename(&kind),
+            Some(("total".to_string(), "sum".to_string()))
+        );
+    }
+
+    #[test]
+    fn closure_param_two_binders_veto() {
+        let kind = general_expr("|total, other| __RSMPL_E0", "|sum, changed| E");
+        assert_eq!(closure_param_rename(&kind), None);
+        let kind = general_expr("|total| __RSMPL_E0", "|sum, x| E");
+        assert_eq!(closure_param_rename(&kind), None);
+    }
+
+    #[test]
+    fn closure_param_non_closure_vetoes() {
+        let kind = general_expr("total + __RSMPL_E0", "sum + E");
+        assert_eq!(closure_param_rename(&kind), None);
+    }
+
+    fn match_placeholders() -> Vec<(String, String)> {
+        vec![
+            ("E".to_string(), "__RSMPL_E0".to_string()),
+            ("B".to_string(), "__RSMPL_E1".to_string()),
+        ]
+    }
+
+    #[test]
+    fn match_arm_plain_fires() {
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total => __RSMPL_E1, _ => 0 }",
+            "match E { sum => B, _ => 0 }",
+            match_placeholders(),
+        );
+        assert_eq!(
+            match_arm_binder_rename(&kind),
+            Some(("total".to_string(), "sum".to_string()))
+        );
+        let c = compiled(kind);
+        assert!(is_local_binder_rename(&c));
+        assert!(!is_let_binder_rename(&c));
+    }
+
+    #[test]
+    fn match_arm_scrutinee_change_vetoes() {
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total => __RSMPL_E1, _ => 0 }",
+            "match E { sum => B, _ => 1 }",
+            match_placeholders(),
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    #[test]
+    fn match_arm_count_vetoes() {
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total => __RSMPL_E1, _ => 0 }",
+            "match E { sum => B, _ => 0, _ => 1 }",
+            match_placeholders(),
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    #[test]
+    fn match_arm_guard_change_vetoes() {
+        let kind = general_expr(
+            "match x { total if y => 1, _ => 0 }",
+            "match x { sum if z => 1, _ => 0 }",
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+        // Added guard vetoes too.
+        let kind = general_expr(
+            "match x { total => 1, _ => 0 }",
+            "match x { sum if y => 1, _ => 0 }",
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    #[test]
+    fn match_arm_body_change_vetoes() {
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total => __RSMPL_E1, _ => 0 }",
+            "match E { sum => B + 1, _ => 0 }",
+            match_placeholders(),
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    #[test]
+    fn match_arm_destructuring_vetoes() {
+        let kind = general_expr2(
+            "match __RSMPL_E0 { Some (total) => __RSMPL_E1, _ => 0 }",
+            "match E { Some (sum) => B, _ => 0 }",
+            match_placeholders(),
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    #[test]
+    fn match_arm_two_binders_vetoes() {
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total => __RSMPL_E1, other => __RSMPL_E1 }",
+            "match E { sum => B, changed => B }",
+            match_placeholders(),
+        );
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    #[test]
+    fn match_arm_non_match_vetoes() {
+        let kind = general_expr("|total| __RSMPL_E0", "|sum| E");
+        assert_eq!(match_arm_binder_rename(&kind), None);
+    }
+
+    fn first_closure_span(src: &str) -> (usize, usize) {
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        struct Find<'a> {
+            original: &'a str,
+            index: &'a crate::lines::LineIndex,
+            out: Vec<(usize, usize)>,
+        }
+        impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
+            fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+                use syn::spanned::Spanned;
+                if let Some(ab) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
+                {
+                    self.out.push(ab);
+                }
+                syn::visit::visit_expr_closure(self, node);
+            }
+        }
+        let mut find = Find {
+            original: src,
+            index: &index,
+            out: Vec::new(),
+        };
+        use syn::visit::Visit;
+        find.visit_file(&parsed);
+        find.out.into_iter().next().expect("test src has a closure")
+    }
+
+    fn first_match_span(src: &str) -> (usize, usize) {
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        struct Find<'a> {
+            original: &'a str,
+            index: &'a crate::lines::LineIndex,
+            out: Vec<(usize, usize)>,
+        }
+        impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
+            fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+                use syn::spanned::Spanned;
+                if let Some(ab) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
+                {
+                    self.out.push(ab);
+                }
+                syn::visit::visit_expr_match(self, node);
+            }
+        }
+        let mut find = Find {
+            original: src,
+            index: &index,
+            out: Vec::new(),
+        };
+        use syn::visit::Visit;
+        find.visit_file(&parsed);
+        find.out.into_iter().next().expect("test src has a match")
+    }
+
+    fn wi2c_orphans(
+        src: &str,
+        kind: PatternKind,
+        span: (usize, usize),
+    ) -> Vec<crate::OrphanReport> {
+        use std::collections::HashMap;
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        let mut states = HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            crate::lines::FileState {
+                original: src.to_string(),
+                index,
+                parsed: Some(parsed),
+            },
+        );
+        let mut file_edits = HashMap::new();
+        file_edits.insert(
+            "src/main.rs".to_string(),
+            vec![crate::edits::TextEdit {
+                start: span.0,
+                end: span.1,
+                replacement: String::new(),
+                label: None,
+            }],
+        );
+        general_orphans(&states, &file_edits, "src/main.rs", 0, &compiled(kind))
+    }
+
+    #[test]
+    fn closure_orphans_lists_body_uses() {
+        let src = "fn main() {\n    let f = |total: u32| total + total;\n    let _ = f;\n}\n";
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
+        let orphans = wi2c_orphans(src, kind, first_closure_span(src));
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].line, 2);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn closure_orphans_empty_when_no_uses() {
+        let src = "fn main() {\n    let f = |total: u32| 1;\n    let _ = f;\n}\n";
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
+        assert!(wi2c_orphans(src, kind, first_closure_span(src)).is_empty());
+    }
+
+    #[test]
+    fn closure_orphans_ignore_outer_scope() {
+        // `total` outside the closure can never dangle: the file-wide
+        // scan would flag lines 2 and 4, the scoped scan flags nothing.
+        let src = "fn main() {\n    let total = 5;\n    let f = |total: u32| 1;\n    let y = total;\n    let _ = (f, y);\n}\n";
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
+        assert!(wi2c_orphans(src, kind, first_closure_span(src)).is_empty());
+    }
+
+    #[test]
+    fn closure_orphans_inner_let_shadowed() {
+        let src =
+            "fn main() {\n    let f = |total: u32| { let total = 2; total };\n    let _ = f;\n}\n";
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
+        let orphans = wi2c_orphans(src, kind, first_closure_span(src));
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
+    fn closure_orphans_macro_and_capture_hidden() {
+        let src = "fn main() {\n    let f = |total: u32| { println!(\"{total}\"); println!(\"{}\", total); 0 };\n    let _ = f;\n}\n";
+        let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
+        let orphans = wi2c_orphans(src, kind, first_closure_span(src));
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].line, 2);
+        assert_eq!(orphans[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn match_arm_orphans_lists_arm_body_use() {
+        let src = "fn main() {\n    let v = match Some(1) { total => total + 1, _ => 0 };\n    let _ = v;\n}\n";
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total => __RSMPL_E1, _ => 0 }",
+            "match E { sum => B, _ => 0 }",
+            match_placeholders(),
+        );
+        let orphans = wi2c_orphans(src, kind, first_match_span(src));
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].line, 2);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn match_arm_orphans_ignore_scrutinee_and_other_arms() {
+        // Scrutinee `total` names the outer binding; the renamed arm
+        // carries no use — the binder line itself is never an orphan.
+        let src = "fn main() {\n    let total = 9;\n    let v = match total { total => 1, _ => 0 };\n    let _ = v;\n}\n";
+        let kind = general_expr(
+            "match __RSMPL_E0 { total => 1, _ => 0 }",
+            "match E { sum => 1, _ => 0 }",
+        );
+        assert!(wi2c_orphans(src, kind, first_match_span(src)).is_empty());
+    }
+
+    #[test]
+    fn match_arm_orphans_guard_use_listed() {
+        let src = "fn main() {\n    let v = match Some(1) { total if total > 0 => 1, _ => 0 };\n    let _ = v;\n}\n";
+        let kind = general_expr2(
+            "match __RSMPL_E0 { total if __RSMPL_E1 => 1, _ => 0 }",
+            "match E { sum if B => 1, _ => 0 }",
+            match_placeholders(),
+        );
+        // Detector check first: guard preserved via hole, binder-only diff.
+        assert_eq!(
+            match_arm_binder_rename(&kind),
+            Some(("total".to_string(), "sum".to_string()))
+        );
+        let orphans = wi2c_orphans(src, kind, first_match_span(src));
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    fn apply_report(
+        patch_text: &str,
+        file_text: &str,
+    ) -> Result<(String, crate::ApplyReport), String> {
+        use std::collections::HashMap;
+        let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
+        let mut files = HashMap::new();
+        files.insert("src/lib.rs".to_string(), file_text.to_string());
+        let mut patch = patch;
+        for f in &mut patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        let report = crate::apply_patch_to_tree(&mut files, &patch).map_err(|e| e.render())?;
+        Ok((files["src/lib.rs"].clone(), report))
+    }
+
+    const WI2C_HEAD: &str =
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+
+    #[test]
+    fn closure_rename_leftover_downgrades() {
+        let patch = format!(
+            "{WI2C_HEAD}@@ -2,1 @@ rule=rename_closure\n# lang=rust\n# expr E\n- |total: u32| E\n+ |sum: u32| E\n"
+        );
+        let src = "fn main() {\n    let f = |total: u32| total + total;\n    let _ = f;\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("|sum: u32| total + total"), "got: {out}");
+        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].orphans.len(), 1);
+        assert_eq!(report.rules[0].orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn closure_rename_clean_stays_instantiated() {
+        let patch = format!(
+            "{WI2C_HEAD}@@ -2,1 @@ rule=rename_closure\n# lang=rust\n# expr E\n- |total: u32| E\n+ |sum: u32| E\n"
+        );
+        let src = "fn main() {\n    let f = |total: u32| 1;\n    let _ = f;\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("|sum: u32| 1"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
+    }
+
+    #[test]
+    fn match_arm_rename_leftover_downgrades() {
+        let patch = format!(
+            "{WI2C_HEAD}@@ -2,1 @@ rule=rename_arm\n# lang=rust\n# expr E\n# expr B\n- match E {{ total => B, _ => 0 }}\n+ match E {{ sum => B, _ => 0 }}\n"
+        );
+        let src = "fn main() {\n    let v = match Some(1) { total => total + 1, _ => 0 };\n    let _ = v;\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("sum => total + 1"), "got: {out}");
+        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].orphans.len(), 1);
     }
 }
