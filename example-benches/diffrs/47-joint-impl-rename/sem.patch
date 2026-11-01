@@ -1,0 +1,11 @@
+diff --git src.rs
+@@ -1,1 @@ rule=r1
+# sweep
+# follow=uses
+- trait PrintableWidget
++ trait LabeledWidget
+@@ -1,1 @@ rule=r1
+# sweep
+# follow=uses
+- struct OldWidget
++ struct NewWidget

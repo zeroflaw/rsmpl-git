@@ -1070,6 +1070,33 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "128-joint-impl-rename-fires" {
+        // WI-3: trait + self-type renames composed in one `impl` header
+        // raise as one shared-rule intent (trait follow hunk first,
+        // self-type second); the composed header is rewritten by the two
+        // follows, never stated.
+        assert!(
+            semantic.contains("rule=r1\n"),
+            "joint impl must share one rule, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- trait Printable\n"),
+            "trait pair must ride first, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- struct Old\n"),
+            "self-type pair must ride second, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("impl Printable"),
+            "composed header is follow-rewritten, never stated, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint impl must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "127-move-body-evolve-strings-kept" {
         // WI-6 slice 3b variant: the moved body renames its self-reference
         // but keeps a `"fact"` string literal and a `// fact` comment

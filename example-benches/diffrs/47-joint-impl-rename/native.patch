@@ -1,0 +1,11 @@
+diff --git a/src.rs b/src.rs
+--- a/src.rs
++++ b/src.rs
+@@ -1 +1 @@
+-trait PrintableWidget {
++trait LabeledWidget {
+@@ -4,2 +4,2 @@ trait PrintableWidget {
+-struct OldWidget;
+-impl PrintableWidget for OldWidget {
++struct NewWidget;
++impl LabeledWidget for NewWidget {

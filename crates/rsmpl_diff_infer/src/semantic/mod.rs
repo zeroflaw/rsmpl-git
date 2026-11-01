@@ -76,6 +76,7 @@ mod item_intent;
 mod item_joint_attr;
 mod item_joint_field_add;
 mod item_joint_field_evo;
+mod item_joint_impl;
 mod item_span;
 mod mod_rename;
 
@@ -193,49 +194,42 @@ pub fn infer_semantic_with_provenance(
     let sections: &[String] =
         match item_intent::try_item_intent_sweep(sections, pre, &mut used_rules) {
             Some((rewritten, def_path, _rule)) => {
-                compressed_any = true;
-                let emitted = rewritten
-                    .iter()
-                    .find(|s| {
-                        s.lines().next().is_some_and(|h| {
-                            h.starts_with("diff --git ")
-                                && crate::b_side_path(&h["diff --git ".len()..])
-                                    .is_some_and(|p| p == def_path)
-                        })
-                    })
-                    .cloned()
-                    .unwrap_or_default();
-                // Original bytes = the claimed (replaced) sections: every
-                // input section absent from the rewritten output.
-                let original: String = sections
-                    .iter()
-                    .filter(|s| !rewritten.iter().any(|r| r == *s))
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("");
-                let changed: Vec<usize> = sections
-                    .iter()
-                    .filter(|s| !rewritten.iter().any(|r| r == *s))
-                    .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
-                    .collect();
-                if !emitted.is_empty() && !original.is_empty() {
-                    let detector_of: Vec<(String, &'static str)> = used_rules
-                        [intent_rules_before..]
-                        .iter()
-                        .map(|r| (r.clone(), "item_intent"))
-                        .collect();
-                    prov::commit_prov(
-                        prov,
-                        &emitted,
-                        &original,
-                        &def_path,
-                        &detector_of,
-                        &changed,
-                        pre.get(&def_path).map(String::as_str),
-                    );
-                }
-                intent_owned = rewritten;
+                intent_owned = prov::commit_pre_pass(
+                    prov,
+                    sections,
+                    rewritten,
+                    &def_path,
+                    "item_intent",
+                    intent_rules_before,
+                    used_rules.as_slice(),
+                    pre,
+                    &mut compressed_any,
+                );
                 &intent_owned
+            }
+            None => sections,
+        };
+    // WI-3 whole-patch joint-`impl` pre-pass (trait + self-type renames
+    // composed in one `impl` header collapse to one shared-rule intent);
+    // runs on the item-intent output (disjoint: two-def triples never
+    // candidates there, never suppressed).
+    let joint_impl_owned: Vec<String>;
+    let joint_impl_rules_before = used_rules.len();
+    let sections: &[String] =
+        match item_joint_impl::try_joint_impl_rename(sections, pre, &mut used_rules) {
+            Some((rewritten, def_path, _rule)) => {
+                joint_impl_owned = prov::commit_pre_pass(
+                    prov,
+                    sections,
+                    rewritten,
+                    &def_path,
+                    "item_joint_impl",
+                    joint_impl_rules_before,
+                    used_rules.as_slice(),
+                    pre,
+                    &mut compressed_any,
+                );
+                &joint_impl_owned
             }
             None => sections,
         };
@@ -307,45 +301,17 @@ pub fn infer_semantic_with_provenance(
     let sections: &[String] = match member::try_member_intent_sweep(sections, pre, &mut used_rules)
     {
         Some((rewritten, def_path, _rule)) => {
-            compressed_any = true;
-            let emitted = rewritten
-                .iter()
-                .find(|s| {
-                    s.lines().next().is_some_and(|h| {
-                        h.starts_with("diff --git ")
-                            && crate::b_side_path(&h["diff --git ".len()..])
-                                .is_some_and(|p| p == def_path)
-                    })
-                })
-                .cloned()
-                .unwrap_or_default();
-            let original: String = sections
-                .iter()
-                .filter(|s| !rewritten.iter().any(|r| r == *s))
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join("");
-            let changed: Vec<usize> = sections
-                .iter()
-                .filter(|s| !rewritten.iter().any(|r| r == *s))
-                .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
-                .collect();
-            if !emitted.is_empty() && !original.is_empty() {
-                let detector_of: Vec<(String, &'static str)> = used_rules[member_rules_before..]
-                    .iter()
-                    .map(|r| (r.clone(), "member_rename"))
-                    .collect();
-                prov::commit_prov(
-                    prov,
-                    &emitted,
-                    &original,
-                    &def_path,
-                    &detector_of,
-                    &changed,
-                    pre.get(&def_path).map(String::as_str),
-                );
-            }
-            member_owned = rewritten;
+            member_owned = prov::commit_pre_pass(
+                prov,
+                sections,
+                rewritten,
+                &def_path,
+                "member_rename",
+                member_rules_before,
+                used_rules.as_slice(),
+                pre,
+                &mut compressed_any,
+            );
             &member_owned
         }
         None => sections,
@@ -359,45 +325,17 @@ pub fn infer_semantic_with_provenance(
     let sections: &[String] =
         match mod_rename::try_mod_rename_intent_sweep(sections, pre, &mut used_rules) {
             Some((rewritten, def_path, _rule)) => {
-                compressed_any = true;
-                let emitted = rewritten
-                    .iter()
-                    .find(|s| {
-                        s.lines().next().is_some_and(|h| {
-                            h.starts_with("diff --git ")
-                                && crate::b_side_path(&h["diff --git ".len()..])
-                                    .is_some_and(|p| p == def_path)
-                        })
-                    })
-                    .cloned()
-                    .unwrap_or_default();
-                let original: String = sections
-                    .iter()
-                    .filter(|s| !rewritten.iter().any(|r| r == *s))
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("");
-                let changed: Vec<usize> = sections
-                    .iter()
-                    .filter(|s| !rewritten.iter().any(|r| r == *s))
-                    .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
-                    .collect();
-                if !emitted.is_empty() && !original.is_empty() {
-                    let detector_of: Vec<(String, &'static str)> = used_rules[mod_rules_before..]
-                        .iter()
-                        .map(|r| (r.clone(), "mod_rename"))
-                        .collect();
-                    prov::commit_prov(
-                        prov,
-                        &emitted,
-                        &original,
-                        &def_path,
-                        &detector_of,
-                        &changed,
-                        pre.get(&def_path).map(String::as_str),
-                    );
-                }
-                mod_owned = rewritten;
+                mod_owned = prov::commit_pre_pass(
+                    prov,
+                    sections,
+                    rewritten,
+                    &def_path,
+                    "mod_rename",
+                    mod_rules_before,
+                    used_rules.as_slice(),
+                    pre,
+                    &mut compressed_any,
+                );
                 &mod_owned
             }
             None => sections,

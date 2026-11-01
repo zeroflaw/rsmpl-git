@@ -11,11 +11,9 @@ through `gitrs` as ordinary hunks, so one tool owns every change.
 
 ## When to use / when not to
 
-- Use: rename (fn/item/field/variant), call rewrites, moves, signature
-  evolution, `let`/expr/type rewrites — anything with `-`/`+` pattern lines.
+- Use: rename (fn/item/field/variant), call rewrites, moves, signature evolution, `let`/expr/type rewrites — anything with `-`/`+` pattern lines.
 - Viewing only: use a targeted file read — the CLI lists nothing.
-- Small file already held: skip discovery entirely — `@@ -1,1 @@` plus
-  `# sweep` searches the whole file (SPEC 17.3).
+- Small file already held: skip discovery entirely — `@@ -1,1 @@` plus `# sweep` searches the whole file (SPEC 17.3).
 
 ## Minimal patch
 
@@ -26,11 +24,7 @@ diff --git src/lib.rs
 + fn bar
 ```
 
-Single path suffices; `---`/`+++`/`index` are optional metadata; `rule=`
-may be omitted when a `#` directive line is present (diagnostics show `<unnamed>`; add `rule=name` when a
-patch has several hunks); elide the `+new,len` side (ignored for
-RSmPL hunks, SPEC 10.4). Every `@@ -old,len @@` cites ORIGINAL pre-patch
-lines, never rebased (SPEC 10). A hunk is RSmPL iff the header carries
+Single path suffices; `---`/`+++`/`index` are optional metadata; `rule=` may be omitted when a `#` directive line is present (diagnostics show `<unnamed>`; add `rule=name` when a patch has several hunks); elide the `+new,len` side (ignored for RSMPL hunks, SPEC 10.4). Every `@@ -old,len @@` cites ORIGINAL pre-patch lines, never rebased (SPEC 10). A hunk is RSmPL iff the header carries
 `rule=` or at least one `#` directive line follows it; directive-free
 renames use the terse form plus `rule=` (SPEC 7.1).
 
@@ -85,7 +79,10 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   File, inline-mod, and block-level (fn bodies) items all match.
   A bare `impl Old`/`impl New` pair renames self-ty + trait-side path; add
   `# allow=many` when several match; definition only — follow up
-  type/value/literal/variant/use sites per the SPEC 14.8 table.
+  type/value/literal/variant/use sites per the SPEC 14.8 table. A joint
+  `impl Trait for Type` rename states its trait + self-type pairs as two
+  `# follow=uses` hunks sharing one rule (trait first); the composed
+  `impl` header is follow-rewritten, never written.
 - Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; struct-field/enum-payload/discriminant likewise under their container header; name preserved, SPEC 14.8).
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between;

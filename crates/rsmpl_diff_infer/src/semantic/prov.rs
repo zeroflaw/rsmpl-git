@@ -363,6 +363,66 @@ pub(crate) fn push_section_prov(
     );
 }
 
+/// WI-3: shared whole-patch pre-pass epilogue for the single-def-shape
+/// intent sweeps (`item_intent`, `item_joint_impl`, `member_rename`,
+/// `mod_rename` — all return the rebuilt sections plus the definition
+/// path). Finds the emitted definition section, rebuilds the replaced
+/// original bytes plus their changed lines, commits provenance under
+/// `detector`, flips `compressed_any`, and returns the rewritten
+/// sections for the caller's owned binding. The `fn_joint` pre-pass
+/// keeps its own epilogue (4-tuple return with the suppression set).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_pre_pass(
+    prov: &mut Vec<HunkProvenance>,
+    sections: &[String],
+    rewritten: Vec<String>,
+    def_path: &str,
+    detector: &'static str,
+    rules_before: usize,
+    used_rules: &[String],
+    pre: &std::collections::HashMap<String, String>,
+    compressed_any: &mut bool,
+) -> Vec<String> {
+    *compressed_any = true;
+    let emitted = rewritten
+        .iter()
+        .find(|s| {
+            s.lines().next().is_some_and(|h| {
+                h.starts_with("diff --git ")
+                    && crate::b_side_path(&h["diff --git ".len()..]).is_some_and(|p| p == def_path)
+            })
+        })
+        .cloned()
+        .unwrap_or_default();
+    let original: String = sections
+        .iter()
+        .filter(|s| !rewritten.iter().any(|r| r == *s))
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    let changed: Vec<usize> = sections
+        .iter()
+        .filter(|s| !rewritten.iter().any(|r| r == *s))
+        .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
+        .collect();
+    if !emitted.is_empty() && !original.is_empty() {
+        let detector_of: Vec<(String, &'static str)> = used_rules[rules_before..]
+            .iter()
+            .map(|r| (r.clone(), detector))
+            .collect();
+        commit_prov(
+            prov,
+            &emitted,
+            &original,
+            def_path,
+            &detector_of,
+            &changed,
+            pre.get(def_path).map(String::as_str),
+        );
+    }
+    rewritten
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

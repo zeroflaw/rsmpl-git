@@ -2443,6 +2443,13 @@ lowered diff is the observable truth as always (Section D.2).
     cross-kind members, and alias/const shapes never joint-fire (only
     multi-addition and cross-file-member joints stay out: a member in
     another file than its container cannot joint by the container law).
+  Joint `impl Trait for Type` (WI-3): a `trait` rename pair plus a
+  `struct`/`enum`/`union` self-type rename pair ride as two authored
+  follow hunks sharing one rule id (trait hunk first); the composed
+  `impl OldTr for OldTy` header is never written — the two follows
+  rewrite it at apply time, and raising emits that spelling for the
+  single-file triple (SPEC D.4). Any third rename, any extra changed
+  line, qualified trait paths, and `impl<…>` generics stay ordinary.
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
@@ -7533,6 +7540,21 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    (a detached attr hunk falls back to the pure rename intent with the
    attr left ordinary). Variant-add, multi-addition, and cross-file-member
    joints stay ordinary (future slices).
+- Joint `impl Trait for Type` raising (WI-3, detector `item_joint_impl`):
+  exactly one `trait` definition rename pair plus exactly one self-type
+  definition rename pair (`struct`/`enum`/`union`) plus exactly one
+  composed `impl` header pair (`impl OldTr for OldTy<sfx>` →
+  `impl NewTr for NewTy<same sfx>`, single unqualified idents, no
+  `impl<…>` generics) in one file, and no other changed line, compresses
+  to two hunks under one shared rule (`# sweep` + `# follow=uses` each,
+  trait pair first per the def-before-member law). The composed header is
+  never stated: the two follows rewrite it at apply time. Totality is the
+  D13 joint scratch-apply probe (composed emission on a `pre` clone must
+  reproduce the plus lines at the three sites with every other line of
+  every file byte-identical — off-diff same-name uses fail the unchanged
+  leg) plus twin-definition vetoes and the T375 byte-win guard. Extra
+  follow-use lines alongside the triple and cross-file trait/type/impl
+  groups stay ordinary (future slices).
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)
@@ -9221,7 +9243,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(126), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
+(127), all example benches (32 applyrs, 47 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
@@ -9243,8 +9265,8 @@ detectors); heterogeneous sites no template fires on stay
   self-ty-`impl`/trait/trait-side-`impl` re-infer as WI-19c precision
   singles (8 semantic + 1 ordinary under partial partition) while the
   `impl Printable for Old` → `impl Labeled for New` double-delta pair
-  stays ordinary (both sides change: needs a joint trait+self-ty
-  intent, item-intent follow work; all-single-delta
+  raises with its trait+self-ty defs as one joint intent (WI-3,
+  `item_joint_impl`, diffrs fixture `128-joint-impl-rename-fires`); all-single-delta
   multi-rename sections compress pair by pair instead (diffrs fixture
   `98-partition-fires`, canonically lossless)), `30` trait-side-only decl/def
   pairs (ordinary by design — no impl side shares the intent; mixed
