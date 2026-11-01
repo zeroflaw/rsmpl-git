@@ -439,13 +439,20 @@ pub(crate) fn antiunify_general_exprs(
 
 /// Parse one changed line as a whole-line expression (one trailing
 /// `;`/`,` tolerated — the terminator never reaches the pattern).
+/// Single-statement one-line `fn` frames unwrap to their inner
+/// expression (WI-4 `frame`); the frame itself never reaches the
+/// template — `frame_holds`-style totality plus the engine probe own
+/// it, exactly as the sub-line extractors do.
 fn parse_line_expr(line: &str) -> Option<syn::Expr> {
     let text = strip_one_terminator(line.trim())?;
     let text = text.trim();
     if text.is_empty() {
         return None;
     }
-    syn::parse_str::<syn::Expr>(text).ok()
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
+        return Some(expr);
+    }
+    super::frame::fn_frame_inner(line)
 }
 
 /// N-site (N ≥ 2) general-expression sweep: every changed line parses

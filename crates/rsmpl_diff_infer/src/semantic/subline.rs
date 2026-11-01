@@ -76,7 +76,7 @@ fn side_expr(line: &str) -> Option<syn::Expr> {
             }
             Some(*init.expr)
         }
-        _ => None,
+        _ => super::frame::fn_frame_inner(line),
     }
 }
 

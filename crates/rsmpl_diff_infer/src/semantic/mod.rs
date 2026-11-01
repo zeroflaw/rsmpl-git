@@ -27,6 +27,7 @@ pub(crate) mod definition_addition;
 pub(crate) mod definition_arm_follow;
 pub(crate) mod definition_evolution;
 mod deletes;
+pub(crate) mod frame;
 pub(crate) mod general_expr;
 mod generalized;
 pub(crate) mod group;

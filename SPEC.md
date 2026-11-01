@@ -7258,7 +7258,13 @@ or last-segment-only, per-site args/receivers token-equal, one shared
 rewrite within the line), and the plus line equals the minus line
 under sequential subterm replacement (any frame delta or unchanged
 same-line twin vetoes), the pair contributes its subterms as sites
-instead of its lines. Totality then counts occurrences of the minus
+instead of its lines. Single-statement one-line `fn` frames unwrap
+to their inner expression before classification (WI-4): a changed line
+parsing as a `syn::ItemFn` whose body holds exactly one statement
+contributes that statement's expression (`Stmt::Expr` with or without
+`;`, or a `let`-init with `let-else` declined) — the unchanged frame
+check on the full line text vetoes header deltas, and multi-statement
+bodies stay ordinary. Totality then counts occurrences of the minus
 subterm in the pre-image (engine-count probe, as verbatim does), not
 changed lines — two calls per line count twice. The emission is the
 same bare-subterm hunk as the whole-line shape (no frame is emitted;
@@ -8627,7 +8633,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(116), all example benches (32 applyrs, 42 diffrs), plus the history_e2e pins. Out of scope
+(116), all example benches (32 applyrs, 43 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
