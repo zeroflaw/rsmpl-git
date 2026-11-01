@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-     Precision singles (WI-7 slices 1-15, `PrecisionUnique`): N == 1
+     Precision singles (WI-7 slices 1-22, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7849,9 +7849,40 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     rule holds; multi-subterm lines decline (multi territory by site
     count); uniqueness proved by `method_literal_holds` at n=1 over the
     emitted tuple plus the T361 byte-compare; uppercase methods ride
-    backticks with the raw-method re-parse check (TOOL-5). Remaining
-    family (sub-line method-wrap) keeps `N ≥ 2` until its WI-7 slice
-    lands.
+    backticks with the raw-method re-parse check (TOOL-5). Slice-22 adds sub-line
+    method-arg-template wrap pairs (`foo(svc.process(alpha_arg));` ->
+    `foo(svc.process(alpha_arg.clone()));`, bare-statement and
+    `let`-init framings via the shared `side_expr` entry, detector in
+    the `method_subline.rs` sibling per D5 — `methods.rs` sits at ~1933
+    and `arg_template.rs` at ~1875, so the detector cannot land inline
+    in either without breaking the 2000 gate; the shared single-pair
+    `antiunify_call_args_single` core is reused, not mirrored): the pair
+    must not form a whole-line method wrap pair (slice-7 owns that shape
+    via the same parser plus the shared core, so there is no bypass
+    around its twin veto via a second counter),
+    `extract_method_wrap_sites` yields exactly one inner site whose args
+    anti-unify to exactly one wrap plus holes. The extractor collects
+    OUTERMOST method calls only — a wrapper that is itself a method call
+    (`a.clone()`) adds a plus-side subterm, so flat pairing would veto
+    every such wrap; turbofish/non-ident calls never record but still
+    gate their interiors. Unchanged pairs are skipped, never vetoed
+    (slice-19/20/21 discipline — twin-counting is the engine totality
+    over the emitted holed pair, which keys on method + arity, so any
+    same-method same-arity twin vetoes even with different args —
+    slice-7 precedent); pure-concrete deltas veto the line (literal
+    territory — slices 20/21 own them), permuted holes veto the line
+    (perm territory), method/receiver/arity deltas veto the line
+    (slice-15/m2f territory); multi-subterm lines decline (multi
+    territory by site count); uniqueness proved by
+    `template_pair_holds` at n=1 over the emitted holed pair plus the
+    T361 byte-compare; uppercase methods ride backticks with the
+    raw-method re-parse check (TOOL-5). The arm sits BEFORE the literal
+    arms: a holed wrap beats the concrete literal spelling where both
+    prove the same site set (reference/binary wrappers upgrade from the
+    slice-20/21 concrete spelling); the general arm above declines wraps
+    by construction (`Call`/`MethodCall` subterms are never general
+    sites). Remaining family (sub-line bare-wrap) keeps `N ≥ 2` until
+    its WI-7 slice lands.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

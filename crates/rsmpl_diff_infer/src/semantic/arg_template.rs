@@ -650,8 +650,10 @@ fn wrapper_tpl_single(minus: &syn::Expr, plus: &syn::Expr, hole: &str) -> Option
 /// vacuous-but-blocking at N=1 — no new template language, no substring
 /// surgery). Zero wraps (callee/perm territory), two wraps, pure concrete deltas
 /// (`1` → `2`, literal territory), and permuted holes all veto, as do
-/// macro/unsupported args (multi precedent).
-fn antiunify_call_args_single(
+/// macro/unsupported args (multi precedent). `pub(crate)` for the WI-7
+/// slice-22 sub-line method-wrap extractor (`subline.rs`, D5 split —
+/// no duplicated core).
+pub(crate) fn antiunify_call_args_single(
     minus_args: &[syn::Expr],
     plus_args: &[syn::Expr],
 ) -> Option<(Vec<String>, Vec<String>)> {

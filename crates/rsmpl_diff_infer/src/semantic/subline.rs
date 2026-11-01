@@ -937,6 +937,143 @@ pub(crate) fn extract_method_literal_sites(
     Some(sites)
 }
 
+/// Collect outermost turbofish-free method calls in source order (WI-7
+/// slice-22): a method call nested inside another method call's
+/// receiver or args (chains, wrappers such as `alpha_arg.clone()`) is
+/// NOT collected. The wrap family adds/removes method subterms by
+/// construction, so flat pairing would veto every method-wrapper wrap
+/// (the plus side always holds one more method call than the minus
+/// side). Bare-call nesting never gates (the outer `foo(..)` wrapper is
+/// a `Call`, not a `MethodCall`). Turbofish/non-ident calls never
+/// record but still gate their interiors (their deltas stay ordinary
+/// per the pinned turbofish discipline). Twin-counting stays with the
+/// engine totality over the emitted template, which counts nested
+/// twins file-wide — skipping here is never guessing.
+fn outermost_method_calls(expr: &syn::Expr) -> Vec<(String, String, Vec<syn::Expr>, String)> {
+    struct M {
+        out: Vec<(String, String, Vec<syn::Expr>, String)>,
+        depth: usize,
+    }
+    impl<'ast> Visit<'ast> for M {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::MethodCall(call) = node {
+                let qualified = call.turbofish.is_none()
+                    && super::ident_len(&call.method.to_string())
+                        .is_some_and(|l| l == call.method.to_string().len());
+                if self.depth == 0 && qualified {
+                    self.out.push((
+                        call.method.to_string(),
+                        call.receiver.to_token_stream().to_string(),
+                        call.args.iter().cloned().collect(),
+                        syn::Expr::MethodCall(call.clone())
+                            .to_token_stream()
+                            .to_string(),
+                    ));
+                }
+                self.depth += 1;
+                syn::visit::visit_expr_method_call(self, call);
+                self.depth -= 1;
+                return;
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut m = M {
+        out: Vec::new(),
+        depth: 0,
+    };
+    m.visit_expr(expr);
+    m.out
+}
+
+/// One method-arg-template wrap subterm site (WI-7 slice-22): the inner
+/// method whose args anti-unify to exactly one wrap plus holes
+/// (rendered template texts feed the totality probe and the emission).
+pub(crate) struct MethodWrapSite {
+    pub(crate) method: String,
+    pub(crate) minus_tpl: Vec<String>,
+    pub(crate) plus_tpl: Vec<String>,
+}
+
+/// Extract method-arg-template wrap sites from one line pair (WI-7
+/// slice-22): every minus/plus outermost-method subterm pairs in order
+/// with the same method, token-equal receivers and same arity; only
+/// pairs whose args anti-unify via the shared single-pair core become
+/// sites — unchanged pairs are skipped, never vetoed (slice-19/20/21
+/// discipline), while pure-concrete deltas veto the LINE (literal
+/// territory — slices 20/21 own them, never partially claimed),
+/// permuted holes veto the line (perm territory), and
+/// method/receiver/arity deltas veto the line (slice-15/m2f territory).
+/// Macro/unsupported args veto (the engine never binds inside macro
+/// bodies). Within-line uniformity is on the full class key (cross-line
+/// uniformity is the caller's single-site gate). Frame deltas veto via
+/// the frame rule over the delta pairs.
+pub(crate) fn extract_method_wrap_sites(minus: &str, plus: &str) -> Option<Vec<MethodWrapSite>> {
+    if minus.trim().starts_with('&') || plus.trim().starts_with('&') {
+        return None;
+    }
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let m_calls = outermost_method_calls(&m_expr);
+    let p_calls = outermost_method_calls(&p_expr);
+    if m_calls.is_empty() || m_calls.len() != p_calls.len() {
+        return None;
+    }
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    for ((o_m, o_r, o_args, o_raw), (n_m, n_r, n_args, n_raw)) in m_calls.iter().zip(p_calls.iter())
+    {
+        if o_m != n_m || o_r != n_r || o_args.len() != n_args.len() {
+            return None;
+        }
+        for arg in o_args.iter().chain(n_args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        let o_vals: Vec<String> = o_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        let n_vals: Vec<String> = n_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        if o_vals == n_vals {
+            // Unchanged subterm (the outer wrapper or an independent
+            // twin): skip, never veto — twin-counting is the engine
+            // totality over the emitted holed pair.
+            continue;
+        }
+        let (m_tpl, p_tpl) = super::arg_template::antiunify_call_args_single(o_args, n_args)?;
+        sites.push(MethodWrapSite {
+            method: o_m.clone(),
+            minus_tpl: m_tpl,
+            plus_tpl: p_tpl,
+        });
+        pairs.push((o_raw.clone(), n_raw.clone()));
+    }
+    if sites.is_empty() {
+        return None;
+    }
+    let (m0, o0, n0) = (
+        sites[0].method.clone(),
+        sites[0].minus_tpl.clone(),
+        sites[0].plus_tpl.clone(),
+    );
+    if sites
+        .iter()
+        .any(|s| s.method != m0 || s.minus_tpl != o0 || s.plus_tpl != n0)
+    {
+        return None;
+    }
+    if !frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;

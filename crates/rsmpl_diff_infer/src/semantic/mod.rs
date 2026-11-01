@@ -98,6 +98,7 @@ pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};
 pub(crate) use member::{try_member_def_only, try_member_rename};
 pub(crate) use method_subline::{
     try_subline_method_fn_single, try_subline_method_literal_single, try_subline_method_single,
+    try_subline_method_wrap_single,
 };
 pub(crate) use methods::{
     try_method_same_literal_single, try_method_same_literal_sweep, try_method_single,
