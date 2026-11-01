@@ -68,12 +68,13 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "[{name}] ordinary passthrough must equal normalized native"
         );
     } else if name == "47-single-m2m-stays-ordinary" {
-        // T484: single method-to-method site veto miniature --
-        // one `a.old_method(1);` -> `a.new_method(1);` line
-        // costs more as a semantic hunk than the ordinary hunk
-        // it replaces: pure ordinary passthrough (code gate
-        // `minuses.len() < 2` in the m2m sweep, veto side of
-        // fixture 15, the 4-site old_method_to_new_method fire).
+        // T484 + WI-7 slice-2: single method-to-method rename veto
+        // miniature -- one `a.old_method(1);` -> `a.new_method(1);`
+        // line with an untouched `b.old_method(9);` twin stays ordinary
+        // via `method_holds` totality (2 sites vs 1 diff pair). Unique
+        // singles now fire as allow-one precision singles (see
+        // `methods::tests::wi7_*`); this fixture pins the twin veto,
+        // veto side of fixture 15, the 4-site old_method_to_new_method fire).
         assert!(
             !semantic.contains("rule="),
             "single m2m edit must stay ordinary, got: {semantic}"

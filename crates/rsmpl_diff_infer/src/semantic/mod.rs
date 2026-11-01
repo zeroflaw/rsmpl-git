@@ -87,8 +87,8 @@ pub(crate) use macro_rules::{try_macro_rules_def_only, try_macro_rules_rename};
 pub(crate) use macros::{try_macro_interior_section, try_macro_rename_sweep};
 pub(crate) use member::{try_member_def_only, try_member_rename};
 pub(crate) use methods::{
-    try_method_same_literal_sweep, try_method_to_fn_sweep, try_method_to_method_sweep,
-    try_ref_method_strip_sweep,
+    try_method_same_literal_sweep, try_method_single, try_method_to_fn_sweep,
+    try_method_to_method_sweep, try_ref_method_strip_sweep,
 };
 pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 

@@ -318,6 +318,52 @@ pub(crate) fn try_method_to_method_sweep(
     ))
 }
 
+/// WI-7 slice-2: whole-line method-to-method rename single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair parses whole-line as
+/// `recv.old(args)` → `recv.new(args)` with token-equal receivers/args,
+/// `old != new`, a pre-image is present (`None` vetoes - uniqueness
+/// needs the whole file, D3), and `method_holds` proves exactly one
+/// `old_method/arity` site file-wide with zero opaque hits (conditions
+/// (a)+(b); (c) is structural: the template always carries the method
+/// ident token beyond the `Receiver`/`E` holes). Emission is the WI-19b
+/// allow-one spelling (tight range, directive-free, default `allow=one`).
+pub(crate) fn try_method_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    file_old?;
+    let (old_method, new_method, arity) = parse_method_to_method_pair(minuses[0], pluses[0])?;
+    if old_method == new_method {
+        return None;
+    }
+    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
+    let mut vars = Vec::with_capacity(arity);
+    for i in 0..arity {
+        vars.push(format!("E{i}"));
+    }
+    let args = vars.join(", ");
+    let old_lit = super::shape::literal_callee(&old_method);
+    let new_lit = super::shape::literal_callee(&new_method);
+    // Allow-one: directive-free ranged hunk (59/77 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!(
+        "- Receiver.{old_lit}({args})\n+ Receiver.{new_lit}({args})\n"
+    ));
+    Some(hunk)
+}
+
 /// Shared emission for the whole-line and sub-line method→method paths
 /// (identical hunks).
 fn emit_method_to_method(
@@ -1346,5 +1392,99 @@ mod tests {
         let out = infer_semantic(std::slice::from_ref(&raw)).unwrap();
         validated_live(&out, &pre);
         assert!(out.contains("- &Receiver.`Old`(\"\")\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi7_method_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-2: unique single `a.old_method(1)` ->
+        // `a.new_method(1)` raises to an allow-one hunk and real-applies
+        // byte-identical.
+        let pre = "fn m() {\n    a.old_method(1);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    a.old_method(1);\n+    a.new_method(1);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique method single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.new_method(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    a.new_method(1);\n}\n");
+    }
+
+    #[test]
+    fn wi7_method_single_twin_vetoes() {
+        // An untouched same-method twin anywhere vetoes (totality).
+        let pre = "fn m() {\n    a.old_method(1);\n    b.old_method(9);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    a.old_method(1);\n+    a.new_method(1);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_single_different_arity_twin_keeps_firing() {
+        // Totality keys on method+arity: a different-arity twin never
+        // matches the emitted pattern and never vetoes.
+        let pre = "fn m() {\n    a.old_method(1);\n    b.old_method(1, 2);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    a.old_method(1);\n+    a.new_method(1);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-arity twin must not veto");
+        assert!(out.contains("- Receiver.old_method(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi7_method_single_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3).
+        assert!(
+            super::try_method_single(
+                &["    a.old_method(1);"],
+                &["    a.new_method(1);"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_single_uppercase_fires_literal() {
+        // Uppercase method idents ride backticks (literal), else the
+        // engine would infer them as `expr` holes.
+        let pre = "fn m() {\n    a.Old(first);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    a.Old(first);\n+    a.New(first);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("uppercase single must fire");
+        assert!(out.contains("- Receiver.`Old`(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.`New`(E0)\n"), "got: {out}");
     }
 }

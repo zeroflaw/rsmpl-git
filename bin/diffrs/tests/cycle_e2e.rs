@@ -489,7 +489,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "92-m2m-single",
-        "t375: single-site m2m rewrite re-infers ordinary",
+        "WI-7 slice-2: single-site m2m re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "93-verbatim-single",
