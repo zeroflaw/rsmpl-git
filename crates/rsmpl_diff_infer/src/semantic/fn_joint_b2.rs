@@ -142,10 +142,168 @@ pub(crate) fn attr_joint_fire(
     })
 }
 
+/// WI-4f cross-file Joint-B2 scratch-apply probe (D13): the two-section
+/// emission (def hunk at `def_path`, call template at `call_path`,
+/// one rule) applied to the pre-image must equal the splice-expected
+/// post text — the attr line inserted/removed at the header site of
+/// the DEF file, the header swapped there, each call site of the CALL
+/// file showing its native plus line, every other line of both files
+/// byte-identical. Single-file files other than the two pass through
+/// by the same whole-comparison discipline as `probe_attr_joint`.
+pub(crate) fn probe_attr_joint_ws(
+    pre: &HashMap<String, String>,
+    emission: &str,
+    def_path: &str,
+    call_path: &str,
+    fire: &Fire,
+    calls: &[(usize, String)],
+) -> bool {
+    let Joint::B2 {
+        attr_line,
+        attr_add,
+        head_site,
+        ..
+    } = &fire.joint
+    else {
+        return false;
+    };
+    let (head_site, attr_add) = (*head_site, *attr_add);
+    let (def_minus, def_plus) = (&fire.def_minus, &fire.def_plus);
+    let Ok(parsed) = rsmpl_patch::parse_patch(emission) else {
+        return false;
+    };
+    let mut files = pre.clone();
+    for section in &parsed.files {
+        files.entry(section.target_path.clone()).or_default();
+    }
+    if rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).is_err() {
+        return false;
+    }
+    let (Some(post_def), Some(post_call), Some(pre_def), Some(pre_call)) = (
+        files.get(def_path),
+        files.get(call_path),
+        pre.get(def_path),
+        pre.get(call_path),
+    ) else {
+        return false;
+    };
+    if !splice_def_matches(
+        post_def,
+        pre_def,
+        &AttrDef {
+            minus: def_minus,
+            plus: def_plus,
+            attr_line,
+            attr_add,
+            head_site,
+        },
+        &[],
+    ) {
+        return false;
+    }
+    if !splice_calls_match(post_call, pre_call, calls) {
+        return false;
+    }
+    // Every other pre-image file must round-trip byte-identical.
+    for (path, pre_text) in pre {
+        if path == def_path || path == call_path {
+            continue;
+        }
+        if files.get(path).is_none_or(|post| post != pre_text) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Expected-def splice check shared by the single-file probe below
+/// (same-file calls ride `calls`) and the cross-file probe (call file
+/// checked separately via `splice_calls_match`, so `calls` is empty):
+/// attr insert/remove at `head_site`, header swap, claimed call sites
+/// showing their native plus lines, every other line byte-identical.
+fn splice_def_matches(
+    post: &str,
+    pre_text: &str,
+    def: &AttrDef,
+    calls: &[(usize, String)],
+) -> bool {
+    let pre_lines: Vec<&str> = pre_text.lines().collect();
+    if def.head_site == 0 || def.head_site > pre_lines.len() {
+        return false;
+    }
+    if !def.attr_add && def.head_site < 2 {
+        return false;
+    }
+    if pre_lines[def.head_site - 1].trim() != def.minus.trim() {
+        return false;
+    }
+    let call_map: HashMap<usize, String> = calls
+        .iter()
+        .map(|(s, p)| (*s, p.trim().to_string()))
+        .collect();
+    let mut expected: Vec<String> = Vec::new();
+    for (idx, line) in pre_lines.iter().enumerate() {
+        let no = idx + 1;
+        if def.attr_add && no == def.head_site {
+            expected.push(def.attr_line.trim().to_string());
+            expected.push(def.plus.trim().to_string());
+            continue;
+        }
+        if !def.attr_add && no == def.head_site - 1 {
+            continue;
+        }
+        if !def.attr_add && no == def.head_site {
+            expected.push(def.plus.trim().to_string());
+            continue;
+        }
+        if let Some(want) = call_map.get(&no) {
+            expected.push(format!("{}{}", indent_of(line), want));
+        } else {
+            expected.push(line.to_string());
+        }
+    }
+    let post_lines: Vec<&str> = post.lines().collect();
+    post_lines.len() == expected.len()
+        && post_lines.iter().zip(expected.iter()).all(|(p, e)| *p == e)
+}
+
+/// The attr-joint definition splice: header pair + attr line + site.
+/// Bundles the `splice_def_matches` inputs (clippy 7-arg lint).
+struct AttrDef<'a> {
+    minus: &'a str,
+    plus: &'a str,
+    attr_line: &'a str,
+    attr_add: bool,
+    head_site: usize,
+}
+
 /// Leading whitespace of a line (the probe re-indents claimed plus
 /// lines with the native line's own indent).
 fn indent_of(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
+}
+
+/// Expected-call splice check: each claimed site shows its native plus
+/// line (re-indented with the native line's own indent), every other
+/// line byte-identical.
+fn splice_calls_match(post: &str, pre_text: &str, calls: &[(usize, String)]) -> bool {
+    let call_map: HashMap<usize, String> = calls
+        .iter()
+        .map(|(s, p)| (*s, p.trim().to_string()))
+        .collect();
+    let pre_lines: Vec<&str> = pre_text.lines().collect();
+    let mut expected: Vec<String> = Vec::new();
+    for (idx, line) in pre_lines.iter().enumerate() {
+        let no = idx + 1;
+        if let Some(want) = call_map.get(&no) {
+            expected.push(format!("{}{}", indent_of(line), want));
+        } else {
+            expected.push(line.to_string());
+        }
+    }
+    let post_lines: Vec<&str> = post.lines().collect();
+    post_lines.len() == expected.len()
+        && post_lines.iter().zip(expected.iter()).all(|(p, e)| *p == e)
 }
 
 /// WI-4b Joint-B2 scratch-apply probe (D13): the two-hunk emission
@@ -189,42 +347,16 @@ pub(crate) fn probe_attr_joint(
     let (Some(post), Some(pre_text)) = (files.get(path), pre.get(path)) else {
         return false;
     };
-    let pre_lines: Vec<&str> = pre_text.lines().collect();
-    if head_site == 0 || head_site > pre_lines.len() {
-        return false;
-    }
-    if !attr_add && head_site < 2 {
-        return false;
-    }
-    if pre_lines[head_site - 1].trim() != def_minus.trim() {
-        return false;
-    }
-    let call_map: HashMap<usize, String> = calls
-        .iter()
-        .map(|(s, p)| (*s, p.trim().to_string()))
-        .collect();
-    let mut expected: Vec<String> = Vec::new();
-    for (idx, line) in pre_lines.iter().enumerate() {
-        let no = idx + 1;
-        if attr_add && no == head_site {
-            expected.push(attr_line.trim().to_string());
-            expected.push(def_plus.trim().to_string());
-            continue;
-        }
-        if !attr_add && no == head_site - 1 {
-            continue;
-        }
-        if !attr_add && no == head_site {
-            expected.push(def_plus.trim().to_string());
-            continue;
-        }
-        if let Some(want) = call_map.get(&no) {
-            expected.push(format!("{}{}", indent_of(line), want));
-        } else {
-            expected.push(line.to_string());
-        }
-    }
-    let post_lines: Vec<&str> = post.lines().collect();
-    post_lines.len() == expected.len()
-        && post_lines.iter().zip(expected.iter()).all(|(p, e)| *p == e)
+    splice_def_matches(
+        post,
+        pre_text,
+        &AttrDef {
+            minus: def_minus,
+            plus: def_plus,
+            attr_line,
+            attr_add,
+            head_site,
+        },
+        calls,
+    )
 }

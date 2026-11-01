@@ -19,14 +19,15 @@
 //! see (the F4b/F4d false-completeness shape). Suppression is keyed per
 //! `(path, old)`: only sections that took part in the vetoed candidate.
 //!
-//! Scope (WI-4b landed, WI-4c landed Joint-A): single-file groups fire
-//! Joint-A/B1/B2; workspace groups fire Joint-A only (def in one file,
-//! callee-only calls across files, one follow hunk at the def). Joint-B
-//! cross-file shapes suppress to ordinary (their call-template sweep is
-//! file-scoped; no two-section emission in this slice). Body deltas,
-//! return-plus-arg-add doubles, slot-plus-attr doubles, and hetero call
-//! shapes suppress without raising (their composition has no
-//! probe-sound two-hunk form).
+//! Scope (WI-4b landed Joint-B1/B2; WI-4c landed Joint-A; WI-4f lands
+//! workspace Joint-B): single-file groups fire A/B1/B2; workspace groups
+//! fire Joint-A (def in one file, callee-only calls across files, one
+//! follow hunk at the def) plus Joint-B1/B2 when the calls live in
+//! exactly one other file (def hunk at the def file + call-template
+//! hunk at the call file, one shared rule). Body deltas, return-plus-
+//! arg-add doubles, slot-plus-attr doubles, mixed def-file calls,
+//! multi-call-file groups, and hetero call shapes suppress without
+//! raising (their composition has no probe-sound two-hunk form).
 
 use std::collections::{HashMap, HashSet};
 
@@ -290,6 +291,41 @@ pub(crate) fn try_fn_joint_intent(
                     }
                 }
                 Workspace::Ready(f, def_path) => {
+                    // WI-4f: Joint-B rides two sections (def hunk at the
+                    // def file, call template at the single call file,
+                    // one rule) — the single-section emission below only
+                    // serves Joint-A.
+                    if !matches!(f.joint, Joint::A) {
+                        return match super::fn_joint_ws::rebuild_workspace_b(
+                            super::fn_joint_ws::WsBRebuild {
+                                sections,
+                                parsed: &parsed,
+                                preserved: &preserved,
+                                native_lens: &native_lens,
+                                pre,
+                                fire: &f,
+                                def_path: &def_path,
+                                used_rules,
+                                checkpoint,
+                                suppressed: &mut suppressed,
+                            },
+                        ) {
+                            Some((out, dp, rule)) => Some((out, dp, rule, suppressed)),
+                            None => {
+                                if suppressed.is_empty() {
+                                    used_rules.truncate(checkpoint);
+                                    None
+                                } else {
+                                    Some((
+                                        sections.to_vec(),
+                                        String::new(),
+                                        String::new(),
+                                        suppressed,
+                                    ))
+                                }
+                            }
+                        };
+                    }
                     let rule = unique_rule(used_rules, &format!("rename_{}_to_{}", f.old, f.new));
                     let emission = emit(&def_path, &rule, &f);
                     let pairs: Vec<Pair> = f
@@ -862,7 +898,7 @@ pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
 /// preserved; qual/generics/where preserved; params evolve, return
 /// preserved (a return delta plus an arg-add is two evolutions the
 /// shared-rule pair cannot restate — suppressed, pinned).
-fn header_argadd_gates(minus: &str, plus: &str) -> bool {
+pub(crate) fn header_argadd_gates(minus: &str, plus: &str) -> bool {
     let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
         return false;
     };
@@ -899,7 +935,8 @@ pub(crate) fn prefix_qual(qual: &str, callee: &str) -> String {
 /// same non-empty concrete suffix. Returns the `(call_minus,
 /// call_plus)` pattern pair, or `None` on any hetero shape (prefix
 /// rewrite, hetero suffix/arity/qual/turbo — suppressed, pinned).
-fn arg_add_template(
+/// WI-4f reuses it for the workspace B1 gate over cross-file claims.
+pub(crate) fn arg_add_template(
     flat: &[FlatPair],
     def_idx: usize,
     old: &str,
@@ -1126,66 +1163,23 @@ pub(crate) fn is_call_callee_of(line: &str, old: &str) -> bool {
 /// Joint-A rides one hunk with `# sweep` + `# follow=uses`; Joint-B1/B2
 /// ride two hunks with `# sweep` and no follow (a follow would claim
 /// the call hunk's sites and the lowering would refuse the overlap).
+/// WI-4f splits the two hunks into per-file builders (see
+/// `fn_joint_emit`) so the workspace Joint-B emission can place the def
+/// hunk at the def file and the call hunk at the call file under one
+/// rule.
 fn emit(path: &str, rule: &str, fire: &Fire) -> String {
     let mut out = crate::git_header(path);
     out.push('\n');
-    match &fire.joint {
-        Joint::A => {
-            out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-            out.push_str("# sweep\n");
-            out.push_str("# follow=uses\n");
-            out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
-            out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
-        }
-        Joint::B1 {
-            call_minus,
-            call_plus,
-        } => {
-            out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-            out.push_str("# sweep\n");
-            out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
-            out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
-            out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-            out.push_str("# sweep\n");
-            out.push_str(&format!("- {call_minus}\n+ {call_plus}\n"));
-        }
-        Joint::B2 {
-            attr_line,
-            attr_add,
-            call_minus,
-            call_plus,
-            ..
-        } => {
-            out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-            out.push_str("# sweep\n");
-            if !*attr_add {
-                out.push_str(&format!("- {attr_line}\n"));
-            }
-            out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
-            if *attr_add {
-                out.push_str(&format!("+ {attr_line}\n"));
-            }
-            out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
-            out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-            out.push_str("# sweep\n");
-            out.push_str(&format!("- {call_minus}\n+ {call_plus}\n"));
-        }
+    out.push_str(&super::fn_joint_emit::def_hunk_text(rule, fire));
+    if let Some(call) = super::fn_joint_emit::call_hunk_text(rule, fire) {
+        out.push_str(&call);
     }
     out
 }
 
-/// `fn foo(x: i32) {` → `fn foo(x: i32) { ... }` (the engine's fn
-/// pattern needs the `{ ... }` body hole; the header text stays
-/// native so the lowering re-renders byte-identically on formatted
-/// code and the probe vetoes otherwise).
-fn with_body_hole(header_line: &str) -> String {
-    let trimmed = header_line.trim_end();
-    let no_brace = trimmed.strip_suffix('{').unwrap_or(trimmed).trim_end();
-    format!("{no_brace} {{ ... }}")
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::fn_joint_emit::with_body_hole;
     use super::super::{infer_semantic_with_pre_images, split_item};
     use super::*;
     use std::collections::HashMap;
@@ -1698,9 +1692,12 @@ mod tests {
 
     #[test]
     fn joint_cross_file_b1_stays_ordinary() {
-        // WI-4c: rename+arg-add across files stays wholly ordinary (the
-        // call-template sweep is file-scoped; no two-section emission in
-        // this slice) — honest, never a fragment.
+        // WI-4f: rename+arg-add across files FIRES as a shared-rule
+        // two-section emission (def hunk at the def file, call template
+        // at the call file) — the WI-4c stays-ordinary posture is
+        // superseded; veto shapes still suppress (next test), never a
+        // fragment. (Pre-pass level; the infer-level round-trip lives in
+        // `fn_joint_ws`.)
         let a_pre = "fn foo(x: i32) {\n    x\n}\n";
         let b_pre = "fn m() {\n    foo(1);\n    foo(2);\n}\n";
         let sections = vec![
@@ -1714,11 +1711,18 @@ mod tests {
             ),
         ];
         let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
-        let full = infer_semantic_with_pre_images(&sections, &pre);
+        let mut used = Vec::new();
+        let Some((out, def_path, rule, _)) = try_fn_joint_intent(&sections, &pre, &mut used) else {
+            panic!("B1 cross-file must fire");
+        };
+        assert_eq!(def_path, "a.rs");
+        assert!(!rule.is_empty());
+        assert_eq!(out.len(), 2, "two sections, got: {out:?}");
         assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "B1 cross-file must stay wholly ordinary, got: {full:?}"
+            out[0].contains(&format!("rule={rule}")) && out[1].contains(&format!("rule={rule}")),
+            "one rule across both sections, got: {out:?}"
         );
+        validated_live(&out.join(""), &pre);
     }
 
     #[test]
