@@ -108,23 +108,33 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "[{name}] ordinary passthrough must equal normalized native"
         );
     } else if name == "49-single-same-literal-stays-ordinary" {
-        // T485: single same-literal site veto miniature --
-        // one `agents.contains("skills/rsmpl-git/SKILL.md");` ->
-        // `agents.contains("skills/gitrs/SKILL.md");` costs more
-        // as a semantic hunk than the ordinary hunk it replaces:
-        // pure ordinary passthrough (unit gate
-        // `method_same_literal_single_site_stays_passthrough`,
-        // veto side of fixture 17, the 3-site calls_contains_literal fire).
+        // T485 + WI-7 slice-13: unique single method same-literal delta
+        // now fires as an allow-one precision single (sweep-vs-single
+        // canonically distinct until WI-8 site-set equality). The twin
+        // veto is pinned by the `wi13_*_twin_vetoes` unit gates; this
+        // fixture pins the unique fire (veto side of fixture 17, the
+        // 3-site calls_contains_literal fire; contrast to fixture 60,
+        // the hetero twin that stays ordinary via tuple totality).
         assert!(
-            !semantic.contains("rule="),
-            "single same-literal edit must stay ordinary, got: {semantic}"
+            semantic.contains("rule=r1"),
+            "unique method literal single must fire, got: {semantic}"
         );
-        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
-        assert!(context.is_empty(), "zero-context, got: {context:?}");
-        let normalized = normalize_native(native_input);
         assert!(
-            semantic == normalized,
-            "[{name}] ordinary passthrough must equal normalized native"
+            !semantic.contains("# allow=many"),
+            "allow-one, no allow=many: {semantic}"
+        );
+        assert!(!semantic.contains("# sweep"), "ranged single: {semantic}");
+        assert!(
+            semantic.contains("- Receiver.contains(\"skills/rsmpl-git/SKILL.md\")\n"),
+            "anchored minus template, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ Receiver.contains(\"skills/gitrs/SKILL.md\")\n"),
+            "anchored plus template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-    agents.contains("),
+            "native minus must be consumed, got: {semantic}"
         );
     } else if name == "50-single-ref-strip-stays-ordinary" {
         // T485: single ref-strip site veto miniature --
@@ -357,15 +367,15 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             "[{name}] ordinary passthrough must equal normalized native"
         );
     } else if name == "60-hetero-samelit-stays-ordinary" {
-        // T490: hetero-delta same-literal veto miniature --
+        // T490 + WI-7 slice-13: hetero-delta same-literal veto miniature --
         // two identical `agents.contains("skills/rsmpl-git/...");`
         // sites rewrite to DIFFERENT new literals (`gitrs` /
         // `other`): no shared (old, new) literal pair, so the
-        // same-literal sweep declines with no per-site singles
-        // (same shared-delta gate as fixtures 58/59 -- the contrast
-        // to fixture 55, where hetero slot deltas fire per-site
-        // singles). Veto side of fixture 17 (homo multi-site
-        // same-literal fire).
+        // same-literal sweep declines; the per-site singles decline too
+        // (tuple-keyed totality: both sites share the same old-args
+        // tuple, so each single over-counts 2 vs 1 — the contrast to
+        // fixture 49, where the unique single fires). Veto side of
+        // fixture 17 (homo multi-site same-literal fire).
         assert!(
             !semantic.contains("rule="),
             "hetero-delta same-literal edit must stay ordinary, got: {semantic}"

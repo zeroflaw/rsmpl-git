@@ -5,6 +5,7 @@
 //! `strip_one_terminator`, `ident_len`, `call_parts`) and totality gates
 //! live in the parent.
 
+use super::arg_template::{parse_method_line, tok};
 use super::{call_parts, count_occurrences, flat_ws, ident_len, strip_one_terminator, unique_rule};
 
 /// N-site (N ≥ 2) method-to-function fan-out (T345, SPEC 18.5): every
@@ -552,6 +553,98 @@ pub(crate) fn try_method_same_literal_sweep(
     hunk.push_str(&format!(
         "- Receiver.{lit}({old})\n+ Receiver.{lit}({new})\n"
     ));
+    Some(hunk)
+}
+
+/// N-site (N == 1) same-method same-args literal-delta single (WI-7
+/// slice-13, `PrecisionUnique`): the N=1 lifting of
+/// `try_method_same_literal_sweep` above. Fires iff the pair parses
+/// (whole-line or the shared T449 `let`-init entry via
+/// `parse_method_line` — the emission stays the `Receiver.method(args)`
+/// pattern and the engine rewrites the call sub-expression in place)
+/// as one same-method call with the same per-site receiver, uniform
+/// arity `k >= 1`, and old/new arg token-tuples with a real delta.
+/// Method deltas stay with the slice-2 single, receiver deltas with
+/// the m2f/general shapes, perms with the slice-11 entry, pure wraps
+/// with the slice-7 entry (all tried earlier). Emission is the concrete
+/// tuple (no `E` arg holes — `method_literal_holds` counts the exact
+/// old-args tuple, so a holed template would match sites the proof
+/// never counted; `Receiver` is the only hole, bound per site like the
+/// multi). The T361 byte-compare pre-reservation
+/// (`single_reproduces`, shared with the wrap/perm/literal singles)
+/// vetoes any TokenStream spacing drift. Emission is the WI-19b
+/// allow-one spelling (tight range, directive-free, default
+/// `allow=one`). Detector name `method_same_literal` (same family,
+/// provenance unchanged). The N >= 2 sweep above keeps its uniform
+/// classes untouched.
+pub(crate) fn try_method_same_literal_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    let (o_recv, o_method, o_args) = parse_method_line(minuses[0])?;
+    let (n_recv, n_method, n_args) = parse_method_line(pluses[0])?;
+    // Method deltas stay with the slice-2 single, receiver deltas with
+    // the m2f/general shapes.
+    if o_recv != n_recv || o_method != n_method || o_args.len() != n_args.len() || o_args.is_empty()
+    {
+        return None;
+    }
+    for arg in o_args.iter().chain(n_args.iter()) {
+        let probe = super::shape::probe_expr(arg);
+        if probe.macros > 0 || probe.unsupported > 0 {
+            return None;
+        }
+    }
+    let old_toks: Vec<String> = o_args.iter().map(tok).collect();
+    let new_toks: Vec<String> = n_args.iter().map(tok).collect();
+    if old_toks == new_toks {
+        return None;
+    }
+    if !crate::totality::method_literal_holds(file_old, &o_method, &old_toks, minuses, changed) {
+        return None;
+    }
+    let old = old_toks.join(", ");
+    let new = new_toks.join(", ");
+    // WI-7b: uppercase same method rides backticks (literal).
+    let lit = super::shape::literal_callee(&o_method);
+    let minus_call = format!("Receiver.{lit}({old})");
+    let plus_call = format!("Receiver.{lit}({new})");
+    // Defensive: both sides must re-parse as calls (the totality probe
+    // re-checks, but a non-parsing template must never leave this core).
+    // The check runs on the raw method: backticks are RSmPL-level
+    // literal spelling (SPEC 15.4), not Rust syntax (TOOL-5).
+    let raw_minus = format!("Receiver.{o_method}({old})");
+    let raw_plus = format!("Receiver.{o_method}({new})");
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minuses[0],
+        pluses[0],
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{o_method}_literal"));
+    // Allow-one: directive-free ranged hunk (slices-1-12 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
     Some(hunk)
 }
 
@@ -1641,5 +1734,223 @@ mod tests {
         let mut files = pre_map(&[("f.rs", "fn m() {\n    a.Old(first);\n}\n")]);
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
         assert_eq!(files["f.rs"], "fn m() {\n    New(a, first);\n}\n");
+    }
+
+    fn msingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+        super::try_method_same_literal_single(
+            &[minus],
+            &[plus],
+            "f.rs",
+            pre,
+            changed,
+            &mut Vec::new(),
+        )
+    }
+
+    #[test]
+    fn wi13_method_literal_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-13: unique single method same-literal delta raises
+        // to an allow-one hunk and real-applies byte-identical. Long
+        // receiver names clear the precision guard (`body <= hunk + 16`:
+        // the concrete tuple saves the receiver spelling minus the
+        // `Receiver` hole, pricing the rule header); short shapes stay
+        // ordinary by design (pinned by fixture 49, which never reaches
+        // this core through the guard).
+        let pre = "fn m() {\n    agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, false);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, false);\n+    agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, \"100644\");\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique method literal single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        assert!(!out.contains("# sweep"), "ranged single: {out}");
+        assert!(
+            out.contains("- Receiver.configure(alpha_argument_1, first_value_foo, false)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.configure(alpha_argument_1, first_value_foo, \"100644\")\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains(
+                "agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, \"100644\");"
+            ),
+            "got: {}",
+            files["f.rs"]
+        );
+        // T361: the applied tree must be byte-identical to the true
+        // post-tree, not merely containing the new line.
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, \"100644\");\n}\n",
+            "applied tree must equal post-tree byte-for-byte"
+        );
+        // Fixed point: re-diff of the applied tree is itself.
+        let out2 =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("must fire");
+        assert_eq!(out, out2, "fixed point");
+    }
+
+    #[test]
+    fn wi13_method_literal_single_let_init_fires() {
+        let pre = "fn m() {\n    let v = agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, false);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let v = agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, false);\n+    let v = agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, \"100644\");\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("let-init method literal single must fire");
+        assert!(
+            out.contains("- Receiver.configure(alpha_argument_1, first_value_foo, false)\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        // T361: byte-identical post-tree through the `let`-init entry
+        // (the emission stays the bare `Receiver.method(args)` pattern;
+        // the engine rewrites the call sub-expression in place).
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let v = agents_with_long_name_here.configure(alpha_argument_1, first_value_foo, \"100644\");\n}\n",
+            "applied tree must equal post-tree byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn wi13_method_literal_single_arity_one_fires() {
+        // Arity 1 needs no zero-hole veto: `Receiver` is already the
+        // hole, so `recv.set(false)` → `recv.set("x")` is a holed
+        // template (unlike the bare-call k=0 verbatim shape).
+        let out = msingle(
+            "    agents_with_long_name_here.set(false);",
+            "    agents_with_long_name_here.set(\"100644\");",
+            Some("fn m() {\n    agents_with_long_name_here.set(false);\n}\n"),
+            &[2],
+        )
+        .expect("arity-one method literal single must fire");
+        assert!(out.contains("- Receiver.set(false)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.set(\"100644\")\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi13_method_literal_single_twin_vetoes() {
+        assert!(
+            msingle(
+                "    recv.configure(a, false);",
+                "    recv.configure(a, \"100644\");",
+                Some(
+                    "fn m() {\n    recv.configure(a, false);\n    other.configure(a, false);\n}\n"
+                ),
+                &[2]
+            )
+            .is_none(),
+            "same-method same-args twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi13_method_literal_single_different_args_twin_fires() {
+        // Totality keys on the exact old-args tuple: a same-method site
+        // with different args never matches and never vetoes.
+        let out = msingle(
+            "    recv.configure(a, false);",
+            "    recv.configure(a, \"100644\");",
+            Some("fn m() {\n    recv.configure(a, false);\n    recv.configure(b, true);\n}\n"),
+            &[2],
+        )
+        .expect("different-args twin must not veto");
+        assert!(out.contains("- Receiver.configure(a, false)"), "got: {out}");
+    }
+
+    #[test]
+    fn wi13_method_literal_single_method_and_receiver_deltas_decline() {
+        assert!(
+            msingle(
+                "    recv.old_method(a, false);",
+                "    recv.new_method(a, \"100644\");",
+                Some("fn m() {\n    recv.old_method(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "method delta must decline here"
+        );
+        assert!(
+            msingle(
+                "    old_recv.configure(a, false);",
+                "    new_recv.configure(a, \"100644\");",
+                Some("fn m() {\n    old_recv.configure(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "receiver delta must decline here"
+        );
+    }
+
+    #[test]
+    fn wi13_method_literal_single_none_identity_macro_veto() {
+        assert!(
+            msingle(
+                "    recv.configure(a, false);",
+                "    recv.configure(a, \"100644\");",
+                None,
+                &[2]
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+        assert!(
+            msingle(
+                "    recv.configure(a, false);",
+                "    recv.configure(a, false);",
+                Some("fn m() {\n    recv.configure(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "identity must veto"
+        );
+        assert!(
+            msingle(
+                "    recv.configure(m!(x), false);",
+                "    recv.configure(m!(x), \"100644\");",
+                Some("fn m() {\n    recv.configure(m!(x), false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro arg must veto"
+        );
+    }
+
+    #[test]
+    fn wi13_method_literal_single_uppercase_fires_literal() {
+        let out = msingle(
+            "    recv.OldMethod(first);",
+            "    recv.OldMethod(second);",
+            Some("fn m() {\n    recv.OldMethod(first);\n}\n"),
+            &[2],
+        )
+        .expect("uppercase method literal single must fire");
+        assert!(
+            out.contains("- Receiver.`OldMethod`(first)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.`OldMethod`(second)\n"),
+            "got: {out}"
+        );
     }
 }

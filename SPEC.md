@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-    Precision singles (WI-7 slices 1-12, `PrecisionUnique`): N == 1
+    Precision singles (WI-7 slices 1-13, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7738,8 +7738,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     a real delta; callee deltas, leading-arg deltas, identity, and
     macro/unsupported args veto; uniqueness proved by
     `call_literal_holds` at n=1 keyed on the trailing old literal.
-    Remaining families (method-literal, sub-line) keep `N ≥ 2` until
-    their WI-7 slices land.
+    Slice-13 adds whole-line method same-literal pairs
+    (`Receiver.configure(alpha_argument_1, first_value_foo, false)` →
+    `Receiver.configure(alpha_argument_1, first_value_foo, "100644")`,
+    whole-line plus `let`-init via the shared `parse_method_line`
+    entry): same method, same per-site receiver, uniform arity k ≥ 1,
+    old/new arg token-tuples with a real delta; method deltas, receiver
+    deltas, identity, and macro/unsupported args veto; uniqueness proved
+    by `method_literal_holds` at n=1 keyed on the exact old-args tuple.
+    The emission is the concrete tuple (no `E` arg holes — a holed
+    template would match sites the tuple-keyed proof never counted;
+    `Receiver` is the only hole). Remaining families (sub-line) keep
+    `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
