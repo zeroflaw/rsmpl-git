@@ -108,7 +108,11 @@ pub(crate) fn try_fn_joint_intent(
 ) -> Option<JointOutcome> {
     let checkpoint = used_rules.len();
     // Parse eligible sections (`.rs` non-rename sections only).
+    // WI-4e: hunk-level inputs — skip `rule=` hunks, not whole sections.
     let mut parsed: Vec<(usize, String, Vec<HunkPairs>)> = Vec::new();
+    // WI-4e: preserved semantic hunks + native lens per claimed section.
+    let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
+    let mut native_lens: HashMap<usize, usize> = HashMap::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -117,16 +121,18 @@ pub(crate) fn try_fn_joint_intent(
         if super::is_rename_header(header) {
             continue;
         }
-        // WI-4d: pre-pass emissions never re-enter later pre-passes.
-        if super::is_semantic_section(sec) {
+        let (prelude, semantic_hunks, native_view) = super::split_semantic_native(sec);
+        let Some(native_sec) = native_view else {
             continue;
-        }
+        };
         let rest = header.strip_prefix("diff --git ")?;
         let path = crate::b_side_path(rest)?;
         if !path.ends_with(".rs") {
             continue;
         }
-        parsed.push((i, path, split_hunks(sec)));
+        preserved.insert(i, (prelude, semantic_hunks));
+        native_lens.insert(i, native_sec.len());
+        parsed.push((i, path, split_hunks(&native_sec)));
     }
     if parsed.is_empty() {
         return None;
@@ -183,7 +189,11 @@ pub(crate) fn try_fn_joint_intent(
                     suppressed.insert((path.to_string(), f.old));
                     continue;
                 }
-                let claimed_bytes: usize = keys.iter().map(|k| sections[parsed[*k].0].len()).sum();
+                // WI-4e: native-view bytes so preserved hunks never tax the win.
+                let claimed_bytes: usize = keys
+                    .iter()
+                    .map(|k| native_lens.get(&parsed[*k].0).copied().unwrap_or(0))
+                    .sum();
                 if emission.len() >= claimed_bytes {
                     used_rules.truncate(checkpoint);
                     suppressed.insert((path.to_string(), f.old));
@@ -198,6 +208,7 @@ pub(crate) fn try_fn_joint_intent(
             let emission = emit(&def_path, &rule, &f);
             let claimed: HashSet<usize> = f.claimed_secs.iter().copied().collect();
             let first = *claimed.iter().min().unwrap_or(&0);
+            let new_hunks = super::emission_hunks(&emission);
             let mut out: Vec<String> = Vec::new();
             for (i, sec) in sections.iter().enumerate() {
                 if !claimed.contains(&i) {
@@ -205,7 +216,30 @@ pub(crate) fn try_fn_joint_intent(
                     continue;
                 }
                 if i == first {
-                    out.push(emission.clone());
+                    let keep = preserved
+                        .get(&i)
+                        .map(|(_, h)| h.clone())
+                        .unwrap_or_default();
+                    if keep.is_empty() {
+                        out.push(emission.clone());
+                    } else {
+                        let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
+                        let mut rebuilt = prelude;
+                        for h in &keep {
+                            rebuilt.push_str(h);
+                        }
+                        for h in &new_hunks {
+                            rebuilt.push_str(h);
+                        }
+                        out.push(rebuilt);
+                    }
+                } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
+                    let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+                    let mut rebuilt = prelude;
+                    for h in &keep {
+                        rebuilt.push_str(h);
+                    }
+                    out.push(rebuilt);
                 }
             }
             Some((out, def_path, rule, suppressed))
@@ -245,11 +279,16 @@ pub(crate) fn try_fn_joint_intent(
                         })
                         .collect();
                     let probed = probe_reproduces(pre, &emission, &pairs);
-                    let claimed_bytes: usize =
-                        f.claimed_secs.iter().map(|s| sections[*s].len()).sum();
+                    // WI-4e: native-view bytes.
+                    let claimed_bytes: usize = f
+                        .claimed_secs
+                        .iter()
+                        .map(|s| native_lens.get(s).copied().unwrap_or(0))
+                        .sum();
                     if probed && emission.len() < claimed_bytes {
                         let claimed: HashSet<usize> = f.claimed_secs.iter().copied().collect();
                         let first = *claimed.iter().min().unwrap_or(&0);
+                        let new_hunks = super::emission_hunks(&emission);
                         let mut out: Vec<String> = Vec::new();
                         for (i, sec) in sections.iter().enumerate() {
                             if !claimed.contains(&i) {
@@ -257,7 +296,32 @@ pub(crate) fn try_fn_joint_intent(
                                 continue;
                             }
                             if i == first {
-                                out.push(emission.clone());
+                                let keep = preserved
+                                    .get(&i)
+                                    .map(|(_, h)| h.clone())
+                                    .unwrap_or_default();
+                                if keep.is_empty() {
+                                    out.push(emission.clone());
+                                } else {
+                                    let (prelude, _) =
+                                        preserved.get(&i).cloned().unwrap_or_default();
+                                    let mut rebuilt = prelude;
+                                    for h in &keep {
+                                        rebuilt.push_str(h);
+                                    }
+                                    for h in &new_hunks {
+                                        rebuilt.push_str(h);
+                                    }
+                                    out.push(rebuilt);
+                                }
+                            } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
+                                let (prelude, keep) =
+                                    preserved.get(&i).cloned().unwrap_or_default();
+                                let mut rebuilt = prelude;
+                                for h in &keep {
+                                    rebuilt.push_str(h);
+                                }
+                                out.push(rebuilt);
                             }
                         }
                         return Some((out, def_path, rule, suppressed));
@@ -1734,6 +1798,37 @@ mod tests {
         let mut used = Vec::new();
         assert!(try_fn_joint_intent(&sections, &pre, &mut used).is_none());
         assert!(used.is_empty());
+    }
+
+    #[test]
+    fn joint_hybrid_section_native_pairs_still_fire() {
+        // WI-4e: pre-existing `rule=` hunk in the def section does not
+        // block the Joint-A fire on the native hunks; the preserved hunk
+        // rides alongside the new follow hunk.
+        let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let hybrid = "diff --git a/src.rs b/src.rs\n--- a/src.rs\n+++ b/src.rs\n@@ -10,0 +10,0 @@ rule=r1\n# bind=M1\n- I\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n"
+            .to_string();
+        let sections = vec![hybrid];
+        let pre_map = pre_map(&[("src.rs", pre)]);
+        let mut used = Vec::new();
+        let Some((out, def_path, rule, _)) = try_fn_joint_intent(&sections, &pre_map, &mut used)
+        else {
+            panic!("native joint pairs in hybrid must fire");
+        };
+        assert_eq!(def_path, "src.rs");
+        assert!(!rule.is_empty());
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].contains("rule=r1"),
+            "preserved hunk kept:\n{}",
+            out[0]
+        );
+        assert!(
+            out[0].contains(&format!("rule={rule}")),
+            "new hunk present:\n{}",
+            out[0]
+        );
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
     }
 
     #[test]

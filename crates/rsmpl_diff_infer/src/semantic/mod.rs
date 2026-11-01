@@ -74,6 +74,7 @@ mod verbatim;
 // WI-3c: covering-span helpers live in `item_span` (this file was over
 // the 1600-line soft cap); re-exported so `super::`/`crate::semantic::`
 // paths keep working.
+mod hybrid;
 mod item_intent;
 mod item_span;
 mod mod_rename;
@@ -794,6 +795,8 @@ pub(crate) fn is_semantic_section(sec: &str) -> bool {
         .any(|l| l.starts_with("@@") && l.contains("rule="))
 }
 
+pub(crate) use hybrid::{emission_hunks, split_semantic_native};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -848,6 +851,34 @@ mod tests {
             &mut used
         )
         .is_none());
+    }
+    #[test]
+    fn wi4e_split_semantic_native_partitions_hunks() {
+        // WI-4e: hybrid sections split into preserved `rule=` hunks and a
+        // native-only view with verbatim `@@` headers (sites preserved).
+        let hybrid = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -10,0 +10,0 @@ rule=r1\n# bind=M1\n- I\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n";
+        let (prelude, semantic, native) = split_semantic_native(hybrid);
+        assert!(prelude.starts_with("diff --git "));
+        assert_eq!(semantic.len(), 1, "one rule= hunk preserved");
+        assert!(semantic[0].contains("rule=r1"));
+        let native_sec = native.expect("native hunks remain");
+        assert!(!native_sec.contains("rule=r1"));
+        assert!(native_sec.contains("-struct Old {"));
+        // Pure-native sections carry no preserved hunks.
+        let pure = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n";
+        let (_, sem2, nat2) = split_semantic_native(pure);
+        assert!(sem2.is_empty());
+        assert!(nat2.is_some());
+        // Pure-semantic sections have no native view (skip, WI-4d posture).
+        let sem_only =
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let (_, sem3, nat3) = split_semantic_native(sem_only);
+        assert_eq!(sem3.len(), 1);
+        assert!(nat3.is_none());
+        // Emission hunks strip the `diff --git` header for splicing.
+        let hunks = emission_hunks("diff --git f.rs\n@@ -1,1 @@ rule=r2\n# sweep\n- a\n+ b\n");
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].starts_with("@@"));
     }
     #[test]
     fn rename_sections_stay_ordinary_passthrough() {

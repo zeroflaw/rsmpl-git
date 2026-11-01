@@ -76,6 +76,11 @@ pub(crate) fn try_item_intent_sweep(
     let mut eligible: Vec<usize> = Vec::new();
     // (section idx, path, minuses, pluses, changed)
     let mut parsed: Vec<SectionPairs> = Vec::new();
+    // WI-4e: preserved pre-existing semantic hunks + native byte lens
+    // per claimed section (pure-native sections hold empty vecs, so
+    // emission stays byte-identical to the pre-4e path).
+    let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
+    let mut native_lens: HashMap<usize, usize> = HashMap::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -84,22 +89,28 @@ pub(crate) fn try_item_intent_sweep(
         if super::is_rename_header(header) {
             continue;
         }
-        // WI-4d: pre-pass emissions never re-enter later pre-passes.
-        if super::is_semantic_section(sec) {
+        // WI-4e: hunk-level pre-pass inputs — skip `rule=` hunks, not
+        // whole sections, so leftover native pairs in hybrid sections
+        // (e.g. move leftovers) can still form intents. Pure-semantic
+        // sections stay skipped.
+        let (prelude, semantic_hunks, native_view) = super::split_semantic_native(sec);
+        let Some(native_sec) = native_view else {
             continue;
-        }
+        };
         let rest = header.strip_prefix("diff --git ")?;
         let path = crate::b_side_path(rest)?;
         if !path.ends_with(".rs") {
             continue;
         }
         eligible.push(i);
-        let (minuses, pluses, balanced) = section_pairs(sec);
+        preserved.insert(i, (prelude, semantic_hunks));
+        native_lens.insert(i, native_sec.len());
+        let (minuses, pluses, balanced) = section_pairs(&native_sec);
         if !balanced || minuses.is_empty() {
             used_rules.truncate(checkpoint);
             return None;
         }
-        let changed = crate::totality::changed_old_lines(sec);
+        let changed = crate::totality::changed_old_lines(&native_sec);
         if changed.len() != minuses.len() {
             used_rules.truncate(checkpoint);
             return None;
@@ -267,15 +278,22 @@ pub(crate) fn try_item_intent_sweep(
         used_rules.truncate(checkpoint);
         return None;
     }
-    // T375: the one hunk must beat the replaced native bytes.
-    let claimed_bytes: usize = parsed.iter().map(|sp| sections[sp.idx].len()).sum();
+    // T375: the one hunk must beat the replaced native bytes (WI-4e:
+    // native-view bytes, so preserved semantic hunks never tax the win).
+    let claimed_bytes: usize = parsed
+        .iter()
+        .map(|sp| native_lens.get(&sp.idx).copied().unwrap_or(0))
+        .sum();
     if emission.len() >= claimed_bytes {
         used_rules.truncate(checkpoint);
         return None;
     }
     // Rebuild: claimed sections collapse to the emission at the def
     // section's slot; anything unclaimed passes through byte-identical.
+    // WI-4e: hybrid sections keep their pre-existing semantic hunks
+    // ahead of the new emission hunks.
     let claimed: HashSet<usize> = eligible.into_iter().collect();
+    let new_hunks = super::emission_hunks(&emission);
     let mut out: Vec<String> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
         if !claimed.contains(&i) {
@@ -283,7 +301,33 @@ pub(crate) fn try_item_intent_sweep(
             continue;
         }
         if i == def.sec {
-            out.push(emission.clone());
+            let keep = preserved
+                .get(&i)
+                .map(|(_, h)| h.clone())
+                .unwrap_or_default();
+            if keep.is_empty() {
+                out.push(emission.clone());
+            } else {
+                let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
+                let mut rebuilt = prelude;
+                for h in &keep {
+                    rebuilt.push_str(h);
+                }
+                for h in &new_hunks {
+                    rebuilt.push_str(h);
+                }
+                out.push(rebuilt);
+            }
+        } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
+            // Non-def claimed hybrid sections collapse away: their native
+            // hunks are claimed by the def emission, but their semantic
+            // hunks must survive — re-emit them under the original header.
+            let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+            let mut rebuilt = prelude;
+            for h in &keep {
+                rebuilt.push_str(h);
+            }
+            out.push(rebuilt);
         }
     }
     Some((out, def.path.clone(), rule))
@@ -1356,5 +1400,35 @@ mod tests {
         assert!(out.contains("# follow=uses"), "got:\n{out}");
         assert!(out.contains("- fn foo"), "got:\n{out}");
         validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn hybrid_section_native_pairs_still_fire() {
+        // WI-4e: a hybrid section (pre-existing `rule=` hunk + native
+        // struct-rename pairs) still raises the intent on the native
+        // hunks, preserving the semantic hunk verbatim.
+        let hybrid = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -10,0 +10,0 @@ rule=r1\n# bind=M1\n- I\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -4,1 +4,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n"
+            .to_string();
+        let pre = pre_map(&[(
+            "f.rs",
+            "struct Old {\n    x: i32,\n}\nfn f(s: Old) -> i32 {\n    0\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) = try_item_intent_sweep(std::slice::from_ref(&hybrid), &pre, &mut used)
+            .expect("native pairs in hybrid must fire");
+        assert_eq!(out.len(), 1, "one section, hybrid preserved: {out:?}");
+        assert!(
+            out[0].contains("rule=r1"),
+            "preserved hunk kept:\n{}",
+            out[0]
+        );
+        assert!(
+            out[0].contains("# follow=uses"),
+            "new intent present:\n{}",
+            out[0]
+        );
+        assert!(out[0].contains("- struct Old"), "got:\n{}", out[0]);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).expect("hybrid output must parse");
+        assert_eq!(parsed.files.len(), 1);
     }
 }

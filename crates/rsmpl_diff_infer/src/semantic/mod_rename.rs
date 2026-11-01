@@ -65,6 +65,9 @@ pub(crate) fn try_mod_rename_intent_sweep(
     let mut rename_secs: Vec<usize> = Vec::new();
     let mut parsed: Vec<SecPairs> = Vec::new();
     let mut eligible: Vec<usize> = Vec::new();
+    // WI-4e: preserved semantic hunks + native lens per section.
+    let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
+    let mut native_lens: HashMap<usize, usize> = HashMap::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -83,21 +86,24 @@ pub(crate) fn try_mod_rename_intent_sweep(
             rename_secs.push(i);
             continue;
         }
-        // WI-4d: pre-pass emissions never re-enter later pre-passes.
-        if super::is_semantic_section(sec) {
+        // WI-4e: skip `rule=` hunks, not whole sections.
+        let (prelude, semantic_hunks, native_view) = super::split_semantic_native(sec);
+        let Some(native_sec) = native_view else {
             continue;
-        }
+        };
         let rest = header.strip_prefix("diff --git ")?;
         let path = crate::b_side_path(rest)?;
         if !path.ends_with(".rs") {
             continue;
         }
         eligible.push(i);
-        let (minuses, pluses, balanced) = section_pairs(sec);
+        preserved.insert(i, (prelude, semantic_hunks));
+        native_lens.insert(i, native_sec.len());
+        let (minuses, pluses, balanced) = section_pairs(&native_sec);
         if !balanced || minuses.is_empty() {
             return None;
         }
-        let changed = crate::totality::changed_old_lines(sec);
+        let changed = crate::totality::changed_old_lines(&native_sec);
         if changed.len() != minuses.len() {
             return None;
         }
@@ -335,17 +341,21 @@ pub(crate) fn try_mod_rename_intent_sweep(
         }
     }
     // T375 over the claimed pair sections only (the rename prelude is
-    // preserved, not replaced, so its bytes never count).
+    // preserved, not replaced, so its bytes never count; WI-4e counts
+    // native-view bytes so preserved hunks never tax the win).
     let claimed_bytes: usize = parsed
         .iter()
         .filter(|sp| claimed_secs.contains(&sp.idx))
-        .map(|sp| sections[sp.idx].len())
+        .map(|sp| native_lens.get(&sp.idx).copied().unwrap_or(0))
         .sum();
     if emission.len() >= claimed_bytes {
         used_rules.truncate(checkpoint);
         return None;
     }
     let rename_set: HashSet<usize> = rename_secs.iter().copied().collect();
+    // WI-4e: hybrid sections keep pre-existing semantic hunks ahead of
+    // the new emission hunks; non-def claimed hybrids re-emit theirs.
+    let new_hunks = super::emission_hunks(&emission);
     let mut out: Vec<String> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
         if rename_set.contains(&i) {
@@ -361,7 +371,30 @@ pub(crate) fn try_mod_rename_intent_sweep(
             continue;
         }
         if i == def.sec {
-            out.push(emission.clone());
+            let keep = preserved
+                .get(&i)
+                .map(|(_, h)| h.clone())
+                .unwrap_or_default();
+            if keep.is_empty() {
+                out.push(emission.clone());
+            } else {
+                let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
+                let mut rebuilt = prelude;
+                for h in &keep {
+                    rebuilt.push_str(h);
+                }
+                for h in &new_hunks {
+                    rebuilt.push_str(h);
+                }
+                out.push(rebuilt);
+            }
+        } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
+            let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+            let mut rebuilt = prelude;
+            for h in &keep {
+                rebuilt.push_str(h);
+            }
+            out.push(rebuilt);
         }
     }
     Some((out, def.path.clone(), rule))
@@ -803,5 +836,24 @@ mod tests {
         assert!(out.contains("# follow=uses"), "got:\n{out}");
         assert!(out.contains("- mod old"), "got:\n{out}");
         validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn hybrid_section_native_pairs_still_fire() {
+        // WI-4e: pre-existing `rule=` hunk in the def section does not
+        // block the mod intent on the native hunks; it is preserved.
+        let mut sections = mod_sections();
+        sections[0] = section(
+            "src/lib.rs",
+            "@@ -20,0 +20,0 @@ rule=r1\n# bind=M1\n- I\n@@ -1,1 +1,1 @@\n-mod old;\n+mod new;\n@@ -2,1 +2,1 @@\n-use crate::old::f;\n+use crate::new::f;\n@@ -4,1 +4,1 @@\n-    crate::old::f();\n+    crate::new::f();\n",
+        );
+        let pre = pre_map(&[("src/lib.rs", LIB_PRE), ("src/other.rs", USE_PRE)]);
+        let mut used = Vec::new();
+        let (out, path, _) =
+            try_mod_rename_intent_sweep(&sections, &pre, &mut used).expect("hybrid must fire");
+        assert_eq!(path, "src/lib.rs");
+        let joined = out.join("");
+        assert!(joined.contains("rule=r1"), "preserved hunk kept: {joined}");
+        assert!(joined.contains("- mod old"), "got: {joined}");
     }
 }

@@ -150,6 +150,9 @@ pub(crate) fn try_member_intent_sweep(
     }
     let mut parsed: Vec<SecPairs> = Vec::new();
     let mut eligible: Vec<usize> = Vec::new();
+    // WI-4e: preserved semantic hunks + native lens per section.
+    let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
+    let mut native_lens: HashMap<usize, usize> = HashMap::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -158,21 +161,24 @@ pub(crate) fn try_member_intent_sweep(
         if super::is_rename_header(header) {
             continue;
         }
-        // WI-4d: pre-pass emissions never re-enter later pre-passes.
-        if super::is_semantic_section(sec) {
+        // WI-4e: skip `rule=` hunks, not whole sections.
+        let (prelude, semantic_hunks, native_view) = super::split_semantic_native(sec);
+        let Some(native_sec) = native_view else {
             continue;
-        }
+        };
         let rest = header.strip_prefix("diff --git ")?;
         let path = crate::b_side_path(rest)?;
         if !path.ends_with(".rs") {
             continue;
         }
         eligible.push(i);
-        let (minuses, pluses, balanced) = section_pairs(sec);
+        preserved.insert(i, (prelude, semantic_hunks));
+        native_lens.insert(i, native_sec.len());
+        let (minuses, pluses, balanced) = section_pairs(&native_sec);
         if !balanced || minuses.is_empty() {
             return None;
         }
-        let changed = crate::totality::changed_old_lines(sec);
+        let changed = crate::totality::changed_old_lines(&native_sec);
         if changed.len() != minuses.len() {
             return None;
         }
@@ -376,15 +382,21 @@ pub(crate) fn try_member_intent_sweep(
             }
         }
     }
+    // WI-4e: native-view bytes, so preserved semantic hunks never tax
+    // the T375 win.
     let claimed_bytes: usize = parsed
         .iter()
         .filter(|sp| claimed_secs.contains(&sp.idx))
-        .map(|sp| sections[sp.idx].len())
+        .map(|sp| native_lens.get(&sp.idx).copied().unwrap_or(0))
         .sum();
     if emission.len() >= claimed_bytes {
         used_rules.truncate(checkpoint);
         return None;
     }
+    // WI-4e: hybrid sections keep pre-existing semantic hunks ahead of
+    // the new emission hunks; non-def claimed hybrids re-emit their
+    // semantic hunks under the original header.
+    let new_hunks = super::emission_hunks(&emission);
     let mut out: Vec<String> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
         if !eligible.contains(&i) {
@@ -396,7 +408,30 @@ pub(crate) fn try_member_intent_sweep(
             continue;
         }
         if i == def_pair.sec {
-            out.push(emission.clone());
+            let keep = preserved
+                .get(&i)
+                .map(|(_, h)| h.clone())
+                .unwrap_or_default();
+            if keep.is_empty() {
+                out.push(emission.clone());
+            } else {
+                let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
+                let mut rebuilt = prelude;
+                for h in &keep {
+                    rebuilt.push_str(h);
+                }
+                for h in &new_hunks {
+                    rebuilt.push_str(h);
+                }
+                out.push(rebuilt);
+            }
+        } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
+            let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+            let mut rebuilt = prelude;
+            for h in &keep {
+                rebuilt.push_str(h);
+            }
+            out.push(rebuilt);
         }
     }
     Some((out, def_pair.path.clone(), rule))
@@ -1334,5 +1369,36 @@ mod tests {
             files["b.rs"]
         );
         assert!(!files["b.rs"].contains("Active"), "got: {}", files["b.rs"]);
+    }
+
+    #[test]
+    fn hybrid_section_native_pairs_still_fire() {
+        // WI-4e: pre-existing `rule=` hunk in the def file does not block
+        // the cross-file member intent; it is preserved alongside.
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -20,0 +20,0 @@ rule=r1\n# bind=M1\n- I\n@@ -2,1 +2,1 @@\n-    timeout_ms: u32,\n+    deadline_ms: u32,\n",
+            ),
+            section(
+                "b.rs",
+                concat!(
+                    "@@ -2,1 +2,1 @@\n",
+                    "-    c.timeout_ms + c.retries as u32\n",
+                    "+    c.deadline_ms + c.retries as u32\n",
+                    "@@ -5,1 +5,1 @@\n",
+                    "-    Config { timeout_ms: 5, retries: 1 }\n",
+                    "+    Config { deadline_ms: 5, retries: 1 }\n",
+                ),
+            ),
+        ];
+        let pre = pre_map(&[("a.rs", XDEF_PRE), ("b.rs", XUSE_PRE)]);
+        let mut used = Vec::new();
+        let (out, path, _) = try_member_intent_sweep(&sections, &pre, &mut used)
+            .expect("native pairs in hybrid must fire");
+        assert_eq!(path, "a.rs");
+        let joined = out.join("");
+        assert!(joined.contains("rule=r1"), "preserved hunk kept: {joined}");
+        assert!(joined.contains("# follow=uses"), "got: {joined}");
     }
 }
