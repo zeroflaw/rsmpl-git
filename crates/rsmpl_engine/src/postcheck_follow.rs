@@ -590,4 +590,56 @@ mod tests {
             Some(true)
         );
     }
+
+    #[test]
+    fn wi6b_same_point_insertions_keep_document_order() {
+        // Same-point inserts share (start, end); the stable sort keeps
+        // document order so the second insert shifts past the first.
+        let triples = vec![(1, 1, "X;".to_string()), (1, 1, "Y;".to_string())];
+        let all = vec![
+            TextEdit::new(1, 1, "X;".to_string()),
+            TextEdit::new(1, 1, "Y;".to_string()),
+        ];
+        assert_eq!(
+            post_starts_for(&triples, &all),
+            vec![(1, "X;".to_string()), (3, "Y;".to_string())]
+        );
+        // Order-dependence: reversed document order reverses the offsets.
+        let all_rev = vec![
+            TextEdit::new(1, 1, "Y;".to_string()),
+            TextEdit::new(1, 1, "X;".to_string()),
+        ];
+        assert_eq!(
+            post_starts_for(&triples, &all_rev),
+            vec![(3, "X;".to_string()), (1, "Y;".to_string())]
+        );
+        // Single-insert control: no shift.
+        let single = vec![(1, 1, "X;".to_string())];
+        let single_all = vec![TextEdit::new(1, 1, "X;".to_string())];
+        assert_eq!(
+            post_starts_for(&single, &single_all),
+            vec![(1, "X;".to_string())]
+        );
+    }
+
+    #[test]
+    fn wi6b_overlapping_predecessor_counts_conservatively() {
+        // Plan time rejects overlaps; the probe still counts an overlapping
+        // predecessor's delta (e.start < os < e.end) instead of ignoring it.
+        let target = vec![(5, 8, "NN".to_string())];
+        let overlap_all = vec![
+            TextEdit::new(3, 7, "XXXXXX".to_string()),
+            TextEdit::new(5, 8, "NN".to_string()),
+        ];
+        assert_eq!(
+            post_starts_for(&target, &overlap_all),
+            vec![(7, "NN".to_string())]
+        );
+        // Control without the overlap: no shift.
+        let alone = vec![TextEdit::new(5, 8, "NN".to_string())];
+        assert_eq!(
+            post_starts_for(&target, &alone),
+            vec![(5, "NN".to_string())]
+        );
+    }
 }
