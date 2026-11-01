@@ -127,12 +127,20 @@ impl Collector<'_> {
     }
 }
 
-fn tokens_mention(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
-    tokens.clone().into_iter().any(|t| match t {
-        proc_macro2::TokenTree::Ident(id) => id == old,
-        proc_macro2::TokenTree::Group(g) => tokens_mention(&g.stream(), old),
-        _ => false,
-    })
+fn macro_ident_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for t in tokens.clone() {
+        match t {
+            proc_macro2::TokenTree::Ident(id) if id == old => {
+                out.push(id.span().start().line as u32);
+            }
+            proc_macro2::TokenTree::Group(g) => {
+                out.extend(macro_ident_lines(&g.stream(), old));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 impl<'ast> Visit<'ast> for Collector<'_> {
@@ -211,11 +219,8 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         if self.macro_paths {
             self.push_path_use(&node.path);
         }
-        if tokens_mention(&node.tokens, self.old) {
-            self.opaque.push((
-                node.span().start().line as u32,
-                "a macro invocation".to_string(),
-            ));
+        for line in macro_ident_lines(&node.tokens, self.old) {
+            self.opaque.push((line, "a macro invocation".to_string()));
         }
     }
 

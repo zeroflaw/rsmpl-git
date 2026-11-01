@@ -1053,16 +1053,16 @@ mod tests {
     }
 
     #[test]
-    fn general_orphans_multiline_opaque_ident_kept_at_start_line() {
+    fn general_orphans_multiline_opaque_ident_at_ident_line() {
         // Multi-line `println!("{}", total)`: the `old` ident lives on
-        // line 5 but `collect_orphans` reports the macro start line (3).
-        // Sibling-line scan keeps the legacy start line (failed mid-turn
-        // under a reported-line-only gate, which dropped this true
-        // orphan — unsafe direction).
+        // line 5 so `collect_orphans` reports the ident line (5), not
+        // the macro start line (3). Sibling-line scan gates on ident
+        // bytes (a reported-line-only gate dropped this true orphan
+        // mid-turn — unsafe direction).
         let src = "fn main() {\n    let total = 1;\n    println!(\n        \"{}\",\n        total\n    );\n}\n";
         let orphans = orphans_for_src(src);
         assert_eq!(orphans.len(), 1, "got: {orphans:?}");
-        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 5, "got: {orphans:?}");
         assert_eq!(orphans[0].reason, "macro-hidden");
     }
 

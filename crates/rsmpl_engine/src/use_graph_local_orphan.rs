@@ -598,10 +598,10 @@ pub(crate) fn let_binder_orphans(
         }
         found
     };
-    // Macros by start line: `collect_orphans` reports the macro start
-    // line while the `old` ident may live on a later line of the same
-    // multi-line invocation. Sibling-line scan keeps the legacy start
-    // line (no line-number change) while gating on the ident bytes.
+    // Macros by start line: `collect_orphans` reports the ident line
+    // while the macro invocation may span several lines. Sibling-line
+    // scan gates on ident bytes (a multi-line macro naming `old`
+    // out-of-block stays dropped, ident-line orphans stay kept).
     let mut macros_by_start: std::collections::HashMap<u32, Vec<(usize, usize)>> =
         std::collections::HashMap::new();
     for r in &gate.macros {
