@@ -1,9 +1,9 @@
 //! WI-2a/2b: `let`-binder rename honesty + block completion.
 //!
 //! WI-2a detects the single-binder rename shape (`let old = E;` → `let
-//! new = E;`, same init, same type annotation) and lists leftover
-//! same-name uses via the proven [`crate::use_graph_orphan::collect_orphans`]
-//! path collector. WI-2b additionally rewrites block-scoped value uses in
+//! new = E;`, same init, same type annotation); the leftover-use orphan
+//! scan lives in [`crate::use_graph_local_orphan`] (enclosing-block
+//! gated). WI-2b additionally rewrites block-scoped value uses in
 //! the same hunk (labelled `follow`); shadowing, nested-fn, and macro
 //! interiors stay evidence (orphans + downgrade), never rewritten.
 
@@ -13,7 +13,6 @@ use rsmpl_pattern::{GeneralShape, PatternKind};
 
 use crate::edits::TextEdit;
 use crate::lines::{FileState, LineIndex};
-use crate::use_graph_orphan::collect_orphans;
 
 /// WI-9a: orphan evidence for definition-only member renames (SPEC
 /// 14.8). Mirrors the scalar orphan block: the definition hunk's own
@@ -350,7 +349,13 @@ pub fn general_orphans(
     compiled: &rsmpl_pattern::CompiledPattern,
 ) -> Vec<crate::OrphanReport> {
     if let Some((old, _)) = let_binder_rename(&compiled.kind) {
-        return let_binder_orphans(states, file_edits, path, edits_before, &old);
+        return crate::use_graph_local_orphan::let_binder_orphans(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            &old,
+        );
     }
     // WI-2c: closure-param / match-arm binder renames. Scope-interior
     // scan only (see `closure_or_arm_orphans`): outside uses can never
@@ -386,141 +391,6 @@ pub fn general_orphans(
         );
     }
     Vec::new()
-}
-
-/// WI-2a post-binder orphan scan for `let`-binder renames (same file
-/// only: locals can never dangle cross-file; uses before the binder
-/// statement end name the outer scope, including the binder's own init
-/// RHS `let total = total;`).
-fn let_binder_orphans(
-    states: &HashMap<String, FileState>,
-    file_edits: &HashMap<String, Vec<TextEdit>>,
-    path: &str,
-    edits_before: usize,
-    old: &str,
-) -> Vec<crate::OrphanReport> {
-    let Some(st) = states.get(path) else {
-        return Vec::new();
-    };
-    let Some(parsed) = st.parsed.as_ref() else {
-        return Vec::new();
-    };
-    let original = st.original.as_str();
-    let index = &st.index;
-    let hunk_edits: &[TextEdit] = file_edits
-        .get(path)
-        .map(|v| &v[edits_before.min(v.len())..])
-        .unwrap_or(&[]);
-    if hunk_edits.is_empty() {
-        return Vec::new();
-    }
-    let renamed: Vec<(usize, usize)> = hunk_edits.iter().map(|e| (e.start, e.end)).collect();
-    let binder_spans: Vec<(usize, usize)> = hunk_edits
-        .iter()
-        .filter(|e| e.label != Some("follow"))
-        .map(|e| (e.start, e.end))
-        .collect();
-    let fallback = binder_spans
-        .iter()
-        .map(|(s, _)| *s)
-        .min()
-        .unwrap_or(usize::MAX);
-    struct LocalEnds<'a> {
-        original: &'a str,
-        index: &'a LineIndex,
-        binders: &'a [(usize, usize)],
-        ends: Vec<usize>,
-    }
-    impl<'ast> syn::visit::Visit<'ast> for LocalEnds<'_> {
-        fn visit_local(&mut self, node: &'ast syn::Local) {
-            use syn::spanned::Spanned;
-            if let Some((a, b)) =
-                crate::matcher_item::span_bytes(self.original, self.index, node.span())
-            {
-                if self.binders.iter().any(|(s, e)| a <= *s && *e <= b) {
-                    self.ends.push(b);
-                }
-            }
-            syn::visit::visit_local(self, node);
-        }
-    }
-    let mut grab = LocalEnds {
-        original,
-        index,
-        binders: &binder_spans,
-        ends: Vec::new(),
-    };
-    {
-        use syn::visit::Visit;
-        grab.visit_file(parsed);
-    }
-    let thresh = grab.ends.into_iter().min().unwrap_or(fallback);
-    if thresh == usize::MAX {
-        return Vec::new();
-    }
-    let thresh_line = index.line_of(thresh);
-    let refs = vec![(path.to_string(), parsed, original, index)];
-    let mut out = collect_orphans(&refs, old, path, &renamed, false);
-    // Inline format-string captures (`println!("{total}")`) hide the
-    // ident inside a string literal — no `Ident` token for the path
-    // collector above. Pre-binder macros never dangle, so only
-    // post-binder capture lines are kept (safe direction: downgrade).
-    for line in format_capture_lines(parsed, old) {
-        if line < thresh_line {
-            continue;
-        }
-        out.push(crate::OrphanReport {
-            file: path.to_string(),
-            line,
-            text: orphan_line_text(original, index, line),
-            reason: "macro-hidden".to_string(),
-        });
-    }
-    out.retain(|o| {
-        if o.line < thresh_line {
-            return false;
-        }
-        if o.line > thresh_line {
-            return true;
-        }
-        if o.reason == "macro-hidden" {
-            return true;
-        }
-        let Some(ls) = index.line_start(o.line) else {
-            return true;
-        };
-        let le = index.line_start(o.line + 1).unwrap_or(original.len());
-        let line_text = &original[ls..le.min(original.len())];
-        let mut off = 0;
-        while let Some(pos) = line_text[off..].find(old) {
-            let a = ls + off + pos;
-            let b = a + old.len();
-            let prev_ok = a == 0 || {
-                let c = original[..a].chars().next_back().unwrap();
-                !(c.is_alphanumeric() || c == '_')
-            };
-            let next_ok = original
-                .get(b..)
-                .map(|r| {
-                    r.chars()
-                        .next()
-                        .map(|c| !(c.is_alphanumeric() || c == '_'))
-                        .unwrap_or(true)
-                })
-                .unwrap_or(true);
-            if prev_ok && next_ok && a >= thresh && !renamed.iter().any(|(s, e)| a < *e && *s < b) {
-                return true;
-            }
-            off += pos + 1;
-            if off >= line_text.len() {
-                break;
-            }
-        }
-        false
-    });
-    out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
-    out.dedup_by(|a, b| a.file == b.file && a.line == b.line);
-    out
 }
 
 /// WI-2b: block-scoped follow edits for a plain binder rename.
@@ -893,7 +763,7 @@ pub fn let_binder_follow_edits(
 /// Lines of macros whose string literals capture `{old}` inline
 /// (`println!("{old}")`, `{old:?}`). `collect_orphans` sees only
 /// `Ident` tokens; format captures live inside `Literal`s.
-fn format_capture_lines(parsed: &syn::File, old: &str) -> Vec<u32> {
+pub(crate) fn format_capture_lines(parsed: &syn::File, old: &str) -> Vec<u32> {
     use syn::visit::{self, Visit};
     struct Finder<'a> {
         old: &'a str,
@@ -1369,6 +1239,86 @@ mod tests {
         assert_eq!(orphans.len(), 1, "got: {orphans:?}");
         assert_eq!(orphans[0].file, "src/main.rs");
         assert_eq!(orphans[0].line, 3);
+    }
+
+    fn orphans_for_src(src: &str) -> Vec<crate::OrphanReport> {
+        use std::collections::HashMap;
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        let binder_off = src.find("let total").unwrap() + 4;
+        let mut states = HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            crate::lines::FileState {
+                original: src.to_string(),
+                index,
+                parsed: Some(parsed),
+            },
+        );
+        let mut file_edits = HashMap::new();
+        file_edits.insert(
+            "src/main.rs".to_string(),
+            vec![crate::edits::TextEdit {
+                start: binder_off,
+                end: binder_off + "total".len(),
+                replacement: "sum".to_string(),
+                label: None,
+            }],
+        );
+        let mut kind = general_stmt("let total = 1;", "let sum = 1;");
+        if let PatternKind::General { placeholders, .. } = &mut kind {
+            placeholders.clear();
+        }
+        let compiled = compiled(kind);
+        general_orphans(&states, &file_edits, "src/main.rs", 0, &compiled)
+    }
+
+    #[test]
+    fn general_orphans_ignores_other_fn_same_file() {
+        // `bar`'s `total` names a different scope — not an orphan.
+        let src = "fn foo() {\n    let total = 1;\n}\nfn bar() {\n    let y = total;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert!(orphans.is_empty(), "got: {orphans:?}");
+    }
+
+    #[test]
+    fn general_orphans_keeps_in_scope_use_beside_other_fn() {
+        // In-scope leftover stays even when another fn shares the name.
+        let src = "fn foo() {\n    let total = 1;\n    let x = total;\n}\nfn bar() {\n    let y = total;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 3);
+    }
+
+    #[test]
+    fn general_orphans_ignores_nested_fn_use() {
+        // Nested fns cannot capture outer locals — unrelated scope.
+        let src = "fn main() {\n    let total = 1;\n    fn inner() -> u32 { total }\n    let g = total;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 4);
+    }
+
+    #[test]
+    fn general_orphans_keeps_shadowed_inner_let_use() {
+        // Shadowed uses stay orphans (no over-narrowing).
+        let src = "fn main() {\n    let total = 1;\n    {\n        let total = 2;\n        let b = total;\n    }\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 5);
+    }
+
+    #[test]
+    fn general_orphans_macro_scope_precision() {
+        // Macro in the enclosing block stays; macro in another fn drops.
+        let same = "fn main() {\n    let total = 1;\n    println!(\"{}\", total);\n}\n";
+        let orphans = orphans_for_src(same);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 3);
+        let other =
+            "fn foo() {\n    let total = 1;\n}\nfn bar() {\n    println!(\"{}\", total);\n}\n";
+        let orphans = orphans_for_src(other);
+        assert!(orphans.is_empty(), "got: {orphans:?}");
     }
 
     fn follow_edits_for(src: &str) -> Vec<crate::edits::TextEdit> {

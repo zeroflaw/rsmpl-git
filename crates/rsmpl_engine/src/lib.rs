@@ -51,6 +51,7 @@ mod use_graph_anchor;
 mod use_graph_assoc;
 mod use_graph_binder;
 mod use_graph_local;
+mod use_graph_local_orphan;
 mod use_graph_macro;
 pub(crate) mod use_graph_member;
 mod use_graph_method;
