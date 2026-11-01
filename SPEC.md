@@ -4940,7 +4940,8 @@ if:
     `not-applicable` (`optional` zero-edit hunks).
     The global `checked.semantics` is `verified` iff every rule is
     `instantiated`/`postcondition` and no ordinary hunk is present;
-     otherwise `partial` (unverified insertions, cuts, ordinary hunks, unverified
+     otherwise `partial` (unverified insertions, cuts, pastes,
+    member-additions, ordinary hunks, unverified
     follow-only extras, and optional zero-edits all force `partial`).
 
 ---
@@ -6728,9 +6729,10 @@ prints one JSON object to stdout:
   every successful run, each computed by a check that can fail on real
   input (never true by construction). `lowering` is the `git apply
   --check` verdict on the full lowering (empty lowerings skip git and
-  report `true`); `semantics` is `"verified"` iff every rule is
+  report `true`);   `semantics` is `"verified"` iff every rule is
   `instantiated`/`postcondition` and no ordinary hunk is present, else
-  `"partial"` (Section 24.6: insertions, cuts, pastes, unverified
+  `"partial"` (Section 24.6: unverified insertions, cuts, pastes,
+  member-additions, unverified
   follow-only extras, optional zero-edits, and ordinary hunks all force
   `partial`);
   `build` is `"pass"` iff `--verify build`
@@ -7448,8 +7450,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   probe: the emitted hunk must apply with `matches == 1` and
   reproduce byte-identically the native post (insertion after line
   N, everything else untouched). Guard is the precision guard
-  (semantic ≤ ordinary + 16 bytes). Insertions report
-  `reparse-only` (no structural plus re-match for insertions).
+  (semantic ≤ ordinary + 16 bytes). Unverified insertions report
+  `reparse-only` (no structural plus re-match for insertions); verified
+  pure insertions and member additions report `postcondition`
+  (Section 24.6).
   Construction follow-through is the next bullet (WI-12c slice 1).
   Detector name `definition_addition`.
 - Definition-addition struct-literal follow-through (WI-12c slice 1):

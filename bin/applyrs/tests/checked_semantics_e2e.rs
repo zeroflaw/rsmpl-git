@@ -259,6 +259,70 @@ fn evolving_move_pair_reports_postcondition_and_verified() {
     );
 }
 
+// WI-7e: bench 02 (`example-benches/applyrs/02-move-fn-cross-file`)
+// cross-file verbatim move — `postcondition` on both entries,
+// `verified` global. Same probe as WI-7a, two files.
+#[test]
+fn cross_file_verbatim_move_reports_postcondition_and_verified() {
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/old.rs",
+        "fn helper() {}\nfn keep_old() {}\n",
+    );
+    write(dir.path(), "src/new.rs", "fn keep_new() {}\n");
+    let out = run_stdin(
+        dir.path(),
+        "diff --git src/old.rs src/old.rs\n--- a/src/old.rs\n+++ b/src/old.rs\n@@ -1,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n\ndiff --git src/new.rs src/new.rs\n--- a/src/new.rs\n+++ b/src/new.rs\n@@ -1,0 @@ rule=paste_helper\n# lang=rust\n# use=Helper\n+ Helper\n",
+        &["--format", "json", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    for rule in v["rules"].as_array().expect("rules array") {
+        assert_eq!(
+            rule["semantics"],
+            serde_json::json!("postcondition"),
+            "bench 02 got: {v}"
+        );
+    }
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "bench 02 global got: {v}"
+    );
+}
+
+// WI-7e: bench 31 shape (`example-benches/diffrs/31-collection-move/`)
+// as an apply-side replay — multi-item cut + bare paste verifies per
+// item, `postcondition` on both entries, `verified` global.
+#[test]
+fn collection_move_bench31_shape_reports_postcondition_and_verified() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -4,0 @@ rule=paste_all\n# lang=rust\n# use=Helpers\n+ Helpers\n\n@@ -1,3 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n",
+        "src/lib.rs",
+        "fn a() {}\nfn b() {}\nfn z() {}\n",
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("postcondition"),
+        "bench 31 paste got: {v}"
+    );
+    assert_eq!(
+        v["rules"][1]["semantics"],
+        serde_json::json!("postcondition"),
+        "bench 31 cut got: {v}"
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "bench 31 global got: {v}"
+    );
+}
 // WI-7d: a pure insertion plus an unpaired cut verify structurally —
 // `postcondition` on both entries, `verified` global.
 #[test]
