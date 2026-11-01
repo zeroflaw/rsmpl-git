@@ -424,7 +424,9 @@ pub(crate) fn try_call_arg_template_sweep(
 /// One method-call line: receiver token text, method ident, arg exprs.
 /// Whole-line `recv.m(args)` with one trailing `;`/`,` tolerated, plus
 /// the `let`-init unwrap (T449 parity with the bare-call path).
-fn parse_method_line(line: &str) -> Option<(String, String, Vec<syn::Expr>)> {
+/// `pub(crate)` for the WI-7 slice-11 method perm single
+/// (`perm_single.rs`, same shared-entry treatment as `parse_bare_pair`).
+pub(crate) fn parse_method_line(line: &str) -> Option<(String, String, Vec<syn::Expr>)> {
     let text = strip_one_terminator(line.trim())?;
     if text.is_empty() || text.starts_with('&') {
         return None;
@@ -743,8 +745,13 @@ pub(crate) fn try_call_arg_template_single(
     let plus_call = format!("{lit}({})", p_tpl.join(", "));
     // Defensive: both sides must re-parse as calls (the totality probe
     // re-checks, but a non-parsing template must never leave this core).
-    if syn::parse_str::<syn::Expr>(&minus_call).is_err()
-        || syn::parse_str::<syn::Expr>(&plus_call).is_err()
+    // The check runs on the raw callee: backticks are RSmPL-level
+    // literal spelling (SPEC 15.4), not Rust syntax, so the backticked
+    // emission would never parse as an `Expr` (TOOL-5).
+    let raw_minus = format!("{o_cal}({})", m_tpl.join(", "));
+    let raw_plus = format!("{o_cal}({})", p_tpl.join(", "));
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
         return None;
     }
@@ -816,8 +823,12 @@ pub(crate) fn try_method_arg_template_single(
     let plus_tpl = format!("Receiver.{lit}({})", p_tpl.join(", "));
     // Defensive: both sides must re-parse as calls (the totality probe
     // re-checks, but a non-parsing template must never leave this core).
-    if syn::parse_str::<syn::Expr>(&minus_tpl).is_err()
-        || syn::parse_str::<syn::Expr>(&plus_tpl).is_err()
+    // Raw method for the check: backticks are RSmPL-level literal
+    // spelling (SPEC 15.4), not Rust syntax (TOOL-5).
+    let raw_minus = format!("Receiver.{o_method}({})", m_tpl.join(", "));
+    let raw_plus = format!("Receiver.{o_method}({})", p_tpl.join(", "));
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
         return None;
     }

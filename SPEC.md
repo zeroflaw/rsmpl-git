@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-   Precision singles (WI-7 slices 1-10, `PrecisionUnique`): N == 1
+    Precision singles (WI-7 slices 1-11, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7713,11 +7713,22 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     the bare anchored template (pattern/type ride each site's own
     wrapper) and carries the same T361 byte-compare pre-reservation as
     slice-4. Guard is the precision guard (semantic ≤ ordinary + 16).
-    `None` pre-image vetoes (no guessing); an untouched same-shape twin
-    vetoes (same-arity for call/method shapes, same-template for
-    general); non-matching twins never count. Remaining families
-    (literal, sub-line, method-perm) keep `N ≥ 2`
-    until their WI-7 slices land.
+    Slice-11 adds whole-line method-call arg-permutation pairs
+    (`Receiver.foo(E0, E1)` → `Receiver.foo(E1, E0)`, whole-line plus
+    `let`-init via the shared `parse_method_line` entry) as the twin of
+    the slice-10 entry: same receiver and same method (receiver deltas
+    stay with the m2f single, method deltas with the slice-2 single),
+    uniform arity k ≥ 2, plus args a non-trivial token multiset
+    bijection of the minus args; identity, non-bijective deltas,
+    receiver/method deltas, and macro/unsupported args veto. TOOL-5
+    hygiene (same slice): the slice-6/7/11 defensive `syn::Expr`
+    re-parse runs on the raw callee/method (backticks are RSmPL-level
+    literal spelling, never Rust syntax); the emission keeps the
+    backticked literal. `None` pre-image vetoes (no guessing); an
+    untouched same-shape twin vetoes (same-arity for call/method
+    shapes, same-template for general); non-matching twins never
+    count. Remaining families (literal, sub-line) keep `N ≥ 2` until
+    their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
