@@ -449,3 +449,7 @@ pub(crate) fn follow_uses_workspace(
     let details = FollowSkip::details(&skipped, def_path);
     Ok((extras, details))
 }
+
+#[cfg(test)]
+#[path = "use_graph_follow_tests.rs"]
+mod tests;
