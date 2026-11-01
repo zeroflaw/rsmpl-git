@@ -4,10 +4,10 @@
 //!
 //! The def hunk (the only hunk for Joint-A, which rides `# follow=uses`;
 //! the header pair for Joint-B) plus the Joint-B call-template hunk
-//! under the same rule live here. Single-file emission (`emit` in
-//! `fn_joint`) concatenates both in one section; the workspace Joint-B
-//! rebuild (`rebuild_workspace_b` in `fn_joint_ws`) places them at the
-//! def file and the call file as two sections sharing one rule.
+//! under the same rule live here. Single-file emission (`emit` below)
+//! concatenates both in one section; the workspace Joint-B rebuild
+//! (`rebuild_workspace_b` in `fn_joint_ws`) places them at the def file
+//! and the call file as two sections sharing one rule.
 
 use super::fn_joint::{Fire, Joint};
 
@@ -64,6 +64,18 @@ pub(crate) fn call_hunk_text(rule: &str, fire: &Fire) -> Option<String> {
     Some(format!(
         "@@ -1,1 @@ rule={rule}\n# sweep\n- {call_minus}\n+ {call_plus}\n"
     ))
+}
+
+/// Single-file joint emission: the def hunk plus — for Joint-B — the
+/// call-template hunk under the same rule, in one section.
+pub(crate) fn emit(path: &str, rule: &str, fire: &Fire) -> String {
+    let mut out = crate::git_header(path);
+    out.push('\n');
+    out.push_str(&def_hunk_text(rule, fire));
+    if let Some(call) = call_hunk_text(rule, fire) {
+        out.push_str(&call);
+    }
+    out
 }
 
 /// `fn foo(x: i32) {` → `fn foo(x: i32) { ... }` (the engine's fn

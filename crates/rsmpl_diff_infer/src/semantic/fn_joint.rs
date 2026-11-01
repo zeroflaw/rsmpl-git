@@ -180,7 +180,7 @@ pub(crate) fn try_fn_joint_intent(
                     continue;
                 }
                 let rule = unique_rule(used_rules, &format!("rename_{}_to_{}", f.old, f.new));
-                let emission = emit(path, &rule, &f);
+                let emission = super::fn_joint_emit::emit(path, &rule, &f);
                 let probed = match &f.joint {
                     Joint::A | Joint::B1 { .. } => {
                         let pairs: Vec<Pair> = f
@@ -234,7 +234,7 @@ pub(crate) fn try_fn_joint_intent(
     }
     match fire {
         Some((f, def_path, rule)) => {
-            let emission = emit(&def_path, &rule, &f);
+            let emission = super::fn_joint_emit::emit(&def_path, &rule, &f);
             let claimed: HashSet<usize> = f.claimed_secs.iter().copied().collect();
             let first = *claimed.iter().min().unwrap_or(&0);
             let new_hunks = super::emission_hunks(&emission);
@@ -327,7 +327,7 @@ pub(crate) fn try_fn_joint_intent(
                         };
                     }
                     let rule = unique_rule(used_rules, &format!("rename_{}_to_{}", f.old, f.new));
-                    let emission = emit(&def_path, &rule, &f);
+                    let emission = super::fn_joint_emit::emit(&def_path, &rule, &f);
                     let pairs: Vec<Pair> = f
                         .claims
                         .iter()
@@ -1157,26 +1157,6 @@ pub(crate) fn is_call_callee_of(line: &str, old: &str) -> bool {
     callee == old
 }
 
-/// Emit the joint emission under `rule`: the header pair rebuilt from
-/// the native def lines (`{` → `{ ... }`, native spacing preserved),
-/// plus — for Joint-B — the call-template hunk under the same rule.
-/// Joint-A rides one hunk with `# sweep` + `# follow=uses`; Joint-B1/B2
-/// ride two hunks with `# sweep` and no follow (a follow would claim
-/// the call hunk's sites and the lowering would refuse the overlap).
-/// WI-4f splits the two hunks into per-file builders (see
-/// `fn_joint_emit`) so the workspace Joint-B emission can place the def
-/// hunk at the def file and the call hunk at the call file under one
-/// rule.
-fn emit(path: &str, rule: &str, fire: &Fire) -> String {
-    let mut out = crate::git_header(path);
-    out.push('\n');
-    out.push_str(&super::fn_joint_emit::def_hunk_text(rule, fire));
-    if let Some(call) = super::fn_joint_emit::call_hunk_text(rule, fire) {
-        out.push_str(&call);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::fn_joint_emit::with_body_hole;
@@ -1335,6 +1315,38 @@ mod tests {
         assert!(
             full.as_ref().is_none_or(|s| !s.contains("rule=")),
             "body veto must stay wholly ordinary"
+        );
+    }
+
+    #[test]
+    fn attr_change_vetoes_to_wholly_ordinary() {
+        // WI-4 residue (WI-5 owns the composition): rename+attr-*change*
+        // (balanced `#[inline]` → `#[inline(never)]` hunk) must not
+        // fragment into ordinary def + rename-claiming sweep — the whole
+        // section stays ordinary, like the F4b body-delta veto above.
+        let pre =
+            "#[inline]\nfn foo(x: i32) -> i32 {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-#[inline]\n-fn foo(x: i32) -> i32 {\n+#[inline(never)]\n+fn bar(x: i32) -> i32 {\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let mut used = Vec::new();
+        let out = try_fn_joint_intent(&sections, &pre, &mut used);
+        let Some((rewritten, _, rule, suppressed)) = out else {
+            panic!("attr-change joint must suppress, not decline silently");
+        };
+        assert!(rule.is_empty(), "suppress-only carries no rule");
+        assert_eq!(rewritten, sections, "suppress-only leaves bytes identical");
+        assert_eq!(
+            suppressed,
+            HashSet::from([("src.rs".to_string(), "foo".to_string())])
+        );
+        // End to end: no semantic hunk at all (the sweep is suppressed).
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "attr-change veto must stay wholly ordinary"
         );
     }
 
