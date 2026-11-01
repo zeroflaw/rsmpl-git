@@ -651,12 +651,18 @@ pub fn let_binder_follow_edits(
         original: &'a str,
         index: &'a LineIndex,
         old: &'a str,
+        new: &'a str,
         enc: (usize, usize),
         binder_end: usize,
         item_fns: &'b [(usize, usize)],
         macros: &'b [(usize, usize)],
         shadows: &'b [(usize, usize)],
         out: Vec<(usize, usize)>,
+        /// Shorthand struct-literal sites (`S { old }`) already claimed
+        /// as `{old}: {new}` expansions. Their value `ExprPath(old)`
+        /// must not also emit a plain `new` edit.
+        shorthand_skip: Vec<(usize, usize)>,
+        shorthand_edits: Vec<(usize, usize, String)>,
     }
     impl<'ast> Visit<'ast> for Uses<'_, '_> {
         fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
@@ -685,7 +691,12 @@ pub fn let_binder_follow_edits(
                     self.index.offset(sp.start().line as u32, sp.start().column),
                     self.index.offset(sp.end().line as u32, sp.end().column),
                 ) {
-                    if self.original.get(a..b) == Some(self.old)
+                    // Shorthand struct values (`S { old }`) are claimed by
+                    // `visit_expr_struct` as `{old}: {new}` expansions —
+                    // never a plain `new` (that would rename the field).
+                    let is_shorthand = self.shorthand_skip.iter().any(|(s, e)| a < *e && *s < b);
+                    if !is_shorthand
+                        && self.original.get(a..b) == Some(self.old)
                         && a >= self.binder_end
                         && self.enc.0 <= a
                         && b <= self.enc.1
@@ -699,6 +710,56 @@ pub fn let_binder_follow_edits(
             }
             syn::visit::visit_expr_path(self, node);
         }
+        /// WI-2b shorthand: `S { old }` means field `old` + value variable
+        /// `old`. A binder rename keeps the field and updates the value,
+        /// so the single token expands to `S { old: new }` (member-shorthand
+        /// discipline, opposite direction from field renames which emit
+        /// `S { new: old }`). Explicit `S { old: old }` needs no handling:
+        /// the field label is a `Member` (never claimed) and the value
+        /// path rewrites plainly to `S { old: new }`.
+        fn visit_expr_struct(&mut self, node: &'ast syn::ExprStruct) {
+            for field in &node.fields {
+                if field.colon_token.is_some() {
+                    continue;
+                }
+                let syn::Member::Named(member) = &field.member else {
+                    continue;
+                };
+                if member != self.old {
+                    continue;
+                }
+                let syn::Expr::Path(ep) = &field.expr else {
+                    continue;
+                };
+                if ep.qself.is_some()
+                    || ep.path.leading_colon.is_some()
+                    || ep.path.segments.len() != 1
+                    || ep.path.segments[0].ident != self.old
+                    || !ep.path.segments[0].arguments.is_none()
+                {
+                    continue;
+                }
+                let Some((a, b)) =
+                    crate::matcher_item::span_bytes(self.original, self.index, member.span())
+                else {
+                    continue;
+                };
+                if self.original.get(a..b) != Some(self.old)
+                    || a < self.binder_end
+                    || a < self.enc.0
+                    || b > self.enc.1
+                    || self.item_fns.iter().any(|r| r.0 <= a && a < r.1)
+                    || self.macros.iter().any(|r| r.0 <= a && a < r.1)
+                    || self.shadows.iter().any(|(d, e)| *d < a && a < *e)
+                {
+                    continue;
+                }
+                self.shorthand_skip.push((a, b));
+                self.shorthand_edits
+                    .push((a, b, format!("{}: {}", self.old, self.new)));
+            }
+            syn::visit::visit_expr_struct(self, node);
+        }
         // Macro interiors stay evidence (opaque, never rewritten).
         fn visit_macro(&mut self, _node: &'ast syn::Macro) {}
     }
@@ -707,20 +768,34 @@ pub fn let_binder_follow_edits(
         original,
         index,
         old,
+        new,
         enc,
         binder_end,
         item_fns: &nested_fns,
         macros: &scopes.macros,
         shadows: &shadows,
         out: Vec::new(),
+        shorthand_skip: Vec::new(),
+        shorthand_edits: Vec::new(),
     };
     uses.visit_file(parsed);
     uses.out.sort_unstable();
     uses.out.dedup();
-    uses.out
+    uses.shorthand_edits.sort();
+    uses.shorthand_edits.dedup();
+    let mut edits: Vec<TextEdit> = uses
+        .out
         .into_iter()
         .map(|(a, b)| TextEdit::new(a, b, new.to_string()).with_label("follow"))
-        .collect()
+        .collect();
+    edits.extend(
+        uses.shorthand_edits
+            .into_iter()
+            .map(|(a, b, r)| TextEdit::new(a, b, r).with_label("follow")),
+    );
+    edits.sort_by_key(|e| (e.start, e.end));
+    edits.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+    edits
 }
 
 /// Lines of macros whose string literals capture `{old}` inline
@@ -1162,6 +1237,54 @@ mod tests {
     fn follow_aborts_on_for_loop_shadow() {
         let src = "fn main() {\n    let total = 1;\n    for total in 0..3 {\n        let x = total;\n    }\n}\n";
         assert!(follow_edits_for(src).is_empty());
+    }
+
+    #[test]
+    fn follow_shorthand_expands_to_field_value() {
+        // Binder keeps the field, updates the value: `S { total }` →
+        // `S { total: sum }` (not `S { sum }`, which would rename the
+        // field and break `cargo check` with E0560).
+        let src =
+            "fn main() {\n    let total = 1;\n    let x = S { total };\n    let y = total;\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 2);
+        let short = edits
+            .iter()
+            .find(|e| src[e.start..e.end] == *"total" && e.replacement.contains(':'))
+            .expect("shorthand expansion present");
+        assert_eq!(short.replacement, "total: sum");
+        assert_eq!(short.label, Some("follow"));
+        // Applying the edits yields the compilable shape.
+        let post = crate::edits::apply_edits(
+            src,
+            edits
+                .iter()
+                .map(|e| crate::edits::TextEdit::new(e.start, e.end, e.replacement.clone()))
+                .collect(),
+        )
+        .unwrap();
+        assert!(post.contains("S { total: sum }"), "got: {post}");
+        assert!(!post.contains("S { sum }"));
+    }
+
+    #[test]
+    fn follow_explicit_struct_value_rewrites_plainly() {
+        // `S { total: total }` already separates label from value: only
+        // the value rewrites, via the plain path (no expansion needed).
+        let src = "fn main() {\n    let total = 1;\n    let x = S { total: total };\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].replacement, "sum");
+    }
+
+    #[test]
+    fn follow_shorthand_respects_shadow() {
+        // Inner `let total` owns the inner `S { total }`; only the outer
+        // shorthand expands.
+        let src = "fn main() {\n    let total = 1;\n    {\n        let total = 2;\n        let b = S { total };\n    }\n    let d = S { total };\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].replacement, "total: sum");
     }
 
     // WI-2c: closure-param / match-arm binder evidence (orphans +
