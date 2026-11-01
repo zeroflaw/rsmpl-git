@@ -19,11 +19,14 @@
 //! are not assoc syntax and are ignored outright — never claimed, never
 //! vetoed, never orphaned.
 
+use std::collections::HashMap;
+
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
+use crate::edits::TextEdit;
 use crate::follow_reasons::{reason as skip_reason, FollowSkip};
-use crate::lines::LineIndex;
+use crate::lines::{FileState, LineIndex};
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
 
@@ -262,6 +265,49 @@ pub(crate) type AssocFileEdits = Vec<(String, Vec<AssocEdit>)>;
 pub(crate) struct AssocWorkspaceOutcome {
     pub per_file: AssocFileEdits,
     pub skipped: Vec<FollowSkip>,
+}
+
+/// WI-27: orphan evidence for definition-only assoc renames (SPEC
+/// 14.8). Without follow, orphans list every container-proven use site
+/// (`Self::`, `S::`, `Tr::`, qself tails) the rename leaves behind.
+/// Mirrors `member_orphans`: the definition hunk's own ident-span edits
+/// plus every loaded `.rs` file feed the assoc collector. An
+/// unparseable header yields no orphans (the definition hunk itself
+/// matches nothing, so the run already fails loud there).
+/// (Relocated from `use_graph_local.rs`, its park after the `plan.rs`
+/// gate move; behaviour-preserving.)
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assoc_orphans(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    impl_header: &str,
+    want_trait: bool,
+    is_type: bool,
+    old: &str,
+) -> Vec<crate::OrphanReport> {
+    let Some(domain) = assoc_domain(impl_header, want_trait, is_type, old) else {
+        return Vec::new();
+    };
+    let Some(filter) = rsmpl_pattern::parse_impl_header(impl_header) else {
+        return Vec::new();
+    };
+    let renamed: Vec<(usize, usize)> = file_edits
+        .get(path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
+    let mut paths: Vec<&String> = states.keys().collect();
+    paths.sort();
+    for p in paths {
+        if let Some(st) = states.get(p) {
+            if let Some(parsed) = st.parsed.as_ref() {
+                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
+            }
+        }
+    }
+    collect_assoc_orphans(&refs, &domain, &filter, path, &renamed)
 }
 
 /// Report-only orphan collection for definition-only assoc renames

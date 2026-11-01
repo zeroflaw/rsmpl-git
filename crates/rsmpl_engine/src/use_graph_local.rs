@@ -6,6 +6,10 @@
 //! gated). WI-2b additionally rewrites block-scoped value uses in
 //! the same hunk (labelled `follow`); shadowing, nested-fn, and macro
 //! interiors stay evidence (orphans + downgrade), never rewritten.
+//!
+//! Member/assoc orphan dispatch lives with its collector:
+//! [`crate::use_graph_member::member_orphans`],
+//! [`crate::use_graph_assoc::assoc_orphans`].
 
 use std::collections::HashMap;
 
@@ -13,81 +17,6 @@ use rsmpl_pattern::{GeneralShape, PatternKind};
 
 use crate::edits::TextEdit;
 use crate::lines::{FileState, LineIndex};
-
-/// WI-9a: orphan evidence for definition-only member renames (SPEC
-/// 14.8). Mirrors the scalar orphan block: the definition hunk's own
-/// ident-span edits plus every loaded `.rs` file feed the member
-/// collector. (Moved from `plan.rs` so that file stays under the
-/// 2000-line hygiene gate; behaviour-preserving move.)
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn member_orphans(
-    states: &HashMap<String, FileState>,
-    file_edits: &HashMap<String, Vec<TextEdit>>,
-    path: &str,
-    edits_before: usize,
-    kind: crate::use_graph_member::MemberKind,
-    container: &str,
-    old: &str,
-) -> Vec<crate::OrphanReport> {
-    let renamed: Vec<(usize, usize)> = file_edits
-        .get(path)
-        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
-        .unwrap_or_default();
-    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
-    let mut paths: Vec<&String> = states.keys().collect();
-    paths.sort();
-    for p in paths {
-        if let Some(st) = states.get(p) {
-            if let Some(parsed) = st.parsed.as_ref() {
-                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
-            }
-        }
-    }
-    crate::use_graph_member::collect_member_orphans(&refs, kind, container, old, path, &renamed)
-}
-
-/// WI-27: orphan evidence for definition-only assoc renames (SPEC
-/// 14.8). Without follow, orphans list every container-proven use site
-/// (`Self::`, `S::`, `Tr::`, qself tails) the rename leaves behind.
-/// Mirrors `member_orphans`: the definition hunk's own ident-span edits
-/// plus every loaded `.rs` file feed the assoc collector. An
-/// unparseable header yields no orphans (the definition hunk itself
-/// matches nothing, so the run already fails loud there).
-/// (Moved from `plan.rs`; behaviour-preserving move.)
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn assoc_orphans(
-    states: &HashMap<String, FileState>,
-    file_edits: &HashMap<String, Vec<TextEdit>>,
-    path: &str,
-    edits_before: usize,
-    impl_header: &str,
-    want_trait: bool,
-    is_type: bool,
-    old: &str,
-) -> Vec<crate::OrphanReport> {
-    let Some(domain) = crate::use_graph_assoc::assoc_domain(impl_header, want_trait, is_type, old)
-    else {
-        return Vec::new();
-    };
-    let Some(filter) = rsmpl_pattern::parse_impl_header(impl_header) else {
-        return Vec::new();
-    };
-    let renamed: Vec<(usize, usize)> = file_edits
-        .get(path)
-        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
-        .unwrap_or_default();
-    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
-    let mut paths: Vec<&String> = states.keys().collect();
-    paths.sort();
-    for p in paths {
-        if let Some(st) = states.get(p) {
-            if let Some(parsed) = st.parsed.as_ref() {
-                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
-            }
-        }
-    }
-    crate::use_graph_assoc::collect_assoc_orphans(&refs, &domain, &filter, path, &renamed)
-}
 
 /// True when `compiled` is a plain single-binder `let` rename.
 pub fn is_let_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {

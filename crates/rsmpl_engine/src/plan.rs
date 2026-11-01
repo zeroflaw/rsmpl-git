@@ -668,7 +668,7 @@ fn apply_inner(
                             }
                             PatternKind::FieldRename {
                                 struct_name, old, ..
-                            } => crate::use_graph_local::member_orphans(
+                            } => crate::use_graph_member::member_orphans(
                                 &states,
                                 &file_edits,
                                 path,
@@ -678,7 +678,7 @@ fn apply_inner(
                                 old,
                             ),
                             PatternKind::VariantRename { enum_name, old, .. } => {
-                                crate::use_graph_local::member_orphans(
+                                crate::use_graph_member::member_orphans(
                                     &states,
                                     &file_edits,
                                     path,
@@ -694,7 +694,7 @@ fn apply_inner(
                                 is_type,
                                 minus_name,
                                 ..
-                            } => crate::use_graph_local::assoc_orphans(
+                            } => crate::use_graph_assoc::assoc_orphans(
                                 &states,
                                 &file_edits,
                                 path,

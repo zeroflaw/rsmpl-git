@@ -21,11 +21,14 @@
 //! veto without `# fallback=syntax` and skip with it (scalar parity).
 //! Method idents and tuple `.0` accesses never match and never veto.
 
+use std::collections::HashMap;
+
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
+use crate::edits::TextEdit;
 use crate::follow_reasons::{reason as skip_reason, FollowSkip};
-use crate::lines::LineIndex;
+use crate::lines::{FileState, LineIndex};
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
 use crate::use_graph_anchor::{field_root, AnchorIndex};
@@ -275,6 +278,38 @@ pub(crate) fn resolve_member_workspace(
         }
     }
     Ok(MemberWorkspaceOutcome { per_file, skipped })
+}
+
+/// WI-9a: orphan evidence for definition-only member renames (SPEC
+/// 14.8). Mirrors the scalar orphan block: the definition hunk's own
+/// ident-span edits plus every loaded `.rs` file feed the member
+/// collector. (Relocated from `use_graph_local.rs`, its park after the
+/// `plan.rs` gate move; behaviour-preserving.)
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn member_orphans(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    kind: MemberKind,
+    container: &str,
+    old: &str,
+) -> Vec<crate::OrphanReport> {
+    let renamed: Vec<(usize, usize)> = file_edits
+        .get(path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> = Vec::new();
+    let mut paths: Vec<&String> = states.keys().collect();
+    paths.sort();
+    for p in paths {
+        if let Some(st) = states.get(p) {
+            if let Some(parsed) = st.parsed.as_ref() {
+                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
+            }
+        }
+    }
+    collect_member_orphans(&refs, kind, container, old, path, &renamed)
 }
 
 /// Report-only orphan collection for definition-only member renames
