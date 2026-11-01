@@ -21,11 +21,11 @@ pub use crate::pattern_classify::{
     impl_block_matches, is_trait_header, parse_impl_header, trait_header_ident, ImplHeaderFilter,
 };
 pub use crate::pattern_evolution::{
-    is_evolution_template, parse_const_evolution_template, parse_enum_evolution_template,
-    parse_evolution_template, parse_fn_body_evolution_template, parse_fn_full_header_template,
-    parse_mod_evolution_template, parse_static_evolution_template, parse_struct_evolution_template,
-    parse_trait_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
-    rename_ident_in_code,
+    body_evolution_veto, is_evolution_template, parse_const_evolution_template,
+    parse_enum_evolution_template, parse_evolution_template, parse_fn_body_evolution_template,
+    parse_fn_full_header_template, parse_mod_evolution_template, parse_static_evolution_template,
+    parse_struct_evolution_template, parse_trait_evolution_template, parse_type_evolution_template,
+    parse_union_evolution_template, rename_ident_in_code, BodyVeto,
 };
 pub use crate::pattern_general::split_leading_attrs;
 

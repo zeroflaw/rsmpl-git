@@ -188,15 +188,14 @@ pub fn parse_fn_body_evolution_template(text: &str) -> Option<(String, String, S
 }
 
 /// WI-6 slice 3b: rename word-bounded `old` → `new` in code text, leaving
-/// string literals, char literals, line comments, and (nested) block
-/// comments byte-verbatim. Pairing (`move_evolve`) and splicing
+/// string literals, char literals, lifetimes, line comments, and (nested)
+/// block comments byte-verbatim. Pairing (`move_evolve`) and splicing
 /// (`capture`) share this scanner, so they agree by construction: a shape
 /// the author did not rename inside a string vetoes at pairing instead of
 /// mis-firing. Limits (conservative = ordinary, never a guess): byte
 /// strings ride on the `"` arm, raw strings (`r"…"`, `r#"…"#`, `br"…"`
 /// via the `r` arm) skip to their closing delimiter; lifetimes (`'a`)
-/// stay in-code and rename consistently (a signature holding a bare
-/// `old` lifetime vetoes upstream at pairing).
+/// ride byte-verbatim and are never an item occurrence (WI-2).
 pub fn rename_ident_in_code(text: &str, old: &str, new: &str) -> String {
     if old.is_empty() || old == new || !text.contains(old) {
         return text.to_string();
@@ -305,8 +304,9 @@ pub fn rename_ident_in_code(text: &str, old: &str, new: &str) -> String {
             }
             continue;
         }
-        // Char literal `'x'` / `'\n'` (lifetimes like `'a` lack the closer
-        // and fall through as code, renaming consistently).
+        // Char literal `'x'` / `'\n'`; a lifetime (`'a`, `'static`)
+        // has no closer and rides byte-verbatim (WI-2: a lifetime
+        // spelled like the old name is never an item occurrence).
         if cs[i] == '\'' {
             let mut k = i + 1;
             if cs.get(k) == Some(&'\\') {
@@ -319,6 +319,20 @@ pub fn rename_ident_in_code(text: &str, old: &str, new: &str) -> String {
             }
             if cs.get(k) == Some(&'\'') {
                 while i <= k {
+                    out.push(cs[i]);
+                    i += 1;
+                }
+                continue;
+            }
+            // Lifetime position: `'` + ident start copies verbatim so
+            // the ident is never renamed.
+            if cs
+                .get(i + 1)
+                .is_some_and(|c| *c == '_' || c.is_ascii_alphabetic())
+            {
+                out.push('\'');
+                i += 1;
+                while i < cs.len() && (cs[i] == '_' || cs[i].is_ascii_alphanumeric()) {
                     out.push(cs[i]);
                     i += 1;
                 }
@@ -337,6 +351,168 @@ pub fn rename_ident_in_code(text: &str, old: &str, new: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// WI-2: why a captured `fn` body cannot take a binding-blind rename.
+///
+/// A `syn` occurrence classifier shared by the authored splice
+/// (`rsmpl_engine::capture`) and the raiser pairing (`move_evolve`):
+/// an occurrence rewrites iff it is the header ident itself or a
+/// self-recursive call/path. Every other namespace — a shadowing local
+/// (or its uses), a field/method name, a macro name, an attribute
+/// interior — is left byte-verbatim and vetoes. Lifetimes are never an
+/// item occurrence (the scanner above already skips them, so they need
+/// no veto). Strings/chars/comments likewise ride verbatim with no veto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyVeto {
+    /// `shadowed-local` | `field` | `macro` | `attribute`.
+    pub kind: &'static str,
+    /// 1-based line within the captured item text.
+    pub line: usize,
+}
+
+/// WI-2: `Some` when `minus_text` (a captured `fn` item) holds an
+/// occurrence of `old` that a body-evolving rename must not touch.
+/// `None` means every code occurrence is a self-reference the splice
+/// may rename (lifetimes/strings/comments are skipped by the scanner).
+/// Unparsable text yields `None` — the caller's parse gate owns it.
+pub fn body_evolution_veto(minus_text: &str, old: &str) -> Option<BodyVeto> {
+    if old.is_empty() || !minus_text.contains(old) {
+        return None;
+    }
+    let item: syn::ItemFn = syn::parse_str(minus_text).ok()?;
+    use quote::ToTokens;
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+
+    struct Probe<'a> {
+        old: &'a str,
+        shadow_line: Option<usize>,
+        single_paths: Vec<usize>,
+        field_line: Option<usize>,
+        macro_line: Option<usize>,
+        attr_line: Option<usize>,
+    }
+    impl<'ast> Visit<'ast> for Probe<'_> {
+        fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+            if node.ident == self.old {
+                let line = node.span().start().line;
+                if self.shadow_line.is_none_or(|l| line < l) {
+                    self.shadow_line = Some(line);
+                }
+            }
+            syn::visit::visit_pat_ident(self, node);
+        }
+        fn visit_expr_field(&mut self, node: &'ast syn::ExprField) {
+            if let syn::Member::Named(id) = &node.member {
+                if id == self.old {
+                    let line = id.span().start().line;
+                    if self.field_line.is_none_or(|l| line < l) {
+                        self.field_line = Some(line);
+                    }
+                }
+            }
+            syn::visit::visit_expr_field(self, node);
+        }
+        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+            if node.method == self.old {
+                let line = node.method.span().start().line;
+                if self.field_line.is_none_or(|l| line < l) {
+                    self.field_line = Some(line);
+                }
+            }
+            syn::visit::visit_expr_method_call(self, node);
+        }
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            if node
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == self.old)
+            {
+                let line = node.path.span().start().line;
+                if self.macro_line.is_none_or(|l| line < l) {
+                    self.macro_line = Some(line);
+                }
+            }
+            // Do not descend into macro token trees: every ident inside
+            // is a distinct namespace the rename must not touch. The
+            // macro name hit above is the veto; interiors stay opaque.
+        }
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            if word_bounded_contains(&node.to_token_stream().to_string(), self.old) {
+                let line = node.span().start().line;
+                if self.attr_line.is_none_or(|l| line < l) {
+                    self.attr_line = Some(line);
+                }
+            }
+        }
+        fn visit_path(&mut self, node: &'ast syn::Path) {
+            if node.segments.len() == 1 && node.segments[0].ident == self.old {
+                self.single_paths
+                    .push(node.segments[0].ident.span().start().line);
+            }
+            syn::visit::visit_path(self, node);
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            for attr in &node.attrs {
+                self.visit_attribute(attr);
+            }
+            // Signature types ride verbatim from the capture (the splice
+            // keeps the captured suffix), so only the inputs' *patterns*
+            // matter for shadowing — never the type paths.
+            for arg in &node.sig.inputs {
+                self.visit_fn_arg(arg);
+            }
+            self.visit_block(&node.block);
+        }
+    }
+    let mut probe = Probe {
+        old,
+        shadow_line: None,
+        single_paths: Vec::new(),
+        field_line: None,
+        macro_line: None,
+        attr_line: None,
+    };
+    probe.visit_item_fn(&item);
+    // Earliest veto wins so the repair names one actionable line.
+    let mut best: Option<BodyVeto> = None;
+    let mut consider = |kind: &'static str, line: Option<usize>| {
+        if let Some(l) = line {
+            if best.as_ref().is_none_or(|b: &BodyVeto| l < b.line) {
+                best = Some(BodyVeto { kind, line: l });
+            }
+        }
+    };
+    consider("attribute", probe.attr_line);
+    consider("field", probe.field_line);
+    consider("macro", probe.macro_line);
+    if let (Some(sl), Some(first_use)) =
+        (probe.shadow_line, probe.single_paths.iter().min().copied())
+    {
+        // A shadowing binder plus any same-named value path: the
+        // scanner would rename binder and uses together, changing
+        // local semantics. Name the binder line (the fix owns it).
+        let _ = first_use;
+        consider("shadowed-local", Some(sl));
+    }
+    best
+}
+
+/// Word-bounded substring check for attribute token strings.
+fn word_bounded_contains(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() || !hay.contains(needle) {
+        return false;
+    }
+    let h: Vec<char> = hay.chars().collect();
+    let n: Vec<char> = needle.chars().collect();
+    let is_ident = |c: char| c == '_' || c.is_ascii_alphanumeric();
+    h.windows(n.len()).enumerate().any(|(i, w)| {
+        w == n
+            && (i == 0 || !is_ident(h[i - 1]))
+            && h.get(i + n.len()).is_none_or(|c| !is_ident(*c))
+    })
 }
 
 /// WI-8 slice 9 concrete-signature `fn` evolution-paste template: a
@@ -1121,5 +1297,56 @@ mod tests {
             "unicode comment kept, got: {out}"
         );
         assert!(out.contains("g(1)"), "call renamed, got: {out}");
+    }
+
+    #[test]
+    fn rename_skips_lifetimes() {
+        // WI-2: a lifetime spelled like the old name is never an item
+        // occurrence — the scanner leaves it verbatim in both directions.
+        let body = "fn fact<'fact>(x: &'fact str) -> &'fact str {\n    fact(x)\n}";
+        let out = rename_ident_in_code(body, "fact", "factorial");
+        assert!(out.contains("'fact"), "lifetime kept, got: {out}");
+        assert!(
+            !out.contains("'factorial"),
+            "lifetime not renamed, got: {out}"
+        );
+        assert!(out.contains("factorial(x)"), "call renamed, got: {out}");
+    }
+
+    #[test]
+    fn body_veto_matrix() {
+        // Genuine self-call: no veto, splice may rename.
+        let firing = "fn fact(n: u64) -> u64 {\n    n * fact(n - 1)\n}";
+        assert_eq!(body_evolution_veto(firing, "fact"), None);
+        // Shadowed local (+ its use): veto at the binder line.
+        let shadow = "fn fact() -> i32 {\n    let fact = 1;\n    fact + fact(2)\n}";
+        assert_eq!(
+            body_evolution_veto(shadow, "fact"),
+            Some(BodyVeto {
+                kind: "shadowed-local",
+                line: 2
+            })
+        );
+        // Field and method names live in another namespace.
+        let field = "fn fact(s: S) -> i32 {\n    s.fact + fact(1)\n}";
+        let veto = body_evolution_veto(field, "fact").expect("field vetoes");
+        assert_eq!((veto.kind, veto.line), ("field", 2));
+        let method = "fn fact(s: S) -> i32 {\n    s.fact() + fact(1)\n}";
+        let veto = body_evolution_veto(method, "fact").expect("method vetoes");
+        assert_eq!((veto.kind, veto.line), ("field", 2));
+        // Macro invocation names the macro, never the item.
+        let mac = "fn fact(n: i32) -> i32 {\n    fact!(n) + fact(n)\n}";
+        let veto = body_evolution_veto(mac, "fact").expect("macro vetoes");
+        assert_eq!((veto.kind, veto.line), ("macro", 2));
+        // Attribute interiors are opaque to the rename.
+        let attr = "fn fact(n: i32) -> i32 {\n    #[cfg_attr(feature = \"fact\")] let y = fact(n);\n    y\n}";
+        let veto = body_evolution_veto(attr, "fact").expect("attr vetoes");
+        assert_eq!(veto.kind, "attribute");
+        // Lifetime occurrence needs no veto: the scanner skips it.
+        let life = "fn fact<'fact>(x: &'fact str) -> &'fact str {\n    fact(x)\n}";
+        assert_eq!(body_evolution_veto(life, "fact"), None);
+        // Strings/comments need no veto either.
+        let lit = "fn fact(n: u64) -> u64 {\n    let s = \"fact\";\n    n * fact(n - 1)\n}";
+        assert_eq!(body_evolution_veto(lit, "fact"), None);
     }
 }

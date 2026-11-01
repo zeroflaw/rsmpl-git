@@ -92,7 +92,7 @@ Move — cut with `# bind=Helper` + `- I` (`I` infers `item`), paste with
 `# use=Helper` + `+ Helper`; paste hunks may precede cut hunks; cross-file
 moves are two file sections (SPEC 9.3, SPEC 10.5). Same-anchor pastes land
 in document order (first hunk topmost) with one blank line between items
-(SPEC 20.2).
+(SPEC 20.2). `as` paste (`+ fn old as new(...) { ... }`) renames the moved fn + self-calls; shadow/field/macro/attr interiors veto (`RSMPL_PATTERN_CONFLICT`, line named).
 
 Use-path prefix — after a `mod` rename, move imports with one hunk
 (`- use crate::old` / `+ use crate::new`, `# allow=many` or `# sweep`); plain, grouped,

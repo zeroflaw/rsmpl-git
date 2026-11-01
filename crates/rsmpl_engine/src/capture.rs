@@ -434,6 +434,16 @@ fn splice_fn_body_evolution(
             "body-evolving paste names `{old_t}` but the capture holds `fn {old_name}`"
         )));
     }
+    // WI-2: binding-aware boundary — a shadowing local, field/method
+    // name, macro name, or attribute interior named like the old ident
+    // vetoes the authored paste (rename by hand or split the move).
+    // Lifetimes/strings/comments ride verbatim with no veto.
+    if let Some(veto) = rsmpl_pattern::body_evolution_veto(captured, &old_name) {
+        return Err(fail(format!(
+            "body-evolving paste vetoes: `{old_name}` has a {} occurrence at captured line {} (rename it by hand or split the move)",
+            veto.kind, veto.line
+        )));
+    }
     // First `fn <Old>` header line (same word-bounded search as the
     // abstract splice; doc/comment lines never evolve).
     let mut target: Option<usize> = None;
@@ -1652,5 +1662,42 @@ mod tests {
             out.contains("n * fact(n - 1)"),
             "stale call kept, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn body_evolution_splice_vetoes_binding_risks() {
+        // WI-2: shadowed locals, fields, and macros veto the authored
+        // paste with the occurrence line named.
+        for (cap, kind) in [
+            (
+                "fn fact() -> i32 {\n    let fact = 1;\n    fact + fact(2)\n}",
+                "shadowed-local",
+            ),
+            ("fn fact(s: S) -> i32 {\n    s.fact + fact(1)\n}", "field"),
+            (
+                "fn fact(n: i32) -> i32 {\n    fact!(n) + fact(n)\n}",
+                "macro",
+            ),
+        ] {
+            let err = splice_evolved_header(cap, "fn fact as factorial(...) { ... }", "r")
+                .expect_err("binding risk must veto");
+            let msg = err.to_string();
+            assert!(msg.contains(kind), "kind {kind} named, got: {msg}");
+            assert!(msg.contains("captured line 2"), "line named, got: {msg}");
+        }
+    }
+
+    #[test]
+    fn body_evolution_splice_keeps_lifetimes() {
+        // WI-2: lifetimes ride verbatim while the self-call renames.
+        let cap = "fn fact<'fact>(x: &'fact str) -> &'fact str {\n    fact(x)\n}";
+        let out = splice_evolved_header(cap, "fn fact as factorial(...) { ... }", "r")
+            .expect("lifetime splice must fire");
+        assert!(out.contains("'fact"), "lifetime kept, got:\n{out}");
+        assert!(
+            !out.contains("'factorial"),
+            "lifetime not renamed, got:\n{out}"
+        );
+        assert!(out.contains("factorial(x)"), "call renamed, got:\n{out}");
     }
 }

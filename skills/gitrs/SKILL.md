@@ -88,7 +88,8 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   type/value/literal/variant/use sites per the SPEC 14.8 table.
 - Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; struct-field/enum-payload/discriminant likewise under their container header; name preserved, SPEC 14.8).
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`);
-  paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between.
+  paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between;
+  `as` paste (`+ fn old as new(...)`) renames fn + self-calls; shadow/field/macro/attr interiors veto (line named, SPEC 20.2).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)
   moves imports after a `mod` rename; grouped/glob/`as` tails preserved;
   members at the matched position rewrite too, segment-wise (SPEC 14.9).

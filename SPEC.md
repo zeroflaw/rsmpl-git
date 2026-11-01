@@ -4279,6 +4279,25 @@ diff --git src/new.rs
 + pub fn renamed(x: i64) -> i64 { ... }
 ```
 
+A body-evolving `fn` paste (WI-6 slice 3b) renames the moved item and
+its self-references together:
+
+```diff
+diff --git src/new.rs
+@@ -5,0 @@ rule=paste_helper
+# use=Helper
++ pub fn oldname as newname(...) { ... }
+```
+
+The `as` names the captured ident; the engine splices the header to
+the new name and renames the captured body's self-recursive calls to
+it. Occurrence law: only the header ident and self-recursive call/path
+occurrences rewrite (strings, chars, comments, and lifetimes ride
+byte-verbatim). A shadowing local (or its uses), a field/method name,
+a macro name, or an attribute interior never rewrites — the paste
+fails loud with `RSMPL_PATTERN_CONFLICT` naming the kind and the
+captured line instead of guessing.
+
 ```diff
 diff --git src/new.rs
 @@ -5,0 @@ rule=paste_config
@@ -8844,11 +8863,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     verbatim-body splice, so stale-self-ref and shadowed-local moves
     still fire unchanged) and the engine splices the header to the new
     name and renames word-bounded `<Old>` → `<New>` in the captured body
-    through a comment/string/raw-string-aware scanner, leaving string
-    literals, char literals, and comments byte-verbatim. The pairing
-    proves the same scanner first (renamed minus item text == plus run
-    text, raw string equality), so pairing and splice agree by
-    construction; any non-rename delta vetoes to ordinary.
+    through a comment/string/raw-string/lifetime-aware scanner, leaving
+    string literals, char literals, lifetimes, and comments
+    byte-verbatim. Occurrence law (WI-2): an occurrence rewrites iff
+    `syn` shows it is the header ident itself or a self-recursive
+    call/path; a shadowing local (or its uses), a field/method name, a
+    macro name, or an attribute interior never rewrites — the authored
+    paste vetoes with `RSMPL_PATTERN_CONFLICT` naming the kind and the
+    captured line (rename by hand or split the move), and the raiser
+    declines the same shapes to ordinary. The pairing proves the same
+    scanner plus the same veto first (renamed minus item text == plus
+    run text, raw string equality, no veto hit), so pairing and splice
+    agree by construction; any non-rename delta vetoes to ordinary.
     WI-6 collection cells: one (minus hunk, plus hunk) cell holding ≥3
    distinct moved items that owns every pair of its minus hunk and every
    paired run of its plus hunk (no fan-out interleave, no split anchors)

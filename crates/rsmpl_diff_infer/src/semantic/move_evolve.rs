@@ -174,6 +174,13 @@ pub(crate) fn find_fn_body_evolved_hits(
         if rsmpl_pattern::rename_ident_in_code(minus_text, &old, &new) != plus_text {
             continue;
         }
+        // WI-2: the same binding boundary as the authored splice — a
+        // shadowed local, field/method, macro, or attribute occurrence
+        // stays ordinary even when the text scan agrees (agreeing for
+        // the wrong reason is still a mis-fire).
+        if rsmpl_pattern::body_evolution_veto(minus_text, &old).is_some() {
+            continue;
+        }
         out.push((s - 1, e - 1, prefix, old.clone(), new));
     }
     out
@@ -888,6 +895,31 @@ mod tests {
             "+}".to_string(),
         ];
         assert_eq!(header_prefix(&lines, "helper"), Some("pub ".to_string()));
+    }
+
+    #[test]
+    fn body_evolved_finder_declines_binding_risks() {
+        // WI-2: even when the text scan agrees, a shadowed local, field,
+        // or macro occurrence stays ordinary — agreeing for the wrong
+        // reason is still a mis-fire.
+        for minus in [
+            "fn fact() -> i32 {\n    let fact = 1;\n    fact + fact(2)\n}",
+            "fn fact(s: S) -> i32 {\n    s.fact + fact(1)\n}",
+            "fn fact(n: i32) -> i32 {\n    fact!(n) + fact(n)\n}",
+        ] {
+            let renamed = rsmpl_pattern::rename_ident_in_code(minus, "fact", "factorial");
+            let plus_body: Vec<String> = renamed.lines().map(|l| format!("+{l}")).collect();
+            assert!(
+                find_fn_body_evolved_hits(minus, &plus_body).is_empty(),
+                "binding risk stays ordinary: {minus}"
+            );
+        }
+        // Lifetimes agree through the scanner and still fire.
+        let life = "fn fact<'fact>(x: &'fact str) -> &'fact str {\n    fact(x)\n}";
+        let renamed = rsmpl_pattern::rename_ident_in_code(life, "fact", "factorial");
+        assert!(renamed.contains("'fact"), "lifetime kept: {renamed}");
+        let plus_body: Vec<String> = renamed.lines().map(|l| format!("+{l}")).collect();
+        assert_eq!(find_fn_body_evolved_hits(life, &plus_body).len(), 1);
     }
 
     fn item_struct(text: &str) -> syn::ItemStruct {

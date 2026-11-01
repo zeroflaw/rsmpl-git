@@ -32,13 +32,13 @@ pub use item_rename::{parse_side as parse_item_rename_side, ItemKind, ItemRename
 pub use macro_bracket::macro_bracket_args;
 pub use metavar::{MetavarTable, TokenKind};
 pub use pattern::{
-    compile, impl_block_matches, is_evolution_template, is_trait_header,
+    body_evolution_veto, compile, impl_block_matches, is_evolution_template, is_trait_header,
     parse_const_evolution_template, parse_enum_evolution_template, parse_evolution_template,
     parse_fn_body_evolution_template, parse_fn_full_header_template, parse_impl_header,
     parse_mod_evolution_template, parse_static_evolution_template, parse_struct_evolution_template,
     parse_trait_evolution_template, parse_type_evolution_template, parse_union_evolution_template,
-    rename_ident_in_code, split_leading_attrs, trait_header_ident, CompiledPattern, GeneralShape,
-    ImplHeaderFilter, PatternKind, VariantPayload,
+    rename_ident_in_code, split_leading_attrs, trait_header_ident, BodyVeto, CompiledPattern,
+    GeneralShape, ImplHeaderFilter, PatternKind, VariantPayload,
 };
 pub use pattern_member_evo::norm_arm_expr;
 pub use quote_utils::{

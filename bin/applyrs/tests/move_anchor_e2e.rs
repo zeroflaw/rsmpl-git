@@ -128,3 +128,60 @@ fn out_of_bounds_anchor_fails_range_conflict() {
     );
     assert_eq!(read(dir.path(), "src/lib.rs"), OOB_SOURCE);
 }
+
+// WI-2: the body-evolving `as` paste renames the moved fn and its
+// self-call together (strings/comments ride verbatim in the engine
+// splice, pinned in `capture.rs` unit tests).
+const EVO_SOURCE: &str = "fn fact(n: u64) -> u64 {\n    n * fact(n - 1)\n}\nfn keep() {}\n";
+const EVO_PATCH: &str = "diff --git src/lib.rs\n@@ -1,3 @@ rule=cut\n# item I\n# bind=H\n- I\n@@ -4,0 @@ rule=paste\n# use=H\n+ fn fact as factorial(...) { ... }\n";
+const EVO_EXPECTED: &str =
+    "fn keep() {}\nfn factorial(n: u64) -> u64 {\n    n * factorial(n - 1)\n}\n";
+
+#[test]
+fn body_evolving_paste_renames_self_call() {
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", EVO_SOURCE);
+    let out = run_stdin(dir.path(), EVO_PATCH, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(dir.path(), "src/lib.rs"), EVO_EXPECTED);
+}
+
+// WI-2: a shadowed local vetoes the authored `as` paste with the
+// occurrence line named — the paste fails loud instead of renaming the
+// local (text + JSON pinned).
+const SHADOW_SOURCE: &str =
+    "fn fact() -> i32 {\n    let fact = 1;\n    fact + fact(2)\n}\nfn keep() {}\n";
+const SHADOW_PATCH: &str = "diff --git src/lib.rs\n@@ -1,4 @@ rule=cut\n# item I\n# bind=H\n- I\n@@ -5,0 @@ rule=paste\n# use=H\n+ fn fact as factorial(...) { ... }\n";
+
+#[test]
+fn body_evolving_paste_vetoes_shadowed_local() {
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", SHADOW_SOURCE);
+    let out = run_stdin(dir.path(), SHADOW_PATCH, &["--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    assert!(err.contains("shadowed-local"), "got: {err}");
+    assert!(err.contains("captured line 2"), "got: {err}");
+    assert_eq!(read(dir.path(), "src/lib.rs"), SHADOW_SOURCE);
+    let out = run_stdin(
+        dir.path(),
+        SHADOW_PATCH,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(!out.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(payload["error"]["code"], "RSMPL_PATTERN_CONFLICT");
+    assert!(
+        payload["error"]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("captured line 2"),
+        "got: {payload}"
+    );
+}
