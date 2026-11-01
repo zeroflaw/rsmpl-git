@@ -94,9 +94,14 @@ pub(crate) fn let_binder_orphans(
     struct ScopeGate<'a> {
         original: &'a str,
         index: &'a LineIndex,
+        old: &'a str,
         blocks: Vec<(usize, usize)>,
         item_fns: Vec<(usize, usize)>,
         macros: Vec<(usize, usize)>,
+        closures: Vec<(usize, usize)>,
+        let_defs: Vec<usize>,
+        closure_params: Vec<usize>,
+        all_pats: Vec<usize>,
     }
     impl<'ast> syn::visit::Visit<'ast> for ScopeGate<'_> {
         fn visit_block(&mut self, node: &'ast syn::Block) {
@@ -125,13 +130,62 @@ pub(crate) fn let_binder_orphans(
                 self.macros.push((a, b));
             }
         }
+        fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+            use syn::spanned::Spanned;
+            if let Some((a, b)) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            {
+                self.closures.push((a, b));
+            }
+            for inp in &node.inputs {
+                for off in crate::use_graph_local::pat_old_offsets(
+                    inp,
+                    self.old,
+                    self.original,
+                    self.index,
+                ) {
+                    self.closure_params.push(off);
+                }
+            }
+            syn::visit::visit_expr_closure(self, node);
+        }
+        fn visit_local(&mut self, node: &'ast syn::Local) {
+            for off in crate::use_graph_local::pat_old_offsets(
+                &node.pat,
+                self.old,
+                self.original,
+                self.index,
+            ) {
+                self.let_defs.push(off);
+            }
+            syn::visit::visit_local(self, node);
+        }
+        fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+            if node.ident == self.old {
+                let sp = node.ident.span();
+                if let (Some(a), Some(b)) = (
+                    self.index.offset(sp.start().line as u32, sp.start().column),
+                    self.index.offset(sp.end().line as u32, sp.end().column),
+                ) {
+                    if self.original.get(a..b) == Some(self.old) {
+                        self.all_pats.push(a);
+                    }
+                }
+            }
+            syn::visit::visit_pat_ident(self, node);
+        }
     }
     let mut gate = ScopeGate {
         original,
         index,
+        old,
         blocks: Vec::new(),
         item_fns: Vec::new(),
         macros: Vec::new(),
+        closures: Vec::new(),
+        let_defs: Vec::new(),
+        closure_params: Vec::new(),
+        all_pats: Vec::new(),
     };
     {
         use syn::visit::Visit;
@@ -171,6 +225,84 @@ pub(crate) fn let_binder_orphans(
         Some(enc) => enc.0 <= off && off < enc.1,
         None => true,
     };
+    // Shadow ranges (mirrors `let_binder_follow_edits`): an inner
+    // `let old` governs to its innermost block end, a closure-param
+    // `old` to its closure end. Uses inside these ranges name the
+    // inner binder, so leftover orphans there are `shadowed`.
+    let within_enc = |r: (usize, usize), off: usize| r.0 <= off && off < r.1;
+    let mut inner_lets: Vec<usize> = gate.let_defs.to_vec();
+    inner_lets.sort_unstable();
+    inner_lets.dedup();
+    let mut inner_params: Vec<usize> = gate.closure_params.to_vec();
+    inner_params.sort_unstable();
+    inner_params.dedup();
+    let is_outer_def = |off: usize| binder_spans.iter().any(|(s, e)| *s <= off && off < *e);
+    let mut all_pat_defs: Vec<usize> = gate.all_pats.to_vec();
+    all_pat_defs.sort_unstable();
+    all_pat_defs.dedup();
+    let is_pat_def = |off: usize| all_pat_defs.contains(&off);
+    let inner_lets: Vec<usize> = inner_lets
+        .into_iter()
+        .filter(|o| {
+            *o > binder_end
+                && enclosing.map(|enc| within_enc(enc, *o)).unwrap_or(true)
+                && !in_nested(*o)
+                && !in_macro(*o)
+                && !is_outer_def(*o)
+        })
+        .collect();
+    let inner_params: Vec<usize> = inner_params
+        .into_iter()
+        .filter(|o| {
+            *o > binder_end
+                && enclosing.map(|enc| within_enc(enc, *o)).unwrap_or(true)
+                && !in_nested(*o)
+                && !in_macro(*o)
+                && !is_outer_def(*o)
+        })
+        .collect();
+    let mut shadows: Vec<(usize, usize)> = Vec::new();
+    if let Some(enc) = enclosing {
+        for d in &inner_lets {
+            let mut best: Option<(usize, usize)> = None;
+            for b in &gate.blocks {
+                if b.0 <= *d && *d < b.1 && within_enc(enc, b.0) {
+                    let narrower = match best {
+                        None => true,
+                        Some(e) => (b.1 - b.0) < (e.1 - e.0),
+                    };
+                    if narrower {
+                        best = Some(*b);
+                    }
+                }
+            }
+            if let Some(b) = best {
+                shadows.push((*d, b.1));
+            } else {
+                shadows.push((*d, enc.1));
+            }
+        }
+        for d in &inner_params {
+            let mut best: Option<(usize, usize)> = None;
+            for c in &gate.closures {
+                if c.0 <= *d && *d < c.1 {
+                    let narrower = match best {
+                        None => true,
+                        Some(e) => (c.1 - c.0) < (e.1 - e.0),
+                    };
+                    if narrower {
+                        best = Some(*c);
+                    }
+                }
+            }
+            if let Some(c) = best {
+                shadows.push((*d, c.1));
+            } else {
+                shadows.push((*d, enc.1));
+            }
+        }
+    }
+    let is_shadowed = |off: usize| shadows.iter().any(|(d, e)| *d < off && off < *e);
     // Byte start of an orphan line; `None` means unmappable (keep the
     // orphan — safe downgrade direction). Macro lines additionally
     // exclude nested-`fn` interiors (a capture inside `fn inner`
@@ -184,15 +316,17 @@ pub(crate) fn let_binder_orphans(
             },
         }
     };
-    // True when `line` holds at least one post-binder `old` ident inside
-    // the enclosing block, outside renamed/nested-fn/macro spans.
-    let line_has_claimable = |line: u32| -> bool {
+    // All post-binder in-scope `old` ident offsets on `line`
+    // (outside renamed/nested-fn/macro spans). Empty means no
+    // claimable leftover on the line.
+    let claimable_offsets = |line: u32| -> Vec<usize> {
+        let mut found = Vec::new();
         let Some(ls) = index.line_start(line) else {
-            return true;
+            return vec![usize::MAX];
         };
         let le = index.line_start(line + 1).unwrap_or(original.len());
         let Some(line_text) = original.get(ls..le.min(original.len())) else {
-            return true;
+            return vec![usize::MAX];
         };
         let mut off = 0;
         while let Some(pos) = line_text[off..].find(old) {
@@ -218,16 +352,20 @@ pub(crate) fn let_binder_orphans(
                 && !renamed.iter().any(|(s, e)| a < *e && *s < b)
                 && !in_nested(a)
                 && !in_macro(a)
+                && !is_pat_def(a)
             {
-                return true;
+                found.push(a);
             }
             off += pos + 1;
             if off >= line_text.len() {
                 break;
             }
         }
-        false
+        found
     };
+    // True when `line` holds at least one post-binder `old` ident inside
+    // the enclosing block, outside renamed/nested-fn/macro spans.
+    let line_has_claimable = |line: u32| -> bool { !claimable_offsets(line).is_empty() };
     let refs = vec![(path.to_string(), parsed, original, index)];
     let mut out = collect_orphans(&refs, old, path, &renamed, false);
     // Inline format-string captures (`println!("{total}")`) hide the
@@ -262,6 +400,23 @@ pub(crate) fn let_binder_orphans(
         // other-block / nested-fn uses that merely share the name.
         line_has_claimable(o.line)
     });
+    // Shadowed relabelling (WI-2b follow-up): leftovers inside an
+    // inner `let old` / closure-param `old` shadow range name the
+    // inner binder, so they report `shadowed`. A line reports
+    // `shadowed` only when every leftover ident on it is shadowed;
+    // any unshadowed leftover stays `off-target`.
+    for o in out.iter_mut() {
+        if o.reason != "off-target" {
+            continue;
+        }
+        let offs = claimable_offsets(o.line);
+        if offs.is_empty() || offs.iter().all(|a| *a == usize::MAX) {
+            continue;
+        }
+        if !offs.is_empty() && offs.iter().all(|a| is_shadowed(*a)) {
+            o.reason = "shadowed".to_string();
+        }
+    }
     out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     out.dedup_by(|a, b| a.file == b.file && a.line == b.line);
     out

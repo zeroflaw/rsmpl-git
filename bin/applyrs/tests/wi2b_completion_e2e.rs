@@ -4,7 +4,7 @@
 //! tests apply a `let total = 1;` → `let sum = 1;` rename for real and prove
 //! the post-tree builds: plain completion rewrites every block-scoped use and
 //! reports `verified`; an inner `let total` shadow keeps its uses, reports
-//! `partial` with `off-target` evidence, and still builds (downgrade is
+//! `partial` with `shadowed` evidence, and still builds (downgrade is
 //! evidence-driven, not build-driven).
 
 mod common;
@@ -116,7 +116,7 @@ fn let_binder_shadow_keeps_inner_and_reports_partial() {
     assert_eq!(orphans.len(), 1, "got: {v}");
     assert_eq!(
         orphans[0]["reason"],
-        serde_json::json!("off-target"),
+        serde_json::json!("shadowed"),
         "got: {v}"
     );
     assert_eq!(orphans[0]["line"], serde_json::json!(6), "got: {v}");

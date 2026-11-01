@@ -867,11 +867,35 @@ mod tests {
 
     #[test]
     fn general_orphans_keeps_shadowed_inner_let_use() {
-        // Shadowed uses stay orphans (no over-narrowing).
+        // Shadowed uses stay orphans (no over-narrowing), labelled
+        // `shadowed` (WI-2b reason follow-up).
         let src = "fn main() {\n    let total = 1;\n    {\n        let total = 2;\n        let b = total;\n    }\n}\n";
         let orphans = orphans_for_src(src);
         assert_eq!(orphans.len(), 1, "got: {orphans:?}");
         assert_eq!(orphans[0].line, 5);
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
+    fn general_orphans_shadowed_closure_param_use() {
+        // An inner closure-param `total` shadows the outer `let total`:
+        // the closure-body use stays a `shadowed` orphan.
+        let src =
+            "fn main() {\n    let total = 1;\n    let f = |total: u32| total + 1;\n    let _ = f;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
+    fn general_orphans_unshadowed_after_inner_block_stays_off_target() {
+        // The inner `let total` governs only its block: the outer use
+        // after the block still names the outer binder (`off-target`).
+        let src = "fn main() {\n    let total = 1;\n    {\n        let total = 2;\n    }\n    let c = total;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 6);
+        assert_eq!(orphans[0].reason, "off-target");
     }
 
     #[test]
