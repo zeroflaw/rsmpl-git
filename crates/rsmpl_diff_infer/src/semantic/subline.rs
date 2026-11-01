@@ -572,6 +572,81 @@ pub(crate) fn extract_arg_permutation_sites(minus: &str, plus: &str) -> Option<V
     Some(sites)
 }
 
+/// One whole-arg method-permutation site (WI-7 slice-18): the new arg
+/// order — plus position `i` holds minus arg `perm[i]`. The receiver
+/// binds as `Receiver` in the emission, so it is not carried (per-site
+/// receiver token-equality is still enforced below).
+pub(crate) struct MethodPermSite {
+    pub(crate) method: String,
+    pub(crate) arity: usize,
+    pub(crate) perm: Vec<usize>,
+}
+
+/// Extract whole-arg method-permutation sites from one line pair
+/// (WI-7 slice-18): every minus/plus subterm pair is a method call
+/// with token-equal receivers, same method, same arity, whose args
+/// are a non-trivial permutation, with one uniform method/arity/perm
+/// across the line's subterms. Receiver deltas stay with the m2f
+/// single, method deltas with the slice-15 single; macro/unsupported
+/// args, `&`-leading, and frame rules mirror the bare perm extractor;
+/// nested same-family calls veto via the frame check.
+pub(crate) fn extract_method_perm_sites(minus: &str, plus: &str) -> Option<Vec<MethodPermSite>> {
+    if minus.trim().starts_with('&') {
+        return None;
+    }
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let m_calls = method_calls(&m_expr);
+    let p_calls = method_calls(&p_expr);
+    if m_calls.is_empty() || m_calls.len() != p_calls.len() {
+        return None;
+    }
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    for ((o_m, o_r, o_args, o_raw), (n_m, n_r, n_args, n_raw)) in m_calls.iter().zip(p_calls.iter())
+    {
+        if o_r != n_r || o_m != n_m || o_args.len() != n_args.len() {
+            return None;
+        }
+        for arg in o_args.iter().chain(n_args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        let o_vals: Vec<String> = o_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        let n_vals: Vec<String> = n_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        let perm = arg_permutation(&o_vals, &n_vals)?;
+        sites.push(MethodPermSite {
+            method: o_m.clone(),
+            arity: o_args.len(),
+            perm,
+        });
+        pairs.push((o_raw.clone(), n_raw.clone()));
+    }
+    let (m0, a0, p0) = (
+        sites[0].method.clone(),
+        sites[0].arity,
+        sites[0].perm.clone(),
+    );
+    if sites
+        .iter()
+        .any(|s| s.method != m0 || s.arity != a0 || s.perm != p0)
+    {
+        return None;
+    }
+    if !perm_frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;

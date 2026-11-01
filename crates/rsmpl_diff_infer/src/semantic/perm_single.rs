@@ -203,6 +203,91 @@ pub(crate) fn try_subline_perm_single(
     Some(hunk)
 }
 
+/// WI-7 slice-18: sub-line method perm single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair does NOT parse whole-line as a
+/// method call on both sides (slice-11 owns that shape, including the
+/// T449 `let`-init entry), but `subline::extract_method_perm_sites`
+/// yields exactly one site with a real non-trivial permutation and the
+/// frame rule holds (e.g. `svc.configure(aa, bb) + 1` ->
+/// `svc.configure(bb, aa) + 1`, `let`-init included via the shared
+/// `side_expr` entry). Receiver deltas stay with the m2f single,
+/// method deltas with the slice-15 single — both veto in the
+/// extractor. Uniqueness is proved by `template_pair_holds` at n=1 over
+/// the emitted pair (one site file-wide, zero opaque hits via the
+/// engine count); the T361 byte-compare pre-reservation
+/// (`single_reproduces`, slices-4-17 posture) vetoes any TokenStream
+/// spacing drift on the sub-expression rewrite path. Whole-line pairs
+/// decline here (slice-11 owns them, even when it vetoed - no bypass
+/// around its twin veto via a second counter). Multi-subterm lines
+/// decline (`sites.len() == 1` only - uniform two-site lines are multi
+/// territory by site count, even at one pair). Emission is the slice-11
+/// allow-one spelling (tight range, directive-free, default
+/// `allow=one`). Detector name `method_arg_template` (same family,
+/// provenance unchanged).
+pub(crate) fn try_subline_method_perm_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    if super::arg_template::parse_method_line(minuses[0]).is_some()
+        && super::arg_template::parse_method_line(pluses[0]).is_some()
+    {
+        return None;
+    }
+    let sites = super::subline::extract_method_perm_sites(minuses[0], pluses[0])?;
+    if sites.len() != 1 {
+        return None;
+    }
+    let (method, arity, perm) = (
+        sites[0].method.clone(),
+        sites[0].arity,
+        sites[0].perm.clone(),
+    );
+    if arity < 2 {
+        return None;
+    }
+    let minus_tpl: Vec<String> = (0..arity).map(|i| format!("E{i}")).collect();
+    let mut plus_tpl = Vec::with_capacity(arity);
+    for p in perm.iter().take(arity) {
+        plus_tpl.push(format!("E{p}"));
+    }
+    let lit = super::shape::literal_callee(&method);
+    let minus_call = format!("Receiver.{lit}({})", minus_tpl.join(", "));
+    let plus_call = format!("Receiver.{lit}({})", plus_tpl.join(", "));
+    let raw_minus = format!("Receiver.{method}({})", minus_tpl.join(", "));
+    let raw_plus = format!("Receiver.{method}({})", plus_tpl.join(", "));
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minuses[0],
+        pluses[0],
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "method_arg_template");
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
 /// WI-7 slice-11: whole-line method-call arg-permutation single (N=1)
 /// under `PrecisionUnique`. Twin of the slice-10 bare-call entry:
 /// same receiver and same method (receiver deltas stay with the m2f
@@ -894,6 +979,189 @@ mod tests {
             )
             .is_none(),
             "non-bijective delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_fires_and_round_trips() {
+        let pre = "fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    svc.configure(alpha_arg, beta_arg) + 1;\n+    svc.configure(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique sub-line method perm single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- Receiver.configure(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.configure(E1, E0)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m(svc: Svc) {\n    svc.configure(beta_arg, alpha_arg) + 1;\n}\n"
+        );
+        let re = super::super::infer_semantic_with_pre_images(
+            std::slice::from_ref(&section(
+                "f.rs",
+                "@@ -2 +2 @@\n-    svc.configure(alpha_arg, beta_arg) + 1;\n+    svc.configure(beta_arg, alpha_arg) + 1;\n",
+            )),
+            &pre_map,
+        )
+        .expect("re-raise must fire");
+        assert_eq!(out, re);
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_let_init_fires() {
+        let pre = "fn m(svc: Svc) {\n    let x = svc.configure(alpha_arg, beta_arg) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let x = svc.configure(alpha_arg, beta_arg) + 1;\n+    let x = svc.configure(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("let-init sub-line method perm single must fire");
+        assert!(out.contains("- Receiver.configure(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.configure(E1, E0)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_uppercase_fires_literal() {
+        let pre = "fn m(svc: Svc) {\n    svc.Configure(alpha_arg, beta_arg) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    svc.Configure(alpha_arg, beta_arg) + 1;\n+    svc.Configure(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("uppercase sub-line method perm single must fire");
+        assert!(out.contains("Receiver.`Configure`(E0, E1)"), "got: {out}");
+        assert!(out.contains("Receiver.`Configure`(E1, E0)"), "got: {out}");
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_twin_vetoes() {
+        let pre = "fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n    svc.configure(first_value, second_value);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    svc.configure(alpha_arg, beta_arg) + 1;\n+    svc.configure(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_different_arity_twin_keeps_firing() {
+        let pre = "fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n    svc.configure(alpha_arg, beta_arg, gamma_arg);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    svc.configure(alpha_arg, beta_arg) + 1;\n+    svc.configure(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-arity twin must not veto");
+        assert!(out.contains("- Receiver.configure(E0, E1)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_whole_line_declines() {
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.configure(alpha_arg, beta_arg);"],
+                &["    svc.configure(beta_arg, alpha_arg);"],
+                "f.rs",
+                Some("fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg);\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "whole-line pair must decline"
+        );
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_two_site_line_declines() {
+        let pre = "fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + svc.configure(gamma_arg, delta_arg);\n}\n";
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.configure(alpha_arg, beta_arg) + svc.configure(gamma_arg, delta_arg);"],
+                &["    svc.configure(beta_arg, alpha_arg) + svc.configure(delta_arg, gamma_arg);"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "two-site line must decline"
+        );
+    }
+
+    #[test]
+    fn wi18_subline_method_perm_single_vetoes() {
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.configure(alpha_arg, beta_arg) + 1;"],
+                &["    svc.configure(beta_arg, alpha_arg) + 1;"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.configure(alpha_arg, beta_arg) + 1;"],
+                &["    svc.configure(beta_arg, gamma_arg) + 1;"],
+                "f.rs",
+                Some("fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "non-bijective delta must decline"
+        );
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.configure(alpha_arg, beta_arg) + 1;"],
+                &["    other.configure(beta_arg, alpha_arg) + 1;"],
+                "f.rs",
+                Some("fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "receiver delta must decline"
+        );
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.old_method(alpha_arg, beta_arg) + 1;"],
+                &["    svc.new_method(beta_arg, alpha_arg) + 1;"],
+                "f.rs",
+                Some("fn m(svc: Svc) {\n    svc.old_method(alpha_arg, beta_arg) + 1;\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "method delta must decline"
         );
     }
 }

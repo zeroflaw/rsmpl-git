@@ -645,6 +645,20 @@ pub(crate) fn compress_balanced_pair_body(
             }
             used_rules.truncate(checkpoint);
         }
+        // WI-7 slice-18: sub-line method perm single under the precision
+        // guard (whole-line pairs decline here - slice-11 owns them;
+        // uniqueness proved by `template_pair_holds` at n=1 plus the
+        // T361 byte-compare, `guard_for("method_arg_template")` stays
+        // Strict for multis).
+        if let Some(single) = semantic::try_subline_method_perm_single(
+            minuses, pluses, path, file_old, changed, used_rules,
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "method_arg_template"));
+            }
+            used_rules.truncate(checkpoint);
+        }
     }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         // Single pairs: definition shapes under the precision guard

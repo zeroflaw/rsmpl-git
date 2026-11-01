@@ -7787,9 +7787,22 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     multi-subterm lines decline (multi territory by site count);
     uniqueness proved by `template_pair_holds` at n=1 over the emitted
     pair plus the T361 byte-compare; uppercase callees ride backticks
-    with the raw-callee re-parse check (TOOL-5). Remaining families
-    (sub-line method-perm/general/literal/wrap) keep `N ≥ 2` until their
-    WI-7 slices land.
+    with the raw-callee re-parse check (TOOL-5). Slice-18 adds sub-line
+    method perm pairs (`svc.configure(alpha_arg, beta_arg) + 1` ->
+    `svc.configure(beta_arg, alpha_arg) + 1`, bare-statement and
+    `let`-init framings via the shared `side_expr` entry): the pair
+    must not parse whole-line on both sides (slice-11 owns that shape,
+    including the T449 `let`-init entry),
+    `extract_method_perm_sites` yields exactly one site with a real
+    non-trivial permutation and the frame rule holds; receiver deltas
+    stay with the m2f single and method deltas with the slice-15
+    single (both veto in the extractor); multi-subterm lines decline
+    (multi territory by site count); uniqueness proved by
+    `template_pair_holds` at n=1 over the emitted
+    `Receiver.m(E0, E1)` / `Receiver.m(E1, E0)` pair plus the T361
+    byte-compare; uppercase methods ride backticks with the raw-method
+    re-parse check (TOOL-5). Remaining families (sub-line
+    general/literal/wrap) keep `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
