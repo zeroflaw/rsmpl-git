@@ -44,6 +44,7 @@ mod postcheck;
 mod postcheck_assoc;
 mod postcheck_attr;
 mod postcheck_follow;
+mod postcheck_move;
 mod postcheck_namehole;
 mod postcheck_synth;
 mod suggest;

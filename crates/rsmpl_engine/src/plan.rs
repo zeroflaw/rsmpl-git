@@ -219,6 +219,10 @@ fn apply_inner(
     // WI-6b: same-file `follow` bytes per (rule, file); map type + helpers
     // live in `postcheck_follow` so this file stays under the size gate.
     let mut def_follow_pending: crate::postcheck_follow::DefFollowMap = HashMap::new();
+    // WI-7a: scalar cuts + bare pastes awaiting the move-pair probe (new
+    // module `postcheck_move` so this file stays under the size gate).
+    let mut move_cuts: Vec<crate::postcheck_move::MoveCut> = Vec::new();
+    let mut move_pastes: Vec<crate::postcheck_move::MovePaste> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     for (sec_idx, section) in patch.files.iter().enumerate() {
@@ -358,6 +362,12 @@ fn apply_inner(
                     .to_string();
                 captures.define(binds[0], captured, &rh.rule_name(), path)?;
                 file_edits.get_mut(path).expect("file state").push(cut);
+                move_cuts.push(crate::postcheck_move::MoveCut {
+                    rule: rh.rule_name(),
+                    file: path.clone(),
+                    spans: vec![(sl, el)],
+                    name: binds[0].to_string(),
+                });
                 rule_order.push((
                     (sec_idx, hunk_idx),
                     RuleReport {
@@ -477,6 +487,16 @@ fn apply_inner(
                     // T249: record capture-paste edits for blank-join. A
                     // paste hunk pushes exactly one insertion at
                     // `edits_before`, so its index is stable.
+                    // WI-7a: bare paste (`+ N` with `# use=N`, template trims
+                    // to the name) records a move probe; evolving templates
+                    // abstain (WI-7c).
+                    let paste_bare_name: Option<String> = match &compiled.kind {
+                        PatternKind::Insertion {
+                            text,
+                            use_name: Some(n),
+                        } if text.trim() == n.as_str() => Some(n.clone()),
+                        _ => None,
+                    };
                     if matches!(
                         &compiled.kind,
                         PatternKind::Insertion {
@@ -493,6 +513,15 @@ fn apply_inner(
                         );
                         if let Some(marks) = paste_marks.get_mut(path) {
                             marks.push((pos, edits_before));
+                        }
+                        if let Some(name) = paste_bare_name {
+                            move_pastes.push(crate::postcheck_move::MovePaste {
+                                rule: rule.clone(),
+                                file: path.clone(),
+                                name,
+                                pos,
+                                bare: true,
+                            });
                         }
                     }
                     // WI-6b1 workspace follow before spans: def-file spans
@@ -1071,6 +1100,18 @@ fn apply_inner(
                 &def_follow_pending,
             )?;
         }
+        // WI-7a: verified cut+paste pairs earn `postcondition` (helper owns
+        // the loop so `plan.rs` stays under the size gate).
+        crate::postcheck_move::upgrade_verified_moves(
+            &move_cuts,
+            &move_pastes,
+            &captures,
+            &states,
+            &full_edits,
+            files,
+            &post_parsed,
+            &mut report.rules,
+        )?;
     }
 
     // WI-2c: the semantic leg beyond reparse is the pass-2 sweep change

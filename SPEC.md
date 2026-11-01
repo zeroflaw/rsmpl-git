@@ -4893,9 +4893,19 @@ if:
      side fails to compile as a pattern (or fails to re-match for an
      engine reason, or finds no attributable plus match) — including
      unparseable post-images, which never veto.
+     A scalar verbatim move pair (one item cut plus one bare paste of
+     the same capture, exactly one edit at the paste position) verifies
+     as `postcondition` on both entries when the post-image holds the
+     captured item bytes at the paste edit's byte-exact post offset and
+     no same-kind same-ident item starts inside the cut span translated
+     to post-image coordinates. Evolving pastes, collections, pure
+     insertions, unpaired cuts, multi-pastes sharing one anchor, and
+     unparseable post-images stay `reparse-only`; in-range mismatch
+     fails loud, never a silent verify.
     Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
     including verified follow-only entries), `postcondition` (sweep gate
-    + plus-pattern both ran), `reparse-only` (insertions, cuts, pastes,
+    + plus-pattern both ran, or a verified cut+paste move pair),
+    `reparse-only` (insertions, cuts, pastes,
     unverified follow-only extras, unverifiable plus, or a local-binder
     (`let`/closure-param/match-arm/for/`if let`/`while let`/fn-param) rename with leftover-use orphans
     (WI-2a/WI-2c/WI-2d)),

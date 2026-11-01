@@ -179,3 +179,29 @@ fn bench_words_pin_postcondition_verified() {
         "bench 28 got: {v}"
     );
 }
+
+// WI-7a: a scalar cut + bare paste of the same capture verifies
+// `postcondition` on both entries with a `verified` global.
+#[test]
+fn verbatim_move_pair_reports_postcondition_and_verified() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 @@ rule=paste_helper\n# lang=rust\n# use=Helper\n+ Helper\n\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n",
+        "src/lib.rs",
+        "fn a() {}\nfn helper() {}\nfn z() {}\n",
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("postcondition"),
+        "paste got: {v}"
+    );
+    assert_eq!(
+        v["rules"][1]["semantics"],
+        serde_json::json!("postcondition"),
+        "cut got: {v}"
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "global got: {v}"
+    );
+}
