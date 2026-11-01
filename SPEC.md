@@ -4948,11 +4948,25 @@ if:
     (`let`/closure-param/match-arm/for/`if let`/`while let`/fn-param) rename with leftover-use orphans
     (WI-2a/WI-2c/WI-2d)),
     `not-applicable` (`optional` zero-edit hunks).
-    The global `checked.semantics` is `verified` iff every rule is
-    `instantiated`/`postcondition` and no ordinary hunk is present;
+     The global `checked.semantics` is `verified` iff every rule is
+    `instantiated`/`postcondition`, no ordinary hunk is present, every
+    rule's engine orphan count is zero, every rule's follow-skip count
+    is zero, and no rule's evidence was truncated (orphan cap 8 /
+    orphan text 80 chars / site bindings cap 8 / binding value 80
+    chars all unhit — counts read before JSON truncation);
      otherwise `partial` (unverified insertions, cuts, pastes,
     member-additions, ordinary hunks, unverified
-    follow-only extras, and optional zero-edits all force `partial`).
+    follow-only extras, optional zero-edits, any orphans, any
+    follow-skips, and any truncated evidence all force `partial`).
+    Text mode prints one
+    `incomplete: rule <name> (<file>): <n> orphans, <m> follow-skipped[, truncated]`
+    line per blocking rule on stderr (JSON stays stdout-only).
+    A definition-only rename with live uses, a follow rename with
+    skipped sites, or a wide rename with truncated evidence therefore
+    reports `partial` with its blocking counts named — never
+    `verified`. This completeness clause is a breaking meaning change
+    of `verified` (v5; the version bump lands in its own item, the
+    derivation lands here).
 
 ---
 
@@ -6740,11 +6754,23 @@ prints one JSON object to stdout:
   input (never true by construction). `lowering` is the `git apply
   --check` verdict on the full lowering (empty lowerings skip git and
   report `true`);   `semantics` is `"verified"` iff every rule is
-  `instantiated`/`postcondition` and no ordinary hunk is present, else
-  `"partial"` (Section 24.6: unverified insertions, cuts, pastes,
+  `instantiated`/`postcondition`, no ordinary hunk is present, every
+  rule's engine orphan count is zero, every rule's follow-skip count is
+  zero, and no rule's evidence was truncated (orphan cap 8 / orphan text
+  80 chars / site bindings cap 8 / binding value 80 chars all unhit —
+  counts read before JSON truncation), else `"partial"` (Section 24.6:
+  unverified insertions, cuts, pastes,
   member-additions, unverified
-  follow-only extras, optional zero-edits, and ordinary hunks all force
-  `partial`);
+  follow-only extras, optional zero-edits, ordinary hunks, any orphans,
+  any follow-skips, and any truncated evidence all force `partial`).
+  Text mode names blockers with one
+  `incomplete: rule <name> (<file>): <n> orphans, <m> follow-skipped[, truncated]`
+  line per blocking rule (plus `incomplete: ordinary hunks present`
+  when ordinary hunks block and `incomplete: rule <name> (<file>):
+  semantics <word>` when the rule word itself blocks); JSON stays
+  stdout-only with no such lines. This completeness clause is a breaking
+  meaning change of `verified` (v5; the version bump lands in its own
+  item, the derivation lands here);
   `build` is `"pass"` iff `--verify build`
   ran, else `"skipped"` (a build failure exits 2 with the `{error}`
   envelope below, never a success payload). Failures never reach this

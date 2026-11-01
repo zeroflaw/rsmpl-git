@@ -323,6 +323,71 @@ fn collection_move_bench31_shape_reports_postcondition_and_verified() {
         "bench 31 global got: {v}"
     );
 }
+// Round-5 WI-1: a definition-only `fn` rename with a live call site is a
+// leftover, not a success — rule stays `instantiated`, orphan listed,
+// global is `partial` (was `verified` before WI-1).
+#[test]
+fn definition_only_fn_rename_with_live_call_reports_partial() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n- fn foo\n+ fn bar\n",
+        "src/lib.rs",
+        "fn foo() {}\nfn caller() { foo(); }\n",
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("instantiated"),
+        "got: {v}"
+    );
+    assert!(
+        v["rules"][0]["orphans"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()),
+        "orphans listed, got: {v}"
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "partial", "build": "skipped"}),
+        "got: {v}"
+    );
+}
+
+// Round-5 WI-1: the clean twin (call sites rewritten away) still verifies.
+#[test]
+fn fn_rename_without_live_uses_still_verified() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=r\n- fn foo\n+ fn bar\n",
+        "src/lib.rs",
+        "fn foo() {}\nfn caller() {}\n",
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "got: {v}"
+    );
+}
+
+// Round-5 WI-1: a definition-only `struct` rename with a live use reports
+// `partial` with the orphan named.
+#[test]
+fn definition_only_struct_rename_with_live_use_reports_partial() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n- struct S\n+ struct T\n",
+        "src/lib.rs",
+        "struct S;\nfn f(s: S) {}\n",
+    );
+    assert!(
+        v["rules"][0]["orphans"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()),
+        "orphans listed, got: {v}"
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "partial", "build": "skipped"}),
+        "got: {v}"
+    );
+}
+
 // WI-7d: a pure insertion plus an unpaired cut verify structurally —
 // `postcondition` on both entries, `verified` global.
 #[test]

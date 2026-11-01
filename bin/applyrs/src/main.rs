@@ -880,6 +880,9 @@ fn run() -> Result<(), CliError> {
         for line in follow_skipped_text_lines(&report) {
             eprintln!("{line}");
         }
+        for line in incomplete_text_lines(&report) {
+            eprintln!("{line}");
+        }
         for d in &report.drifts {
             eprintln!(
                 "drift: {} {} cited [{},{}] -> actual [{},{}]",
@@ -911,6 +914,9 @@ fn run() -> Result<(), CliError> {
         eprintln!("{line}");
     }
     for line in follow_skipped_text_lines(&report) {
+        eprintln!("{line}");
+    }
+    for line in incomplete_text_lines(&report) {
         eprintln!("{line}");
     }
     for d in &report.drifts {
@@ -1046,11 +1052,19 @@ fn post_sha_hex(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-/// WI-1b: global `checked.semantics` (SPEC 24.6, D.2). `verified` iff
-/// every rule is `instantiated`/`postcondition` and no ordinary hunk is
-/// present; otherwise `partial` (insertions, cuts, pastes, follow-only
-/// extras, optional zero-edits, and ordinary hunks all force `partial`).
-/// Empty patches verify vacuously.
+/// WI-1b + round-5 WI-1: global `checked.semantics` (SPEC 24.6, D.2).
+/// `verified` iff every rule is `instantiated`/`postcondition`, no ordinary
+/// hunk is present, every rule's engine orphan count is zero, every rule's
+/// follow-skip count is zero, and no rule's evidence was truncated
+/// (orphan cap 8 / orphan text 80 chars / site bindings cap 8 / binding
+/// value 80 chars all unhit — the same caps `sites_json`/`orphans_json`
+/// render with). Counts are read from the engine `ApplyReport` before JSON
+/// truncation. Rule words describe the edit proof; the global word adds
+/// completeness, so a definition-only rename with live uses, a follow
+/// rename with skipped sites, or a wide rename with truncated evidence
+/// reports `partial` naming its blockers. Empty patches verify vacuously.
+/// (`optional` zero-edit `not-applicable`, insertions, cuts, pastes,
+/// follow-only extras, and ordinary hunks all force `partial` as before.)
 fn global_semantics(report: &rsmpl_engine::ApplyReport) -> &'static str {
     if report.has_ordinary {
         return "partial";
@@ -1060,8 +1074,79 @@ fn global_semantics(report: &rsmpl_engine::ApplyReport) -> &'static str {
             "instantiated" | "postcondition" => {}
             _ => return "partial",
         }
+        if !r.orphans.is_empty() || !r.follow_skipped_details.is_empty() {
+            return "partial";
+        }
+        if is_truncated_rule(r) {
+            return "partial";
+        }
     }
     "verified"
+}
+
+/// Round-5 WI-1: evidence-truncation probe (SPEC D.2 caps). True when the
+/// default report would cut this rule's evidence: more than 8 orphans, any
+/// orphan text over 80 chars, more than 8 bindings on any site, or any
+/// binding value over 80 chars. Mirrors the `MAX_*` constants in
+/// `sites_json`/`orphans_json`; `--bindings full` lifts display only, the
+/// verdict still sees the caps (completeness is display-independent).
+fn is_truncated_rule(r: &rsmpl_engine::RuleReport) -> bool {
+    const MAX_ENTRIES: usize = 8;
+    const MAX_CHARS: usize = 80;
+    if r.orphans.len() > MAX_ENTRIES {
+        return true;
+    }
+    if r.orphans.iter().any(|o| o.text.chars().count() > MAX_CHARS) {
+        return true;
+    }
+    for s in &r.sites {
+        if s.bindings.len() > MAX_ENTRIES {
+            return true;
+        }
+        if s.bindings
+            .iter()
+            .any(|(_, v)| v.chars().count() > MAX_CHARS)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Round-5 WI-1 (D12): one stderr line per blocking rule in text mode
+/// (`incomplete: rule <name> (<file>): <n> orphans, <m> follow-skipped[, truncated]`).
+/// Rules whose word is not `instantiated`/`postcondition` block as
+/// `semantics <word>`; rules with leftovers block with their counts.
+/// JSON mode stays stdout-only and carries no such lines.
+fn incomplete_text_lines(report: &rsmpl_engine::ApplyReport) -> Vec<String> {
+    let mut out = Vec::new();
+    if report.has_ordinary {
+        out.push("incomplete: ordinary hunks present".to_string());
+    }
+    for r in &report.rules {
+        let word_ok = matches!(r.semantics.as_str(), "instantiated" | "postcondition");
+        let orphans = r.orphans.len();
+        let skipped = r.follow_skipped_details.len();
+        let truncated = is_truncated_rule(r);
+        if word_ok && orphans == 0 && skipped == 0 && !truncated {
+            continue;
+        }
+        if word_ok {
+            let mut tail = format!("{orphans} orphans, {skipped} follow-skipped");
+            if truncated {
+                tail.push_str(", truncated");
+            }
+            out.push(format!("incomplete: rule {} ({}): {tail}", r.rule, r.file));
+        } else {
+            out.push(format!(
+                "incomplete: rule {} ({}): semantics {}",
+                r.rule,
+                r.file,
+                r.semantics.as_str()
+            ));
+        }
+    }
+    out
 }
 
 /// WI-2 digest of one full binding value (SPEC D.2 `binding_meta`).
@@ -1595,5 +1680,119 @@ fn parse_err(e: rsmpl_patch::ParseError) -> CliError {
                 ),
             ),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_report(
+        semantics: rsmpl_engine::RuleSemantics,
+        orphans: Vec<rsmpl_engine::OrphanReport>,
+        skips: Vec<rsmpl_engine::FollowSkipReport>,
+        sites: Vec<rsmpl_engine::SiteReport>,
+    ) -> rsmpl_engine::ApplyReport {
+        rsmpl_engine::ApplyReport {
+            rules: vec![rsmpl_engine::RuleReport {
+                rule: "r".to_string(),
+                file: "src/lib.rs".to_string(),
+                matches: 1,
+                spans: vec![(1, 1)],
+                span_labels: vec![None],
+                sites,
+                follow_skipped_details: skips,
+                orphans,
+                semantics,
+                symbol: None,
+            }],
+            has_ordinary: false,
+            drifts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn clean_instantiated_verifies() {
+        let rep = test_report(
+            rsmpl_engine::RuleSemantics::Instantiated,
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert_eq!(global_semantics(&rep), "verified");
+        assert!(incomplete_text_lines(&rep).is_empty());
+    }
+
+    #[test]
+    fn orphaned_blocks_with_counts() {
+        let rep = test_report(
+            rsmpl_engine::RuleSemantics::Instantiated,
+            vec![rsmpl_engine::OrphanReport {
+                file: "src/lib.rs".to_string(),
+                line: 2,
+                text: "foo()".to_string(),
+                reason: "off-target".to_string(),
+            }],
+            vec![],
+            vec![],
+        );
+        assert_eq!(global_semantics(&rep), "partial");
+        let lines = incomplete_text_lines(&rep);
+        assert_eq!(lines.len(), 1, "got: {lines:?}");
+        assert!(lines[0].contains("1 orphans"), "got: {lines:?}");
+    }
+
+    #[test]
+    fn skipped_blocks_with_counts() {
+        let rep = test_report(
+            rsmpl_engine::RuleSemantics::Postcondition,
+            vec![],
+            vec![rsmpl_engine::FollowSkipReport {
+                file: "src/lib.rs".to_string(),
+                line: 3,
+                reason: "shadowed".to_string(),
+            }],
+            vec![],
+        );
+        assert_eq!(global_semantics(&rep), "partial");
+        let lines = incomplete_text_lines(&rep);
+        assert_eq!(lines.len(), 1, "got: {lines:?}");
+        assert!(lines[0].contains("1 follow-skipped"), "got: {lines:?}");
+    }
+
+    #[test]
+    fn truncated_binding_blocks() {
+        let long = "x".repeat(81);
+        let rep = test_report(
+            rsmpl_engine::RuleSemantics::Postcondition,
+            vec![],
+            vec![],
+            vec![rsmpl_engine::SiteReport {
+                span: (1, 1),
+                bindings: vec![("E".to_string(), long)],
+            }],
+        );
+        assert_eq!(global_semantics(&rep), "partial");
+        assert!(
+            incomplete_text_lines(&rep)[0].contains("truncated"),
+            "got: {:?}",
+            incomplete_text_lines(&rep)
+        );
+    }
+
+    #[test]
+    fn reparse_only_still_blocks() {
+        let rep = test_report(
+            rsmpl_engine::RuleSemantics::ReparseOnly,
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert_eq!(global_semantics(&rep), "partial");
+        assert!(
+            incomplete_text_lines(&rep)[0].contains("reparse-only"),
+            "got: {:?}",
+            incomplete_text_lines(&rep)
+        );
     }
 }
