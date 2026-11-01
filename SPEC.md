@@ -2400,6 +2400,13 @@ which is the point (no range discovery). Spans cover definition + use
 edits (`spans.len() >= matches`; `matches` counts definitions); the
 lowered diff is the observable truth as always (Section D.2).
 
+  Composed definition pairs (WI-5 slice 1): a definition rename pair
+  may carry exactly one attached attr delta written above it on its own
+  diff lines (add/remove/replace under the default Preserve law); the
+  pair still applies and verifies as one follow hunk, and raising emits
+  that spelling (SPEC D.4). Two attr deltas, or an attr delta detached
+  from its definition, stay ordinary.
+
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
 Workspace search (WI-7a): the resolver searches every loaded `.rs`
@@ -7429,6 +7436,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   veto the whole intent (never a partial claim); the probe doubles as
   the uniqueness guard (an off-diff same-name call or same-tail `use`
   fails the unchanged-leg).
+  Item rename+attr joint (WI-5 slice 1, same detector): one definition
+  rename pair plus exactly one attached attr-delta pair (same file,
+  attr line directly above the def line) joined with at least one
+  claimable use emits the follow hunk with the attr delta carried
+  above the def pair (the authored Preserve-delta spelling). Double
+  attr deltas, detached attr hunks, non-attr co-residents, `fn` defs
+  (WI-4 B2 owns those), and attr+def without a use stay ordinary
+  (a detached attr hunk falls back to the pure rename intent with the
+  attr left ordinary). Field-add, variant-add, and field-type
+  evolution joints stay ordinary (future slices).
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)

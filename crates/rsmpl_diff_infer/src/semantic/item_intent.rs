@@ -210,13 +210,25 @@ pub(crate) fn try_item_intent_sweep(
     // WI-4f-next3: relaxed co-resident law (member/mod posture) — every
     // non-def pair in the def hunk must itself be a claimable use
     // (adjacent def+use lines share one hunk in real git output); a def
-    // hunk carrying an unclaimable pair declines the whole intent.
-    for pi in &hunk_pairs[def_hunk] {
-        if *pi == def_idx {
-            continue;
-        }
-        if !pair_claimable(&pairs[*pi]) {
-            return None;
+    // hunk carrying an unclaimable pair declines the whole intent,
+    // except the WI-5 slice-1 attached attr joint (same file, adjacent
+    // site, no attr elsewhere; `fn` defs excluded — WI-4 B2 owns them).
+    let attr_joint = super::item_joint_attr::find_attr_joint(
+        &pairs,
+        &hunk_pairs,
+        def_hunk,
+        def_idx,
+        is_fn_intent,
+        &pair_claimable,
+    );
+    if attr_joint.is_none() {
+        for pi in &hunk_pairs[def_hunk] {
+            if *pi == def_idx {
+                continue;
+            }
+            if !pair_claimable(&pairs[*pi]) {
+                return None;
+            }
         }
     }
     // Partition balanced hunks into claimable vs leftover.
@@ -255,8 +267,12 @@ pub(crate) fn try_item_intent_sweep(
     }
     // No claimable use beyond the def → nothing to join. WI-4f-next3:
     // a lone def hunk holding def + claimable co-resident uses joins
-    // (the gap's literal case); def-only still declines.
-    if !claimed_idx.iter().any(|pi| *pi != def_idx) {
+    // (the gap's literal case); def-only still declines. WI-5: the
+    // attr pair is not a use — the joint still needs one real use.
+    if !claimed_idx
+        .iter()
+        .any(|pi| *pi != def_idx && Some(*pi) != attr_joint)
+    {
         return None;
     }
     claimed_idx.sort_unstable();
@@ -313,16 +329,29 @@ pub(crate) fn try_item_intent_sweep(
             &mut probe_used,
         )?;
     }
-    // Build the emission: sweep dummy + follow + def pair.
+    // Build the emission: sweep dummy + follow + def pair (WI-5: the
+    // attr delta rides above the def pair in the joint arm).
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let emission = emit(
-        &def.path,
-        &rule,
-        &def_kind,
-        &def_prefix,
-        &old_ident,
-        &new_ident,
-    );
+    let emission = match attr_joint {
+        Some(api) => super::item_joint_attr::joint_emit(
+            &def.path,
+            &rule,
+            &def_kind,
+            &def_prefix,
+            &old_ident,
+            &new_ident,
+            &pairs[api].minus,
+            &pairs[api].plus,
+        ),
+        None => super::item_joint_attr::emit(
+            &def.path,
+            &rule,
+            &def_kind,
+            &def_prefix,
+            &old_ident,
+            &new_ident,
+        ),
+    };
     // Scratch-apply probe: every claimed site must show its native plus
     // line, every other line byte-identical (per file, claimed subset).
     if !probe_reproduces(pre, &emission, &claimed_pairs) {
@@ -706,23 +735,6 @@ pub(crate) fn count_kind_defs(
         }
     }
     count
-}
-
-/// Emit the single-hunk follow emission under `rule`.
-fn emit(path: &str, rule: &str, kind: &str, prefix: &str, old: &str, new: &str) -> String {
-    let mut out = crate::git_header(path);
-    out.push('\n');
-    out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-    out.push_str("# sweep\n");
-    out.push_str("# follow=uses\n");
-    if kind == "fn" {
-        // WI-1: concrete vis rides the terse pair (never a `V` hole —
-        // the intent proved one vis).
-        out.push_str(&format!("- {prefix}fn {old}\n+ {prefix}fn {new}\n"));
-    } else {
-        out.push_str(&format!("- {prefix}{kind} {old}\n+ {prefix}{kind} {new}\n"));
-    }
-    out
 }
 
 /// Scratch-apply probe: the emission applied to a `pre` clone must show
@@ -1562,5 +1574,119 @@ mod tests {
         assert!(out[0].contains("- struct Old"), "got:\n{}", out[0]);
         let parsed = rsmpl_patch::parse_patch(&out[0]).expect("hybrid output must parse");
         assert_eq!(parsed.files.len(), 1);
+    }
+
+    // WI-5 slice 1: item rename + single attr-delta joint.
+
+    const ATTR_JOINT_PRE: &str =
+        "#[derive(Debug)]\nstruct Old {\n    x: i32,\n}\nfn f(s: Old) -> i32 {\n    0\n}\n";
+
+    fn attr_joint_sections() -> Vec<String> {
+        vec![
+            "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-#[derive(Debug)]\n-struct Old {\n+#[derive(Debug, Clone)]\n+struct New {\n@@ -5,1 +5,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n"
+                .to_string(),
+        ]
+    }
+
+    #[test]
+    fn item_attr_joint_fires() {
+        let sections = attr_joint_sections();
+        let pre = pre_map(&[("f.rs", ATTR_JOINT_PRE)]);
+        let mut used = Vec::new();
+        let (out, path, rule) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("attr joint must fire");
+        assert_eq!(path, "f.rs");
+        assert!(!rule.is_empty());
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- #[derive(Debug)]"), "got:\n{}", out[0]);
+        assert!(
+            out[0].contains("+ #[derive(Debug, Clone)]"),
+            "got:\n{}",
+            out[0]
+        );
+        assert!(out[0].contains("- struct Old"), "got:\n{}", out[0]);
+        assert!(out[0].contains("+ struct New"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["f.rs"].contains("#[derive(Debug, Clone)]"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("struct New {"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(files["f.rs"].contains("s: New"), "got: {}", files["f.rs"]);
+        assert!(!files["f.rs"].contains("Old"), "got: {}", files["f.rs"]);
+        // Full pipeline raises the same joint hunk.
+        let e2e = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
+        assert!(e2e.contains("# follow=uses"), "got:\n{e2e}");
+        assert!(e2e.contains("- #[derive(Debug)]"), "got:\n{e2e}");
+        assert!(e2e.contains("- struct Old"), "got:\n{e2e}");
+    }
+
+    #[test]
+    fn item_attr_joint_vetoes() {
+        // Double attr-delta, separate-hunk attr, fn def, and attr+def
+        // without a use all stay wholly ordinary (never partial).
+        let double_attr = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1,3 @@\n-#[derive(Debug)]\n-#[inline]\n-struct Old;\n+#[derive(Debug, Clone)]\n+#[inline(never)]\n+struct New;\n@@ -4,1 +4,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n";
+        let fn_def = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n-#[derive(Debug)]\n-fn foo(x: i32) -> i32 {\n+#[derive(Debug, Clone)]\n-fn bar(x: i32) -> i32 {\n@@ -6,1 +6,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n";
+        let no_use = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-#[derive(Debug)]\n-struct Old;\n+#[derive(Debug, Clone)]\n+struct New;\n";
+        let cases = [
+            (
+                double_attr,
+                "f.rs",
+                "#[derive(Debug)]\n#[inline]\nstruct Old;\nfn f(s: Old) -> i32 {\n    0\n}\n",
+            ),
+            (
+                fn_def,
+                "src/lib.rs",
+                "#[derive(Debug)]\nfn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n}\n",
+            ),
+            (no_use, "f.rs", "#[derive(Debug)]\nstruct Old;\n"),
+        ];
+        for (section, path, pre_text) in cases {
+            let pre = pre_map(&[(path, pre_text)]);
+            let mut used = Vec::new();
+            assert!(
+                try_item_intent_sweep(std::slice::from_ref(&section.to_string()), &pre, &mut used)
+                    .is_none(),
+                "joint veto must decline:\n{section}"
+            );
+            assert!(used.is_empty());
+        }
+    }
+
+    #[test]
+    fn item_attr_joint_separate_hunk_falls_back_to_pure() {
+        // An attr delta in its own hunk is not attached: the joint arm
+        // stays out and the pure rename intent fires with the attr hunk
+        // left ordinary in place (honest fallback, never a joint claim).
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old;\n+struct New;\n@@ -3,1 +3,1 @@\n-#[derive(Debug)]\n+#[derive(Debug, Clone)]\n@@ -4,1 +4,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n"
+            .to_string();
+        let pre = pre_map(&[(
+            "f.rs",
+            "struct Old;\nfn g() {}\n#[derive(Debug)]\nfn f(s: Old) -> i32 {\n    0\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) = try_item_intent_sweep(std::slice::from_ref(&section), &pre, &mut used)
+            .expect("pure rename must still fire");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- struct Old"), "got:\n{}", out[0]);
+        assert!(
+            !out[0].contains("- #[derive(Debug)]"),
+            "attr stays ordinary:\n{}",
+            out[0]
+        );
+        assert!(
+            out[0].contains("@@ -3,1 +3,1 @@"),
+            "attr hunk kept in place:\n{}",
+            out[0]
+        );
+        validated_live(&out[0], &pre);
     }
 }
