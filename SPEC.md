@@ -7801,8 +7801,20 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     `template_pair_holds` at n=1 over the emitted
     `Receiver.m(E0, E1)` / `Receiver.m(E1, E0)` pair plus the T361
     byte-compare; uppercase methods ride backticks with the raw-method
-    re-parse check (TOOL-5). Remaining families (sub-line
-    general/literal/wrap) keep `N ≥ 2` until their WI-7 slices land.
+    re-parse check (TOOL-5). Slice-19 adds sub-line general-expression
+    pairs (`foo(alpha_arg + 1);` -> `foo(alpha_arg + 2);`,
+    bare-statement and `let`-init framings via the shared `side_expr`
+    entry, detector in the `general_subline.rs` sibling per D5): the
+    pair must not anti-unify whole-line (slices 4–5 own that shape, via
+    both the whole-line and the `let`-init entries),
+    `extract_general_sites` yields exactly one inner general site with
+    a real single-hole delta and the frame rule holds; unchanged
+    subterms (a nested base such as `self.alpha`) are skipped, never
+    vetoed — twin-counting is the engine totality over the emitted
+    pair; multi-subterm lines decline (multi territory by site count);
+    uniqueness proved by `template_pair_holds` at n=1 over the emitted
+    pair plus the T361 byte-compare. Remaining families (sub-line
+    literal/wrap) keep `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

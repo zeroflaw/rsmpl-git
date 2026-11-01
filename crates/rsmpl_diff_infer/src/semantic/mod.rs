@@ -29,6 +29,7 @@ pub(crate) mod definition_evolution;
 mod deletes;
 pub(crate) mod frame;
 pub(crate) mod general_expr;
+pub(crate) mod general_subline;
 mod generalized;
 pub(crate) mod group;
 pub(crate) mod guard;
@@ -108,6 +109,7 @@ pub(crate) use definition_addition::{try_definition_addition, try_definition_add
 pub(crate) use definition_arm_follow::try_variant_addition_follow;
 pub(crate) use definition_evolution::{try_definition_evolution_sweep, PRECISION_GUARD};
 pub(crate) use general_expr::{try_general_expr_single, try_general_expr_sweep};
+pub(crate) use general_subline::try_subline_general_single;
 pub(crate) use generalized::{
     try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep,
     try_sig_evolution_sweep, try_type_sweep, try_untyped_let_sweep,

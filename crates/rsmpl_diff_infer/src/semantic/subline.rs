@@ -647,6 +647,102 @@ pub(crate) fn extract_method_perm_sites(minus: &str, plus: &str) -> Option<Vec<M
     Some(sites)
 }
 
+/// One general-expression subterm site (WI-7 slice-19): the paired
+/// minus/plus sub-expressions (the caller anti-unifies the pair; the
+/// frame check runs on the rendered texts at extraction time).
+pub(crate) struct GeneralSite {
+    pub(crate) minus: syn::Expr,
+    pub(crate) plus: syn::Expr,
+}
+
+/// Collect general-variant subterms in source order (pre-order walk:
+/// outer before inner). `Call`/`MethodCall` subterms are never
+/// collected (the tighter call/method families own those shapes), so a
+/// call-wrapped general delta yields exactly its inner sites; nested
+/// same-variant ancestors pair up too and veto downstream via the
+/// frame check or the caller's single-site gate.
+fn general_subterms(expr: &syn::Expr) -> Vec<(syn::Expr, String)> {
+    struct G(Vec<(syn::Expr, String)>);
+    impl<'ast> Visit<'ast> for G {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if super::general_expr::variant(node).is_some() {
+                self.0
+                    .push((node.clone(), node.to_token_stream().to_string()));
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut g = G(Vec::new());
+    g.visit_expr(expr);
+    g.0
+}
+
+/// Extract general-expression sites from one line pair (WI-7 slice-19):
+/// every minus/plus general subterm pairs in order with the same
+/// variant key; only pairs with a real token delta become sites —
+/// unchanged subterms are skipped, never vetoed (a nested base such as
+/// `self.alpha` inside `self.alpha + 1` can never match the emitted
+/// template, so only the engine totality over the emitted pair counts
+/// twins). Macro/unsupported subterms veto (the engine never binds
+/// inside macro bodies). Within-line uniformity is on the variant key
+/// only — template-pair uniformity is the caller's (it owns the
+/// anti-unification core). No `&`-leading veto: a `&x` → `&mut x`
+/// delta is itself a general `Reference` site. Frame deltas veto via
+/// the frame rule over the delta pairs.
+pub(crate) fn extract_general_sites(minus: &str, plus: &str) -> Option<Vec<GeneralSite>> {
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let m_subs = general_subterms(&m_expr);
+    let p_subs = general_subterms(&p_expr);
+    if m_subs.is_empty() || m_subs.len() != p_subs.len() {
+        return None;
+    }
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    for ((o_expr, o_raw), (n_expr, n_raw)) in m_subs.iter().zip(p_subs.iter()) {
+        if super::general_expr::variant(o_expr) != super::general_expr::variant(n_expr) {
+            return None;
+        }
+        if o_raw == n_raw {
+            // Unchanged subterm (a nested base or an independent twin):
+            // skip, never veto — twin-counting is the engine totality
+            // over the emitted pair, not subterm counting.
+            continue;
+        }
+        // Macro/unsupported subterms would inline unmatchable text into
+        // a hole (the engine never binds inside macro bodies).
+        for e in [o_expr, n_expr] {
+            let probe = super::shape::probe_expr(e);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        sites.push(GeneralSite {
+            minus: o_expr.clone(),
+            plus: n_expr.clone(),
+        });
+        pairs.push((o_raw.clone(), n_raw.clone()));
+    }
+    if sites.is_empty() {
+        // No general delta anywhere: a call/method-family delta owns
+        // this pair, never this extractor.
+        return None;
+    }
+    // Within-line uniformity on the variant key (template-pair
+    // uniformity is the caller's anti-unification).
+    let k0 = super::general_expr::variant(&sites[0].minus);
+    if sites
+        .iter()
+        .any(|s| super::general_expr::variant(&s.minus) != k0)
+    {
+        return None;
+    }
+    if !frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;

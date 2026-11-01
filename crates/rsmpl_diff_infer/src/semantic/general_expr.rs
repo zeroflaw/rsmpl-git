@@ -68,7 +68,9 @@ fn classify_tok_child(minus: &[String], plus: &[String]) -> Option<(String, Stri
 /// key per side only as "binary" (an op delta across sides is the
 /// template's anchor, not a shape change); every other variant is its
 /// own key.
-fn variant(expr: &syn::Expr) -> Option<&'static str> {
+/// `pub(crate)` so the WI-7 slice-19 sub-line extractor keys the same
+/// variants without a mirrored match.
+pub(crate) fn variant(expr: &syn::Expr) -> Option<&'static str> {
     match expr {
         syn::Expr::Binary(_) => Some("binary"),
         syn::Expr::Unary(_) => Some("unary"),
@@ -443,7 +445,9 @@ pub(crate) fn antiunify_general_exprs(
 /// expression (WI-4 `frame`); the frame itself never reaches the
 /// template — `frame_holds`-style totality plus the engine probe own
 /// it, exactly as the sub-line extractors do.
-fn parse_line_expr(line: &str) -> Option<syn::Expr> {
+/// `pub(crate)` so the WI-7 slice-19 sub-line single reuses the same
+/// whole-line entry for its owns-shape decline (no mirrored parser).
+pub(crate) fn parse_line_expr(line: &str) -> Option<syn::Expr> {
     let text = strip_one_terminator(line.trim())?;
     let text = text.trim();
     if text.is_empty() {
@@ -588,7 +592,13 @@ pub(crate) fn try_general_expr_sweep(
 /// detectors own those shapes); `Await` singles always veto (no token
 /// delta exists, so a holed shape is identical and a delta shape is
 /// hole-free).
-fn antiunify_general_expr_single(minus: &syn::Expr, plus: &syn::Expr) -> Option<(String, String)> {
+/// `pub(crate)` so the WI-7 slice-19 sub-line single anti-unifies its
+/// one extracted site through the same single-pair core (no mirrored
+/// duplicate).
+pub(crate) fn antiunify_general_expr_single(
+    minus: &syn::Expr,
+    plus: &syn::Expr,
+) -> Option<(String, String)> {
     let key = variant(minus)?;
     if variant(plus) != Some(key) {
         return None;
@@ -747,12 +757,15 @@ pub(crate) fn single_reproduces(
         && files.get(path).is_some_and(|got| *got == expected)
 }
 
-/// Shared tail of the single-entry paths (whole-line and `let`-init):
-/// anchor gate, file-wide uniqueness at n=1, byte-compare
-/// pre-reservation, and the allow-one emission. Returns `None` on any
-/// veto; reserves the rule name only for emissions that reproduce.
+/// Shared tail of the single-entry paths (whole-line, `let`-init, and
+/// WI-7 slice-19 sub-line): anchor gate, file-wide uniqueness at n=1,
+/// byte-compare pre-reservation, and the allow-one emission. Returns
+/// `None` on any veto; reserves the rule name only for emissions that
+/// reproduce.
+/// `pub(crate)` so the slice-19 sub-line single reuses the same tail
+/// (no mirrored emission).
 #[allow(clippy::too_many_arguments)]
-fn emit_general_expr_single(
+pub(crate) fn emit_general_expr_single(
     path: &str,
     pre: &str,
     minus_line: &str,
