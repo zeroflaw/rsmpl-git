@@ -531,17 +531,74 @@ pub(crate) fn try_method_arg_template_sweep(
     Some(hunk)
 }
 
-/// Single-pair anti-unification (WI-7 slice-6): one minus/plus arg
+/// Single-pair structural wrapper (WI-7 slice-8): the N ≥ 2
+/// `wrapper_tpl` column-uniformity gates are vacuous-but-blocking at
+/// N=1 (every one-element column is trivially uniform, so the hole
+/// column `continue`s past the wrap and the bare-call/binary arms can
+/// never bind). This helper proves the same two vocabularies
+/// structurally from one pair, with no uniformity gates:
+///
+/// * bare call: `plus` is `Expr::Call`, exactly one arg position
+///   token-equals `minus` (the hole), every other arg rides verbatim
+///   as a concrete anchor (vacuous-uniformity, as in multis);
+///   zero-arg calls, zero holes, and two holes (`f(x, x)`, one-hole
+///   discipline) veto. The callee token is the anchor beyond the hole
+///   (condition (c) of `PrecisionUnique`).
+/// * binary: `plus` is `Expr::Binary`, exactly one side token-equals
+///   `minus`, the operator plus the other side are concrete anchors
+///   (`E + 1` / `1 + E`); both/neither sides equal vetoes.
+///
+/// Every other plus shape (method-call, reference, unary, cast, field,
+/// index, await) declines here: reference keeps its `wrapper_tpl`
+/// path (direct token-equality, no uniformity gate) and the method
+/// one-arg-hole wrap stays ordinary for slice-9.
+fn wrapper_tpl_single(minus: &syn::Expr, plus: &syn::Expr, hole: &str) -> Option<String> {
+    if let syn::Expr::Call(call) = plus {
+        let mut found = false;
+        let mut rendered = Vec::with_capacity(call.args.len());
+        for arg in call.args.iter() {
+            if tok(arg) == tok(minus) {
+                if found {
+                    return None;
+                }
+                found = true;
+                rendered.push(hole.to_string());
+            } else {
+                rendered.push(tok(arg));
+            }
+        }
+        if !found {
+            return None;
+        }
+        let callee = tok(&call.func);
+        if callee.is_empty() {
+            return None;
+        }
+        return Some(format!("{}({})", callee, rendered.join(", ")));
+    }
+    if let syn::Expr::Binary(b) = plus {
+        let (l, r, op) = (tok(&b.left), tok(&b.right), tok(&b.op));
+        let m = tok(minus);
+        match (l == m, r == m) {
+            (true, false) => return Some(format!("{hole} {op} {r}")),
+            (false, true) => return Some(format!("{l} {op} {hole}")),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Single-pair anti-unification (WI-7 slices 6+8): one minus/plus arg
 /// vector pair of uniform arity `k ≥ 1` yields a template arg pair with
 /// holes on every token-equal position and a wrapper on exactly one
 /// differing position, or `None` (stays ordinary). Within-pair rule: a
 /// position token-equal across minus/plus binds hole `E{i}`; the single
 /// differing position must be a structural wrap via `wrapper_tpl`
-/// (same vocabulary as the multi — no new template language, no
-/// substring surgery). At N=1 the multi's cross-site uniformity gates
-/// are vacuous, so exactly the shapes `wrapper_tpl` proves from one
-/// pair fire (method-receiver and reference wraps); bare-call, binary,
-/// and method-arg wraps need cross-site evidence and stay ordinary.
+/// (method-receiver and reference wraps, same vocabulary as the multi)
+/// or via `wrapper_tpl_single` (bare-call and binary wraps, whose
+/// multi column-uniformity gates are vacuous-but-blocking at N=1 —
+/// no new template language, no substring surgery). Method one-arg-hole
+/// wraps still need cross-site evidence and stay ordinary (slice-9).
 /// Zero wraps (callee/perm territory), two wraps, pure concrete deltas
 /// (`1` → `2`, literal territory), and permuted holes all veto, as do
 /// macro/unsupported args (multi precedent).
@@ -567,11 +624,9 @@ fn antiunify_call_args_single(
             plus_tpl.push(format!("E{i}"));
             continue;
         }
-        let w = wrapper_tpl(
-            std::slice::from_ref(m),
-            std::slice::from_ref(p),
-            &format!("E{i}"),
-        )?;
+        let hole = format!("E{i}");
+        let w = wrapper_tpl(std::slice::from_ref(m), std::slice::from_ref(p), &hole)
+            .or_else(|| wrapper_tpl_single(m, p, &hole))?;
         minus_tpl.push(format!("E{i}"));
         plus_tpl.push(w);
         wraps += 1;
@@ -587,7 +642,8 @@ fn antiunify_call_args_single(
 /// shared T449 `let`-init entry — the emission stays the bare-call
 /// pattern and the engine rewrites the call sub-expression in place)
 /// as one same-callee call whose args anti-unify to exactly one wrap
-/// plus holes, a pre-image is present (`None` vetoes — uniqueness needs
+/// plus holes (slice-6 shapes via `wrapper_tpl`, slice-8 bare-call and
+/// binary inner wraps via `wrapper_tpl_single`), a pre-image is present (`None` vetoes — uniqueness needs
 /// the whole file, D3), and `template_pair_holds` proves exactly one
 /// site file-wide with zero opaque hits (conditions (a)+(b); (c) is
 /// structural: the callee token plus the wrapper anchor beyond the
@@ -655,7 +711,9 @@ pub(crate) fn try_call_arg_template_single(
 /// shared T449 `let`-init entry — the emission stays the
 /// `Receiver.m(...)` pattern and the engine rewrites the method-call
 /// sub-expression in place) as one same-receiver same-method call whose
-/// args anti-unify to exactly one wrap plus holes, a pre-image is
+/// args anti-unify to exactly one wrap plus holes (slice-7 shapes via
+/// `wrapper_tpl`, slice-8 bare-call and binary inner wraps via
+/// `wrapper_tpl_single`), a pre-image is
 /// present (`None` vetoes — uniqueness needs the whole file, D3), and
 /// `template_pair_holds` proves exactly one site file-wide with zero
 /// opaque hits (conditions (a)+(b); (c) is structural: the method ident
@@ -1039,6 +1097,287 @@ mod tests {
             )
             .is_none(),
             "macro arg must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-8: unique single `use_it(x)` -> `use_it(f(x))`
+        // raises to an allow-one hunk and real-applies byte-identical
+        // (the N>=2 column-uniformity gates are vacuous at N=1, so the
+        // structural `wrapper_tpl_single` proof carries this shape).
+        let pre = "fn use_it(x: i32) -> i32 { x }\nfn f(x: i32) -> i32 { x }\nfn a(x: i32) -> i32 {\n    use_it(x)\n}\n";
+        let raw = section("f.rs", "@@ -4 +4 @@\n-    use_it(x)\n+    use_it(f(x))\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique bare wrap single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(f(E0))\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn use_it(x: i32) -> i32 { x }\nfn f(x: i32) -> i32 { x }\nfn a(x: i32) -> i32 {\n    use_it(f(x))\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_let_init_fires_and_round_trips() {
+        // The shared T449 entry unwraps `let` inits: the emission stays
+        // the bare-call pattern and the engine rewrites the call
+        // sub-expression in place.
+        let pre = "fn m() {\n    let a = use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = use_it(x);\n+    let a = use_it(f(x));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique let-init bare wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(f(E0))\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    let a = use_it(f(x));\n}\n");
+    }
+
+    #[test]
+    fn wi8_binary_wrap_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-8: unique single `use_it(x)` -> `use_it(x + 1)`
+        // raises to an allow-one hunk and real-applies byte-identical.
+        let pre = "fn m() {\n    use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(x + 1);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique binary wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(E0 + 1)\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    use_it(x + 1);\n}\n");
+    }
+
+    #[test]
+    fn wi8_binary_wrap_single_flipped_side_fires() {
+        // Anchor on the left (`1 + x`): the same structural proof with
+        // the hole on the right.
+        let out = single(
+            "    use_it(x);",
+            "    use_it(1 + x);",
+            Some("fn m() {\n    use_it(x);\n}\n"),
+            &[2],
+        )
+        .expect("flipped binary wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(1 + E0)\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    use_it(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi8_binary_wrap_single_let_init_fires() {
+        let out = single(
+            "    let a = use_it(x);",
+            "    let a = use_it(x + 1);",
+            Some("fn m() {\n    let a = use_it(x);\n}\n"),
+            &[2],
+        )
+        .expect("let-init binary wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(E0 + 1)\n"), "got: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    let a = use_it(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_twin_vetoes() {
+        // An untouched same-callee same-arity twin matches the minus
+        // pattern (2 != 1) and vetoes.
+        let pre = "fn m() {\n    use_it(x);\n    use_it(y);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(f(x));\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_binary_wrap_single_twin_vetoes() {
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(x + 1);",
+                Some("fn m() {\n    use_it(x);\n    use_it(y);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3, shared gate).
+        assert!(
+            single("    use_it(x);", "    use_it(f(x));", None, &[2]).is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_two_hole_vetoes() {
+        // Two holes need a two-hole template — future work, never
+        // guessed at N=1 (one-hole discipline).
+        assert!(
+            single(
+                "    f(x);",
+                "    f(g(x, x));",
+                Some("fn m() {\n    f(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "two holes must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_zero_hole_vetoes() {
+        // A wrapper with no hole (`f()` carries no `E0`) is not a wrap
+        // of the minus arg — pure concrete territory, never a single.
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(f());",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "zero-hole wrapper must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_binary_wrap_single_both_sides_equal_vetoes() {
+        // `x + x` binds the hole twice — duplicated-hole territory,
+        // never guessed (T442 discipline).
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(x + x);",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "double-hole binary must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_binary_wrap_single_neither_side_equal_vetoes() {
+        // Neither side carries the minus — a concrete delta, literal
+        // territory (disjoint by construction).
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(y + 1);",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "concrete binary must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_bare_wrap_single_macro_interior_vetoes() {
+        // A wrapper carrying macro text never raises: the engine never
+        // matches inside macro bodies (multi precedent).
+        assert!(
+            single(
+                "    use_it(x);",
+                "    use_it(f(m!(x)));",
+                Some("fn m() {\n    use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro interior must veto"
+        );
+    }
+
+    #[test]
+    fn wi8_method_entry_bare_wrap_single_fires_and_round_trips() {
+        // The shared single-pair core serves the method outer entry too:
+        // `r.use_it(x)` -> `r.use_it(f(x))` raises `Receiver.use_it(E0)`
+        // -> `Receiver.use_it(f(E0))` under the same gates.
+        let pre = "fn m() {\n    r.use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    r.use_it(x);\n+    r.use_it(f(x));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique method-entry bare wrap single must fire");
+        assert!(out.contains("- Receiver.use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.use_it(f(E0))\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    r.use_it(f(x));\n}\n");
+    }
+
+    #[test]
+    fn wi8_method_entry_binary_wrap_single_fires() {
+        let out = msingle(
+            "    r.use_it(x);",
+            "    r.use_it(x + 1);",
+            Some("fn m() {\n    r.use_it(x);\n}\n"),
+            &[2],
+        )
+        .expect("method-entry binary wrap single must fire");
+        assert!(out.contains("- Receiver.use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.use_it(E0 + 1)\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    r.use_it(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi8_method_entry_bare_wrap_single_twin_vetoes() {
+        assert!(
+            msingle(
+                "    r.use_it(x);",
+                "    r.use_it(f(x));",
+                Some("fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "twin must veto"
         );
     }
 

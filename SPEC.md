@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
- Precision singles (WI-7 slices 1-7, `PrecisionUnique`): N == 1
+  Precision singles (WI-7 slices 1-8, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7680,7 +7680,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    single-pair core — all other args holes; receiver/method deltas,
    zero/two wraps, pure concrete deltas, and permuted holes veto) via
    `template_pair_holds` at n=1 over the emitted `Receiver.m(...)`
-   pair. The
+   pair. Slice-8 adds bare-call and binary inner-wrap pairs
+   (`use_it(E0)` → `use_it(f(E0))`, `use_it(E0)` → `use_it(E0 + 1)`)
+   for both outer entries through the same shared single-pair core:
+   the N ≥ 2 column-uniformity gates are vacuous-but-blocking at N=1,
+   so these two vocabularies prove structurally from one pair
+   (`wrapper_tpl_single`: exactly one arg/side token-equals the minus,
+   every other position a concrete anchor); zero holes, two holes,
+   and pure concrete deltas veto as before. The
    callee/method/function/operator token is the anchor beyond the holes
    (`Receiver`/`E`; uppercase rides backticks, same rule as above).
    Emission is the ranged allow-one spelling (tight original range,
@@ -7691,7 +7698,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    `None` pre-image vetoes (no guessing); an untouched same-shape twin
    vetoes (same-arity for call/method shapes, same-template for
    general); non-matching twins never count. Remaining families
-   (literal, sub-line, bare-call/binary arg wraps, perm) keep `N ≥ 2`
+   (literal, sub-line, method one-arg-hole wraps, perm) keep `N ≥ 2`
    until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
