@@ -1,5 +1,6 @@
 //! WI-7a + WI-7b + WI-7c cut+paste move verification plus WI-7d
-//! pure-insertion and unpaired-cut verdicts (SPEC 24.6).
+//! pure-insertion and unpaired-cut verdicts plus the WI-7d-follow-up
+//! member-addition verdict (SPEC 24.6).
 //!
 //! A move pair — one item cut (`- I` + `# bind=N`, scalar or
 //! `# allow=many` collection in source order) and one paste (`+ N` +
@@ -27,6 +28,15 @@
 //!   per-item old kind+ident absence against the translated cut spans
 //!   plus a post-image file re-parse — earns `postcondition` on the
 //!   cut entry.
+//!
+//! WI-7d-follow-up adds the member-addition verdict:
+//!
+//! * member addition (`FieldAddition` / `VariantAddition` / `ArmAddition`
+//!   point-insertion): presence at the byte-exact post offset plus
+//!   container membership in the re-parsing post-image (struct holds the
+//!   field / enum holds the variant / a same-scrutinee `match` holds the
+//!   arm) — earns `postcondition` on the entry; sweeps need every
+//!   recorded insert to verify.
 //!
 //! Everything else stays `reparse-only`: empty collections,
 //! multi-inserts sharing one anchor, multi-pastes sharing one anchor
@@ -85,6 +95,33 @@ pub(crate) struct PureInsert {
     pub(crate) file: String,
     pub(crate) pos: usize,
     pub(crate) expected: String,
+}
+
+/// WI-7d-follow-up container key for a member-addition insertion. Field
+/// and variant carry their container name plus the member name;
+/// arm carries the variant plus the token-normalised scrutinee from the
+/// classifier (compared against the same normalisation in the probe —
+/// mismatch abstains, never verifies).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MemberKind {
+    Field { container: String, member: String },
+    Variant { container: String, member: String },
+    Arm { member: String, scrutinee: String },
+}
+
+/// WI-7d-follow-up pending member addition: rule/file plus the
+/// original-coordinate insertion byte offset, the exact bytes the
+/// planner spliced, and the container key above. One entry per new
+/// insertion edit (ranged: exactly one; sweep: one per lacking
+/// container). The probe checks byte-exact presence at the post offset
+/// plus container membership in the re-parsing post-image.
+#[derive(Clone, Debug)]
+pub(crate) struct MemberAddition {
+    pub(crate) rule: String,
+    pub(crate) file: String,
+    pub(crate) pos: usize,
+    pub(crate) expected: String,
+    pub(crate) kind: MemberKind,
 }
 
 /// WI-7a + WI-7b + WI-7c: upgrade verified cut+paste pairs to `postcondition`.
@@ -425,6 +462,241 @@ pub(crate) fn upgrade_unpaired_cuts(
         }
     }
     Ok(())
+}
+
+/// WI-7d-follow-up: upgrade verified member additions to `postcondition`.
+///
+/// A member addition (`FieldAddition` / `VariantAddition` / `ArmAddition`
+/// point-insertion) verifies iff the post image carries exactly the
+/// spliced bytes at the byte-exact post offset, the file re-parses, and
+/// the container holds the member in the post-image (`struct` holds the
+/// field / `enum` holds the variant / a same-scrutinee `match` holds the
+/// arm). Entries group by (rule, file) so a file-scope sweep needs every
+/// recorded insert to verify (all-or-nothing). Single-edit-at-pos plus
+/// `replacement == expected` guards mirror the pure-insertion probe (two
+/// inserts at one anchor, or any drift between planning and probing,
+/// abstain — never verify).
+pub(crate) fn upgrade_member_additions(
+    additions: &[MemberAddition],
+    full_edits: &HashMap<String, Vec<TextEdit>>,
+    files: &HashMap<String, String>,
+    post_parsed: &HashMap<String, syn::File>,
+    rules: &mut [RuleReport],
+) -> Result<(), StructuredError> {
+    use std::collections::{HashMap as Map, HashSet};
+    // Group recorded inserts by (rule, file): a sweep verifies only when
+    // every insert verifies.
+    let mut by_rule: Map<(String, String), Vec<&MemberAddition>> = Map::new();
+    for a in additions {
+        by_rule
+            .entry((a.rule.clone(), a.file.clone()))
+            .or_default()
+            .push(a);
+    }
+    // Track which (rule, file) groups earn the upgrade; apply after the
+    // loop so a loud failure below still surfaces before any mutation.
+    let mut verified: HashSet<(String, String)> = HashSet::new();
+    for ((rule, file), group) in &by_rule {
+        let post_file = match post_parsed.get(file) {
+            Some(f) => f,
+            None => continue,
+        };
+        let mut group_ok = true;
+        for add in group {
+            let edits = full_edits.get(file).map(Vec::as_slice).unwrap_or(&[]);
+            let at_pos: Vec<&TextEdit> = edits
+                .iter()
+                .filter(|e| e.start == add.pos && e.end == add.pos)
+                .collect();
+            if at_pos.len() != 1 {
+                group_ok = false;
+                break;
+            }
+            if at_pos[0].replacement != add.expected {
+                group_ok = false;
+                break;
+            }
+            let post = crate::postcheck_follow::post_starts_for(
+                &[(
+                    at_pos[0].start,
+                    at_pos[0].end,
+                    at_pos[0].replacement.clone(),
+                )],
+                edits,
+            );
+            if post.len() != 1 {
+                group_ok = false;
+                break;
+            }
+            let post_text = match files.get(file) {
+                Some(t) => t,
+                None => {
+                    group_ok = false;
+                    break;
+                }
+            };
+            match post_text.get(post[0].0..post[0].0.saturating_add(add.expected.len())) {
+                Some(s) if s == add.expected => {}
+                Some(_) => {
+                    return Err(StructuredError::new(
+                        rsmpl_patch::ErrorCode::MatchConflict,
+                        "postcondition: member addition did not land as authored (inserted text does not match the post-image at the anchor)",
+                    )
+                    .with_rule(rule)
+                    .with_file(file)
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "member-addition",
+                        "read the reported spans in the post-image file; fix the addition anchor so the member lands inside its container as authored",
+                    )));
+                }
+                None => {
+                    group_ok = false;
+                    break;
+                }
+            }
+            if !member_present(post_file, &add.kind) {
+                group_ok = false;
+                break;
+            }
+        }
+        if group_ok && !group.is_empty() {
+            verified.insert((rule.clone(), file.clone()));
+        }
+    }
+    for r in rules.iter_mut() {
+        if verified.contains(&(r.rule.clone(), r.file.clone())) {
+            r.semantics = RuleSemantics::Postcondition;
+        }
+    }
+    Ok(())
+}
+
+/// WI-7d-follow-up container membership: the structural half of the
+/// member-addition verdict (mirrors the matcher-side naming discipline:
+/// field ident equality, variant last-segment equality, arm
+/// last-segment equality under a token-normalised scrutinee).
+fn member_present(post_file: &syn::File, kind: &MemberKind) -> bool {
+    match kind {
+        MemberKind::Field { container, member } => {
+            struct FieldProbe<'ast> {
+                name: &'ast str,
+                want: &'ast str,
+                found: bool,
+            }
+            impl<'ast> syn::visit::Visit<'ast> for FieldProbe<'ast> {
+                fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
+                    if s.ident == self.name {
+                        if let syn::Fields::Named(f) = &s.fields {
+                            if f.named
+                                .iter()
+                                .any(|f| f.ident.as_ref().is_some_and(|i| i == self.want))
+                            {
+                                self.found = true;
+                            }
+                        }
+                    }
+                    syn::visit::visit_item_struct(self, s);
+                }
+            }
+            let mut probe = FieldProbe {
+                name: container,
+                want: member,
+                found: false,
+            };
+            syn::visit::Visit::visit_file(&mut probe, post_file);
+            probe.found
+        }
+        MemberKind::Variant { container, member } => {
+            struct VariantProbe<'ast> {
+                name: &'ast str,
+                want: &'ast str,
+                found: bool,
+            }
+            impl<'ast> syn::visit::Visit<'ast> for VariantProbe<'ast> {
+                fn visit_item_enum(&mut self, e: &'ast syn::ItemEnum) {
+                    if e.ident == self.name && e.variants.iter().any(|v| v.ident == self.want) {
+                        self.found = true;
+                    }
+                    syn::visit::visit_item_enum(self, e);
+                }
+            }
+            let mut probe = VariantProbe {
+                name: container,
+                want: member,
+                found: false,
+            };
+            syn::visit::Visit::visit_file(&mut probe, post_file);
+            probe.found
+        }
+        MemberKind::Arm { member, scrutinee } => {
+            struct ArmProbe {
+                want: String,
+                scrutinee: String,
+                found: bool,
+            }
+            impl<'ast> syn::visit::Visit<'ast> for ArmProbe {
+                fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+                    let scrut = &*node.expr;
+                    let got: String = quote::quote!(#scrut)
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if got == self.scrutinee {
+                        for arm in &node.arms {
+                            let name: Option<String> = match &arm.pat {
+                                syn::Pat::Ident(pi)
+                                    if pi.by_ref.is_none()
+                                        && pi.mutability.is_none()
+                                        && pi.subpat.is_none() =>
+                                {
+                                    Some(pi.ident.to_string())
+                                }
+                                syn::Pat::Path(pp) if pp.qself.is_none() => {
+                                    pp.path.segments.last().map(|s| s.ident.to_string())
+                                }
+                                syn::Pat::TupleStruct(ps) => {
+                                    ps.path.segments.last().map(|s| s.ident.to_string())
+                                }
+                                syn::Pat::Struct(ps) => {
+                                    ps.path.segments.last().map(|s| s.ident.to_string())
+                                }
+                                _ => None,
+                            };
+                            if name.as_deref() == Some(self.want.as_str()) {
+                                self.found = true;
+                            }
+                        }
+                    }
+                    syn::visit::visit_expr_match(self, node);
+                }
+            }
+            // Expression-position matches are `Expr`, not `Item`: route
+            // every expression through the match probe (matcher
+            // discipline in `matcher_member_evo`).
+            struct FileWalk {
+                probe: ArmProbe,
+            }
+            impl<'ast> syn::visit::Visit<'ast> for FileWalk {
+                fn visit_expr(&mut self, node: &'ast syn::Expr) {
+                    if let syn::Expr::Match(m) = node {
+                        syn::visit::Visit::visit_expr_match(&mut self.probe, m);
+                    } else {
+                        syn::visit::visit_expr(self, node);
+                    }
+                }
+            }
+            let mut walk = FileWalk {
+                probe: ArmProbe {
+                    want: member.clone(),
+                    scrutinee: scrutinee.clone(),
+                    found: false,
+                },
+            };
+            syn::visit::Visit::visit_file(&mut walk, post_file);
+            walk.probe.found
+        }
+    }
 }
 
 /// WI-7d: the inserted slice must parse standalone as Rust — an item,
@@ -927,6 +1199,196 @@ mod tests {
         let (_, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
         assert_eq!(semantics_of(&report, "ins_one"), "reparse-only");
         assert_eq!(semantics_of(&report, "ins_two"), "reparse-only");
+    }
+
+    #[test]
+    fn field_addition_verifies_postcondition() {
+        // WI-7d-follow-up: a struct-field point-insertion verifies by
+        // byte-exact presence plus container membership.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 @@ rule=add\n  struct S {\n+ b: bool,\n";
+        let (files, report) =
+            apply_report(patch, vec![("src/lib.rs", "struct S {\n    a: u32,\n}\n")]);
+        assert!(
+            files["src/lib.rs"].contains("b: bool,"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "add"), "postcondition");
+    }
+
+    #[test]
+    fn variant_addition_verifies_postcondition() {
+        // WI-7d-follow-up: an enum-variant point-insertion verifies by
+        // byte-exact presence plus container membership.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 @@ rule=add\n  enum E {\n+ C,\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", "enum E {\n    A,\n}\n")]);
+        assert!(
+            files["src/lib.rs"].contains("C,"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "add"), "postcondition");
+    }
+
+    #[test]
+    fn arm_addition_verifies_postcondition() {
+        // WI-7d-follow-up: a match-arm point-insertion verifies by
+        // byte-exact presence plus same-scrutinee membership.
+        let pre = "enum E {\n    A,\n}\n\nfn f(e: E) -> u32 {\n    match e {\n        E::A => 1,\n    }\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 @@ rule=arm\n  match e {\n+ E::C => 3,\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", pre)]);
+        assert!(
+            files["src/lib.rs"].contains("E::C => 3,"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "arm"), "postcondition");
+    }
+
+    #[test]
+    fn member_addition_sweep_spelling_verifies() {
+        // WI-7d-follow-up: the file-scope (`# sweep`) spelling records the
+        // same per-insert probe input and verifies (single-container pin;
+        // multi-container sweeps need every insert to verify by
+        // construction of the group loop).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=add\n# sweep\n  struct S {\n+ b: bool,\n";
+        let (files, report) =
+            apply_report(patch, vec![("src/lib.rs", "struct S {\n    a: u32,\n}\n")]);
+        assert!(
+            files["src/lib.rs"].contains("b: bool,"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "add"), "postcondition");
+    }
+
+    #[test]
+    fn tampered_member_addition_post_fails_loud() {
+        // WI-7d-follow-up in-range mismatch fails loud: forge a field
+        // addition whose post-image carries different bytes at the
+        // anchor offset.
+        let original = "struct S {\n    a: u32,\n}\n";
+        let index = LineIndex::new(original);
+        let pos = index.line_start(3).unwrap();
+        let expected = "    b: bool,\n";
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![TextEdit::new(pos, pos, expected.to_string())],
+        )]);
+        let post_text = "struct S {\n    a: u32,\n    c: u8,\n}\n";
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(post_text).expect("post parses"),
+        )]);
+        let additions = vec![MemberAddition {
+            rule: "add".to_string(),
+            file: "f.rs".to_string(),
+            pos,
+            expected: expected.to_string(),
+            kind: MemberKind::Field {
+                container: "S".to_string(),
+                member: "b".to_string(),
+            },
+        }];
+        let mut rules = vec![RuleReport {
+            rule: "add".to_string(),
+            file: "f.rs".to_string(),
+            semantics: RuleSemantics::ReparseOnly,
+            ..Default::default()
+        }];
+        let files = HashMap::from([("f.rs".to_string(), post_text.to_string())]);
+        let err =
+            upgrade_member_additions(&additions, &full_edits, &files, &post_parsed, &mut rules)
+                .unwrap_err();
+        assert!(
+            err.render().contains("RSMPL_MATCH_CONFLICT"),
+            "got: {}",
+            err.render()
+        );
+    }
+
+    #[test]
+    fn member_addition_missing_member_stays_reparse_only() {
+        // WI-7d-follow-up abstains when the container does not hold the
+        // member in the post-image (here the recorded scrutinee names a
+        // different match, so the arm never counts as present even though
+        // the bytes landed): no verdict, never loud.
+        let original = "fn f(e: E) -> u32 {\n    match e {\n        E::A => 1,\n    }\n}\n";
+        let index = LineIndex::new(original);
+        let pos = index.line_start(4).expect("line 4");
+        let expected = "        E::C => 3,\n";
+        let mut post_text = original.to_string();
+        post_text.insert_str(pos, expected);
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(&post_text).expect("post parses"),
+        )]);
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![TextEdit::new(pos, pos, expected.to_string())],
+        )]);
+        let additions = vec![MemberAddition {
+            rule: "arm".to_string(),
+            file: "f.rs".to_string(),
+            pos,
+            expected: expected.to_string(),
+            kind: MemberKind::Arm {
+                member: "C".to_string(),
+                scrutinee: "other".to_string(),
+            },
+        }];
+        let mut rules = vec![RuleReport {
+            rule: "arm".to_string(),
+            file: "f.rs".to_string(),
+            semantics: RuleSemantics::ReparseOnly,
+            ..Default::default()
+        }];
+        let files = HashMap::from([("f.rs".to_string(), post_text.to_string())]);
+        upgrade_member_additions(&additions, &full_edits, &files, &post_parsed, &mut rules)
+            .expect("abstains");
+        assert_eq!(rules[0].semantics, RuleSemantics::ReparseOnly);
+    }
+
+    #[test]
+    fn same_anchor_double_member_addition_stays_reparse_only() {
+        // WI-7d-follow-up: two member inserts at one anchor share the
+        // position, so neither earns a verdict (ambiguous attribution).
+        // Forged directly: the single-edit-at-pos gate sees two edits.
+        let original = "struct S {\n    a: u32,\n}\n";
+        let index = LineIndex::new(original);
+        let pos = index.line_start(3).unwrap();
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![
+                TextEdit::new(pos, pos, "    b: bool,\n".to_string()),
+                TextEdit::new(pos, pos, "    c: u8,\n".to_string()),
+            ],
+        )]);
+        let post_text = "struct S {\n    a: u32,\n    b: bool,\n    c: u8,\n}\n";
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(post_text).expect("post parses"),
+        )]);
+        let additions = vec![MemberAddition {
+            rule: "add".to_string(),
+            file: "f.rs".to_string(),
+            pos,
+            expected: "    b: bool,\n".to_string(),
+            kind: MemberKind::Field {
+                container: "S".to_string(),
+                member: "b".to_string(),
+            },
+        }];
+        let mut rules = vec![RuleReport {
+            rule: "add".to_string(),
+            file: "f.rs".to_string(),
+            semantics: RuleSemantics::ReparseOnly,
+            ..Default::default()
+        }];
+        let files = HashMap::from([("f.rs".to_string(), post_text.to_string())]);
+        upgrade_member_additions(&additions, &full_edits, &files, &post_parsed, &mut rules)
+            .expect("abstains");
+        assert_eq!(rules[0].semantics, RuleSemantics::ReparseOnly);
     }
 
     #[test]

@@ -2575,7 +2575,7 @@ Rules:
 - Variant-payload evolution is `enum E {` context + one of three same-shape pairs with concrete preserved variant name: tuple payloads `Old(A, …)` / `Old(B, …)` (same arity, per-position type templates sharing one binding set under SPEC 15.7), struct payloads `Old { f: A, … }` / `Old { f: B, … }` (same field names in order, per-field type templates), or discriminants `Old = D0` / `Old = D1` (a general-expr template). Payload and discriminant never evolve together (one hunk per region, or an ordinary hunk). A bare `Old` / `New` pair stays a variant rename; call-shaped pairs without the header stay calls.
 - A name-changing "evolution" fails fast: same RHS on both sides points at the bare `<kind> <Name>` rename pair; differing RHS on both sides never combines rename + evolution (write a rename hunk plus an evolution hunk, or an ordinary hunk).
 - Classification is shape-first: sides without `=` (bare `type Old`) fall through to the item-rename classifier untouched; `const { … }` block expressions are never definitions. Member pairs without their container header fall through (field pairs to the member-rename missing-header error; call-shaped and discriminant pairs to the call/general classifiers). Leading `#[...]`/doc lines are the member's own attributes (SPEC 14.6 mirror laws: plus-side additions and differing sets fail fast; matching sites carry them).
-- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Member addition kinds (`FieldAddition`, `VariantAddition`, `ArmAddition`) reject it likewise (an insertion renames nothing). Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict); pure insertions report `reparse-only`.
+- `# follow=uses` is rejected on evolution kinds (C17): evolving a type renames nothing, and silently following would guess at conversion edits the patch never stated. Member addition kinds (`FieldAddition`, `VariantAddition`, `ArmAddition`) reject it likewise (an insertion renames nothing). Verification is the WI-1.5 plus re-match at each reported span with per-site binding equality (`instantiated` verdict) for evolutions; pure insertions and member additions verify as `postcondition` via their structural probes (presence plus standalone re-parse / container membership), else `reparse-only`.
 - Out of scope in v0.1: generic-param/`where` evolution on aliases and fields, and value conversion at use sites.
 
 Member-addition authoring (WI-12b slice 1) reuses the member-evolution
@@ -4912,20 +4912,27 @@ if:
        templates, kind mismatches, standalone-unparseable insertions,
        and unparseable post-images stay `reparse-only`; in-range mismatch
        fails loud, never a silent verify.
-       A pure insertion (`+ <text>` with no `# use=`, exactly one
-       insertion edit at its anchor) verifies as `postcondition` when
-       the post-image holds the inserted bytes at the byte-exact post
-       offset, the inserted slice parses standalone as Rust (`Item` /
-       `Stmt` / `Expr` / `Type` / multi-item `File`), and the file
-       re-parses.
-       An unpaired cut (a scalar or collection cut with no same-name
-       paste — a deletion) verifies as `postcondition` when, per
-       captured item, no same-kind same-ident item starts inside the
-       cut spans translated to post-image coordinates and the file
-       re-parses.
-    Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
-    including verified follow-only entries), `postcondition` (sweep gate
-    + plus-pattern both ran, or a verified cut+paste move pair),
+        A pure insertion (`+ <text>` with no `# use=`, exactly one
+        insertion edit at its anchor) verifies as `postcondition` when
+        the post-image holds the inserted bytes at the byte-exact post
+        offset, the inserted slice parses standalone as Rust (`Item` /
+        `Stmt` / `Expr` / `Type` / multi-item `File`), and the file
+        re-parses.
+        A member addition (`FieldAddition` / `VariantAddition` /
+        `ArmAddition` point-insertion, ranged or file-scope) verifies as
+        `postcondition` when every recorded insert holds its bytes at the
+        byte-exact post offset and the container holds the member in the
+        re-parsing post-image (struct holds the field / enum holds the
+        variant / a same-scrutinee `match` holds the arm).
+        An unpaired cut (a scalar or collection cut with no same-name
+        paste — a deletion) verifies as `postcondition` when, per
+        captured item, no same-kind same-ident item starts inside the
+        cut spans translated to post-image coordinates and the file
+        re-parses.
+     Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
+     including verified follow-only entries), `postcondition` (sweep gate
+     + plus-pattern both ran, or a verified move / insertion / cut /
+     member-addition structural probe),
      `reparse-only` (unverified insertions, cuts, pastes,
     unverified follow-only extras, unverifiable plus, or a local-binder
     (`let`/closure-param/match-arm/for/`if let`/`while let`/fn-param) rename with leftover-use orphans

@@ -222,9 +222,11 @@ fn apply_inner(
     // WI-7a: scalar cuts + bare pastes awaiting the move-pair probe (new
     // module `postcheck_move` so this file stays under the size gate).
     // WI-7d: pure insertions await the insertion probe in the same module.
+    // WI-7d-follow-up: member additions await their container probe below.
     let mut move_cuts: Vec<crate::postcheck_move::MoveCut> = Vec::new();
     let mut move_pastes: Vec<crate::postcheck_move::MovePaste> = Vec::new();
     let mut pure_inserts: Vec<crate::postcheck_move::PureInsert> = Vec::new();
+    let mut member_additions: Vec<crate::postcheck_move::MemberAddition> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     for (sec_idx, section) in patch.files.iter().enumerate() {
@@ -556,6 +558,52 @@ fn apply_inner(
                                 pos: e.start,
                                 expected: e.replacement.clone(),
                             });
+                        }
+                    }
+                    // WI-7d-follow-up: member additions (`FieldAddition` /
+                    // `VariantAddition` / `ArmAddition`) record every new
+                    // insertion edit for the container-membership probe in
+                    // `postcheck_move` (ranged: exactly one; sweep: one per
+                    // lacking container; arm is ranged-only by construction).
+                    {
+                        let member_kind: Option<crate::postcheck_move::MemberKind> =
+                            match &compiled.kind {
+                                PatternKind::FieldAddition {
+                                    struct_name, field, ..
+                                } => Some(crate::postcheck_move::MemberKind::Field {
+                                    container: struct_name.clone(),
+                                    member: field.clone(),
+                                }),
+                                PatternKind::VariantAddition {
+                                    enum_name, variant, ..
+                                } => Some(crate::postcheck_move::MemberKind::Variant {
+                                    container: enum_name.clone(),
+                                    member: variant.clone(),
+                                }),
+                                PatternKind::ArmAddition {
+                                    variant, scrutinee, ..
+                                } => Some(crate::postcheck_move::MemberKind::Arm {
+                                    member: variant.clone(),
+                                    scrutinee: scrutinee.clone(),
+                                }),
+                                _ => None,
+                            };
+                        if let Some(kind) = member_kind {
+                            if let Some(edits) = file_edits.get(path) {
+                                for e in &edits[edits_before..] {
+                                    if e.start == e.end {
+                                        member_additions.push(
+                                            crate::postcheck_move::MemberAddition {
+                                                rule: rule.clone(),
+                                                file: path.clone(),
+                                                pos: e.start,
+                                                expected: e.replacement.clone(),
+                                                kind: kind.clone(),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                     // WI-6b1 workspace follow before spans: def-file spans
@@ -1151,6 +1199,13 @@ fn apply_inner(
         )?;
         crate::postcheck_move::upgrade_pure_insertions(
             &pure_inserts,
+            &full_edits,
+            files,
+            &post_parsed,
+            &mut report.rules,
+        )?;
+        crate::postcheck_move::upgrade_member_additions(
+            &member_additions,
             &full_edits,
             files,
             &post_parsed,

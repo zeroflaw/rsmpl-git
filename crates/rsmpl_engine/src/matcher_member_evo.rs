@@ -1266,11 +1266,11 @@ mod tests {
     }
 
     #[test]
-    fn field_addition_fire_reparse_only_indented() {
+    fn field_addition_fire_verifies_postcondition() {
         let patch = add_field_patch("b: bool,");
         let (out, report) = apply_report(&patch, "struct S {\n    a: u32,\n}\n").unwrap();
         assert!(out.contains("    b: bool,"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
     }
 
     #[test]
@@ -1285,11 +1285,11 @@ mod tests {
     }
 
     #[test]
-    fn variant_addition_bare_fire() {
+    fn variant_addition_bare_fire_verifies_postcondition() {
         let patch = add_variant_patch("C,");
         let (out, report) = apply_report(&patch, "enum E {\n    A,\n}\n").unwrap();
         assert!(out.contains("    C,"), "got: {out:?}");
-        assert_eq!(report.rules[0].semantics, RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
     }
 
     #[test]
@@ -1393,7 +1393,7 @@ mod arm_addition_tests {
         assert_eq!(report.rules[0].matches, 1);
         assert_eq!(
             report.rules[0].semantics,
-            super::super::RuleSemantics::ReparseOnly
+            super::super::RuleSemantics::Postcondition
         );
     }
 
