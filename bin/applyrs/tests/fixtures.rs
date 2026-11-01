@@ -252,3 +252,81 @@ fn example_bench_readme_table_matches_recomputed() {
     }
     assert!(seen > 0, "no bench dirs found");
 }
+
+#[test]
+fn spec_d5_corpus_counts_match_disk() {
+    // WI-20 follow-up: pin SPEC D.5 corpus counts to the directories on
+    // disk so a fixture/bench addition without a SPEC update (or vice
+    // versa) fails loudly instead of drifting stale again (41/60 residue).
+    let root = workspace_root();
+    fn count_rel(root: &Path, rel: &str) -> usize {
+        let dir =
+            std::fs::read_dir(root.join(rel)).unwrap_or_else(|e| panic!("cannot list {rel}: {e}"));
+        let mut n = 0;
+        for entry in dir {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                n += 1;
+            }
+        }
+        assert!(n > 0, "{rel} has no subdirectories");
+        n
+    }
+    let applyrs_fixtures = count_rel(&root, "test-fixtures/applyrs");
+    let diffrs_fixtures = count_rel(&root, "test-fixtures/diffrs");
+    let applyrs_benches = count_rel(&root, "example-benches/applyrs");
+    let diffrs_benches = count_rel(&root, "example-benches/diffrs");
+    let spec_text = std::fs::read_to_string(root.join("SPEC.md")).unwrap();
+    // Reflow-proof: the corpus sentence may wrap across lines in SPEC.
+    let spec: String = spec_text.split_whitespace().collect::<Vec<_>>().join(" ");
+    fn number_after(text: &str, needle: &str) -> usize {
+        let i = text
+            .find(needle)
+            .unwrap_or_else(|| panic!("SPEC D.5 missing {needle:?}"));
+        let rest = &text[i + needle.len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        assert!(
+            !digits.is_empty(),
+            "SPEC D.5 has no number after {needle:?}"
+        );
+        digits.parse().unwrap()
+    }
+    let spec_applyrs = number_after(&spec, "all applyrs fixtures (");
+    let spec_diffrs = number_after(&spec, "all diffrs fixtures (");
+    let bench_open = spec
+        .find("all example benches (")
+        .expect("SPEC D.5 missing bench counts");
+    let bench_rest = &spec[bench_open + "all example benches (".len()..];
+    let spec_bench_applyrs: usize = bench_rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .expect("SPEC D.5 bench counts must start with a number");
+    let comma = bench_rest
+        .find(',')
+        .expect("SPEC D.5 bench pair needs a comma");
+    let after_comma = &bench_rest[comma + 1..];
+    let second: String = after_comma
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let spec_bench_diffrs: usize = second.parse().expect("SPEC D.5 bench pair needs 2 numbers");
+    assert_eq!(
+        spec_applyrs, applyrs_fixtures,
+        "SPEC D.5 applyrs fixture count drifted"
+    );
+    assert_eq!(
+        spec_diffrs, diffrs_fixtures,
+        "SPEC D.5 diffrs fixture count drifted"
+    );
+    assert_eq!(
+        spec_bench_applyrs, applyrs_benches,
+        "SPEC D.5 applyrs bench count drifted"
+    );
+    assert_eq!(
+        spec_bench_diffrs, diffrs_benches,
+        "SPEC D.5 diffrs bench count drifted"
+    );
+}
