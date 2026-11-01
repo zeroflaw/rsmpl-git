@@ -1091,6 +1091,28 @@ pub fn apply_fn_hunk(
             name_hole,
         )?;
         edits.append(&mut new_edits);
+        // WI-3: fn-param binder completion — the params edit above owns
+        // the binder; unshadowed body uses rewrite as `follow` edits
+        // (shadowed/macro/nested-fn uses stay orphans via the scope
+        // scan, never rewritten).
+        if let Some((old, new)) = crate::use_graph_binder::fn_param_binder_rename_from_hunk(hunk) {
+            if let Some((bs, be)) = crate::use_graph_binder_unified::fn_param_binder_span(
+                &c.item.sig,
+                &old,
+                original,
+                index,
+            ) {
+                edits.extend(crate::use_graph_binder_unified::scope_follow_edits(
+                    parsed,
+                    original,
+                    index,
+                    rsmpl_pattern::binder::BinderScope::FnParam,
+                    &old,
+                    &new,
+                    &[(bs, be)],
+                ));
+            }
+        }
         // WI-10a: same-name attr evolution still needs an ident-bearing
         // span for the WI-1.4 postcondition (which counts `fn {name}`
         // defs at reported spans). Emit the byte-identical name edit

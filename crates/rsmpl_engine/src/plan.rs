@@ -749,9 +749,10 @@ fn apply_inner(
                         (RuleSemantics::NotApplicable, false)
                     } else if !is_rewrite_kind(&compiled)
                         || (!orphans.is_empty()
-                            && (crate::use_graph_local::is_local_binder_rename(&compiled)
-                                || crate::use_graph_binder::fn_param_binder_rename_from_hunk(rh)
-                                    .is_some()))
+                            && crate::use_graph_binder_unified::is_binder_rename(
+                                &compiled,
+                                Some(rh),
+                            ))
                     {
                         (RuleSemantics::ReparseOnly, false)
                     } else if sweep_gate_ran {

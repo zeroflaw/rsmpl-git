@@ -562,6 +562,40 @@ pub fn apply_general_hunk(
                         edits.extend(crate::use_graph_local::let_binder_follow_edits(
                             parsed, original, index, node.start, node.end, &old, &new,
                         ));
+                    } else if let Some(b) = rsmpl_pattern::binder::binder_rename(&compiled.kind) {
+                        // WI-3: only `LetClosure` reaches the Stmt arm
+                        // besides `Let`. Binder-ident emission plus
+                        // closure-body follows (the whole-statement
+                        // replacement is redundant: minus/plus are
+                        // token-equal outside the binder by construction).
+                        let done = match b.scope {
+                            rsmpl_pattern::binder::BinderScope::LetClosure => {
+                                crate::use_graph_binder_unified::local_binder_span(
+                                    tgt, b.scope, &b.old, original, index,
+                                )
+                                .map(|(bs, be)| {
+                                    edits.push(
+                                        TextEdit::new(bs, be, b.new.clone()).with_label("rename"),
+                                    );
+                                    edits.extend(
+                                        crate::use_graph_binder_unified::scope_follow_edits(
+                                            parsed,
+                                            original,
+                                            index,
+                                            b.scope,
+                                            &b.old,
+                                            &b.new,
+                                            &[(node.start, node.end)],
+                                        ),
+                                    );
+                                })
+                                .is_some()
+                            }
+                            _ => false,
+                        };
+                        if !done {
+                            edits.push(TextEdit::new(node.start, node.end, replacement));
+                        }
                     } else {
                         edits.push(TextEdit::new(node.start, node.end, replacement));
                     }
@@ -653,7 +687,44 @@ pub fn apply_general_hunk(
                             replacement.push(';');
                         }
                     }
-                    edits.push(TextEdit::new(node.start, end, replacement));
+                    // WI-3: single-binder expression renames emit the
+                    // binder ident (labelled `rename`) plus scope
+                    // follows — never the whole-node replacement (the
+                    // rest is token-equal by construction, and keeping
+                    // target formatting shrinks the native diff).
+                    let binder_done = match rsmpl_pattern::binder::binder_rename(&compiled.kind) {
+                        Some(b) => {
+                            matches!(
+                                b.scope,
+                                rsmpl_pattern::binder::BinderScope::Closure
+                                    | rsmpl_pattern::binder::BinderScope::MatchArm
+                                    | rsmpl_pattern::binder::BinderScope::For
+                                    | rsmpl_pattern::binder::BinderScope::IfLet
+                                    | rsmpl_pattern::binder::BinderScope::WhileLet
+                            ) && crate::use_graph_binder_unified::expr_binder_span(
+                                tgt, b.scope, &b.old, original, index,
+                            )
+                            .map(|(bs, be)| {
+                                edits.push(
+                                    TextEdit::new(bs, be, b.new.clone()).with_label("rename"),
+                                );
+                                edits.extend(crate::use_graph_binder_unified::scope_follow_edits(
+                                    parsed,
+                                    original,
+                                    index,
+                                    b.scope,
+                                    &b.old,
+                                    &b.new,
+                                    &[(node.start, node.end)],
+                                ));
+                            })
+                            .is_some()
+                        }
+                        None => false,
+                    };
+                    if !binder_done {
+                        edits.push(TextEdit::new(node.start, end, replacement));
+                    }
                 }
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {

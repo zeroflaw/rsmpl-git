@@ -71,8 +71,12 @@ pub(crate) fn closure_or_arm_orphans(
         scopes: NodeScopes,
     }
     impl ScopeGrab<'_> {
+        // WI-3 reversed containment: definition edits are binder-ident
+        // tight (never whole-node), so the scope node *contains* a
+        // definition span. Whole-node spans still satisfy this
+        // (equality keeps the legacy tests green).
         fn contained(&self, a: usize, b: usize) -> bool {
-            self.spans.iter().any(|(s, e)| *s <= a && b <= *e)
+            self.spans.iter().any(|(s, e)| a <= *s && *e <= b)
         }
         fn binders_of(&self, pat: &syn::Pat) -> Vec<(usize, usize)> {
             let mut out = Vec::new();
@@ -181,13 +185,25 @@ pub(crate) fn closure_or_arm_orphans(
         return Vec::new();
     }
 
-    interior_reports(parsed, original, index, path, &scopes, old)
+    interior_reports(
+        parsed,
+        original,
+        index,
+        path,
+        &scopes,
+        old,
+        &follow_spans(file_edits, path, edits_before),
+    )
 }
 
 /// Shared scope-interior report builder (WI-2c + WI-2d): value-path
 /// uses in the regions (binder spans excluded) are `off-target` past
 /// no inner binder and `shadowed` past one; in-scope macro interiors
 /// and inline `{old}` captures are `macro-hidden`.
+///
+/// WI-3 `rewritten` are the hunk's `follow`-labelled spans: uses the
+/// completion already rewrote are not orphans (the follow walk and this
+/// scan implement the same shadow predicate, so the sets partition).
 fn interior_reports(
     parsed: &syn::File,
     original: &str,
@@ -195,6 +211,7 @@ fn interior_reports(
     path: &str,
     scopes: &NodeScopes,
     old: &str,
+    rewritten: &[(usize, usize)],
 ) -> Vec<crate::OrphanReport> {
     use syn::spanned::Spanned;
     use syn::visit::Visit;
@@ -204,6 +221,7 @@ fn interior_reports(
         index: &'a LineIndex,
         old: &'a str,
         scopes: &'a NodeScopes,
+        rewritten: &'a [(usize, usize)],
         uses: Vec<(proc_macro2::Span, usize, usize)>,
         inner_defs: Vec<(usize, usize)>,
         opaque_lines: Vec<u32>,
@@ -216,7 +234,10 @@ fn interior_reports(
                     if let Some((a, b)) =
                         crate::matcher_item::span_bytes(self.original, self.index, sp)
                     {
-                        if self.original.get(a..b) == Some(self.old)
+                        // WI-3: completed uses are evidence, not orphans.
+                        let done = self.rewritten.iter().any(|(s, e)| a < *e && *s < b);
+                        if !done
+                            && self.original.get(a..b) == Some(self.old)
                             && self.scopes.iter().any(|(rs, bs)| {
                                 rs.iter().any(|(s, e)| *s <= a && b <= *e)
                                     && !bs.iter().any(|(s, e)| a < *e && *s < b)
@@ -328,6 +349,7 @@ fn interior_reports(
         index,
         old,
         scopes,
+        rewritten,
         uses: Vec::new(),
         inner_defs: Vec::new(),
         opaque_lines: Vec::new(),
@@ -456,8 +478,9 @@ pub(crate) fn wi2d_expr_orphans(
         scopes: NodeScopes,
     }
     impl ScopeGrab<'_> {
+        // WI-3 reversed containment (see the closure/arm grab above).
         fn contained(&self, a: usize, b: usize) -> bool {
-            self.spans.iter().any(|(s, e)| *s <= a && b <= *e)
+            self.spans.iter().any(|(s, e)| a <= *s && *e <= b)
         }
         fn binders_of(&self, pat: &syn::Pat) -> Vec<(usize, usize)> {
             let mut out = Vec::new();
@@ -562,7 +585,15 @@ pub(crate) fn wi2d_expr_orphans(
     if scopes.is_empty() {
         return Vec::new();
     }
-    interior_reports(parsed, original, index, path, &scopes, old)
+    interior_reports(
+        parsed,
+        original,
+        index,
+        path,
+        &scopes,
+        old,
+        &follow_spans(file_edits, path, edits_before),
+    )
 }
 
 /// WI-2d: scope-interior orphans for fn-param renames. The scope is the
@@ -653,7 +684,34 @@ pub(crate) fn fn_param_orphans(
     if scopes.is_empty() {
         return Vec::new();
     }
-    interior_reports(parsed, original, index, path, &scopes, old)
+    interior_reports(
+        parsed,
+        original,
+        index,
+        path,
+        &scopes,
+        old,
+        &follow_spans(file_edits, path, edits_before),
+    )
+}
+
+/// WI-3: the hunk's `follow`-labelled spans (completion evidence the
+/// interior scan must not report back as orphans).
+fn follow_spans(
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+) -> Vec<(usize, usize)> {
+    file_edits
+        .get(path)
+        .map(|v| {
+            v[edits_before.min(v.len())..]
+                .iter()
+                .filter(|e| e.label == Some("follow"))
+                .map(|e| (e.start, e.end))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Opaque lines for macro interiors naming `old`: one entry per ident
@@ -920,7 +978,8 @@ mod tests {
     const HEAD: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
 
     #[test]
-    fn for_rename_leftover_downgrades() {
+    fn for_rename_completes_body_uses() {
+        // WI-3: `for`-binder renames complete over the loop body.
         let patch = format!(
             "{HEAD}@@ -2,3 @@ rule=rename_for\n# lang=rust\n# expr E\n- for total in E {{ ... }}\n+ for sum in E {{ ... }}\n"
         );
@@ -928,12 +987,17 @@ mod tests {
             "fn main() {\n    for total in 0..3 {\n        let x = total + total;\n    }\n}\n";
         let (out, report) = apply_report(&patch, src).unwrap();
         assert!(out.contains("for sum in"), "got: {out}");
-        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
-        assert_eq!(report.rules[0].orphans.len(), 1);
+        assert!(out.contains("let x = sum + sum;"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
     }
 
     #[test]
-    fn iflet_rename_leftover_downgrades() {
+    fn iflet_rename_completes_then_uses() {
+        // WI-3: `if let`-binder renames complete over the then-branch.
         let patch = format!(
             "{HEAD}@@ -2,3 @@ rule=rename_iflet\n# lang=rust\n# expr E\n- if let total = E {{ ... }}\n+ if let sum = E {{ ... }}\n"
         );
@@ -941,12 +1005,17 @@ mod tests {
             "fn main() {\n    if let total = Some(1) {\n        let x = total + 1;\n    }\n}\n";
         let (out, report) = apply_report(&patch, src).unwrap();
         assert!(out.contains("if let sum ="), "got: {out}");
-        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
-        assert_eq!(report.rules[0].orphans.len(), 1);
+        assert!(out.contains("let x = sum + 1;"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
     }
 
     #[test]
-    fn whilelet_rename_leftover_downgrades() {
+    fn whilelet_rename_completes_body_uses() {
+        // WI-3: `while let`-binder renames complete over the loop body.
         let patch = format!(
             "{HEAD}@@ -2,4 @@ rule=rename_whilelet\n# lang=rust\n# expr E\n- while let total = E {{ ... }}\n+ while let sum = E {{ ... }}\n"
         );
@@ -954,20 +1023,49 @@ mod tests {
             "fn main() {\n    while let total = Some(1) {\n        let x = total;\n        break;\n    }\n}\n";
         let (out, report) = apply_report(&patch, src).unwrap();
         assert!(out.contains("while let sum ="), "got: {out}");
-        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
-        assert_eq!(report.rules[0].orphans.len(), 1);
+        assert!(out.contains("let x = sum;"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
     }
 
     #[test]
-    fn fn_param_rename_leftover_downgrades() {
+    fn fn_param_rename_completes_body_uses() {
+        // WI-3: fn-param renames complete over the fn body.
         let patch = format!(
             "{HEAD}@@ -1,3 @@ rule=rename_param\n- fn foo(total: u32) {{ ... }}\n+ fn foo(sum: u32) {{ ... }}\n"
         );
         let src = "fn foo(total: u32) -> u32 {\n    total + 1\n}\n";
         let (out, report) = apply_report(&patch, src).unwrap();
         assert!(out.contains("fn foo(sum: u32)"), "got: {out}");
+        assert!(out.contains("sum + 1"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
+    }
+
+    #[test]
+    fn fn_param_rename_shadowed_use_stays_orphan() {
+        let patch = format!(
+            "{HEAD}@@ -1,4 @@ rule=rename_param\n- fn foo(total: u32) {{ ... }}\n+ fn foo(sum: u32) {{ ... }}\n"
+        );
+        let src = "fn foo(total: u32) -> u32 {\n    let total = 1;\n    total + total\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("fn foo(sum: u32)"), "got: {out}");
         assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
-        assert_eq!(report.rules[0].orphans.len(), 1);
+        assert!(!report.rules[0].orphans.is_empty());
+        assert!(
+            report.rules[0]
+                .orphans
+                .iter()
+                .any(|o| o.reason == "shadowed"),
+            "got: {:?}",
+            report.rules[0].orphans
+        );
     }
 
     #[test]

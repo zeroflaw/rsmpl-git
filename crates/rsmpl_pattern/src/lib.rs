@@ -4,6 +4,7 @@
 //! Compiles raw RSmPL hunk pattern text into structured patterns.
 //! Actual matching against target files lives in `rsmpl_engine`.
 
+pub mod binder;
 mod expr_pattern;
 mod fn_pattern;
 mod infer;

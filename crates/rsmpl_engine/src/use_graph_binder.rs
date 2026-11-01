@@ -9,24 +9,9 @@
 //! multi-binder diffs veto (today's behaviour is kept). No completion,
 //! no schema change.
 
-use std::collections::HashMap;
-
-use rsmpl_pattern::{GeneralShape, PatternKind};
+use rsmpl_pattern::PatternKind;
 
 use crate::use_graph_local::single_ident_binder;
-use crate::use_graph_normalize::normalize_placeholders;
-
-/// Parse a general-expression pattern forgiving the block-tail `...`
-/// ellipsis (not valid `syn` on its own): retry with the engine's
-/// ellipsis-marker ident, which parses as a plain expression statement
-/// and compares equal on both sides when both were `...`.
-fn parse_expr_forgiving(s: &str) -> Option<syn::Expr> {
-    if let Ok(e) = syn::parse_str::<syn::Expr>(s) {
-        return Some(e);
-    }
-    let fixed = s.replace("...", "__RSMPL_ELLIPSIS_0");
-    syn::parse_str::<syn::Expr>(&fixed).ok()
-}
 
 /// True when `compiled` is a WI-2d binder rename: a `for` / `if let` /
 /// `while let` binder-only diff (general-expression shape). The fn-param
@@ -39,180 +24,34 @@ pub fn is_wi2d_expr_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> 
         || while_let_binder_rename(&compiled.kind).is_some()
 }
 
-/// `(old, new)` when `kind` is a `for`-loop binder rename —
-/// `for old in E { ... }` → `for new in E { ... }` with the same
-/// iterator and body (placeholder-normalized). Labels must agree; only
-/// a single-ident pattern may change.
+/// `(old, new)` when `kind` is a `for`-loop binder rename.
+/// WI-3: delegates to the single pattern identity; the scope filter
+/// keeps the `For`-only contract.
 pub fn for_loop_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
-    let PatternKind::General {
-        shape: GeneralShape::Expr,
-        minus_sub,
-        plus_body,
-        placeholders,
-        minus_attrs,
-        plus_attrs,
-        ..
-    } = kind
-    else {
-        return None;
-    };
-    if *minus_attrs != *plus_attrs {
-        return None;
+    match rsmpl_pattern::binder::binder_rename(kind) {
+        Some(b) if b.scope == rsmpl_pattern::binder::BinderScope::For => Some((b.old, b.new)),
+        _ => None,
     }
-    let Some(syn::Expr::ForLoop(minus)) = parse_expr_forgiving(minus_sub) else {
-        return None;
-    };
-    let Some(syn::Expr::ForLoop(plus)) = parse_expr_forgiving(plus_body) else {
-        return None;
-    };
-    if crate::matcher_general::render(&minus.label) != crate::matcher_general::render(&plus.label) {
-        return None;
-    }
-    let (old_id, old_mut) = single_ident_binder(&minus.pat)?;
-    let (new_id, new_mut) = single_ident_binder(&plus.pat)?;
-    if old_id == new_id || old_mut != new_mut {
-        return None;
-    }
-    let ph_map: HashMap<&str, &str> = placeholders
-        .iter()
-        .map(|(name, ph)| (ph.as_str(), name.as_str()))
-        .collect();
-    let minus_iter = crate::matcher_general::render(&*minus.expr);
-    let plus_iter = crate::matcher_general::render(&*plus.expr);
-    if normalize_placeholders(&minus_iter, &ph_map) != normalize_placeholders(&plus_iter, &ph_map) {
-        return None;
-    }
-    let minus_body = crate::matcher_general::render(&minus.body);
-    let plus_body_r = crate::matcher_general::render(&plus.body);
-    if normalize_placeholders(&minus_body, &ph_map) != normalize_placeholders(&plus_body_r, &ph_map)
-    {
-        return None;
-    }
-    Some((old_id, new_id))
 }
 
-/// `(old, new)` when `kind` is an `if let` binder rename —
-/// `if let old = E { ... } …` → `if let new = E { ... } …` with the
-/// same scrutinee, then-branch, and else-branch. The condition must be
-/// a direct `let` on both sides (chains vetoed); labels must agree.
+/// `(old, new)` when `kind` is an `if let` binder rename.
+/// WI-3: delegates to the single pattern identity; the scope filter
+/// keeps the `IfLet`-only contract.
 pub fn if_let_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
-    let PatternKind::General {
-        shape: GeneralShape::Expr,
-        minus_sub,
-        plus_body,
-        placeholders,
-        minus_attrs,
-        plus_attrs,
-        ..
-    } = kind
-    else {
-        return None;
-    };
-    if *minus_attrs != *plus_attrs {
-        return None;
+    match rsmpl_pattern::binder::binder_rename(kind) {
+        Some(b) if b.scope == rsmpl_pattern::binder::BinderScope::IfLet => Some((b.old, b.new)),
+        _ => None,
     }
-    let Some(syn::Expr::If(minus)) = parse_expr_forgiving(minus_sub) else {
-        return None;
-    };
-    let Some(syn::Expr::If(plus)) = parse_expr_forgiving(plus_body) else {
-        return None;
-    };
-    let syn::Expr::Let(minus_let) = &*minus.cond else {
-        return None;
-    };
-    let syn::Expr::Let(plus_let) = &*plus.cond else {
-        return None;
-    };
-    let (old_id, old_mut) = single_ident_binder(&minus_let.pat)?;
-    let (new_id, new_mut) = single_ident_binder(&plus_let.pat)?;
-    if old_id == new_id || old_mut != new_mut {
-        return None;
-    }
-    let ph_map: HashMap<&str, &str> = placeholders
-        .iter()
-        .map(|(name, ph)| (ph.as_str(), name.as_str()))
-        .collect();
-    let minus_scrut = crate::matcher_general::render(&*minus_let.expr);
-    let plus_scrut = crate::matcher_general::render(&*plus_let.expr);
-    if normalize_placeholders(&minus_scrut, &ph_map) != normalize_placeholders(&plus_scrut, &ph_map)
-    {
-        return None;
-    }
-    let minus_then = crate::matcher_general::render(&minus.then_branch);
-    let plus_then = crate::matcher_general::render(&plus.then_branch);
-    if normalize_placeholders(&minus_then, &ph_map) != normalize_placeholders(&plus_then, &ph_map) {
-        return None;
-    }
-    match (&minus.else_branch, &plus.else_branch) {
-        (None, None) => {}
-        (Some((_, a)), Some((_, b))) => {
-            let ma = crate::matcher_general::render(&**a);
-            let pb = crate::matcher_general::render(&**b);
-            if normalize_placeholders(&ma, &ph_map) != normalize_placeholders(&pb, &ph_map) {
-                return None;
-            }
-        }
-        _ => return None,
-    }
-    Some((old_id, new_id))
 }
 
-/// `(old, new)` when `kind` is a `while let` binder rename —
-/// `while let old = E { ... }` → `while let new = E { ... }` with the
-/// same scrutinee and body. Labels must agree.
+/// `(old, new)` when `kind` is a `while let` binder rename.
+/// WI-3: delegates to the single pattern identity; the scope filter
+/// keeps the `WhileLet`-only contract.
 pub fn while_let_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
-    let PatternKind::General {
-        shape: GeneralShape::Expr,
-        minus_sub,
-        plus_body,
-        placeholders,
-        minus_attrs,
-        plus_attrs,
-        ..
-    } = kind
-    else {
-        return None;
-    };
-    if *minus_attrs != *plus_attrs {
-        return None;
+    match rsmpl_pattern::binder::binder_rename(kind) {
+        Some(b) if b.scope == rsmpl_pattern::binder::BinderScope::WhileLet => Some((b.old, b.new)),
+        _ => None,
     }
-    let Some(syn::Expr::While(minus)) = parse_expr_forgiving(minus_sub) else {
-        return None;
-    };
-    let Some(syn::Expr::While(plus)) = parse_expr_forgiving(plus_body) else {
-        return None;
-    };
-    if crate::matcher_general::render(&minus.label) != crate::matcher_general::render(&plus.label) {
-        return None;
-    }
-    let syn::Expr::Let(minus_let) = &*minus.cond else {
-        return None;
-    };
-    let syn::Expr::Let(plus_let) = &*plus.cond else {
-        return None;
-    };
-    let (old_id, old_mut) = single_ident_binder(&minus_let.pat)?;
-    let (new_id, new_mut) = single_ident_binder(&plus_let.pat)?;
-    if old_id == new_id || old_mut != new_mut {
-        return None;
-    }
-    let ph_map: HashMap<&str, &str> = placeholders
-        .iter()
-        .map(|(name, ph)| (ph.as_str(), name.as_str()))
-        .collect();
-    let minus_scrut = crate::matcher_general::render(&*minus_let.expr);
-    let plus_scrut = crate::matcher_general::render(&*plus_let.expr);
-    if normalize_placeholders(&minus_scrut, &ph_map) != normalize_placeholders(&plus_scrut, &ph_map)
-    {
-        return None;
-    }
-    let minus_body = crate::matcher_general::render(&minus.body);
-    let plus_body_r = crate::matcher_general::render(&plus.body);
-    if normalize_placeholders(&minus_body, &ph_map) != normalize_placeholders(&plus_body_r, &ph_map)
-    {
-        return None;
-    }
-    Some((old_id, new_id))
 }
 
 /// `(old, new)` when `hunk` renames exactly one `fn` parameter and

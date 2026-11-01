@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use rsmpl_pattern::{GeneralShape, PatternKind};
+use rsmpl_pattern::PatternKind;
 
 use crate::edits::TextEdit;
 use crate::lines::{FileState, LineIndex};
@@ -23,249 +23,49 @@ pub fn is_let_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {
     let_binder_rename(&compiled.kind).is_some()
 }
 
-/// WI-2c/2d: true when `compiled` renames exactly one local binder —
-/// a `let` binder (WI-2a), a closure parameter, a match-arm pattern
-/// (WI-2c), or a `for` / `if let` / `while let` binder (WI-2d) — and
-/// nothing else in the pattern changes. The downgrade gate uses this:
-/// any leftover use forces `reparse-only` (global `partial`).
+/// WI-3: true when `compiled` renames exactly one local binder (any
+/// spelling — `let`, closure-param, match-arm, `for` / `if let` /
+/// `while let`, let-wrapped closure, via the single pattern identity).
+/// The downgrade gate uses this: any leftover use forces `reparse-only`
+/// (global `partial`).
 pub fn is_local_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {
-    is_let_binder_rename(compiled)
-        || closure_param_rename(&compiled.kind).is_some()
-        || match_arm_binder_rename(&compiled.kind).is_some()
-        || crate::use_graph_binder::is_wi2d_expr_binder_rename(compiled)
+    rsmpl_pattern::binder::binder_rename(&compiled.kind).is_some()
 }
 
 /// `(old, new)` binder idents when `kind` is a plain `let old = E;` →
 /// `let new = E;` rename with identical init and type annotation.
 /// Anything else (destructuring, init/type change, `let-else`,
 /// attribute delta) yields `None` — today's behaviour is kept.
+///
+/// WI-3: delegates to the single pattern identity
+/// ([`rsmpl_pattern::binder::binder_rename`]); the scope filter keeps
+/// the `Let`-only contract.
 pub fn let_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
-    let PatternKind::General {
-        shape: GeneralShape::Stmt,
-        minus_sub,
-        plus_body,
-        placeholders,
-        minus_attrs,
-        plus_attrs,
-        ..
-    } = kind
-    else {
-        return None;
-    };
-    if *minus_attrs != *plus_attrs {
-        return None;
+    match rsmpl_pattern::binder::binder_rename(kind) {
+        Some(b) if b.scope == rsmpl_pattern::binder::BinderScope::Let => Some((b.old, b.new)),
+        _ => None,
     }
-    let Ok(syn::Stmt::Local(minus_local)) = syn::parse_str::<syn::Stmt>(minus_sub) else {
-        return None;
-    };
-    let Ok(syn::Stmt::Local(plus_local)) = syn::parse_str::<syn::Stmt>(plus_body) else {
-        return None;
-    };
-    // Plain `let` only: this syn tree has no `let-else` diverge field;
-    // a `let-else` minus side fails to parse as `Stmt::Local` and yields
-    // `None` below, keeping today's behaviour.
-    let (old_id, old_mut) = single_ident_binder(&minus_local.pat)?;
-    let (new_id, new_mut) = single_ident_binder(&plus_local.pat)?;
-    if old_id == new_id || old_mut != new_mut {
-        return None;
-    }
-    // Type annotation must match (both absent or token-equal after
-    // placeholder normalization).
-    let ph_map: HashMap<&str, &str> = placeholders
-        .iter()
-        .map(|(name, ph)| (ph.as_str(), name.as_str()))
-        .collect();
-    if normalize_ty(&minus_local.pat, &ph_map) != normalize_ty(&plus_local.pat, &ph_map) {
-        return None;
-    }
-    // Both sides need the same init expression (token-equal after
-    // mapping `__RSMPL_*` placeholders back to their names; both sides
-    // normalized so `...` markers compare intact).
-    let minus_init = minus_local.init.as_ref().map(|i| init_tokens(&i.expr))?;
-    let plus_init = plus_local.init.as_ref().map(|i| init_tokens(&i.expr))?;
-    if normalize_placeholders(&minus_init, &ph_map) != normalize_placeholders(&plus_init, &ph_map) {
-        return None;
-    }
-    Some((old_id, new_id))
 }
 
-/// WI-2c: `(old, new)` when `kind` is a closure-parameter rename —
-/// `|old| Body` → `|new| Body` (or an annotated `|old: T| Body` pair
-/// with the same `T`) with placeholder-normalized-equal bodies.
-/// Qualifiers (async/static/move/capture/lifetimes/return type) must match;
-/// exactly one parameter may differ, and the differing pair must be a
-/// single ident with the same `P: T` annotation discipline as `let`
-/// (bare `P` never drops/adds an annotation). A full interior
-/// old→new rewrite is deliberately NOT detected: nothing can dangle
-/// outside the closure, so it needs no evidence and stays today's
-/// `instantiated`.
+/// WI-2c: `(old, new)` when `kind` is a closure-parameter rename.
+/// WI-3: delegates to the single pattern identity; the scope filter
+/// keeps the `Closure`-only contract (see the `BinderScope::Closure`
+/// pins in `rsmpl_pattern::binder`).
 pub fn closure_param_rename(kind: &PatternKind) -> Option<(String, String)> {
-    let PatternKind::General {
-        shape: GeneralShape::Expr,
-        minus_sub,
-        plus_body,
-        placeholders,
-        minus_attrs,
-        plus_attrs,
-        ..
-    } = kind
-    else {
-        return None;
-    };
-    if *minus_attrs != *plus_attrs {
-        return None;
+    match rsmpl_pattern::binder::binder_rename(kind) {
+        Some(b) if b.scope == rsmpl_pattern::binder::BinderScope::Closure => Some((b.old, b.new)),
+        _ => None,
     }
-    let Ok(syn::Expr::Closure(minus)) = syn::parse_str::<syn::Expr>(minus_sub) else {
-        return None;
-    };
-    let Ok(syn::Expr::Closure(plus)) = syn::parse_str::<syn::Expr>(plus_body) else {
-        return None;
-    };
-    // Qualifiers compare strictly (a different qualifier is a
-    // different closure). Fields are rendered via locals: `#m.f`
-    // in `quote!` would interpolate `m`, not the field.
-    if crate::matcher_general::render(&minus.asyncness)
-        != crate::matcher_general::render(&plus.asyncness)
-    {
-        return None;
-    }
-    if crate::matcher_general::render(&minus.movability)
-        != crate::matcher_general::render(&plus.movability)
-    {
-        return None;
-    }
-    if crate::matcher_general::render(&minus.capture)
-        != crate::matcher_general::render(&plus.capture)
-    {
-        return None;
-    }
-    if crate::matcher_general::render(&minus.lifetimes)
-        != crate::matcher_general::render(&plus.lifetimes)
-    {
-        return None;
-    }
-    if crate::matcher_general::render(&minus.constness)
-        != crate::matcher_general::render(&plus.constness)
-    {
-        return None;
-    }
-    if crate::matcher_general::render(&minus.output) != crate::matcher_general::render(&plus.output)
-    {
-        return None;
-    }
-    if minus.inputs.len() != plus.inputs.len() {
-        return None;
-    }
-    let ph_map: HashMap<&str, &str> = placeholders
-        .iter()
-        .map(|(name, ph)| (ph.as_str(), name.as_str()))
-        .collect();
-    let mut diff: Option<(String, String)> = None;
-    for (mp, pp) in minus.inputs.iter().zip(plus.inputs.iter()) {
-        let mn = normalize_placeholders(&quote::quote!(#mp).to_string(), &ph_map);
-        let pn = normalize_placeholders(&quote::quote!(#pp).to_string(), &ph_map);
-        if mn == pn {
-            continue;
-        }
-        let (old_id, old_mut) = single_ident_binder(mp)?;
-        let (new_id, new_mut) = single_ident_binder(pp)?;
-        if old_id == new_id || old_mut != new_mut {
-            return None;
-        }
-        if normalize_ty(mp, &ph_map) != normalize_ty(pp, &ph_map) {
-            return None;
-        }
-        if diff.replace((old_id, new_id)).is_some() {
-            return None;
-        }
-    }
-    let (old, new) = diff?;
-    let minus_body = crate::matcher_general::render(&*minus.body);
-    let plus_raw_body = crate::matcher_general::render(&*plus.body);
-    if normalize_placeholders(&minus_body, &ph_map)
-        != normalize_placeholders(&plus_raw_body, &ph_map)
-    {
-        return None;
-    }
-    Some((old, new))
 }
 
-/// WI-2c: `(old, new)` when `kind` is a match-arm binder rename —
-/// `match S { old => B, … }` → `match S { new => B, … }` with the same
-/// scrutinee, arm count, guard, and body (placeholder-normalized).
-/// Only a single-ident arm pattern may change; destructuring,
-/// scrutinee/guard/body deltas, and multi-arm diffs veto (today's
-/// behaviour is kept).
+/// WI-2c: `(old, new)` when `kind` is a match-arm binder rename.
+/// WI-3: delegates to the single pattern identity; the scope filter
+/// keeps the `MatchArm`-only contract.
 pub fn match_arm_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
-    let PatternKind::General {
-        shape: GeneralShape::Expr,
-        minus_sub,
-        plus_body,
-        placeholders,
-        minus_attrs,
-        plus_attrs,
-        ..
-    } = kind
-    else {
-        return None;
-    };
-    if *minus_attrs != *plus_attrs {
-        return None;
+    match rsmpl_pattern::binder::binder_rename(kind) {
+        Some(b) if b.scope == rsmpl_pattern::binder::BinderScope::MatchArm => Some((b.old, b.new)),
+        _ => None,
     }
-    let Ok(syn::Expr::Match(minus)) = syn::parse_str::<syn::Expr>(minus_sub) else {
-        return None;
-    };
-    let Ok(syn::Expr::Match(plus)) = syn::parse_str::<syn::Expr>(plus_body) else {
-        return None;
-    };
-    let ph_map: HashMap<&str, &str> = placeholders
-        .iter()
-        .map(|(name, ph)| (ph.as_str(), name.as_str()))
-        .collect();
-    let minus_scrut = crate::matcher_general::render(&*minus.expr);
-    let plus_scrut = crate::matcher_general::render(&*plus.expr);
-    if normalize_placeholders(&minus_scrut, &ph_map) != normalize_placeholders(&plus_scrut, &ph_map)
-    {
-        return None;
-    }
-    if minus.arms.len() != plus.arms.len() {
-        return None;
-    }
-    let mut diff: Option<(String, String)> = None;
-    for (ma, pa) in minus.arms.iter().zip(plus.arms.iter()) {
-        let mn = normalize_placeholders(&quote::quote!(#ma).to_string(), &ph_map);
-        let pn = normalize_placeholders(&quote::quote!(#pa).to_string(), &ph_map);
-        if mn == pn {
-            continue;
-        }
-        let (old_id, old_mut) = single_ident_binder(&ma.pat)?;
-        let (new_id, new_mut) = single_ident_binder(&pa.pat)?;
-        if old_id == new_id || old_mut != new_mut {
-            return None;
-        }
-        match (&ma.guard, &pa.guard) {
-            (None, None) => {}
-            (Some((_, mg)), Some((_, pg))) => {
-                let mgs = crate::matcher_general::render(&**mg);
-                let pgs = crate::matcher_general::render(&**pg);
-                if normalize_placeholders(&mgs, &ph_map) != normalize_placeholders(&pgs, &ph_map) {
-                    return None;
-                }
-            }
-            _ => return None,
-        }
-        let minus_arm_body = crate::matcher_general::render(&*ma.body);
-        let plus_arm_body = crate::matcher_general::render(&*pa.body);
-        if normalize_placeholders(&minus_arm_body, &ph_map)
-            != normalize_placeholders(&plus_arm_body, &ph_map)
-        {
-            return None;
-        }
-        if diff.replace((old_id, new_id)).is_some() {
-            return None;
-        }
-    }
-    diff
 }
 
 /// Report-only orphans for the general-statement binder-rename shape.
@@ -285,6 +85,23 @@ pub fn general_orphans(
             edits_before,
             &old,
         );
+    }
+    // WI-3: let-wrapped closure binder (F3 headline). The outer `let`
+    // name is unchanged, so the let scan stays silent; the init closure
+    // body can still dangle. The whole-statement edit contains the
+    // closure node, so the closure-interior scan claims it (WI-3
+    // reversed containment).
+    if let Some(b) = rsmpl_pattern::binder::binder_rename(&compiled.kind) {
+        if b.scope == rsmpl_pattern::binder::BinderScope::LetClosure {
+            return crate::use_graph_scope::closure_or_arm_orphans(
+                states,
+                file_edits,
+                path,
+                edits_before,
+                &b.old,
+                true,
+            );
+        }
     }
     // WI-2c: closure-param / match-arm binder renames. Scope-interior
     // scan only (see `closure_or_arm_orphans`): outside uses can never
@@ -513,31 +330,10 @@ pub(crate) fn single_ident_binder(pat: &syn::Pat) -> Option<(String, bool)> {
     }
 }
 
-/// Type annotation tokens of a `let` pattern (`""` when unannotated).
-fn normalize_ty(pat: &syn::Pat, ph_map: &HashMap<&str, &str>) -> String {
-    let ty = match pat {
-        syn::Pat::Type(pt) => Some(&*pt.ty),
-        _ => None,
-    };
-    match ty {
-        None => String::new(),
-        Some(t) => {
-            let s = quote::quote!(#t).to_string();
-            normalize_placeholders(&s, ph_map)
-        }
-    }
-}
-
-fn init_tokens(expr: &syn::Expr) -> String {
-    quote::quote!(#expr).to_string()
-}
-
-pub(crate) use crate::use_graph_normalize::normalize_placeholders;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsmpl_pattern::{CompiledPattern, PatternKind};
+    use rsmpl_pattern::{CompiledPattern, GeneralShape, PatternKind};
 
     fn general_stmt(minus_sub: &str, plus_body: &str) -> PatternKind {
         PatternKind::General {
@@ -1473,16 +1269,39 @@ mod tests {
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
 
     #[test]
-    fn closure_rename_leftover_downgrades() {
+    fn closure_rename_completes_body_uses() {
+        // WI-3: closure-param renames complete over the body scope —
+        // the binder plus unshadowed uses rewrite in-hunk (`follow`),
+        // orphans stay empty, `verified`-ward (global `partial` only
+        // when leftovers block it).
         let patch = format!(
             "{WI2C_HEAD}@@ -2,1 @@ rule=rename_closure\n# lang=rust\n# expr E\n- |total: u32| E\n+ |sum: u32| E\n"
         );
         let src = "fn main() {\n    let f = |total: u32| total + total;\n    let _ = f;\n}\n";
         let (out, report) = apply_report(&patch, src).unwrap();
-        assert!(out.contains("|sum: u32| total + total"), "got: {out}");
+        assert!(out.contains("|sum: u32| sum + sum"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
+    }
+
+    #[test]
+    fn closure_rename_shadowed_use_stays_orphan() {
+        // A use past an inner same-name binder is `shadowed` evidence,
+        // never rewritten; leftovers keep the run non-`verified`.
+        let patch = format!(
+            "{WI2C_HEAD}@@ -2,1 @@ rule=rename_closure\n# lang=rust\n# expr E\n- |total: u32| E\n+ |sum: u32| E\n"
+        );
+        let src =
+            "fn main() {\n    let f = |total: u32| { let total = 1; total };\n    let _ = f;\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("|sum: u32|"), "got: {out}");
+        assert!(out.contains("let total = 1; total"), "got: {out}");
         assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
         assert_eq!(report.rules[0].orphans.len(), 1);
-        assert_eq!(report.rules[0].orphans[0].reason, "off-target");
+        assert_eq!(report.rules[0].orphans[0].reason, "shadowed");
     }
 
     #[test]
@@ -1501,14 +1320,32 @@ mod tests {
     }
 
     #[test]
-    fn match_arm_rename_leftover_downgrades() {
+    fn match_arm_rename_completes_body_uses() {
+        // WI-3: match-arm renames complete over the arm guard+body.
         let patch = format!(
             "{WI2C_HEAD}@@ -2,1 @@ rule=rename_arm\n# lang=rust\n# expr E\n# expr B\n- match E {{ total => B, _ => 0 }}\n+ match E {{ sum => B, _ => 0 }}\n"
         );
         let src = "fn main() {\n    let v = match Some(1) { total => total + 1, _ => 0 };\n    let _ = v;\n}\n";
         let (out, report) = apply_report(&patch, src).unwrap();
-        assert!(out.contains("sum => total + 1"), "got: {out}");
+        assert!(out.contains("sum => sum + 1"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
+    }
+
+    #[test]
+    fn match_arm_rename_shadowed_use_stays_orphan() {
+        let patch = format!(
+            "{WI2C_HEAD}@@ -2,1 @@ rule=rename_arm\n# lang=rust\n# expr E\n# expr B\n- match E {{ total => B, _ => 0 }}\n+ match E {{ sum => B, _ => 0 }}\n"
+        );
+        let src = "fn main() {\n    let v = match Some(1) { total => { let total = 1; total }, _ => 0 };\n    let _ = v;\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("sum =>"), "got: {out}");
+        assert!(out.contains("let total = 1; total"), "got: {out}");
         assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
         assert_eq!(report.rules[0].orphans.len(), 1);
+        assert_eq!(report.rules[0].orphans[0].reason, "shadowed");
     }
 }

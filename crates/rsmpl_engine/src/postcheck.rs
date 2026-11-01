@@ -177,6 +177,22 @@ pub(crate) fn plus_instantiated_parsed(
     spans: &[(u32, u32)],
     matches: usize,
 ) -> Option<bool> {
+    // WI-3: completion rewrites in-scope uses, so recorded bindings for
+    // in-scope holes re-match with the rename applied. Out-of-scope
+    // holes (and non-binder hunks) pass through byte-identical.
+    let owned: Vec<HashMap<String, String>>;
+    let bindings_list: &[HashMap<String, String>] = if matches!(
+        &compiled.kind,
+        PatternKind::General { .. } | PatternKind::Expr { .. }
+    ) {
+        owned = bindings_list
+            .iter()
+            .map(|m| crate::use_graph_binder_unified::probe_bindings(compiled, Some(rh), m))
+            .collect();
+        &owned
+    } else {
+        bindings_list
+    };
     match &compiled.kind {
         PatternKind::Fn { plus_name, .. } => {
             let needle = plus_name.trim();
