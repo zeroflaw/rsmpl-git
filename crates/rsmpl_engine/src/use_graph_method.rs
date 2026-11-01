@@ -11,7 +11,6 @@
 //! `follow` edits; unproven receivers are `off-target`/`shadowed`
 //! evidence, never a veto.
 
-use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::follow_reasons::{reason as skip_reason, FollowSkip};
@@ -335,12 +334,54 @@ fn path_segments(path: &syn::Path) -> Vec<String> {
     path.segments.iter().map(|s| s.ident.to_string()).collect()
 }
 
-fn tokens_mention(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
-    tokens.clone().into_iter().any(|t| match t {
-        proc_macro2::TokenTree::Ident(id) => id == old,
-        proc_macro2::TokenTree::Group(g) => tokens_mention(&g.stream(), old),
-        _ => false,
-    })
+/// Per-ident macro lines mentioning `old` (WI-2b ident-line parity:
+/// multi-line macros report the ident line, not the macro start line).
+/// Mirrors orphan/assoc/member helpers: whole-ident match only, recurse groups.
+fn macro_ident_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for t in tokens.clone() {
+        match t {
+            proc_macro2::TokenTree::Ident(id) if id == old => {
+                out.push(id.span().start().line as u32);
+            }
+            proc_macro2::TokenTree::Group(g) => {
+                out.extend(macro_ident_lines(&g.stream(), old));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Per-ident lines for an `ItemMacro` node (`macro_rules!` definitions):
+/// the macro name ident, the macro path segments, plus every `old` ident
+/// inside the body tokens. Whole-ident only, mirroring `macro_ident_lines`.
+fn item_macro_ident_lines(node: &syn::ItemMacro, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    if node.ident.as_ref().is_some_and(|i| i == old) {
+        if let Some(ident) = node.ident.as_ref() {
+            out.push(ident.span().start().line as u32);
+        }
+    }
+    for seg in &node.mac.path.segments {
+        if seg.ident == old {
+            out.push(seg.ident.span().start().line as u32);
+        }
+    }
+    out.extend(macro_ident_lines(&node.mac.tokens, old));
+    out
+}
+
+/// Per-ident lines for an `ImplItemMacro` node: path segments plus body tokens.
+fn impl_item_macro_ident_lines(node: &syn::ImplItemMacro, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for seg in &node.mac.path.segments {
+        if seg.ident == old {
+            out.push(seg.ident.span().start().line as u32);
+        }
+    }
+    out.extend(macro_ident_lines(&node.mac.tokens, old));
+    out
 }
 
 /// Per-file anchored call claims plus per-site evidence.
@@ -522,11 +563,11 @@ impl<'ast> Visit<'ast> for MethodCallWalker<'_> {
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if tokens_mention(&node.tokens, self.old) {
-            self.opaque.push((
-                node.span().start().line as u32,
-                "a macro invocation".to_string(),
-            ));
+        // No recursion: macro interiors are opaque, never claimed.
+        // One entry per ident line (WI-2b ident-line parity — not the
+        // macro start line). Single-line macros are unchanged.
+        for line in macro_ident_lines(&node.tokens, self.old) {
+            self.opaque.push((line, "a macro invocation".to_string()));
         }
     }
 }
@@ -580,22 +621,12 @@ pub(crate) fn resolve_method_workspace(
         }
         impl<'ast> Visit<'ast> for V<'_> {
             fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
-                let toks = quote::quote!(#node).to_string();
-                if toks
-                    .split(|c: char| !c.is_alphanumeric() && c != '_')
-                    .any(|t| t == self.old)
-                {
-                    self.out.push(node.span().start().line as u32);
-                }
+                // Per-ident lines (WI-2b ident-line parity): the macro
+                // name, path, and body idents each report their own line.
+                self.out.extend(item_macro_ident_lines(node, self.old));
             }
             fn visit_impl_item_macro(&mut self, node: &'ast syn::ImplItemMacro) {
-                let toks = quote::quote!(#node).to_string();
-                if toks
-                    .split(|c: char| !c.is_alphanumeric() && c != '_')
-                    .any(|t| t == self.old)
-                {
-                    self.out.push(node.span().start().line as u32);
-                }
+                self.out.extend(impl_item_macro_ident_lines(node, self.old));
             }
         }
         let mut v = V {
@@ -1217,5 +1248,54 @@ mod tests {
             "got: {:?}",
             report.rules[0].orphans
         );
+    }
+
+    #[test]
+    fn multiline_macro_reports_ident_line() {
+        let src = "fn f() {\n    println!(\n        \"{}\",\n        old\n    );\n}\n";
+        // `old` sits on line 4; the macro starts on line 2.
+        let parsed: syn::File = syn::parse_str(src).expect("test src must parse");
+        struct Grab(Vec<proc_macro2::TokenStream>);
+        impl<'ast> syn::visit::Visit<'ast> for Grab {
+            fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                self.0.push(node.tokens.clone());
+                syn::visit::visit_macro(self, node);
+            }
+        }
+        use syn::visit::Visit;
+        let mut g = Grab(Vec::new());
+        g.visit_file(&parsed);
+        assert_eq!(g.0.len(), 1, "one macro expected");
+        assert_eq!(super::macro_ident_lines(&g.0[0], "old"), vec![4]);
+    }
+
+    #[test]
+    fn single_line_macro_reports_same_line() {
+        let src = "fn f() { println!(\"{}\", old); }\n";
+        let parsed: syn::File = syn::parse_str(src).expect("test src must parse");
+        struct Grab(Vec<proc_macro2::TokenStream>);
+        impl<'ast> syn::visit::Visit<'ast> for Grab {
+            fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                self.0.push(node.tokens.clone());
+                syn::visit::visit_macro(self, node);
+            }
+        }
+        use syn::visit::Visit;
+        let mut g = Grab(Vec::new());
+        g.visit_file(&parsed);
+        assert_eq!(g.0.len(), 1, "one macro expected");
+        assert_eq!(super::macro_ident_lines(&g.0[0], "old"), vec![1]);
+    }
+
+    #[test]
+    fn item_macro_body_reports_ident_line() {
+        let src = "macro_rules! foo {\n    () => {\n        old\n    };\n}\n";
+        // `old` sits on line 3; the macro starts on line 1.
+        let parsed: syn::File = syn::parse_str(src).expect("test src must parse");
+        let node = parsed.items.first().expect("one item");
+        let syn::Item::Macro(m) = node else {
+            panic!("expected ItemMacro, got {node:?}");
+        };
+        assert_eq!(super::item_macro_ident_lines(m, "old"), vec![3]);
     }
 }
