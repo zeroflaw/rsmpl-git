@@ -745,6 +745,41 @@ fn single_reproduces(
         && files.get(path).is_some_and(|got| *got == expected)
 }
 
+/// Shared tail of the single-entry paths (whole-line and `let`-init):
+/// anchor gate, file-wide uniqueness at n=1, byte-compare
+/// pre-reservation, and the allow-one emission. Returns `None` on any
+/// veto; reserves the rule name only for emissions that reproduce.
+#[allow(clippy::too_many_arguments)]
+fn emit_general_expr_single(
+    path: &str,
+    pre: &str,
+    minus_line: &str,
+    plus_line: &str,
+    changed: &[usize],
+    minus_tpl: &str,
+    plus_tpl: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if !is_anchored(minus_tpl, plus_tpl) {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), minus_tpl, plus_tpl, 1) {
+        return None;
+    }
+    // Byte-compare pre-reservation: reserve the rule name only for
+    // emissions that reproduce the native swap exactly.
+    if !single_reproduces(
+        path, pre, changed[0], minus_line, plus_line, minus_tpl, plus_tpl,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "general_expr");
+    // Allow-one: directive-free ranged hunk (slices-1-3 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
 pub(crate) fn try_general_expr_single(
     minuses: &[&str],
     pluses: &[&str],
@@ -759,33 +794,38 @@ pub(crate) fn try_general_expr_single(
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
     let pre = file_old?;
-    let minus = parse_line_expr(minuses[0])?;
-    let plus = parse_line_expr(pluses[0])?;
-    for e in [&minus, &plus] {
+    // Whole-line entry first (tightest, incl. WI-4 frame unwrap).
+    if let (Some(minus), Some(plus)) = (parse_line_expr(minuses[0]), parse_line_expr(pluses[0])) {
+        for e in [&minus, &plus] {
+            let probe = shape::probe_expr(e);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        let (minus_tpl, plus_tpl) = antiunify_general_expr_single(&minus, &plus)?;
+        return emit_general_expr_single(
+            path, pre, minuses[0], pluses[0], changed, &minus_tpl, &plus_tpl, used_rules,
+        );
+    }
+    // WI-7 slice-5: `let`-init fallback (same WI-5 entry as the multi
+    // sweep). `let` lines never parse whole-line as expressions; the
+    // init column anti-unifies through the same single-pair core and
+    // the bare anchored template rewrites the init subterm in place
+    // (pattern/type ride each site's own wrapper). The byte-compare
+    // probe validates the init entry exactly as the whole-line entry
+    // (spacing-drift veto carries over).
+    let minus_init = parse_let_init(minuses[0])?;
+    let plus_init = parse_let_init(pluses[0])?;
+    for e in [&minus_init, &plus_init] {
         let probe = shape::probe_expr(e);
         if probe.macros > 0 || probe.unsupported > 0 {
             return None;
         }
     }
-    let (minus_tpl, plus_tpl) = antiunify_general_expr_single(&minus, &plus)?;
-    if !is_anchored(&minus_tpl, &plus_tpl) {
-        return None;
-    }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_tpl, &plus_tpl, 1) {
-        return None;
-    }
-    // Byte-compare pre-reservation: reserve the rule name only for
-    // emissions that reproduce the native swap exactly.
-    if !single_reproduces(
-        path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
-    ) {
-        return None;
-    }
-    let rule = unique_rule(used_rules, "general_expr");
-    // Allow-one: directive-free ranged hunk (slices-1-3 precedent).
-    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
-    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    let (minus_tpl, plus_tpl) = antiunify_general_expr_single(&minus_init, &plus_init)?;
+    emit_general_expr_single(
+        path, pre, minuses[0], pluses[0], changed, &minus_tpl, &plus_tpl, used_rules,
+    )
 }
 
 #[cfg(test)]
@@ -1130,16 +1170,17 @@ mod tests {
 
     #[test]
     fn wi5_single_pair_stays_ordinary() {
-        // N ≥ 2 gate: one `let`-init pair never sweeps.
+        // N ≥ 2 gate for the multi sweep: one `let`-init pair never
+        // sweeps (WI-7 slice-5 owns N=1 via `try_general_expr_single`;
+        // the sweep entry itself still declines singles).
         let pre = "fn m() {\n    let a = x + 1;\n}\n";
-        let raw = section(
-            "f.rs",
-            "@@ -2 +2 @@\n-    let a = x + 1;\n+    let a = x + 2;\n",
-        );
-        let pre_map = pre_map(&[("f.rs", pre)]);
+        let mut used = Vec::new();
+        let minuses = ["    let a = x + 1;"];
+        let pluses = ["    let a = x + 2;"];
         assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "single pair must stay ordinary (WI-7 owns N=1)"
+            super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2], &mut used)
+                .is_none(),
+            "single pair must never sweep (WI-7 owns N=1)"
         );
     }
     #[test]
@@ -1250,21 +1291,114 @@ mod tests {
     }
 
     #[test]
-    fn wi7_general_single_let_init_declines() {
-        // `let` lines never parse whole-line as expressions: the `let`
-        // slice owns init singles, this detector declines.
+    fn wi7_general_single_let_init_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-5: unique `let`-init single raises to an allow-one
+        // hunk and real-applies byte-identical (pattern/type ride each
+        // site's own wrapper).
+        let pre = "fn m() {\n    let a = x + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = x + 1;\n+    let a = x + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique let-init single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(out.contains("+ E0 + 2\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    let a = x + 2;\n}\n");
+    }
+
+    #[test]
+    fn wi7_general_single_let_init_twin_vetoes() {
+        // An untouched same-init twin anywhere vetoes (totality).
+        let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = x + 1;\n+    let a = x + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "let-init twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_general_single_let_init_different_delta_twin_keeps_firing() {
+        // A twin with a different delta never matches `E0 + 1`.
+        let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 9;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = x + 1;\n+    let a = x + 2;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-delta let-init twin must not veto");
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(out.contains("+ E0 + 2\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi7_general_single_let_init_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3).
         assert!(
             super::try_general_expr_single(
                 &["    let a = x + 1;"],
                 &["    let a = x + 2;"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_general_single_let_init_zero_hole_vetoes() {
+        // Two deltas, no hole: stays ordinary.
+        assert!(
+            super::try_general_expr_single(
+                &["    let a = x + 1;"],
+                &["    let a = y + 2;"],
                 "f.rs",
                 Some("fn m() {\n    let a = x + 1;\n}\n"),
                 &[2],
                 &mut Vec::new()
             )
             .is_none(),
-            "let-init must decline"
+            "two-delta let-init must veto"
         );
+    }
+
+    #[test]
+    fn wi7_general_single_let_init_whole_line_still_fires() {
+        // Slice-4 regression: whole-line singles keep firing through
+        // the same entry.
+        let out = super::try_general_expr_single(
+            &["    x + 1;"],
+            &["    x + 2;"],
+            "f.rs",
+            Some("fn m() {\n    x + 1;\n}\n"),
+            &[2],
+            &mut Vec::new(),
+        )
+        .expect("whole-line single must still fire");
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
     }
     #[test]
     fn wi7_general_single_call_anchor_drift_stays_ordinary() {

@@ -497,9 +497,10 @@ pub(crate) fn compress_balanced_pair_body(
             }
             used_rules.truncate(checkpoint);
         }
-        // WI-7 slice-4: whole-line general-expression single under the
-        // precision guard (uniqueness proved by `template_pair_holds`
-        // at n=1, `guard_for("general_expr")` stays Strict for multis).
+        // WI-7 slices 4-5: whole-line (slice-4) and `let`-init
+        // (slice-5) general-expression singles under the precision
+        // guard (uniqueness proved by `template_pair_holds` at n=1,
+        // `guard_for("general_expr")` stays Strict for multis).
         if let Some(single) =
             semantic::try_general_expr_single(minuses, pluses, path, file_old, changed, used_rules)
         {

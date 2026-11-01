@@ -453,7 +453,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "79-general-expr-single",
-        "t375: single-site general-expr rewrite re-infers ordinary",
+        "WI-7 slice-5: single-site let-init general-expr re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "80-raw-addr-flip",
