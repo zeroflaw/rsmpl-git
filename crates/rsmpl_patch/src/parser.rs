@@ -369,7 +369,7 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
             )
             .with_file(file)
             .with_range(format!("line {}", at + 1))
-            .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines)")
+            .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines); if the counts look right, a line may be missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char) so it never entered the body -- check marker indent before changing the header, then paste `expected_header` from the repair")
             .with_repair(serde_json::json!({
                 "action": "fix_header",
                 "expected_old": old_count,
@@ -1250,6 +1250,10 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("fix the header counts"));
+        // TOOL-gitrs-hint2: the count symptom is usually marker indent
+        // (an unprefixed line never enters the body), so the hint names
+        // the 1-char marker rule explicitly.
+        assert!(s.suggestion.as_deref().unwrap().contains("1-char marker"));
         // WI-10 consideration: the mismatch carries machine repair —
         // exact counts plus a drop-in corrected header line.
         let repair = s.repair.clone().expect("count mismatch must carry repair");
@@ -1282,6 +1286,16 @@ mod tests {
         // `\ No newline` markers are neither side: exact counts pass.
         let marker_ok = "diff --git a/link b/link\n--- /dev/null\n+++ b/link\n@@ -0,0 +1,1 @@\n+real.txt\n\\ No newline at end of file\n";
         parse_patch(marker_ok).unwrap();
+        // TOOL-gitrs-hint2 micro-pin: an unprefixed body line never enters
+        // the body, so the miscount hint (not a new error) carries the
+        // marker clause.
+        let unprefixed = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n a\nfoo\n-b\n";
+        let err = parse_patch(unprefixed).unwrap_err();
+        let ParseError::Structured(s) = &err else {
+            panic!("expected structured PARSE_CONFLICT, got: {err}");
+        };
+        assert_eq!(s.code, ErrorCode::ParseConflict);
+        assert!(s.suggestion.as_deref().unwrap().contains("1-char marker"));
     }
 
     #[test]

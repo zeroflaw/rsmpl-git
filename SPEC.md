@@ -5210,13 +5210,16 @@ RSMPL_PARSE_CONFLICT
 file: src/lib.rs
 old_range: line 4
 reason: ordinary hunk body has 3 old-side and 3 new-side lines but header claims -1,5 +1,3: @@ -1,5 +1,3 @@
-suggestion: fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines)
+suggestion: fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines); if the counts look right, a line may be missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char) so it never entered the body -- check marker indent before changing the header, then paste `expected_header` from the repair
 ```
 
 Both carry file + header-line range + suggestion (no `rule:` line
 unless the hunk header carries one; JSON explicit throughout), plus
 the machine repair: the whitespace arm a header-template `fix_pattern`,
-the count arm the `fix_header` drop-in header (SPEC D.2).
+the count arm the `fix_header` drop-in header (SPEC D.2). A body line
+missing its 1-char prefix never enters the body, so marker-indent
+surfaces as a count symptom: the count-arm suggestion names the
+1-char marker rule before directing the agent to the repair.
 
 ```text
 RSMPL_PARSE_CONFLICT
