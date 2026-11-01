@@ -989,6 +989,34 @@ fn apply_inner(
                     )
                 })
                 .unwrap_or_else(|| r.spans.clone());
+            // WI-2b: binder renames carry `follow` use-spans alongside the
+            // definition; the plus (`let new = …`) only proves the
+            // definition spans — follows verify byte-exact below.
+            // Translate only the definition originals so indices cannot
+            // drift when follows interleave.
+            let plus_spans: Vec<(u32, u32)> =
+                if crate::use_graph_local::is_let_binder_rename(&compiled) {
+                    let def_orig: Vec<(u32, u32)> = r
+                        .spans
+                        .iter()
+                        .zip(r.span_labels.iter())
+                        .filter(|(_, l)| l.as_deref() != Some("follow"))
+                        .map(|(s, _)| *s)
+                        .collect();
+                    states
+                        .get(&r.file)
+                        .map(|st| {
+                            translate_spans_to_post(
+                                &st.original,
+                                &st.index,
+                                full_edits.get(&r.file).map(Vec::as_slice).unwrap_or(&[]),
+                                &def_orig,
+                            )
+                        })
+                        .unwrap_or(def_orig)
+                } else {
+                    post_spans.clone()
+                };
             match plus_instantiated_parsed(
                 &compiled,
                 &rh,
@@ -996,7 +1024,7 @@ fn apply_inner(
                 &post_text,
                 post_parsed.get(&r.file),
                 post_index.get(&r.file),
-                &post_spans,
+                &plus_spans,
                 r.matches,
             ) {
                 Some(true) => {}

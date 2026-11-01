@@ -2445,7 +2445,7 @@ and text mode prints one `orphans:` stderr line with each entry as
 the first diagnostic names the first orphan `file:line` alongside the
 `applied` flag. A `# follow=uses` hunk never carries `orphans` (its
 uses rewrite; `follow_skipped_details` owns that signal).
-WI-2a extends orphan evidence to `let`-binder renames: a general-statement `let old = E;` -> `let new = E;` hunk (same init, single ident binder) lists leftover same-name uses as `orphans` (`off-target`, macro interiors and inline `{old}` format captures `macro-hidden`) and caps at `reparse-only` (global `partial`) while leftovers exist; zero leftovers stays `instantiated`.
+WI-2a extends orphan evidence to `let`-binder renames: a general-statement `let old = E;` -> `let new = E;` hunk (same init, single ident binder) lists leftover same-name uses as `orphans` (`off-target`, macro interiors and inline `{old}` format captures `macro-hidden`) and caps at `reparse-only` (global `partial`) while leftovers exist; zero leftovers stays `instantiated`. WI-2b completes the same shape in-block: unshadowed value uses of `old` after the binder inside its smallest enclosing block rewrite in the same hunk (labelled `follow`); inner `let old` / closure-param `old` shadows, nested-`fn` bodies, and macro interiors never rewrite (stay orphans); any other same-name binder (for-loop, match arm, ...) vetoes completion.
 
 Skip and orphan reason vocabulary (WI-2): every structured skip and
 every orphan carries a machine `reason`, one of `shadowed` (another

@@ -550,6 +550,15 @@ pub fn apply_general_hunk(
                     }
                     // Strip: replacement already drops the envelope.
                     edits.push(TextEdit::new(node.start, node.end, replacement));
+                    // WI-2b: same-shape binder rename completes block-scoped
+                    // uses in the same hunk (labelled `follow`).
+                    if let Some((old, new)) =
+                        crate::use_graph_local::let_binder_rename(&compiled.kind)
+                    {
+                        edits.extend(crate::use_graph_local::let_binder_follow_edits(
+                            parsed, original, index, node.start, node.end, &old, &new,
+                        ));
+                    }
                 }
                 for &(s, e) in &accepted {
                     if node.start < e && s < node.end && !(s <= node.start && node.end <= e) {
