@@ -8829,7 +8829,28 @@ form). Only single-pair bare-symbol call hunks normalize this way;
  across the whole hunk (`P` → `P0`, `T` → `T0`, `E` → `E0`,
  second-position names onto `P1`/`T1`/`E1`, …) and drops those
  declarations, matching inferrer emission; count-mismatched sides,
- non-`let` lines, and any token collision keep the authored spelling. Anchors,
+ non-`let` lines, and any token collision keep the authored spelling.
+ The template diet unifies the same-site spellings the raiser never
+ emits: an explicit default-valued `# lang=rust` line drops (the
+ inferrer never writes it; kept beside an explicit `# mode`
+ directive, whose interaction with `lang` stays pinned); a declared
+ `# expr` hole in a single-pair call/method/general-expression hunk
+ renames positionally to the inferrer diet (`E`/`Arg` → `E0`, … by
+ first appearance) while inferrer diet vocabulary (`Receiver`,
+ `E0…`/`P0…`/`T0…`, bare `T`, `V Q G W N I`) stays verbatim, and all
+ `# expr` declarations drop on success — so an authored
+ `Receiver.old_method(Arg)` and an inferred
+ `Receiver.old_method(E0)`, or an authored `E + 1` and an inferred
+ `E0 + 1`, share one form (symbol hunks, turbofish pairs, `let`-led
+ or `fn`-header lines, multi-pair bodies, context lines, unmentioned
+ declared names, and token collisions keep the authored spelling);
+ and a framed fn pure-rename pair (one minus/plus pair of `fn`
+ headers, optional equal `V Q ` prefixes, token-identical outside
+ differing names, only `...`/`{`/`}` context) contracts to the bare
+ `- fn Old` / `+ fn New` diet — so terse-framed, explicit-framed, and
+ bare legs over the same sites compare equal (evolutions, concrete
+ vis, multi-pair bodies, the `N` name hole, and stray context keep
+ the authored spelling). Anchors,
  `allow == one` hunks with ≠1 proven spans, ordinary hunks, non-contained/file scopes, and
  hunks with no matched spans keep their authored ranges. Hunks keep
 document order rather than range-sorting: an insertion anchor at a

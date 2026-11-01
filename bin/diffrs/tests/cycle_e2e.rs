@@ -242,7 +242,10 @@ fn commit_all(dir: &Path, what: &str) {
 /// sweep vs inferred ranged spellings of the same sites, WI-1b unifies
 /// authored `# symbol` hunks vs inferred concrete paths, and WI-8 unifies
 /// authored sweep singles vs inferred precision singles (plus stale-cited
-/// vs actual-cited singles) over the same site.
+/// vs actual-cited singles) over the same site, and WI-8b unifies
+/// template-diet spellings over the same site (default `# lang=rust`
+/// dropped, declared `# expr` holes diet-renamed, framed fn pure-rename
+/// pairs contracted to the bare diet).
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
@@ -297,6 +300,12 @@ const CYCLE_OK: &[&str] = &[
     "108-impl-sweep-single",
     "59-field-nofollow",
     "77-variant-nofollow",
+    "01-rename-fn",
+    "11-method-to-function",
+    "21-attrs-preserve",
+    "51-drift-stale-range",
+    "78-method-to-function",
+    "79-general-expr-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -310,10 +319,6 @@ const CYCLE_OK: &[&str] = &[
 /// `hetero` sites differ structurally so no template fires (WI-4/7);
 /// `empty` zero-edit re-diff (05).
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
-    (
-        "01-rename-fn",
-        "WI-19b: single-site fn rename re-infers as slot sweep single (sweep spelling), canonically distinct from the authored terse form (terse-vs-sweep canonical equality stays open)",
-    ),
     ("04-mixed", "t375: two single-site edits re-infer ordinary"),
     (
         "05-optional-noop",
@@ -336,10 +341,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single impl method re-infers ordinary",
     ),
     (
-        "11-method-to-function",
-        "WI-7 slice-3: single-site m2f re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
-    ),
-    (
         "12-stmt-rewrite",
         "hetero: header+let mixed single block; v1 fuses pure let runs only (WI-5d), no sub-hunk split or header+body joint shape (WI-19c permanent non-goal: hunk atomicity, a single mixed native hunk never splits)",
     ),
@@ -359,7 +360,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "19-trait-rename",
         "t375: single trait method re-infers ordinary",
     ),
-    ("21-attrs-preserve", "t375: single fn re-infers ordinary"),
     (
         "22-attrs-strip",
         "t375: single attributed fn re-infers ordinary",
@@ -387,10 +387,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "50-repeat-let",
         "t375: single-site repeat-grow re-infers ordinary",
-    ),
-    (
-        "51-drift-stale-range",
-        "partial (WI-19): drift-applied single-site rename re-infers as precision item_rename single at the actual range; S cites the stale range (drift is apply-only evidence, S′ cites actual)",
     ),
     (
         "52-macro-verbatim",
@@ -454,14 +450,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site impl-filter rename re-infers ordinary",
     ),
 
-    (
-        "78-method-to-function",
-        "WI-7 slice-3: single-site m2f re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
-    ),
-    (
-        "79-general-expr-single",
-        "WI-7 slice-5: single-site let-init general-expr re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
-    ),
     (
         "80-raw-addr-flip",
         "t375: single-site raw-addr rewrite re-infers ordinary",
