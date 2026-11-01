@@ -5012,6 +5012,7 @@ if:
         byte-exact post offset and the container holds the member in the
         re-parsing post-image (struct holds the field / enum holds the
         variant / a same-scrutinee `match` holds the arm).
+        Joint rename+addition halves (a shared-rule item rename plus its addition) verify against the renamed (new) container.
         A member evolution (`FieldTypeEvolution` /
         `VariantPayloadEvolution` tuple / struct / discriminant, ranged
         or file-scope) verifies as `postcondition` when its plus-pattern

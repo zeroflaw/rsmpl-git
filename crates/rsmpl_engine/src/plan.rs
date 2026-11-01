@@ -228,6 +228,10 @@ fn apply_inner(
     let mut move_pastes: Vec<crate::postcheck_move::MovePaste> = Vec::new();
     let mut pure_inserts: Vec<crate::postcheck_move::PureInsert> = Vec::new();
     let mut member_additions: Vec<crate::postcheck_move::MemberAddition> = Vec::new();
+    // WI-5 slice 2d: joint rename+addition shares one rule; the addition
+    // names the old container but the post-image holds the new one, so
+    // remember struct/enum renames per (rule, file) for the remap below.
+    let mut joint_rename_new: HashMap<(String, String), (String, String)> = HashMap::new();
     // WI-7d evolution-probe: member evolutions await their container probe
     // (`postcheck_move_evo`, sibling per D5).
     let mut member_evos: Vec<crate::postcheck_move_evo::MemberEvo> = Vec::new();
@@ -445,6 +449,27 @@ fn apply_inner(
                                         );
                                     }
                                 }
+                            }
+                        }
+                        // WI-5 slice 2d: remember struct/enum renames per
+                        // (rule, file); joint additions name the old
+                        // container while the post-image holds the new one.
+                        if let PatternKind::ItemRename {
+                            kind,
+                            minus_name,
+                            plus_name,
+                            ..
+                        } = &compiled.kind
+                        {
+                            let is_container = matches!(
+                                kind,
+                                rsmpl_pattern::ItemKind::Struct | rsmpl_pattern::ItemKind::Enum
+                            );
+                            if is_container {
+                                joint_rename_new.insert(
+                                    (rule.clone(), path.clone()),
+                                    (minus_name.clone(), plus_name.clone()),
+                                );
                             }
                         }
                     }
@@ -1148,6 +1173,29 @@ fn apply_inner(
             &post_parsed,
             &mut report.rules,
         )?;
+        // WI-5 slice 2d: joint additions name the old container while the
+        // post-image holds the renamed one. Remap same-(rule,file)
+        // additions whose container matches the sibling rename old
+        // ident to the new ident before the membership probe; pure
+        // additions (no sibling rename) and other containers pass through.
+        for add in member_additions.iter_mut() {
+            let key = (add.rule.clone(), add.file.clone());
+            if let Some((old, new)) = joint_rename_new.get(&key) {
+                match &mut add.kind {
+                    crate::postcheck_move::MemberKind::Field { container, .. }
+                        if container == old =>
+                    {
+                        *container = new.clone()
+                    }
+                    crate::postcheck_move::MemberKind::Variant { container, .. }
+                        if container == old =>
+                    {
+                        *container = new.clone()
+                    }
+                    _ => {}
+                }
+            }
+        }
         crate::postcheck_move::upgrade_member_additions(
             &member_additions,
             &full_edits,
@@ -1184,3 +1232,39 @@ fn apply_inner(
 #[cfg(test)]
 #[path = "plan_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod wi5_2d_tests {
+    use super::*;
+    #[test]
+    fn joint_field_add_verifies_postcondition() {
+        let pre = "struct Old {\n    x: u32,\n}\nfn f(s: Old) {}\n";
+        let patch_text = "diff --git a/a.rs b/a.rs\n@@ -1,1 @@ rule=r1\n  struct Old {\n+    y: u32,\n@@ -1,1 @@ rule=r1\n# sweep\n# follow=uses\n- struct Old\n+ struct New\n";
+        let patch = rsmpl_patch::parse_patch(patch_text).expect("patch parses");
+        let mut files: HashMap<String, String> =
+            HashMap::from([("a.rs".to_string(), pre.to_string())]);
+        let report = apply_with_captures(&mut files, &patch).expect("applies");
+        assert_eq!(report.rules.len(), 2, "got: {:?}", report.rules);
+        for r in &report.rules {
+            assert_eq!(r.semantics, RuleSemantics::Postcondition, "got: {r:?}");
+        }
+        assert!(
+            files["a.rs"].contains("struct New"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(files["a.rs"].contains("y: u32"), "got: {}", files["a.rs"]);
+    }
+    #[test]
+    fn pure_field_add_still_verifies() {
+        let pre = "struct Old {\n    x: u32,\n}\n";
+        let patch_text =
+            "diff --git a/a.rs b/a.rs\n@@ -1,1 @@ rule=r2\n  struct Old {\n+    y: u32,\n";
+        let patch = rsmpl_patch::parse_patch(patch_text).expect("patch parses");
+        let mut files: HashMap<String, String> =
+            HashMap::from([("a.rs".to_string(), pre.to_string())]);
+        let report = apply_with_captures(&mut files, &patch).expect("applies");
+        assert_eq!(report.rules.len(), 1);
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
+    }
+}
