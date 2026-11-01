@@ -498,14 +498,15 @@ fn apply_inner(
                     // T249: record capture-paste edits for blank-join. A
                     // paste hunk pushes exactly one insertion at
                     // `edits_before`, so its index is stable.
-                    // WI-7a: bare paste (`+ N` with `# use=N`, template trims
-                    // to the name) records a move probe; evolving templates
-                    // abstain (WI-7c).
-                    let paste_bare_name: Option<String> = match &compiled.kind {
+                    // WI-7a + WI-7c: every capture-paste (`+ N` / `+ template`
+                    // with `# use=N`) records a move probe; bare pastes
+                    // verify verbatim, evolving pastes verify per item via
+                    // the template replay in `postcheck_move`.
+                    let paste_capture_name: Option<(String, bool, String)> = match &compiled.kind {
                         PatternKind::Insertion {
                             text,
                             use_name: Some(n),
-                        } if text.trim() == n.as_str() => Some(n.clone()),
+                        } => Some((n.clone(), text.trim() == n.as_str(), text.clone())),
                         _ => None,
                     };
                     if matches!(
@@ -525,13 +526,14 @@ fn apply_inner(
                         if let Some(marks) = paste_marks.get_mut(path) {
                             marks.push((pos, edits_before));
                         }
-                        if let Some(name) = paste_bare_name {
+                        if let Some((name, bare, template_text)) = paste_capture_name {
                             move_pastes.push(crate::postcheck_move::MovePaste {
                                 rule: rule.clone(),
                                 file: path.clone(),
                                 name,
                                 pos,
-                                bare: true,
+                                bare,
+                                template: if bare { None } else { Some(template_text) },
                             });
                         }
                     }

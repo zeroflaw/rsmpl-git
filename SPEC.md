@@ -4893,21 +4893,24 @@ if:
      side fails to compile as a pattern (or fails to re-match for an
      engine reason, or finds no attributable plus match) — including
      unparseable post-images, which never veto.
-      A verbatim move pair (one item cut plus one bare paste of
+      A move pair (one item cut plus one paste of
       the same capture — scalar or `# allow=many` collection in
       source order — exactly one edit at the paste position) verifies
       as `postcondition` on both entries when the post-image holds the
-      joined captured item bytes (per-item `trim_end`, `"\n\n"` join,
-      trailing `"\n"`) at the paste edit's byte-exact post offset and,
-      per captured item, no same-kind same-ident item starts inside
-      the cut spans translated to post-image coordinates (the same-file
-      paste block itself is excluded from the absence scan, or every
-      same-file collection move would fail on its own output).
-      Evolving pastes, empty collections, pure
+      expected paste bytes at the paste edit's byte-exact post offset and,
+      per captured item, no same-kind same-ident (old ident for evolving)
+      item starts inside the cut spans translated to post-image coordinates
+      (the same-file paste block itself is excluded from the absence scan,
+      or every same-file move would fail on its own output).
+      Bare pastes expect the joined captured item bytes (per-item
+      `trim_end`, `"\n\n"` join, trailing `"\n"`); evolving pastes expect
+      the template-replayed bytes (scalar splice, or per-item
+      concretize+splice joined identically — kind-preserving, new ident
+      `pre_old_post` per the `N`-hole). Empty collections, pure
       insertions, unpaired cuts, multi-pastes sharing one anchor,
-      unnameable items (`impl` blocks and friends), and
-      unparseable post-images stay `reparse-only`; in-range mismatch
-      fails loud, never a silent verify.
+      unnameable items (`impl` blocks and friends), hole-less collection
+      templates, kind mismatches, and unparseable post-images stay
+      `reparse-only`; in-range mismatch fails loud, never a silent verify.
     Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
     including verified follow-only entries), `postcondition` (sweep gate
     + plus-pattern both ran, or a verified cut+paste move pair),

@@ -1,33 +1,39 @@
-//! WI-7a + WI-7b cut+paste move verification (SPEC 24.6).
+//! WI-7a + WI-7b + WI-7c cut+paste move verification (SPEC 24.6).
 //!
-//! A verbatim move pair — one item cut (`- I` + `# bind=N`, scalar or
-//! `# allow=many` collection in source order) and one bare paste
-//! (`+ N` + `# use=N`, template trims to the name) — earns
+//! A move pair — one item cut (`- I` + `# bind=N`, scalar or
+//! `# allow=many` collection in source order) and one paste (`+ N` +
+//! `# use=N` bare, or `+ <template>` + `# use=N` evolving) — earns
 //! `postcondition` on **both** entries iff two span-local checks hold
 //! in the post-image:
 //!
 //! * presence: the pasted bytes equal the joined captured item texts
-//!   (per-item `trim_end`, `"\n\n"` join, trailing `"\n"`) at the
-//!   paste edit's byte-exact post-image offset (WI-6b
-//!   `post_starts_for` machinery — occurrence elsewhere never counts);
-//! * absence per item: no same-kind same-ident item starts inside the
-//!   cut spans translated to post-image coordinates (structural,
-//!   never a substring search).
+//!   (bare: per-item `trim_end`, `"\n\n"` join, trailing `"\n"`), or
+//!   the template-replayed bytes (WI-7c: scalar splice, or per-item
+//!   concretize+splice joined identically), at the paste edit's
+//!   byte-exact post-image offset (WI-6b `post_starts_for` machinery —
+//!   occurrence elsewhere never counts);
+//! * absence per item: no same-kind same-ident (old ident for evolving)
+//!   item starts inside the cut spans translated to post-image
+//!   coordinates (structural, never a substring search).
 //!
-//! Everything else stays `reparse-only`: evolving pastes, pure
-//! insertions, unpaired cuts, empty collections, multi-pastes sharing
-//! one anchor (T249 blank-join), unparseable post-images, and
-//! unnameable items (`impl` blocks and friends). Out-of-range probe
-//! math abstains (skip, never fail); in-range mismatch fails loud with
-//! `RSMPL_MATCH_CONFLICT` (a planner bug, never a user error — WI-6
-//! tamper doctrine).
+//! Everything else stays `reparse-only`: pure insertions, unpaired
+//! cuts, empty collections, multi-pastes sharing one anchor (T249
+//! blank-join), unparseable post-images, unnameable items (`impl`
+//! blocks and friends), hole-less collection templates, and kind
+//! mismatches. Out-of-range probe math abstains (skip, never fail);
+//! in-range mismatch fails loud with `RSMPL_MATCH_CONFLICT` (a planner
+//! bug, never a user error — WI-6 tamper doctrine).
 
 use std::collections::HashMap;
 
 use rsmpl_patch::StructuredError;
 use syn::spanned::Spanned;
 
-use crate::capture::CaptureStore;
+use crate::capture::{splice_evolved_header, CaptureStore};
+use crate::capture_evolve::{
+    captured_old_ident, collection_template_parts, concrete_new_ident, concretize_template,
+    parse_collection_name_hole,
+};
 use crate::edits::{translate_spans_to_post, TextEdit};
 use crate::lines::FileState;
 use crate::{RuleReport, RuleSemantics};
@@ -43,24 +49,29 @@ pub(crate) struct MoveCut {
     pub(crate) name: String,
 }
 
-/// WI-7a pending bare paste: rule/file plus the capture name and the
-/// original-coordinate insertion byte offset. `bare` is false for
-/// evolving templates (WI-7c owns those).
+/// WI-7a pending paste: rule/file plus the capture name and the
+/// original-coordinate insertion byte offset. `bare` is true for
+/// verbatim pastes (`+ N` trims to the name, `template` is `None`);
+/// evolving pastes carry the raw template for the WI-7c per-item probe.
 pub(crate) struct MovePaste {
     pub(crate) rule: String,
     pub(crate) file: String,
     pub(crate) name: String,
     pub(crate) pos: usize,
     pub(crate) bare: bool,
+    pub(crate) template: Option<String>,
 }
 
-/// WI-7a + WI-7b: upgrade verified cut+paste pairs to `postcondition`.
+/// WI-7a + WI-7b + WI-7c: upgrade verified cut+paste pairs to `postcondition`.
 ///
-/// Pairing is by capture name. Presence checks the joined paste bytes
-/// (scalar and 1-item collections share the single-item form) at the
-/// byte-exact post offset; absence checks every captured item's
-/// kind+ident against the translated cut spans. Skips stay
-/// `reparse-only`; in-range mismatches fail loud.
+/// Pairing is by capture name. Presence checks the paste bytes at the
+/// byte-exact post offset — joined captured bytes for bare pastes
+/// (scalar and 1-item collections share the single-item form), or the
+/// template-replayed bytes for evolving pastes (scalar splice, or
+/// per-item concretize+splice joined identically for collections);
+/// absence checks every captured item's old kind+ident against the
+/// translated cut spans. Skips stay `reparse-only`; in-range mismatches
+/// fail loud.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn upgrade_verified_moves(
     cuts: &[MoveCut],
@@ -73,33 +84,42 @@ pub(crate) fn upgrade_verified_moves(
     rules: &mut [RuleReport],
 ) -> Result<(), StructuredError> {
     for p in pastes {
-        if !p.bare {
-            continue;
-        }
         let cut = match cuts.iter().find(|c| c.name == p.name) {
             Some(c) => c,
             None => continue,
         };
-        let (texts, _collection) = match captures.get_all(&p.name, &p.rule, &p.file) {
+        let (texts, collection) = match captures.get_all(&p.name, &p.rule, &p.file) {
             Ok(v) => v,
             Err(_) => continue,
         };
         if texts.is_empty() {
             continue;
         }
-        // WI-7b joined insertion text: per-item `trim_end`, `"\n\n"`
-        // join, trailing `"\n"` — exactly what `paste_capture` splices
-        // for a bare collection paste; the scalar single-item form
-        // coincides (`trim_end + "\n"`).
-        let joined = texts
-            .iter()
-            .map(|t| t.trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        if joined.is_empty() {
-            continue;
-        }
-        let expected = format!("{joined}\n");
+        // WI-7b bare insertion text vs WI-7c template-replayed text.
+        // Both mirror `paste_capture` byte-for-byte (per-item
+        // `trim_end`, `"\n\n"` join, trailing `"\n"`); any drift between
+        // the two call sites abstains via the replacement-equality
+        // guard below, never verifies.
+        let expected = if p.bare {
+            // WI-7b joined insertion text: per-item `trim_end`, `"\n\n"`
+            // join, trailing `"\n"` — exactly what `paste_capture`
+            // splices for a bare collection paste; the scalar
+            // single-item form coincides (`trim_end + "\n"`).
+            let joined = texts
+                .iter()
+                .map(|t| t.trim_end().to_string())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if joined.is_empty() {
+                continue;
+            }
+            format!("{joined}\n")
+        } else {
+            match evolved_expected(texts, collection, p.template.as_deref(), &p.rule) {
+                Some(e) => e,
+                None => continue,
+            }
+        };
         // Single edit at the paste position: the T249 same-anchor join
         // (WI-7b) and any same-pos sibling insertion abstain.
         let edits = full_edits.get(&p.file).map(Vec::as_slice).unwrap_or(&[]);
@@ -221,21 +241,88 @@ pub(crate) fn upgrade_verified_moves(
     Ok(())
 }
 
-/// WI-7a loud failure: the pair claimed a verbatim move but the
-/// post-image disagrees at the recorded span (planner bug, WI-6
-/// doctrine — `RSMPL_MATCH_CONFLICT` so agents reuse the match-conflict
-/// repair path).
+/// WI-7c loud failure: the pair claimed a move but the post-image
+/// disagrees at the recorded span (planner bug, WI-6 doctrine —
+/// `RSMPL_MATCH_CONFLICT` so agents reuse the match-conflict repair
+/// path).
 fn move_error(rule: &str, file: &str, detail: &str) -> StructuredError {
     StructuredError::new(
         rsmpl_patch::ErrorCode::MatchConflict,
-        format!("postcondition: verbatim move did not land as authored ({detail})"),
+        format!("postcondition: move did not land as authored ({detail})"),
     )
     .with_rule(rule)
     .with_file(file)
     .with_repair(StructuredError::fix_pattern_repair(
         "move",
-        "read the reported spans in the post-image file; fix the cut range or paste anchor so the pair names one verbatim item move",
+        "read the reported spans in the post-image file; fix the cut range or paste anchor so the pair names one item move",
     ))
+}
+
+/// WI-7c: template-replayed expected bytes for an evolving paste.
+///
+/// Mirrors `paste_capture` byte-for-byte without touching the edit
+/// list: scalar splices once (`trim_end + "\n"`), collections replay
+/// per item (`N`-hole concretize + splice, `"\n\n"` join, trailing
+/// `"\n"`). Returns `None` (abstain, never loud) when the template is
+/// missing, hole-less, ident-less, kind-mismatched, or unspliceable —
+/// the same shapes `paste_capture` rejects loud at apply time or that
+/// cannot name items structurally.
+fn evolved_expected(
+    texts: &[String],
+    collection: bool,
+    template: Option<&str>,
+    rule: &str,
+) -> Option<String> {
+    let tmpl = template?;
+    if tmpl.trim().is_empty() {
+        return None;
+    }
+    if !collection {
+        if texts.len() != 1 {
+            return None;
+        }
+        let old_named = named_item(&texts[0])?;
+        let spliced = splice_evolved_header(&texts[0], tmpl, rule).ok()?;
+        let new_named = named_item(&spliced)?;
+        // Evolving keeps the item kind; a kind change is shape drift,
+        // never a verified move.
+        if new_named.0 != old_named.0 {
+            return None;
+        }
+        let mut out = spliced.trim_end().to_string();
+        if out.is_empty() {
+            return None;
+        }
+        out.push('\n');
+        return Some(out);
+    }
+    let (_, hole_name) = collection_template_parts(tmpl)?;
+    let (pre, post) = parse_collection_name_hole(&hole_name)?;
+    if texts.is_empty() {
+        return None;
+    }
+    let mut items = Vec::with_capacity(texts.len());
+    for captured in texts {
+        let old_ident = captured_old_ident(captured)?;
+        let old_named = named_item(captured)?;
+        let new_ident = concrete_new_ident(&pre, &old_ident, &post);
+        let concrete = concretize_template(tmpl, &hole_name, &new_ident);
+        let spliced = splice_evolved_header(captured, &concrete, rule).ok()?;
+        let new_named = named_item(&spliced)?;
+        if new_named.0 != old_named.0 || new_named.1 != new_ident {
+            return None;
+        }
+        items.push(spliced);
+    }
+    let joined = items
+        .iter()
+        .map(|t| t.trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if joined.is_empty() {
+        return None;
+    }
+    Some(format!("{joined}\n"))
 }
 
 /// Named-item identity of a captured text: kind tag + ident for the nine
@@ -331,13 +418,172 @@ mod tests {
     }
 
     #[test]
-    fn evolving_paste_stays_reparse_only() {
-        // WI-7c owns evolving pastes: template != name abstains.
+    fn evolving_paste_verifies_postcondition() {
+        // WI-7c: scalar evolving paste verifies per item via the
+        // template replay (old ident absent, evolved bytes present).
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=paste_new\n# lang=rust\n# use=Helper\n+ pub fn renamed() { ... }\n\n@@ -2,3 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n";
         let src = "fn a() {}\nfn helper() {\n    1\n}\nfn z() {}\n";
-        let (_, report) = apply_report(patch, vec![("src/lib.rs", src)]);
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", src)]);
+        assert!(
+            files["src/lib.rs"].contains("pub fn renamed()"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            !files["src/lib.rs"].contains("fn helper()"),
+            "old ident must be gone, got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "cut_helper"), "postcondition");
+        assert_eq!(semantics_of(&report, "paste_new"), "postcondition");
+    }
+
+    #[test]
+    fn evolving_cross_file_verifies_postcondition() {
+        // WI-7c cross-file: presence in the paste file, old-absence in
+        // the cut file. Single-line capture needs the abstract
+        // `(...)` template (concrete signatures need multi-line bodies).
+        let patch = "diff --git a/src/old.rs b/src/old.rs\n--- a/src/old.rs\n+++ b/src/old.rs\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n\ndiff --git a/src/new.rs b/src/new.rs\n--- a/src/new.rs\n+++ b/src/new.rs\n@@ -1,0 @@ rule=paste_new\n# lang=rust\n# use=Helper\n+ pub fn renamed(...) { ... }\n";
+        let (files, report) = apply_report(
+            patch,
+            vec![("src/old.rs", SRC), ("src/new.rs", "fn main() {}\n")],
+        );
+        assert_eq!(files["src/old.rs"], "fn a() {}\nfn z() {}\n");
+        assert!(
+            files["src/new.rs"].contains("fn renamed()"),
+            "got: {}",
+            files["src/new.rs"]
+        );
+        assert_eq!(semantics_of(&report, "cut_helper"), "postcondition");
+        assert_eq!(semantics_of(&report, "paste_new"), "postcondition");
+    }
+
+    #[test]
+    fn evolving_collection_verifies_per_item() {
+        // WI-7c: a 2-item collection cut + `new_N` evolving paste replays
+        // per item (`new_a`, `new_b`) and verifies both entries.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,0 @@ rule=paste_all\n# lang=rust\n# use=Helpers\n+ fn new_N(...) { ... }\n\n@@ -1,2 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n";
+        let src = "fn a() {}\nfn b() {}\nfn z() {}\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", src)]);
+        assert!(
+            files["src/lib.rs"].contains("fn new_a()"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            files["src/lib.rs"].contains("fn new_b()"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "cut_all"), "postcondition");
+        assert_eq!(semantics_of(&report, "paste_all"), "postcondition");
+    }
+
+    #[test]
+    fn tampered_evolving_post_fails_loud() {
+        // WI-7c in-range mismatch fails loud: forge an evolving pair
+        // whose post-image carries the wrong new ident at the offset.
+        let original = "fn a() {}\nfn helper() {}\nfn z() {}\n";
+        let index = LineIndex::new(original);
+        let cut_start = index.line_start(2).unwrap();
+        let cut_end = index.line_start(3).unwrap();
+        let captured = original[cut_start..cut_end].to_string();
+        let template = "pub fn renamed(...) { ... }";
+        let spliced = crate::capture::splice_evolved_header(&captured, template, "paste_h")
+            .expect("splice works");
+        let mut expected = spliced.trim_end().to_string();
+        expected.push('\n');
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![
+                TextEdit::new(0, 0, expected.clone()),
+                TextEdit::new(cut_start, cut_end, String::new()),
+            ],
+        )]);
+        // Post carries a different new ident at the same offset.
+        let post_text = "pub fn wrong() {}\nfn a() {}\nfn z() {}\n";
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(post_text).expect("post parses"),
+        )]);
+        let mut captures = CaptureStore::default();
+        captures
+            .define("H", captured, "cut_h", "f.rs")
+            .expect("bind");
+        let cuts = vec![MoveCut {
+            rule: "cut_h".to_string(),
+            file: "f.rs".to_string(),
+            spans: vec![(2, 2)],
+            name: "H".to_string(),
+        }];
+        let pastes = vec![MovePaste {
+            rule: "paste_h".to_string(),
+            file: "f.rs".to_string(),
+            name: "H".to_string(),
+            pos: 0,
+            bare: false,
+            template: Some(template.to_string()),
+        }];
+        let mut rules = vec![
+            RuleReport {
+                rule: "cut_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+            RuleReport {
+                rule: "paste_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+        ];
+        let states = HashMap::from([(
+            "f.rs".to_string(),
+            FileState {
+                original: original.to_string(),
+                index: LineIndex::new(original),
+                parsed: Some(syn::parse_str::<syn::File>(original).expect("pre parses")),
+            },
+        )]);
+        let files = HashMap::from([("f.rs".to_string(), post_text.to_string())]);
+        let err = upgrade_verified_moves(
+            &cuts,
+            &pastes,
+            &captures,
+            &states,
+            &full_edits,
+            &files,
+            &post_parsed,
+            &mut rules,
+        )
+        .unwrap_err();
+        assert!(
+            err.render().contains("RSMPL_MATCH_CONFLICT"),
+            "got: {}",
+            err.render()
+        );
+    }
+
+    #[test]
+    fn same_anchor_double_evolving_paste_stays_reparse_only() {
+        // T249 join mutates the evolving replacement too, so two
+        // evolving pastes of one capture at one anchor abstain.
+        // Single-line capture needs the abstract `(...)` template.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,0 @@ rule=paste_one\n# lang=rust\n# use=Helper\n+ pub fn renamed(...) { ... }\n\n@@ -3,0 @@ rule=paste_two\n# lang=rust\n# use=Helper\n+ pub fn renamed(...) { ... }\n\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n";
+        let (_, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
         assert_eq!(semantics_of(&report, "cut_helper"), "reparse-only");
-        assert_eq!(semantics_of(&report, "paste_new"), "reparse-only");
+        assert_eq!(semantics_of(&report, "paste_one"), "reparse-only");
+        assert_eq!(semantics_of(&report, "paste_two"), "reparse-only");
+    }
+
+    #[test]
+    fn evolved_expected_rejects_hole_less_collection_template() {
+        // Hole-less collection templates cannot name per-item idents:
+        // the probe abstains (`None`), mirroring the apply-time loud
+        // rejection without ever verifying.
+        let texts = vec!["fn a() {}\n".to_string(), "fn b() {}\n".to_string()];
+        assert!(evolved_expected(&texts, true, Some("fn renamed() { ... }"), "r").is_none());
     }
 
     #[test]
@@ -426,6 +672,7 @@ mod tests {
             name: "H".to_string(),
             pos: original.len(),
             bare: true,
+            template: None,
         }];
         let mut rules = vec![
             RuleReport {
@@ -546,6 +793,7 @@ mod tests {
             name: "H".to_string(),
             pos: 0,
             bare: true,
+            template: None,
         }];
         let rules = vec![
             RuleReport {

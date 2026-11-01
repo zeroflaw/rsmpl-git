@@ -231,3 +231,29 @@ fn collection_move_pair_reports_postcondition_and_verified() {
         "global got: {v}"
     );
 }
+
+// WI-7c: a scalar cut + evolving paste verifies per item via the
+// template replay — `postcondition` on both entries, `verified` global.
+#[test]
+fn evolving_move_pair_reports_postcondition_and_verified() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=paste_new\n# lang=rust\n# use=Helper\n+ pub fn renamed() { ... }\n\n@@ -2,3 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n",
+        "src/lib.rs",
+        "fn a() {}\nfn helper() {\n    1\n}\nfn z() {}\n",
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("postcondition"),
+        "paste got: {v}"
+    );
+    assert_eq!(
+        v["rules"][1]["semantics"],
+        serde_json::json!("postcondition"),
+        "cut got: {v}"
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "global got: {v}"
+    );
+}
