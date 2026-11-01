@@ -221,8 +221,10 @@ fn apply_inner(
     let mut def_follow_pending: crate::postcheck_follow::DefFollowMap = HashMap::new();
     // WI-7a: scalar cuts + bare pastes awaiting the move-pair probe (new
     // module `postcheck_move` so this file stays under the size gate).
+    // WI-7d: pure insertions await the insertion probe in the same module.
     let mut move_cuts: Vec<crate::postcheck_move::MoveCut> = Vec::new();
     let mut move_pastes: Vec<crate::postcheck_move::MovePaste> = Vec::new();
+    let mut pure_inserts: Vec<crate::postcheck_move::PureInsert> = Vec::new();
 
     // ---- Pass 1: `# bind=` cut hunks (v0.1: item captures only). ----
     for (sec_idx, section) in patch.files.iter().enumerate() {
@@ -534,6 +536,25 @@ fn apply_inner(
                                 pos,
                                 bare,
                                 template: if bare { None } else { Some(template_text) },
+                            });
+                        }
+                    }
+                    // WI-7d: pure insertions (`+ <text>`, no `# use=`) record
+                    // the same one-line probe input; the byte-exact presence
+                    // + standalone re-parse check lives in `postcheck_move`.
+                    if matches!(
+                        &compiled.kind,
+                        PatternKind::Insertion { use_name: None, .. }
+                    ) && found == 1
+                        && file_edits.get(path).map(|v| v.len()).unwrap_or(0) == edits_before + 1
+                    {
+                        let e = &file_edits.get(path).expect("file state")[edits_before];
+                        if e.start == e.end {
+                            pure_inserts.push(crate::postcheck_move::PureInsert {
+                                rule: rule.clone(),
+                                file: path.clone(),
+                                pos: e.start,
+                                expected: e.replacement.clone(),
                             });
                         }
                     }
@@ -1115,6 +1136,9 @@ fn apply_inner(
         }
         // WI-7a: verified cut+paste pairs earn `postcondition` (helper owns
         // the loop so `plan.rs` stays under the size gate).
+        // WI-7d: pure insertions and unpaired cuts earn the same word via
+        // their own structural probes (same module, called after the pair
+        // probe so a named paste is never misread as unpaired).
         crate::postcheck_move::upgrade_verified_moves(
             &move_cuts,
             &move_pastes,
@@ -1122,6 +1146,22 @@ fn apply_inner(
             &states,
             &full_edits,
             files,
+            &post_parsed,
+            &mut report.rules,
+        )?;
+        crate::postcheck_move::upgrade_pure_insertions(
+            &pure_inserts,
+            &full_edits,
+            files,
+            &post_parsed,
+            &mut report.rules,
+        )?;
+        crate::postcheck_move::upgrade_unpaired_cuts(
+            &move_cuts,
+            &move_pastes,
+            &captures,
+            &states,
+            &full_edits,
             &post_parsed,
             &mut report.rules,
         )?;

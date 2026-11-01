@@ -4893,35 +4893,47 @@ if:
      side fails to compile as a pattern (or fails to re-match for an
      engine reason, or finds no attributable plus match) — including
      unparseable post-images, which never veto.
-      A move pair (one item cut plus one paste of
-      the same capture — scalar or `# allow=many` collection in
-      source order — exactly one edit at the paste position) verifies
-      as `postcondition` on both entries when the post-image holds the
-      expected paste bytes at the paste edit's byte-exact post offset and,
-      per captured item, no same-kind same-ident (old ident for evolving)
-      item starts inside the cut spans translated to post-image coordinates
-      (the same-file paste block itself is excluded from the absence scan,
-      or every same-file move would fail on its own output).
-      Bare pastes expect the joined captured item bytes (per-item
-      `trim_end`, `"\n\n"` join, trailing `"\n"`); evolving pastes expect
-      the template-replayed bytes (scalar splice, or per-item
-      concretize+splice joined identically — kind-preserving, new ident
-      `pre_old_post` per the `N`-hole). Empty collections, pure
-      insertions, unpaired cuts, multi-pastes sharing one anchor,
-      unnameable items (`impl` blocks and friends), hole-less collection
-      templates, kind mismatches, and unparseable post-images stay
-      `reparse-only`; in-range mismatch fails loud, never a silent verify.
+       A move pair (one item cut plus one paste of
+       the same capture — scalar or `# allow=many` collection in
+       source order — exactly one edit at the paste position) verifies
+       as `postcondition` on both entries when the post-image holds the
+       expected paste bytes at the paste edit's byte-exact post offset and,
+       per captured item, no same-kind same-ident (old ident for evolving)
+       item starts inside the cut spans translated to post-image coordinates
+       (the same-file paste block itself is excluded from the absence scan,
+       or every same-file move would fail on its own output).
+       Bare pastes expect the joined captured item bytes (per-item
+       `trim_end`, `"\n\n"` join, trailing `"\n"`); evolving pastes expect
+       the template-replayed bytes (scalar splice, or per-item
+       concretize+splice joined identically — kind-preserving, new ident
+       `pre_old_post` per the `N`-hole). Empty collections, multi-pastes
+       sharing one anchor, multi-inserts sharing one anchor, unnameable
+       items (`impl` blocks and friends), hole-less collection
+       templates, kind mismatches, standalone-unparseable insertions,
+       and unparseable post-images stay `reparse-only`; in-range mismatch
+       fails loud, never a silent verify.
+       A pure insertion (`+ <text>` with no `# use=`, exactly one
+       insertion edit at its anchor) verifies as `postcondition` when
+       the post-image holds the inserted bytes at the byte-exact post
+       offset, the inserted slice parses standalone as Rust (`Item` /
+       `Stmt` / `Expr` / `Type` / multi-item `File`), and the file
+       re-parses.
+       An unpaired cut (a scalar or collection cut with no same-name
+       paste — a deletion) verifies as `postcondition` when, per
+       captured item, no same-kind same-ident item starts inside the
+       cut spans translated to post-image coordinates and the file
+       re-parses.
     Per-rule evidence is `semantics`: `instantiated` (plus-pattern ran,
     including verified follow-only entries), `postcondition` (sweep gate
     + plus-pattern both ran, or a verified cut+paste move pair),
-    `reparse-only` (insertions, cuts, pastes,
+     `reparse-only` (unverified insertions, cuts, pastes,
     unverified follow-only extras, unverifiable plus, or a local-binder
     (`let`/closure-param/match-arm/for/`if let`/`while let`/fn-param) rename with leftover-use orphans
     (WI-2a/WI-2c/WI-2d)),
     `not-applicable` (`optional` zero-edit hunks).
     The global `checked.semantics` is `verified` iff every rule is
     `instantiated`/`postcondition` and no ordinary hunk is present;
-    otherwise `partial` (insertions, cuts, ordinary hunks, unverified
+     otherwise `partial` (unverified insertions, cuts, ordinary hunks, unverified
     follow-only extras, and optional zero-edits all force `partial`).
 
 ---

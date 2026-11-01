@@ -1,4 +1,5 @@
-//! WI-7a + WI-7b + WI-7c cut+paste move verification (SPEC 24.6).
+//! WI-7a + WI-7b + WI-7c cut+paste move verification plus WI-7d
+//! pure-insertion and unpaired-cut verdicts (SPEC 24.6).
 //!
 //! A move pair — one item cut (`- I` + `# bind=N`, scalar or
 //! `# allow=many` collection in source order) and one paste (`+ N` +
@@ -16,13 +17,25 @@
 //!   item starts inside the cut spans translated to post-image
 //!   coordinates (structural, never a substring search).
 //!
-//! Everything else stays `reparse-only`: pure insertions, unpaired
-//! cuts, empty collections, multi-pastes sharing one anchor (T249
-//! blank-join), unparseable post-images, unnameable items (`impl`
-//! blocks and friends), hole-less collection templates, and kind
-//! mismatches. Out-of-range probe math abstains (skip, never fail);
-//! in-range mismatch fails loud with `RSMPL_MATCH_CONFLICT` (a planner
-//! bug, never a user error — WI-6 tamper doctrine).
+//! WI-7d adds the two non-pair verdicts:
+//!
+//! * pure insertion (`+ <text>` with no `# use=`): presence at the
+//!   byte-exact post offset plus a standalone re-parse of the inserted
+//!   slice (`Item`/`Stmt`/`Expr`/`Type`/multi-item `File`) plus a
+//!   post-image file re-parse — earns `postcondition` on the entry;
+//! * unpaired cut (a cut with no same-name paste — a deletion):
+//!   per-item old kind+ident absence against the translated cut spans
+//!   plus a post-image file re-parse — earns `postcondition` on the
+//!   cut entry.
+//!
+//! Everything else stays `reparse-only`: empty collections,
+//! multi-inserts sharing one anchor, multi-pastes sharing one anchor
+//! (T249 blank-join), unparseable post-images, standalone-unparseable
+//! insertions, unnameable items (`impl` blocks and friends),
+//! hole-less collection templates, and kind mismatches.
+//! Out-of-range probe math abstains (skip, never fail); in-range
+//! mismatch fails loud with `RSMPL_MATCH_CONFLICT` (a planner bug,
+//! never a user error — WI-6 tamper doctrine).
 
 use std::collections::HashMap;
 
@@ -60,6 +73,18 @@ pub(crate) struct MovePaste {
     pub(crate) pos: usize,
     pub(crate) bare: bool,
     pub(crate) template: Option<String>,
+}
+
+/// WI-7d pending pure insertion: rule/file plus the original-coordinate
+/// insertion byte offset and the exact bytes the planner spliced
+/// (`apply_insertion` normalises to trailing `"\n"`). The probe checks
+/// byte-exact presence at the post offset and a standalone re-parse of
+/// the inserted slice.
+pub(crate) struct PureInsert {
+    pub(crate) rule: String,
+    pub(crate) file: String,
+    pub(crate) pos: usize,
+    pub(crate) expected: String,
 }
 
 /// WI-7a + WI-7b + WI-7c: upgrade verified cut+paste pairs to `postcondition`.
@@ -239,6 +264,196 @@ pub(crate) fn upgrade_verified_moves(
         }
     }
     Ok(())
+}
+
+/// WI-7d: upgrade verified pure insertions to `postcondition`.
+///
+/// A pure insertion (`+ <text>`, no `# use=`) verifies iff the post
+/// image carries exactly the spliced bytes at the byte-exact post
+/// offset, the file re-parses, and the inserted slice parses
+/// standalone as Rust. Single-edit-at-pos plus
+/// `replacement == expected` guards mirror the pair probe (two
+/// inserts at one anchor, or any drift between planning and probing,
+/// abstain — never verify).
+pub(crate) fn upgrade_pure_insertions(
+    inserts: &[PureInsert],
+    full_edits: &HashMap<String, Vec<TextEdit>>,
+    files: &HashMap<String, String>,
+    post_parsed: &HashMap<String, syn::File>,
+    rules: &mut [RuleReport],
+) -> Result<(), StructuredError> {
+    for ins in inserts {
+        // File must re-parse: the insertion is only structural when it
+        // lands in a valid Rust file (global reparse already gates,
+        // the missing parse here just abstains).
+        if post_parsed.get(&ins.file).is_none() {
+            continue;
+        }
+        if !insertion_text_parses(&ins.expected) {
+            continue;
+        }
+        let edits = full_edits.get(&ins.file).map(Vec::as_slice).unwrap_or(&[]);
+        let at_pos: Vec<&TextEdit> = edits
+            .iter()
+            .filter(|e| e.start == ins.pos && e.end == ins.pos)
+            .collect();
+        if at_pos.len() != 1 {
+            continue;
+        }
+        if at_pos[0].replacement != ins.expected {
+            continue;
+        }
+        let post = crate::postcheck_follow::post_starts_for(
+            &[(
+                at_pos[0].start,
+                at_pos[0].end,
+                at_pos[0].replacement.clone(),
+            )],
+            edits,
+        );
+        if post.len() != 1 {
+            continue;
+        }
+        let post_text = match files.get(&ins.file) {
+            Some(t) => t,
+            None => continue,
+        };
+        match post_text.get(post[0].0..post[0].0.saturating_add(ins.expected.len())) {
+            Some(s) if s == ins.expected => {}
+            Some(_) => {
+                return Err(StructuredError::new(
+                    rsmpl_patch::ErrorCode::MatchConflict,
+                    "postcondition: insertion did not land as authored (inserted text does not match the post-image at the anchor)",
+                )
+                .with_rule(&ins.rule)
+                .with_file(&ins.file)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "insertion",
+                    "read the reported spans in the post-image file; fix the insertion anchor so the inserted item lands as authored",
+                )));
+            }
+            None => continue,
+        }
+        for r in rules.iter_mut() {
+            if r.rule == ins.rule && r.file == ins.file {
+                r.semantics = RuleSemantics::Postcondition;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// WI-7d: upgrade verified unpaired cuts (deletions) to `postcondition`.
+///
+/// A cut with no same-name paste verifies iff every captured item's
+/// old kind+ident is absent from the translated cut spans in a
+/// re-parsing post-image. There is no paste block to exclude (unlike
+/// the pair probe). Cuts that do have a same-name paste belong to
+/// the pair probe and are skipped here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn upgrade_unpaired_cuts(
+    cuts: &[MoveCut],
+    pastes: &[MovePaste],
+    captures: &CaptureStore,
+    states: &HashMap<String, FileState>,
+    full_edits: &HashMap<String, Vec<TextEdit>>,
+    post_parsed: &HashMap<String, syn::File>,
+    rules: &mut [RuleReport],
+) -> Result<(), StructuredError> {
+    use std::collections::HashSet;
+    let paired: HashSet<&str> = pastes.iter().map(|p| p.name.as_str()).collect();
+    for cut in cuts {
+        if paired.contains(cut.name.as_str()) {
+            continue;
+        }
+        let (texts, _) = match captures.get_all(&cut.name, &cut.rule, &cut.file) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if texts.is_empty() {
+            continue;
+        }
+        let mut wanted: Vec<(&'static str, String)> = Vec::with_capacity(texts.len());
+        let mut nameable = true;
+        for t in texts {
+            match named_item(t) {
+                Some(v) => wanted.push(v),
+                None => {
+                    nameable = false;
+                    break;
+                }
+            }
+        }
+        if !nameable {
+            continue;
+        }
+        let state = match states.get(&cut.file) {
+            Some(s) => s,
+            None => continue,
+        };
+        let cut_edits = full_edits.get(&cut.file).map(Vec::as_slice).unwrap_or(&[]);
+        let translated =
+            translate_spans_to_post(&state.original, &state.index, cut_edits, &cut.spans);
+        if translated.is_empty() {
+            continue;
+        }
+        let post_file = match post_parsed.get(&cut.file) {
+            Some(f) => f,
+            None => continue,
+        };
+        for item in &post_file.items {
+            let (k2, id2) = match named_item_of(item) {
+                Some(v) => v,
+                None => continue,
+            };
+            if !wanted.iter().any(|(k, id)| *k == k2 && *id == id2) {
+                continue;
+            }
+            let line = item.span().start().line as u32;
+            if translated.iter().any(|(s, e)| line >= *s && line <= *e) {
+                return Err(move_error(
+                    &cut.rule,
+                    &cut.file,
+                    "cut item is still present at the cut span in the post-image",
+                ));
+            }
+        }
+        for r in rules.iter_mut() {
+            if r.rule == cut.rule && r.file == cut.file {
+                r.semantics = RuleSemantics::Postcondition;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// WI-7d: the inserted slice must parse standalone as Rust — an item,
+/// a statement, an expression, a type, or a multi-item file. Anything
+/// else (a lone `}`, a half-line fragment) abstains, never verifies.
+fn insertion_text_parses(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if syn::parse_str::<syn::Item>(t).is_ok() {
+        return true;
+    }
+    if syn::parse_str::<syn::Stmt>(t).is_ok() {
+        return true;
+    }
+    if syn::parse_str::<syn::Expr>(t).is_ok() {
+        return true;
+    }
+    if syn::parse_str::<syn::Type>(t).is_ok() {
+        return true;
+    }
+    if syn::parse_str::<syn::File>(t)
+        .map(|f| !f.items.is_empty())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    false
 }
 
 /// WI-7c loud failure: the pair claimed a move but the post-image
@@ -587,12 +802,179 @@ mod tests {
     }
 
     #[test]
-    fn pure_insertion_and_unpaired_cut_stay_reparse_only() {
-        // WI-7d owns these: no pair, no structural verdict.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=ins\n+ fn inserted() {}\n\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n";
+    fn pure_insertion_verifies_postcondition() {
+        // WI-7d: a pure insertion (`+ <text>`, no `# use=`) verifies by
+        // byte-exact presence plus a standalone re-parse of the slice.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=ins\n+ fn inserted() {}\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
+        assert!(
+            files["src/lib.rs"].contains("fn inserted() {}"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "ins"), "postcondition");
+    }
+
+    #[test]
+    fn unpaired_scalar_cut_verifies_postcondition() {
+        // WI-7d: a cut with no same-name paste (a deletion) verifies by
+        // old kind+ident absence in the translated cut span.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
+        assert!(
+            !files["src/lib.rs"].contains("helper"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "cut_helper"), "postcondition");
+    }
+
+    #[test]
+    fn unpaired_collection_cut_verifies_per_item() {
+        // WI-7d: a collection cut with no paste verifies per item.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n";
+        let (files, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
+        assert!(
+            !files["src/lib.rs"].contains("fn a()"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            !files["src/lib.rs"].contains("helper"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            files["src/lib.rs"].contains("fn z()"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert_eq!(semantics_of(&report, "cut_all"), "postcondition");
+    }
+
+    #[test]
+    fn unpaired_cut_returning_item_fails_loud() {
+        // WI-7d in-range mismatch fails loud: forge an unpaired cut whose
+        // post-image still carries the cut item inside the cut span.
+        let original = "fn a() {}\nfn helper() {}\nfn z() {}\n";
+        let index = LineIndex::new(original);
+        let cut_start = index.line_start(2).unwrap();
+        let cut_end = index.line_start(3).unwrap();
+        let captured = original[cut_start..cut_end].to_string();
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![TextEdit::new(cut_start, cut_end, String::new())],
+        )]);
+        // Post still carries the item at the cut span: absence must fail.
+        let post_text = original.to_string();
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(&post_text).expect("post parses"),
+        )]);
+        let mut captures = CaptureStore::default();
+        captures
+            .define("H", captured, "cut_h", "f.rs")
+            .expect("bind");
+        let cuts = vec![MoveCut {
+            rule: "cut_h".to_string(),
+            file: "f.rs".to_string(),
+            spans: vec![(2, 2)],
+            name: "H".to_string(),
+        }];
+        let mut rules = vec![RuleReport {
+            rule: "cut_h".to_string(),
+            file: "f.rs".to_string(),
+            semantics: RuleSemantics::ReparseOnly,
+            ..Default::default()
+        }];
+        let states = HashMap::from([(
+            "f.rs".to_string(),
+            FileState {
+                original: original.to_string(),
+                index: LineIndex::new(original),
+                parsed: Some(syn::parse_str::<syn::File>(original).expect("pre parses")),
+            },
+        )]);
+        let err = upgrade_unpaired_cuts(
+            &cuts,
+            &[],
+            &captures,
+            &states,
+            &full_edits,
+            &post_parsed,
+            &mut rules,
+        )
+        .unwrap_err();
+        assert!(
+            err.render().contains("RSMPL_MATCH_CONFLICT"),
+            "got: {}",
+            err.render()
+        );
+    }
+
+    #[test]
+    fn unparseable_insertion_stays_reparse_only() {
+        // WI-7d: an inserted slice that parses neither as item/stmt/expr/
+        // type/file abstains — never a structural verdict.
+        assert!(!insertion_text_parses("} garbage { { {"));
+    }
+
+    #[test]
+    fn same_anchor_double_pure_insert_stays_reparse_only() {
+        // WI-7d: two pure inserts at one anchor share the position, so
+        // neither earns a verdict (ambiguous attribution).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 @@ rule=ins_one\n+ fn one() {}\n\n@@ -1,0 @@ rule=ins_two\n+ fn two() {}\n";
         let (_, report) = apply_report(patch, vec![("src/lib.rs", SRC)]);
-        assert_eq!(semantics_of(&report, "ins"), "reparse-only");
-        assert_eq!(semantics_of(&report, "cut_helper"), "reparse-only");
+        assert_eq!(semantics_of(&report, "ins_one"), "reparse-only");
+        assert_eq!(semantics_of(&report, "ins_two"), "reparse-only");
+    }
+
+    #[test]
+    fn tampered_insertion_post_fails_loud() {
+        // WI-7d in-range mismatch fails loud: forge a pure insertion whose
+        // post-image carries different bytes at the anchor offset.
+        let expected = "fn inserted() {}\n";
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![TextEdit::new(0, 0, expected.to_string())],
+        )]);
+        let post_text = "fn tampered() {}\nfn a() {}\n";
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(post_text).expect("post parses"),
+        )]);
+        let inserts = vec![PureInsert {
+            rule: "ins".to_string(),
+            file: "f.rs".to_string(),
+            pos: 0,
+            expected: expected.to_string(),
+        }];
+        let mut rules = vec![RuleReport {
+            rule: "ins".to_string(),
+            file: "f.rs".to_string(),
+            semantics: RuleSemantics::ReparseOnly,
+            ..Default::default()
+        }];
+        let files = HashMap::from([("f.rs".to_string(), post_text.to_string())]);
+        let err = upgrade_pure_insertions(&inserts, &full_edits, &files, &post_parsed, &mut rules)
+            .unwrap_err();
+        assert!(
+            err.render().contains("RSMPL_MATCH_CONFLICT"),
+            "got: {}",
+            err.render()
+        );
+    }
+
+    #[test]
+    fn unnameable_unpaired_cut_stays_reparse_only() {
+        // WI-7d: an `impl`-block cut names no item, so absence cannot be
+        // proven — the cut abstains like the WI-7b move does. The impl
+        // range also covers the inner method span, so the cut binds the
+        // collection (scalar would fail the count gate, not the probe).
+        let src = "struct S;\nimpl S {\n    fn m(&self) {}\n}\nfn z() {}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 @@ rule=cut_all\n# lang=rust\n# allow=many\n# item I\n# bind=Helpers\n- I\n";
+        let (_, report) = apply_report(patch, vec![("src/lib.rs", src)]);
+        assert_eq!(semantics_of(&report, "cut_all"), "reparse-only");
     }
 
     #[test]

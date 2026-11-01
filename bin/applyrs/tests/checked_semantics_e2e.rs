@@ -1,9 +1,9 @@
 //! WI-1b: honest `checked` — per-rule `semantics` + global `verified|partial`.
 //!
 //! Pins the v3 envelope: ranged renames report `instantiated`, file-scope
-//! sweeps report `postcondition`, insertions report `reparse-only` with a
-//! `partial` global, and optional zero-edits report `not-applicable` with
-//! a `partial` global. A tampered post-image (simulated by hand-editing
+//! sweeps report `postcondition`, verified pure insertions and unpaired
+//! cuts report `postcondition` with a `verified` global (WI-7d), and
+//! optional zero-edits report `not-applicable` with a `partial` global. A tampered post-image (simulated by hand-editing
 //! after a clean apply is out of scope here; instead the engine-level
 //! instantiation failure is pinned via a plus that cannot appear) fails
 //! loud — see the engine unit for the direct tamper pin.
@@ -67,9 +67,10 @@ fn sweep_reports_postcondition_and_verified() {
 }
 
 #[test]
-fn insertion_reports_reparse_only_and_partial() {
-    // Pure insertion (`+` line) never owes instantiation: reparse-only,
-    // forcing the global to `partial`.
+fn insertion_reports_postcondition_and_verified() {
+    // WI-7d: a pure insertion (`+` line) verifies structurally
+    // (byte-exact presence + standalone re-parse) — `postcondition`,
+    // and the global is `verified` with no other rule present.
     let v = json_check(
         "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 +1,1 @@ rule=ins\n+ fn inserted() {}\n",
         "src/lib.rs",
@@ -77,12 +78,12 @@ fn insertion_reports_reparse_only_and_partial() {
     );
     assert_eq!(
         v["rules"][0]["semantics"],
-        serde_json::json!("reparse-only"),
+        serde_json::json!("postcondition"),
         "got: {v}"
     );
     assert_eq!(
         v["checked"],
-        serde_json::json!({"lowering": true, "semantics": "partial", "build": "skipped"}),
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
         "got: {v}"
     );
 }
@@ -245,6 +246,32 @@ fn evolving_move_pair_reports_postcondition_and_verified() {
         v["rules"][0]["semantics"],
         serde_json::json!("postcondition"),
         "paste got: {v}"
+    );
+    assert_eq!(
+        v["rules"][1]["semantics"],
+        serde_json::json!("postcondition"),
+        "cut got: {v}"
+    );
+    assert_eq!(
+        v["checked"],
+        serde_json::json!({"lowering": true, "semantics": "verified", "build": "skipped"}),
+        "global got: {v}"
+    );
+}
+
+// WI-7d: a pure insertion plus an unpaired cut verify structurally —
+// `postcondition` on both entries, `verified` global.
+#[test]
+fn insertion_and_unpaired_cut_report_postcondition_and_verified() {
+    let v = json_check(
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,0 @@ rule=ins\n+ fn inserted() {}\n\n@@ -2,1 @@ rule=cut_helper\n# lang=rust\n# item I\n# bind=Helper\n- I\n",
+        "src/lib.rs",
+        "fn a() {}\nfn helper() {}\nfn z() {}\n",
+    );
+    assert_eq!(
+        v["rules"][0]["semantics"],
+        serde_json::json!("postcondition"),
+        "insertion got: {v}"
     );
     assert_eq!(
         v["rules"][1]["semantics"],
