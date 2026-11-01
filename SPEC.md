@@ -8797,10 +8797,16 @@ sig-evolution over K blocks), which share one rule name across K
 hunks in document order. Two comparators share this form: pure
 `rsmpl_patch::canonicalize` (parse → re-emit) preserves the authored
  locality spelling, while `rsmpl_engine::canonicalize_with_tree`
- matches every `allow == many` hunk against the pre-image tree and
- re-emits it under the range rule below (tight when its sites span at
- most 64 lines, else the `# sweep` dummy) — so an authored sweep and
- an inferred ranged hunk over the same sites share one form. The
+ matches every contained/file-scope hunk with engine-proven spans
+ against the pre-image tree and re-emits it under the range rule below
+ (tight when its sites span at most 64 lines, else the `# sweep`
+ dummy) — so an authored sweep, an inferred ranged hunk, an inferred
+ precision single, and a stale-cited hunk over the same sites share one
+ form. Single-site hunks of either cardinality collapse to the diet
+ directive-free tight actual range; multi-site `allow == many` hunks
+ take the tight `@@ -min,len @@` with `# allow=many`. Two hunks compare
+ equal iff their site sets, templates (post-diet), and file sets are
+ equal: locality never distinguishes, templates always do. The
  tree-aware form also unifies symbol spelling: an authored
  `# symbol Old=crate::old_api` call hunk (`- Old(E)` / `+ New(E)`
  with `# fallback=syntax`) is rewritten to the concrete-path diet
@@ -8824,8 +8830,8 @@ form). Only single-pair bare-symbol call hunks normalize this way;
  second-position names onto `P1`/`T1`/`E1`, …) and drops those
  declarations, matching inferrer emission; count-mismatched sides,
  non-`let` lines, and any token collision keep the authored spelling. Anchors,
-`allow == one` hunks, ordinary hunks, non-contained/file scopes, and
-hunks with no matched spans keep their authored ranges. Hunks keep
+ `allow == one` hunks with ≠1 proven spans, ordinary hunks, non-contained/file scopes, and
+ hunks with no matched spans keep their authored ranges. Hunks keep
 document order rather than range-sorting: an insertion anchor at a
 range edge applies in document order (Section 20.2 — a paste at
 `(1,0)` plus an edit of `[1,1]` yields different trees when swapped,
@@ -8837,7 +8843,8 @@ original range of at most 64 lines, emit that real range with
 `@@ -1,1 @@`). Moves and deletes keep today's real ranges/anchors.
 Tree-aware comparison derives the same rule from matched spans: the
 union of a hunk's engine-reported site spans (`min` to `max`) decides
-— at most 64 lines cites that tight range, wider spreads become the
+— at most 64 lines cites that tight range (directive-free when the
+union is one site, `# allow=many` otherwise), wider spreads become the
 sweep dummy; when the patch fails to apply (zero-match, overlap,
 unparseable target) comparison falls back to the pure form over the
 spell-normalized patch (ranges stay authored, symbol spelling still

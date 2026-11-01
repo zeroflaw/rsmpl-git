@@ -1,11 +1,13 @@
 //! Tree-aware canonical form (SPEC D.5, WI-1a + WI-1b).
 //!
 //! [`canonicalize_with_tree`] compares patches by what they rewrite, not
-//! how they cite it: each `allow == many` hunk is matched against the
-//! pre-image tree and re-emitted under the D.5 range rule (tight range
-//! when its sites fit in 64 lines, else the `# sweep` dummy), so an
-//! authored sweep and an inferred ranged hunk over the same sites share
-//! one canonical form. WI-1b adds spelling unification: an authored
+//! how they cite it: each contained/file-scope hunk with engine-proven
+//! spans is re-emitted under the D.5 range rule (multi-site hunks: tight
+//! range when their sites fit in 64 lines, else the `# sweep` dummy;
+//! WI-8: single-site hunks of either cardinality collapse to the diet
+//! directive-free tight actual range), so an authored sweep, an inferred
+//! ranged hunk, an inferred precision single, and a stale-cited hunk over
+//! the same sites share one canonical form. WI-1b adds spelling unification: an authored
 //! `# symbol Old=crate::old_api` call hunk (`- Old(E)` / `+ New(E)`
 //! with `# fallback=syntax`) is the same rewrite as the inferred
 //! concrete diet form (`- crate::old_api(E0)` / `+ crate::new_api(E0)`),

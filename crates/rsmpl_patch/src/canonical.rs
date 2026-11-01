@@ -40,18 +40,20 @@ pub fn canonicalize(patch_text: &str) -> Result<String, ParseError> {
     Ok(emit_canonical(&mut patch))
 }
 
-/// Tree-aware canonical form (SPEC D.5, WI-1a): like [`canonicalize`],
-/// but every `allow == many` hunk whose key `(target file, rule name)`
-/// has an entry in `spans` is re-emitted under the D.5 range rule —
-/// tight `@@ -min,len @@` with `# allow=many` when the union of its
-/// matched site spans fits in [`TIGHT_RANGE_MAX_LINES`] lines, else the
-/// `# sweep` dummy `@@ -1,1 @@`. This unifies the two spellings of one
-/// rewrite (authored sweep vs inferred ranged) for comparison.
+/// Tree-aware canonical form (SPEC D.5, WI-1a + WI-8): like [`canonicalize`],
+/// but every hunk whose key `(target file, rule name)` has an entry in
+/// `spans` is re-emitted under the D.5 range rule — multi-site `allow ==
+/// many` hunks take the tight `@@ -min,len @@` with `# allow=many` when
+/// the union of matched site spans fits in [`TIGHT_RANGE_MAX_LINES`]
+/// lines, else the `# sweep` dummy `@@ -1,1 @@`; single-site hunks of
+/// either cardinality collapse to the diet directive-free tight actual
+/// range. This unifies the spellings of one rewrite (authored sweep vs
+/// inferred ranged vs inferred single vs stale-cited) for comparison.
 ///
 /// `spans` values are original-coordinate inclusive `[start, end]` line
 /// spans, one per matched site (as reported by the engine). Hunks left
 /// untouched: zero-length insertion anchors (SPEC 10.5), `allow == one`
-/// hunks, ordinary hunks, non-contained/file scopes (`anchor`/`overlap`/
+/// hunks with ≠1 spans, ordinary hunks, non-contained/file scopes (`anchor`/`overlap`/
 /// `exact` ranges are load-bearing for matching), and keys with no
 /// spans (zero-match `# optional`, unapplied trees).
 pub fn canonicalize_with_spans(
@@ -91,7 +93,16 @@ fn normalize_file_markers(patch: &mut Patch) {
     }
 }
 
-/// Apply the D.5 range rule to `allow == many` hunks with known spans.
+/// Apply the D.5 range rule to hunks with known spans (SPEC D.5, WI-8):
+/// multi-site `allow == many` hunks as before (tight `@@ -min,len @@`
+/// with `# allow=many` when the union fits in [`TIGHT_RANGE_MAX_LINES`]
+/// lines, else the `# sweep` dummy), plus single-site hunks of either
+/// cardinality (an authored sweep single and an inferred precision
+/// single over the same site share one diet form: directive-free tight
+/// actual range; a stale cited single re-ranges to its proven span).
+/// `allow == one` hunks with ≠1 spans never occur on success (the apply
+/// would fail, leaving no spans) and stay untouched, so error shapes
+/// never widen.
 fn normalize_ranges_with_spans(
     patch: &mut Patch,
     spans: &HashMap<(String, String), Vec<(u32, u32)>>,
@@ -99,7 +110,7 @@ fn normalize_ranges_with_spans(
     for sec in &mut patch.files {
         for hunk in &mut sec.hunks {
             let Hunk::Rsmpl(r) = hunk else { continue };
-            if r.allow() != Allow::Many || r.header.old_len == 0 {
+            if r.header.old_len == 0 {
                 continue;
             }
             if !matches!(r.scope(), Scope::Contained | Scope::File) {
@@ -112,6 +123,14 @@ fn normalize_ranges_with_spans(
             if sites.is_empty() {
                 continue;
             }
+            // WI-8: single-site hunks (either cardinality) collapse to
+            // the diet single form; multi-site `allow == one` is an
+            // error shape (apply fails → no spans in practice) and is
+            // left byte-identical.
+            let single = sites.len() == 1;
+            if r.allow() != Allow::Many && !single {
+                continue;
+            }
             let min_s = sites.iter().map(|(s, _)| *s).min().unwrap_or(1);
             let max_e = sites.iter().map(|(_, e)| *e).max().unwrap_or(1);
             if max_e < min_s {
@@ -121,14 +140,26 @@ fn normalize_ranges_with_spans(
             if len <= TIGHT_RANGE_MAX_LINES {
                 r.header.old_start = min_s;
                 r.header.old_len = len;
-                // Tight form: `# allow=many` alone (drop file scope).
-                r.directives
-                    .retain(|d| !matches!(d, Directive::Scope(Scope::File)));
+                if single {
+                    // Diet single: directive-free tight (drop any
+                    // `allow` + file-scope lines; effective allow falls
+                    // back to `one`, scope to `contained`).
+                    r.directives.retain(|d| {
+                        !matches!(d, Directive::Allow(_) | Directive::Scope(Scope::File))
+                    });
+                } else {
+                    // Tight multi: `# allow=many` alone (drop file scope).
+                    r.directives
+                        .retain(|d| !matches!(d, Directive::Scope(Scope::File)));
+                }
             } else {
                 r.header.old_start = 1;
                 r.header.old_len = 1;
                 if r.scope() != Scope::File {
                     r.directives.push(Directive::Scope(Scope::File));
+                }
+                if r.allow() != Allow::Many {
+                    r.directives.push(Directive::Allow(Allow::Many));
                 }
             }
         }
@@ -738,5 +769,82 @@ mod tests {
                 .unwrap();
         parse_patch(&once).expect("tree-aware output must re-parse");
         assert_eq!(once, canon(&once), "must be pure-canonical fixed point");
+    }
+
+    #[test]
+    fn wi8_sweep_single_collapses_to_directive_free_tight() {
+        // WI-8: an authored sweep over one site becomes the diet single
+        // (directive-free tight actual range) — the form the precision
+        // singles emit.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let got =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(2, 2)])])).unwrap();
+        assert!(
+            got.contains("@@ -2,1 @@ rule=r1\n- foo(E0)\n+ bar(E0)\n"),
+            "single sweep → directive-free tight:\n{got}"
+        );
+        assert!(!got.contains("# allow=many"), "got:\n{got}");
+        assert!(!got.contains("# sweep"), "got:\n{got}");
+        assert_eq!(got, canon(&got), "must be pure-canonical fixed point");
+    }
+
+    #[test]
+    fn wi8_allow_many_single_collapses_to_directive_free_tight() {
+        // WI-8: a ranged `allow == many` hunk over one site likewise
+        // collapses (both authored directions land on the same bytes).
+        let text = "diff --git src/lib.rs\n@@ -2,3 @@ rule=s\n# allow=many\n- foo(E0)\n+ bar(E0)\n";
+        let got =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(2, 2)])])).unwrap();
+        assert!(
+            got.contains("@@ -2,1 @@ rule=r1\n- foo(E0)\n+ bar(E0)\n"),
+            "got:\n{got}"
+        );
+        assert!(!got.contains("# allow=many"), "got:\n{got}");
+    }
+
+    #[test]
+    fn wi8_stale_allow_one_reranges_to_actual() {
+        // WI-8: a stale-cited single re-ranges to its proven span (the
+        // 51 pattern with an identical body).
+        let stale = "diff --git src/lib.rs\n@@ -1,3 @@ rule=s\n- fn foo\n+ fn bar\n";
+        let actual = "diff --git src/lib.rs\n@@ -6,3 @@ rule=s\n# allow=many\n- fn foo\n+ fn bar\n";
+        let a =
+            canonicalize_with_spans(stale, &spans(&[("src/lib.rs", "s", vec![(6, 8)])])).unwrap();
+        let b =
+            canonicalize_with_spans(actual, &spans(&[("src/lib.rs", "s", vec![(6, 8)])])).unwrap();
+        assert_eq!(a, b, "stale:\n{a}\nactual:\n{b}");
+        assert!(
+            a.contains("@@ -6,3 @@ rule=r1\n"),
+            "actual range wins:\n{a}"
+        );
+        assert!(!a.contains("# allow=many"), "single → directive-free:\n{a}");
+    }
+
+    #[test]
+    fn wi8_different_site_sets_never_unify() {
+        // Negative pin: same body, disjoint proven sites → different
+        // ranges, never one form.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let a =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(2, 2)])])).unwrap();
+        let b =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(9, 9)])])).unwrap();
+        assert_ne!(a, b, "site sets differ:\n{a}\n{b}");
+        assert!(a.contains("@@ -2,1 @@"), "got:\n{a}");
+        assert!(b.contains("@@ -9,1 @@"), "got:\n{b}");
+    }
+
+    #[test]
+    fn wi8_multi_site_single_span_each_side_stays_many() {
+        // Multi-site `allow == many` keeps today's tight form (no
+        // directive collapse for N ≥ 2).
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let got =
+            canonicalize_with_spans(text, &spans(&[("src/lib.rs", "s", vec![(2, 2), (5, 5)])]))
+                .unwrap();
+        assert!(
+            got.contains("@@ -2,4 @@ rule=r1\n# allow=many\n"),
+            "got:\n{got}"
+        );
     }
 }

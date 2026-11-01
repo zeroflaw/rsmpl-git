@@ -6,9 +6,10 @@
 //! (SPEC D.5): apply authored/emitted S to the pre-tree → post;
 //! `git diff -U0` pre→post → `diffrs` → S′;
 //! `canonicalize_with_tree(S′) == canonicalize_with_tree(S)` under the
-//! pre-image for semantic cases (tree-aware: authored sweep and inferred
-//! ranged spellings of the same sites compare equal; plain tree equality
-//! for ordinary cases); one more iteration asserts the fixed point
+//! pre-image for semantic cases (tree-aware: authored sweep, inferred
+//! ranged, and inferred precision-single spellings of the same sites
+//! compare equal — WI-8 single-site collapse plus stale-range re-ranging;
+//! plain tree equality for ordinary cases); one more iteration asserts the fixed point
 //! `S″ == S′` byte-identical.
 //!
 //! Requires a workspace build so the sibling `applyrs` binary sits next
@@ -238,8 +239,10 @@ fn commit_all(dir: &Path, what: &str) {
 /// fixture pre-image. WI-1d re-authored the diet family to canonical
 /// ranged diet, so each entry below asserts the fixed point with an
 /// already-canonical authored S; WI-1a additionally unifies authored
-/// sweep vs inferred ranged spellings of the same sites, and WI-1b
-/// unifies authored `# symbol` hunks vs inferred concrete paths.
+/// sweep vs inferred ranged spellings of the same sites, WI-1b unifies
+/// authored `# symbol` hunks vs inferred concrete paths, and WI-8 unifies
+/// authored sweep singles vs inferred precision singles (plus stale-cited
+/// vs actual-cited singles) over the same site.
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
@@ -261,6 +264,14 @@ const CYCLE_OK: &[&str] = &[
     "37-verbatim-unary-sweep",
     "38-method-to-method-sweep",
     "39-move-evolve",
+    "90-macro-rules-nofollow",
+    "92-m2m-single",
+    "100-call-sweep-single",
+    "74-call-swap-single",
+    "85-call-wrap-single",
+    "103-legacy-single",
+    "109-rename-calls-single",
+    "116-call-arg-wrap-single",
     "27-call-sweep",
     "24-pat-sweep",
     "40-sequence-sweep",
@@ -435,10 +446,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site some-unwrap rewrite re-infers ordinary",
     ),
     (
-        "74-call-swap-single",
-        "WI-7 slice-10: single-site call perm re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
-    ),
-    (
         "75-macro-verbatim-single",
         "t375: single-site macro-verbatim rewrite re-infers ordinary",
     ),
@@ -472,24 +479,12 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site diet some-unwrap rewrite re-infers ordinary",
     ),
     (
-        "85-call-wrap-single",
-        "WI-7 slice-6: single-site call wrap re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
-    ),
-    (
         "86-token-tree-single",
         "t375: single-site token-tree arg rewrite re-infers ordinary",
     ),
     (
         "89-fn-follow-single",
         "t375: single-use fn follow re-infers ordinary",
-    ),
-    (
-        "90-macro-rules-nofollow",
-        "WI-19b: def re-infers as precision item_rename single (allow=many spelling), canonically distinct from the authored directive-free form (orphan use stays ordinary; canonical-equality follow-up)",
-    ),
-    (
-        "92-m2m-single",
-        "WI-7 slice-2: single-site m2m re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "93-verbatim-single",
@@ -517,16 +512,8 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "100-call-sweep-single",
-        "WI-7 slice-1: single-site call-sweep re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
-    ),
-    (
         "102-use-rename-single",
         "t375: single-site use-rename rewrite re-infers ordinary",
-    ),
-    (
-        "103-legacy-single",
-        "t375: single-site legacy rewrite re-infers ordinary",
     ),
     (
         "104-symbol-single",
@@ -543,20 +530,12 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "109-rename-calls-single",
-        "t375: single-site rename-calls rewrite re-infers ordinary",
-    ),
-    (
         "112-trait-sweep-single",
         "t375: single-site trait-sweep rewrite re-infers ordinary",
     ),
     (
         "113-sig-evolve-single",
         "WI-19b: vis+ret evolution stays ordinary (N=1 sig singles own vis/qual-only; ret belongs to the type domain)",
-    ),
-    (
-        "116-call-arg-wrap-single",
-        "t375: single-site arg-wrap rewrite re-infers ordinary",
     ),
     (
         "117-type-rewrite-single",
