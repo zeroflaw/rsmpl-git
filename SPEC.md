@@ -2709,11 +2709,27 @@ syntax (ignored); call/literal/composite bases (`make().old()`) never
 claim; unrelated `X::old` tails are ignored outright. Unproven method
 receivers are `shadowed` (another item defines `old`) or `off-target`
 evidence — never a veto. Inherent `impl S { fn old }` and other-trait
-`impl <Other> for _ { fn old }` defs never claim (different items →
-`shadowed` evidence). Without follow, leftover trait-proven impl defs
-and anchored call sites report as orphans (`off-target`, unproven
-`shadowed`, macro `macro-hidden`). Inherent-`impl` headers and same-name
-evolutions keep the C17 rejection.
+`impl <Other> for _ { fn old }` defs never claim a trait-header rename
+(different items → `shadowed` evidence). Without follow, leftover
+trait-proven impl defs and anchored call sites report as orphans
+(`off-target`, unproven `shadowed`, macro `macro-hidden`).
+
+`# follow=uses` on a bare-inherent-`impl` method rename (WI-6, `impl S {`
+context + `fn old` → `fn new`) rewrites every inherent `impl S`
+definition of the same name — each `fn` ident rewritten and labelled
+`rename` in `span_labels` (`matches` counts the definition-hunk block) —
+plus anchored call sites by the same anchor order over the single-type
+domain (`S`): `recv.old()` with a proven `S` receiver, `self` inside an
+`impl S` block, `S::old` tails, and `<S as _>::old` qself tails naming
+the self type. `trait` declarations, `impl <Trait> for _` definitions,
+and other-type inherent `impl U { fn old }` defs never claim (different
+items → `shadowed` evidence); unproven receivers are `shadowed` or
+`off-target`, never a veto. Without follow, leftover domain defs and
+anchored calls report as orphans with the same reasons. The definition
+set is every inherent `impl S` block of the domain (last-segment
+equality, D8). `impl T for S` headers name a trait-impl block, not a
+renameable method owner, and same-name evolutions rename nothing: both
+keep the C17 rejection.
 
 Associated-item evolution (WI-26) keeps the name and rewrites only
 the RHS/default span under the same header: `type Item = Vec<T>;` →
@@ -3979,7 +3995,7 @@ case where an ordinary hunk cannot express the edit.
 | C13 | `# symbol` declared without `# fallback=syntax` in a call-shape hunk whose seeded path resolves to no definition in this crate | `` symbol `<Name>` (`<path>`) resolves to no definition in this crate `` (code `RSMPL_SYMBOL_CONFLICT`, suggestion `` write the concrete path `<path>` in the pattern, or add `# fallback=syntax` to allow syntactic matching ``, repair `add_directive` `# fallback=syntax`). Only minus-side seeds must resolve (plus-only seeds name the rewrite target, which the crate may not define yet); only call shapes reach this gate (general/macro shapes fail earlier at C14). Envelope: text carries `rule:`/`file:` plus the reason and a set `suggestion:` line (null `range:` omitted, no `old_range:` line); JSON carries `rule`/`file` set, `range: null`, and the same set suggestion — the suggestion-set contrast vs the suggestion-null C14/C15 rows. |
  | C14 | `# symbol` in a general-expr/`let`/type or macro hunk (with or without `# fallback=syntax`) | `` `# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this SHAPE hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern `` with SHAPE one of `general-expression`, `general let-statement` (emitted as `` general `let`-statement ``), `general-type`, `macro` (code `RSMPL_PATTERN_CONFLICT`, suggestion null — the `use a call-shape hunk or a concrete path pattern` tail is part of `reason:` after ` — `, not a separate suggestion). A `# symbol` naming the *method ident* of a method call is also rejected: the method slot compares bare idents, never seeded paths, so it could never match — `` `# symbol old` names the method ident; method idents already match exactly — remove that `# symbol` line (symbols verify receiver/callee paths, SPEC 19.3) `` (same code, suggestion null). Text output omits the null `range:`/`suggestion:` lines; the JSON envelope carries explicit `range: null` / `suggestion: null`. |
 | C15 | inert directives: lone `# fallback=syntax` (no `# symbol`, no `# follow=uses`) or non-default `# attrs=` on a call/method-call/macro shape | `` `# fallback=syntax` without `# symbol` does nothing (call matching is already syntactic in v0.1) — remove the line, or add `# symbol Name=path` (SPEC 19.3)`` and `` `# attrs=` is ignored on call/macro shapes in v0.1 (attribute envelopes are only checked on fn/item/general/use shapes) — remove the line (SPEC 14.6)`` (code `RSMPL_PATTERN_CONFLICT`, suggestion null) |
-| C17 | `# follow=uses` on any shape other than a fn, item, field, variant, assoc, or trait-method rename hunk (WI-6a, WI-9a, WI-27, WI-3; evolution, member-addition, assoc-evolution, and inherent-`impl` method kinds included) | `` `# follow=uses` is only supported on fn, item, field, variant, assoc, and trait-method rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
+| C17 | `# follow=uses` on any shape other than a fn, item, field, variant, assoc, trait-method, or inherent-method rename hunk (WI-6a, WI-9a, WI-27, WI-3, WI-6; evolution, member-addition, assoc-evolution, and `impl T for S`-header method kinds included) | `` `# follow=uses` is only supported on fn, item, field, variant, assoc, trait-method, and inherent-method rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)` `` (code `RSMPL_PATTERN_CONFLICT`, suggestion set: `` remove `# follow=uses`, or rewrite this hunk as a fn/item/field/variant/assoc rename ``; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:` line, JSON carries explicit `range: null`) |
 | C16 | `# root=item` with a minus side that is not a single declared metavariable | `` `# root=item` requires a single-metavar item-capture pattern (write `- I` for a declared `# item I` metavariable) `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C18 | multi-statement minus outside the WI-5c sequence shape (WI-9c(c) narrowed): parses as two or more Rust statements that are not 2–4 plain `let` statements with an equal-count plain-`let` plus side (Section 16.4.2) | `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side parses as N Rust statements, not a plain-`let` sequence); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` — or, for a sequence-shaped minus with a mismatched plus side, `` v1 statement sequences need 2–4 plain `let` statements on both sides with equal counts (the minus side has K plain `let` statements, the plus side differs); write 2–4 plain `let` statements, one hunk per statement or item, or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
 | C19 | hole inside a macro invocation body in a general minus pattern, or a `Verbatim` expression/type/pattern node in a pattern position (WI-2b) | `` v1 general patterns match macro invocations verbatim (a hole inside `NAME!(...)` never binds); write the macro body concretely, use a `# macro=token_tree` hunk for whole-macro rewrites or per-argument holes (WI-7a: one hole per top-level comma-separated argument), or use an ordinary hunk `` — or, for engine-opaque nodes, `` v1 general patterns do not match `Verbatim ...` nodes (engine-opaque); write a concrete shape or use an ordinary hunk `` (code `RSMPL_PATTERN_CONFLICT`, suggestion null; same rule+file envelope as the C3/C4/C5 siblings — text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`) |
@@ -7281,8 +7297,8 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_arg_template`, `call_arg_template`, `general_expr`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
-   `call_literal`, `call_peel`, `call_peel_section`,
-   `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `item_intent`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
+    `call_literal`, `call_peel`, `call_peel_section`,
+    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -7304,8 +7320,9 @@ the WI-7 cross-file intent label: `""` when ungrouped, else
 intent across files (rename-like detectors only — same-callee,
 template, verbatim, delete, and move hunks never group; divergent
 deltas never group; single-file repeats never group except
-`trait_method_rename`, whose trait+impl intent lives in one file and
-groups under the shared name even for a lone section). Grouped hunks share one
+`trait_method_rename` and `inherent_method_rename`, whose def+call
+intents live in one file and group under the shared name even for a
+lone section). Grouped hunks share one
 `rule=<group>` name in patch bytes (WI-7b): the re-emission renames
 each grouped hunk from its positional `rN` to the shared
 `rename_Old_to_New` and orders file sections definition-first
@@ -7599,8 +7616,19 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   inherent `impl S` block declines the whole class to ordinary (different
   items, never the K-hunk fallback). Divergent per-pair
   WI-22b: trait tails must match (last segment, `crate::T` proves `T`) or the whole class declines to ordinary (different items, `T::old` vs `U::old`).
-  WI-22c: cross-file grouping joins on the method `(old,new)` delta only; each grouped intent stays per-file same-trait (WI-22b), so the shared rule is token sharing, not a global same-trait claim.
-  suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
+   WI-22c: cross-file grouping joins on the method `(old,new)` delta only; each grouped intent stays per-file same-trait (WI-22b), so the shared rule is token sharing, not a global same-trait claim.
+   suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
+ - Inherent-method rename (WI-6): the trait detector's inherent sibling.
+   Every def pair sits in an inherent `impl` block of one self type
+   (last-segment discipline, D8) with one uniform ident delta, plus at
+   least one anchored call line sharing the delta (def-only classes stay
+   with the slot sweep; trait-block and `impl <T> for _` defs veto).
+   Emits the single document-first impl-block hunk with `# follow=uses`
+   iff the block probe and the full-set scratch probe reproduce every
+   changed line; otherwise ordinary (unproven/shadowed calls fail the
+   scratch, never a def-only partial). Detector name
+   `inherent_method_rename` (strict T375 like its trait sibling, so the
+   follow form needs enough pairs to beat the ordinary bytes).
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →

@@ -1,12 +1,14 @@
-//! WI-3/WI-21: `# follow=uses` for trait-method renames (SPEC 14.8).
+//! WI-3/WI-21 + WI-6: `# follow=uses` for method renames (SPEC 14.8).
 //!
-//! Definition follow plus anchored call-site follow (WI-21).
-//! For a trait-header `ImplContext` rename `old` → `new`, every
+//! Definition follow plus anchored call-site follow. For a trait-header
+//! `ImplContext` rename `old` → `new`, every
 //! `impl <Trait> for <Self>` block whose trait tail names the renamed
 //! trait contributes its same-name `ImplItem::Fn` definition ident as a
-//! *definition claim* (rewritten, labelled `rename`). Inherent impls
-//! (`impl S { fn old }` with no trait) never claim — they are a different
-//! item and become `shadowed` evidence. Anchored call sites
+//! *definition claim* (rewritten, labelled `rename`). For an inherent
+//! `impl S {` rename, every inherent `impl S` block contributes its
+//! same-name definition (WI-6). Inherent impls never claim trait
+//! renames (and trait-side items never claim inherent renames) — a
+//! different item becomes `shadowed` evidence. Anchored call sites
 //! (`recv.old()` with a proven receiver, `S::old` tails) rewrite as
 //! `follow` edits; unproven receivers are `off-target`/`shadowed`
 //! evidence, never a veto.
@@ -20,7 +22,7 @@ use crate::use_graph::FollowVeto;
 use crate::use_graph_anchor::AnchorIndex;
 
 /// Last `::` segment, cut at generics/whitespace (`"S < T >"` → `"S"`).
-fn last_ident(normed: &str) -> String {
+pub(crate) fn last_ident(normed: &str) -> String {
     let seg = normed.rsplit("::").next().unwrap_or(normed).trim();
     let mut s = String::new();
     for c in seg.chars() {
@@ -53,6 +55,14 @@ pub(crate) fn method_trait_name(impl_header: &str) -> Option<String> {
     }
     Some(filter.trait_path.clone())
 }
+
+/// WI-6 inherent domain (split to `use_graph_method_inherent.rs`
+/// under the D5 file-size gate): re-exported here so the follow paths
+/// below and the inline tests keep one import site.
+pub(crate) use crate::use_graph_method_inherent::{
+    collect_inherent_impl_claims, collect_trait_decl_fn_lines, collect_trait_impl_fn_lines,
+    inherent_has_shadow, inherent_other_lines, method_domain, MethodDomain,
+};
 
 /// Extracted method rename names from an `ImplContext` hunk: (old, new).
 /// Diet `V Q fn old …` spellings carry concrete idents, so a light
@@ -159,7 +169,7 @@ pub(crate) fn collect_impl_fn_claims(
 }
 
 /// Inherent same-name `fn` definitions (`impl S { fn old }`): evidence
-/// only (`shadowed`), never claims.
+/// only (`shadowed`) under a *trait* rename, never claims.
 pub(crate) fn collect_inherent_fn_lines(
     files: &[(String, &syn::File, &str, &LineIndex)],
     old: &str,
@@ -452,7 +462,7 @@ impl<'a> MethodCallWalker<'a> {
     }
 }
 
-fn self_ty_last(ty: &syn::Type) -> Option<String> {
+pub(crate) fn self_ty_last(ty: &syn::Type) -> Option<String> {
     if let syn::Type::Path(tp) = ty {
         if tp.qself.is_none() {
             return tp.path.segments.last().map(|s| s.ident.to_string());
@@ -535,8 +545,13 @@ impl<'ast> Visit<'ast> for MethodCallWalker<'_> {
                 if last.ident == self.old {
                     // `<S as Tr>::old`: explicit trait names the item.
                     let segs = path_segments(&node.path);
-                    let is_trait = segs.iter().any(|s| s == self.trait_name);
-                    if is_trait {
+                    let is_trait =
+                        !self.trait_name.is_empty() && segs.iter().any(|s| s == self.trait_name);
+                    // WI-6: inherent qself (`<S as _>::old`, `<S>::old`)
+                    // names the item through the self type instead.
+                    let is_self = self.trait_name.is_empty()
+                        && qself_ty_last(&node.qself).is_some_and(|s| self.domain_has(&s));
+                    if is_trait || is_self {
                         self.claims.push(last.ident.span());
                     }
                 }
@@ -551,8 +566,12 @@ impl<'ast> Visit<'ast> for MethodCallWalker<'_> {
             if let Some(last) = node.path.segments.last() {
                 if last.ident == self.old {
                     let segs = path_segments(&node.path);
-                    let is_trait = segs.iter().any(|s| s == self.trait_name);
-                    if is_trait {
+                    let is_trait =
+                        !self.trait_name.is_empty() && segs.iter().any(|s| s == self.trait_name);
+                    // WI-6: inherent qself, self-type proof (see above).
+                    let is_self = self.trait_name.is_empty()
+                        && qself_ty_last(&node.qself).is_some_and(|s| self.domain_has(&s));
+                    if is_trait || is_self {
                         self.claims.push(last.ident.span());
                     }
                 }
@@ -572,7 +591,15 @@ impl<'ast> Visit<'ast> for MethodCallWalker<'_> {
     }
 }
 
+/// Last ident of a `QSelf` position type (`S` in `<S as Tr>`).
+/// `None` for non-path types. WI-6 inherent qself proof.
+fn qself_ty_last(qself: &Option<syn::QSelf>) -> Option<String> {
+    qself.as_ref().and_then(|q| self_ty_last(&q.ty))
+}
+
 /// Collect anchored call claims + evidence for one file.
+/// `trait_name` is `""` for inherent domains (WI-6): the trait-half
+/// checks never fire and qself claims prove through the self type.
 fn collect_method_calls(
     parsed: &syn::File,
     trait_name: &str,
@@ -604,13 +631,18 @@ fn collect_method_calls(
 
 pub(crate) fn resolve_method_workspace(
     files: &[(String, &syn::File, &str, &LineIndex)],
-    trait_name: &str,
+    domain: &MethodDomain,
     old: &str,
     def_path: &str,
     renamed: &[(usize, usize)],
     fallback_syntax: bool,
 ) -> Result<MethodOutcome, FollowVeto> {
-    let claims = collect_impl_fn_claims(files, trait_name, old);
+    // Definition claims per domain: trait-proven `impl <Tr> for <Self>`
+    // defs, or inherent `impl S` defs of the domain self type (WI-6).
+    let claims = match domain {
+        MethodDomain::Trait(t) => collect_impl_fn_claims(files, t, old),
+        MethodDomain::Inherent(s) => collect_inherent_impl_claims(files, s, old),
+    };
     // Opaque gate: a macro-token / attribute mention of `old` vetoes
     // without fallback (assoc parity, never a silent skip).
     let mut opaque: Vec<(String, u32)> = Vec::new();
@@ -657,67 +689,105 @@ pub(crate) fn resolve_method_workspace(
             )
         })
         .collect();
-    for (f, l) in collect_inherent_fn_lines(files, old) {
-        skipped.push(FollowSkip::new(
-            format!("{f}:{l}: inherent method `{old}` (different item) left untouched"),
-            &f,
-            l,
-            skip_reason::SHADOWED,
-        ));
+    // Namesake definitions outside the domain are `shadowed`
+    // evidence (different items, never claims). Trait domain: inherent
+    // defs + other-trait defs. Inherent domain (WI-6): trait decls,
+    // trait-impl defs, and other-type inherent defs.
+    match domain {
+        MethodDomain::Trait(t) => {
+            for (f, l) in collect_inherent_fn_lines(files, old) {
+                skipped.push(FollowSkip::new(
+                    format!("{f}:{l}: inherent method `{old}` (different item) left untouched"),
+                    &f,
+                    l,
+                    skip_reason::SHADOWED,
+                ));
+            }
+            // Other-trait `impl <Other> for _` definitions of `old` are
+            // shadow evidence (a different item), mirroring inherent
+            // namesakes.
+            {
+                let mut seen: Vec<(String, u32)> = Vec::new();
+                for (path, parsed, _, _) in files {
+                    struct V<'a> {
+                        trait_name: &'a str,
+                        old: &'a str,
+                        out: Vec<u32>,
+                    }
+                    impl<'ast> Visit<'ast> for V<'_> {
+                        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+                            let is_other = match &node.trait_ {
+                                None => false,
+                                Some((_, p, _)) => last_ident(&norm_path(p)) != *self.trait_name,
+                            };
+                            if is_other {
+                                for it in &node.items {
+                                    if let syn::ImplItem::Fn(m) = it {
+                                        if m.sig.ident == self.old {
+                                            self.out.push(m.sig.ident.span().start().line as u32);
+                                        }
+                                    }
+                                }
+                            }
+                            visit::visit_item_impl(self, node);
+                        }
+                    }
+                    let mut v = V {
+                        trait_name: t,
+                        old,
+                        out: Vec::new(),
+                    };
+                    v.visit_file(parsed);
+                    for l in v.out {
+                        seen.push((path.clone(), l));
+                    }
+                }
+                seen.sort();
+                seen.dedup();
+                for (f, l) in seen {
+                    skipped.push(FollowSkip::new(
+                        format!(
+                            "{f}:{l}: other-trait method `{old}` (different item) left untouched"
+                        ),
+                        &f,
+                        l,
+                        skip_reason::SHADOWED,
+                    ));
+                }
+            }
+        }
+        MethodDomain::Inherent(s) => {
+            for (f, l) in collect_trait_decl_fn_lines(files, old)
+                .into_iter()
+                .chain(collect_trait_impl_fn_lines(files, old))
+                .chain(inherent_other_lines(files, s, old))
+            {
+                skipped.push(FollowSkip::new(
+                    format!(
+                        "{f}:{l}: method `{old}` on another item (different item) left untouched"
+                    ),
+                    &f,
+                    l,
+                    skip_reason::SHADOWED,
+                ));
+            }
+        }
     }
     // WI-21: anchored call-site claims. Domain self types prove receivers
     // via the WI-14 anchor order; unproven receivers are evidence only.
-    let domain_self = collect_domain_self(files, trait_name);
-    let has_shadow = method_has_shadow(files, trait_name, old);
-    // Other-trait `impl <Other> for _` definitions of `old` are shadow
-    // evidence (a different item), mirroring inherent namesakes.
-    {
-        let mut seen: Vec<(String, u32)> = Vec::new();
-        for (path, parsed, _, _) in files {
-            struct V<'a> {
-                trait_name: &'a str,
-                old: &'a str,
-                out: Vec<u32>,
-            }
-            impl<'ast> Visit<'ast> for V<'_> {
-                fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-                    let is_other = match &node.trait_ {
-                        None => false,
-                        Some((_, p, _)) => last_ident(&norm_path(p)) != *self.trait_name,
-                    };
-                    if is_other {
-                        for it in &node.items {
-                            if let syn::ImplItem::Fn(m) = it {
-                                if m.sig.ident == self.old {
-                                    self.out.push(m.sig.ident.span().start().line as u32);
-                                }
-                            }
-                        }
-                    }
-                    visit::visit_item_impl(self, node);
-                }
-            }
-            let mut v = V {
-                trait_name,
-                old,
-                out: Vec::new(),
-            };
-            v.visit_file(parsed);
-            for l in v.out {
-                seen.push((path.clone(), l));
-            }
-        }
-        seen.sort();
-        seen.dedup();
-        for (f, l) in seen {
-            skipped.push(FollowSkip::new(
-                format!("{f}:{l}: other-trait method `{old}` (different item) left untouched"),
-                &f,
-                l,
-                skip_reason::SHADOWED,
-            ));
-        }
-    }
+    // Inherent domains (WI-6) prove against the single self type.
+    let walker_trait: &str = match domain {
+        MethodDomain::Trait(t) => t,
+        MethodDomain::Inherent(_) => "",
+    };
+    let domain_self: Vec<String> = match domain {
+        MethodDomain::Trait(t) => collect_domain_self(files, t),
+        MethodDomain::Inherent(s) => vec![s.clone()],
+    };
+    let has_shadow = match domain {
+        MethodDomain::Trait(t) => method_has_shadow(files, t, old),
+        MethodDomain::Inherent(s) => inherent_has_shadow(files, s, old),
+    };
     // Claims outside already-renamed definition spans only.
     let mut per_file: MethodFollowSpans = Vec::new();
     for (path, a, b, _) in claims {
@@ -731,7 +801,7 @@ pub(crate) fn resolve_method_workspace(
     }
     // Anchored calls per file (never veto: unproven sites skip below).
     for (path, parsed, original, index) in files {
-        let calls = collect_method_calls(parsed, trait_name, &domain_self, old, has_shadow);
+        let calls = collect_method_calls(parsed, walker_trait, &domain_self, old, has_shadow);
         for (line, ctx) in &calls.opaque {
             skipped.push(FollowSkip::new(
                 format!("{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"),
@@ -740,10 +810,14 @@ pub(crate) fn resolve_method_workspace(
                 skip_reason::MACRO_HIDDEN,
             ));
         }
+        let domain_word = match domain {
+            MethodDomain::Trait(_) => "the trait domain",
+            MethodDomain::Inherent(_) => "the inherent domain",
+        };
         for line in &calls.shadowed {
             skipped.push(FollowSkip::new(
                 format!(
-                    "{path}:{line}: unanchored `{old}` call left untouched (receiver does not prove the trait domain)"
+                    "{path}:{line}: unanchored `{old}` call left untouched (receiver does not prove {domain_word})"
                 ),
                 path,
                 *line,
@@ -753,7 +827,7 @@ pub(crate) fn resolve_method_workspace(
         for line in &calls.off_target {
             skipped.push(FollowSkip::new(
                 format!(
-                    "{path}:{line}: unanchored `{old}` call left untouched (receiver does not prove the trait domain)"
+                    "{path}:{line}: unanchored `{old}` call left untouched (receiver does not prove {domain_word})"
                 ),
                 path,
                 *line,
@@ -797,9 +871,10 @@ pub(crate) fn resolve_method_workspace(
     Ok(MethodOutcome { per_file, skipped })
 }
 
-/// Follow target for a trait-header `ImplContext` rename hunk:
-/// (old, new, header). `None` for inherent headers, evolutions, and
-/// name holes. Single call so `use_graph.rs` stays small (D5).
+/// Follow target for a method `ImplContext` rename hunk: (old, new,
+/// header). Trait headers and bare inherent headers (`impl S {`)
+/// qualify (WI-6); `impl T for S` headers, evolutions, and name holes
+/// stay `None` (C17). Single call so `use_graph.rs` stays small (D5).
 pub(crate) fn method_follow_target(
     rh: &rsmpl_patch::RsmplHunk,
     compiled: &rsmpl_pattern::CompiledPattern,
@@ -807,29 +882,21 @@ pub(crate) fn method_follow_target(
     let rsmpl_pattern::PatternKind::ImplContext { impl_header } = &compiled.kind else {
         return None;
     };
-    if !rsmpl_pattern::is_trait_header(impl_header) {
-        return None;
-    }
+    method_domain(impl_header)?;
     method_rename_names(rh, compiled).map(|(o, n)| (o, n, impl_header.clone()))
 }
 
-/// Resolve trait-method definition follow to engine edits + skips.
+/// Resolve method definition follow to engine edits + skips.
 /// Single call so `use_graph.rs` keeps only the label mapping (D5).
 pub(crate) fn resolve_method_follow(
     refs: &[(String, &syn::File, &str, &crate::lines::LineIndex)],
-    impl_header: &str,
+    domain: &MethodDomain,
     old: &str,
     def_path: &str,
     renamed: &[(usize, usize)],
     fallback_syntax: bool,
 ) -> Result<(MethodFollowSpans, Vec<FollowSkip>), FollowVeto> {
-    let Some(trait_name) = method_trait_name(impl_header) else {
-        return Err(FollowVeto {
-            reason: "method follow header does not parse as a `trait` block header".to_string(),
-        });
-    };
-    let outcome =
-        resolve_method_workspace(refs, &trait_name, old, def_path, renamed, fallback_syntax)?;
+    let outcome = resolve_method_workspace(refs, domain, old, def_path, renamed, fallback_syntax)?;
     Ok((outcome.per_file, outcome.skipped))
 }
 
@@ -842,8 +909,8 @@ pub(crate) fn method_follow_new_name(
     method_rename_names(rh, compiled).map(|(_, n)| n)
 }
 
-/// Plan-layer orphan entry: trait-header `ImplContext` renames list
-/// leftover impl definitions; everything else lists nothing. Keeps
+/// Plan-layer orphan entry: method `ImplContext` renames list leftover
+/// domain definitions; everything else lists nothing. Keeps
 /// `plan.rs` to a one-line arm (D5 file-size gate).
 pub(crate) fn method_orphans_for(
     states: &std::collections::HashMap<String, crate::lines::FileState>,
@@ -856,24 +923,24 @@ pub(crate) fn method_orphans_for(
     let rsmpl_pattern::PatternKind::ImplContext { impl_header } = &compiled.kind else {
         return Vec::new();
     };
-    let Some(trait_name) = method_trait_name(impl_header) else {
+    let Some(domain) = method_domain(impl_header) else {
         return Vec::new();
     };
     let Some((old, _)) = method_rename_names(rh, compiled) else {
         return Vec::new();
     };
-    method_orphans(states, file_edits, path, edits_before, &trait_name, &old)
+    method_orphans(states, file_edits, path, edits_before, &domain, &old)
 }
 
-/// Orphan evidence for definition-only trait-method renames: leftover
-/// trait-proven impl `fn` definitions. Mirrors `assoc_orphans` (WI-1b).
+/// Orphan evidence for definition-only method renames: leftover
+/// domain `fn` definitions. Mirrors `assoc_orphans` (WI-1b).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn method_orphans(
     states: &std::collections::HashMap<String, crate::lines::FileState>,
     file_edits: &std::collections::HashMap<String, Vec<crate::edits::TextEdit>>,
     path: &str,
     edits_before: usize,
-    trait_name: &str,
+    domain: &MethodDomain,
     old: &str,
 ) -> Vec<crate::OrphanReport> {
     let renamed: Vec<(usize, usize)> = file_edits
@@ -890,7 +957,13 @@ pub(crate) fn method_orphans(
             }
         }
     }
-    let claims = collect_impl_fn_claims(&refs, trait_name, old);
+    // Definition claims per domain (WI-6 inherent arm mirrors the
+    // trait arm: other-domain defs in the same file are orphans too).
+    let domain_claims: Vec<(String, usize, usize, u32)> = match domain {
+        MethodDomain::Trait(t) => collect_impl_fn_claims(&refs, t, old),
+        MethodDomain::Inherent(s) => collect_inherent_impl_claims(&refs, s, old),
+    };
+    let claims = domain_claims;
     let mut out = Vec::new();
     for (f, _, _, line) in claims {
         // Skip spans the definition hunk already rewrote.
@@ -913,7 +986,11 @@ pub(crate) fn method_orphans(
         });
     }
     // Same-file leftover claims (not in `renamed`) are orphans too.
-    for (f, a, b, line) in collect_impl_fn_claims(&refs, trait_name, old) {
+    let domain_claims_same: Vec<(String, usize, usize, u32)> = match domain {
+        MethodDomain::Trait(t) => collect_impl_fn_claims(&refs, t, old),
+        MethodDomain::Inherent(s) => collect_inherent_impl_claims(&refs, s, old),
+    };
+    for (f, a, b, line) in domain_claims_same {
         if f != path {
             continue;
         }
@@ -942,10 +1019,20 @@ pub(crate) fn method_orphans(
     // report as `off-target`; unproven receivers report as
     // `shadowed`/`off-target`; macro interiors as `macro-hidden`.
     {
-        let domain_self = collect_domain_self(&refs, trait_name);
-        let has_shadow = method_has_shadow(&refs, trait_name, old);
+        let walker_trait: &str = match domain {
+            MethodDomain::Trait(t) => t,
+            MethodDomain::Inherent(_) => "",
+        };
+        let domain_self: Vec<String> = match domain {
+            MethodDomain::Trait(t) => collect_domain_self(&refs, t),
+            MethodDomain::Inherent(s) => vec![s.clone()],
+        };
+        let has_shadow = match domain {
+            MethodDomain::Trait(t) => method_has_shadow(&refs, t, old),
+            MethodDomain::Inherent(s) => inherent_has_shadow(&refs, s, old),
+        };
         for (f, parsed, _, _) in &refs {
-            let calls = collect_method_calls(parsed, trait_name, &domain_self, old, has_shadow);
+            let calls = collect_method_calls(parsed, walker_trait, &domain_self, old, has_shadow);
             let mut lines: Vec<(u32, &'static str)> = Vec::new();
             for span in &calls.claims {
                 lines.push((span.start().line as u32, "off-target"));
@@ -1080,14 +1167,171 @@ mod tests {
         );
     }
 
+    // WI-6: inherent-method follow block shape (`{` definitions carry
+    // the `...` body + `}` closers, per `block_hunk_body`).
+    const INHERENT_SRC: &str =
+        "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f(s: S) {\n    s.old();\n}\n";
+
+    fn inherent_patch() -> String {
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# follow=uses\n  impl S {\n      ...\n-     V Q fn old G (...) W {\n+     V Q fn new G (...) W {\n          ...\n      }\n  }\n"
+            .to_string()
+    }
+
     #[test]
-    fn inherent_header_follow_rejected() {
-        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=r\n# follow=uses\n  impl S {\n-     V Q fn old G (...) W {\n+     V Q fn new G (...) W {\n";
+    fn inherent_header_follow_accepts() {
+        // WI-6: the F6 probe — def + param-anchored call rewrite.
+        let (files, report) =
+            apply_files(&inherent_patch(), &[("src/lib.rs", INHERENT_SRC)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("fn new(&self) {"), "got: {out}");
+        assert!(!out.contains("fn old"), "got: {out}");
+        assert!(out.contains("s.new();"), "got: {out}");
+        assert!(!out.contains("s.old()"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+    }
+
+    #[test]
+    fn inherent_other_type_namesake_shadowed() {
+        // Same-name method on another struct: untouched, `shadowed`.
+        let src = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nstruct U;\nimpl U {\n    fn old(&self) {\n    }\n}\nfn f(s: S, u: U) {\n    s.old();\n    u.old();\n}\n";
+        let (files, report) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("s.new();"), "got: {out}");
+        assert!(out.contains("u.old();"), "got: {out}");
+        assert!(
+            report.rules[0]
+                .follow_skipped_details
+                .iter()
+                .any(|d| d.reason == "shadowed"),
+            "got: {:?}",
+            report.rules[0].follow_skipped_details
+        );
+    }
+
+    #[test]
+    fn inherent_trait_side_namesake_shadowed() {
+        // A trait decl + trait-impl def of the same name are different
+        // items: untouched, `shadowed` evidence.
+        let src = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nimpl T for S {\n    fn old(&self) {\n    }\n}\n";
+        let (files, report) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("fn new(&self) {"), "got: {out}");
+        assert!(out.contains("fn old(&self);"), "got: {out}");
+        assert!(
+            report.rules[0]
+                .follow_skipped_details
+                .iter()
+                .any(|d| d.reason == "shadowed"),
+            "got: {:?}",
+            report.rules[0].follow_skipped_details
+        );
+    }
+
+    #[test]
+    fn inherent_unproven_receiver_off_target() {
+        let src =
+            "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f(q: u32) {\n    q.old();\n}\n";
+        let (files, report) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("q.old()"), "got: {out}");
+        assert!(
+            report.rules[0]
+                .follow_skipped_details
+                .iter()
+                .any(|d| d.reason == "off-target"),
+            "got: {:?}",
+            report.rules[0].follow_skipped_details
+        );
+    }
+
+    #[test]
+    fn inherent_self_and_assoc_tails_rewrite() {
+        // `self` inside `impl S` + `S::old` + `<S as T>::old` claim.
+        let src = "trait T {}\nstruct S;\nimpl S {\n    fn old(&self) {\n    }\n    fn run(&self) {\n        self.old();\n    }\n}\nfn f() {\n    S::old();\n    <S as T>::old();\n}\n";
+        let (files, _) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("self.new();"), "got: {out}");
+        assert!(out.contains("S::new();"), "got: {out}");
+        assert!(out.contains("<S as T>::new();"), "got: {out}");
+        assert!(!out.contains("old"), "got: {out}");
+    }
+
+    #[test]
+    fn inherent_annotated_and_literal_anchors_rewrite() {
+        let src = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f() {\n    let x: S = other();\n    x.old();\n}\n";
+        let (files, _) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("x.new();"), "got: {out}");
+        assert!(!out.contains("x.old()"), "got: {out}");
+    }
+
+    #[test]
+    fn inherent_cross_file_defs_and_calls_rewrite() {
+        let patch = inherent_patch().replace("src/lib.rs", "src/a.rs");
+        let (files, _) = apply_files(
+            &patch,
+            &[
+                ("src/a.rs", "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\n"),
+                (
+                    "src/b.rs",
+                    "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f(s: S) {\n    s.old();\n}\n",
+                ),
+            ],
+        )
+        .unwrap();
+        assert!(files["src/a.rs"].contains("fn new(&self) {"));
+        assert!(files["src/b.rs"].contains("fn new(&self) {"));
+        assert!(files["src/b.rs"].contains("s.new();"));
+        assert!(!files["src/b.rs"].contains("old"));
+    }
+
+    #[test]
+    fn inherent_no_follow_lists_def_and_call_orphans() {
+        // Definition-only inherent rename: leftover defs + anchored
+        // calls report as orphans (WI-1 blocks `verified`).
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n  impl S {\n      ...\n-     V Q fn old G (...) W {\n+     V Q fn new G (...) W {\n          ...\n      }\n  }\n";
+        let (_, report) = apply_files(p, &[("src/lib.rs", INHERENT_SRC)]).unwrap();
+        assert!(
+            report.rules[0]
+                .orphans
+                .iter()
+                .any(|o| o.text.contains("s.old()")),
+            "call sites must orphan, got: {:?}",
+            report.rules[0].orphans
+        );
+    }
+
+    #[test]
+    fn inherent_evolution_follow_rejected() {
+        // Same name both sides: not a rename, follow stays C17.
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# follow=uses\n  impl S {\n      ...\n-     V Q fn old G (...) W {\n+     V Q fn old G (...) W {\n          ...\n      }\n  }\n";
         let err = apply(
             p,
             &[(
                 "src/lib.rs",
                 "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\n",
+            )],
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("C17") || err.contains("# follow=uses"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn trait_impl_header_follow_rejected() {
+        // WI-6 non-goal: `impl T for S` headers name a trait-impl
+        // block, not a renameable method owner — still C17.
+        let p = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# follow=uses\n  impl T for S {\n      ...\n-     V Q fn old G (...) W {\n+     V Q fn new G (...) W {\n          ...\n      }\n  }\n";
+        let err = apply(
+            p,
+            &[(
+                "src/lib.rs",
+                "trait T {}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\n",
             )],
         )
         .unwrap_err();

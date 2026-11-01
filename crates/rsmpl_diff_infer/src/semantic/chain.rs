@@ -96,6 +96,15 @@ pub(crate) fn run_pair_chain(
     {
         return Some((tm, "trait_method_rename"));
     }
+    // WI-6: inherent-method rename + anchored calls (def-only classes
+    // stay with the slot sweep above; unproven call sets stay
+    // ordinary). Disjoint from the trait half (that one requires a
+    // trait side; this one requires none).
+    if let Some(im) =
+        super::try_inherent_method_rename(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((im, "inherent_method_rename"));
+    }
     // WI-9b: field/variant member rename (one definition pair plus
     // use-site lines sharing the ident delta, follow emission with a
     // scratch-apply line-equality probe). Disjoint from the trait

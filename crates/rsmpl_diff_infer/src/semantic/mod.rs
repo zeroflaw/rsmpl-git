@@ -74,6 +74,7 @@ mod mod_rename;
 pub(crate) use item_span::item_emission_header;
 pub(crate) use prefix::try_use_prefix_sweep;
 pub(crate) use slot::try_fn_slot_sweep;
+pub(crate) use trait_methods::try_inherent_method_rename;
 pub(crate) use trait_methods::try_trait_method_rename;
 
 pub(crate) use arg_template::{try_call_arg_template_sweep, try_method_arg_template_sweep};

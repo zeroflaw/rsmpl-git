@@ -62,6 +62,7 @@ mod use_graph_local_orphan;
 mod use_graph_macro;
 pub(crate) mod use_graph_member;
 mod use_graph_method;
+mod use_graph_method_inherent;
 mod use_graph_orphan;
 mod use_graph_scope;
 mod validate;

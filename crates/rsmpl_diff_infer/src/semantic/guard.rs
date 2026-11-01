@@ -103,6 +103,7 @@ mod tests {
             "method_to_fn",
             "method_to_method",
             "trait_method_rename",
+            "inherent_method_rename",
             "attr_sweep",
         ] {
             assert_eq!(guard_for(d), Guard::Strict, "{d} must be strict");

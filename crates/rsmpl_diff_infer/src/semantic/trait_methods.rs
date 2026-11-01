@@ -227,6 +227,193 @@ pub(crate) fn try_trait_method_rename(
     }
     Some(out)
 }
+/// WI-6: inherent-method rename + anchored calls (SPEC D.4).
+///
+/// Def pairs all sit in inherent `impl` blocks of one self type
+/// (last-segment discipline, D8) with one uniform ident delta, plus at
+/// least one call line sharing the delta. Emits the single follow hunk
+/// on the document-first impl block header iff `probe_block_hunk` and
+/// the full-set scratch probe reproduce every changed line; otherwise
+/// `None` (def-only classes stay with the slot sweep, unproven call
+/// sets stay ordinary — never a def-only partial). Disjoint from
+/// `try_trait_method_rename` (that one requires a trait side; this one
+/// requires none) — the chain tries the trait half first.
+pub(crate) fn try_inherent_method_rename(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    if changed.len() != minuses.len() {
+        return None;
+    }
+    let pre = file_old?;
+    // Two-phase classification shared with the trait half: def pairs
+    // parse as fn headers with a uniform ident delta; non-def pairs
+    // are candidate anchored call sites gated cheaply here.
+    let mut old_name: Option<String> = None;
+    let mut new_name: Option<String> = None;
+    let mut terms: Vec<Option<char>> = Vec::with_capacity(minuses.len());
+    let mut is_def: Vec<bool> = Vec::with_capacity(minuses.len());
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        if let Some((o, n, term)) = trait_rename_pair(m, p) {
+            if old_name.as_ref().is_some_and(|c| *c != o) {
+                return None;
+            }
+            if new_name.as_ref().is_some_and(|c| *c != n) {
+                return None;
+            }
+            old_name = Some(o);
+            new_name = Some(n);
+            terms.push(Some(term));
+            is_def.push(true);
+        } else {
+            terms.push(None);
+            is_def.push(false);
+        }
+    }
+    let (old_name, new_name) = (old_name?, new_name?);
+    if old_name == new_name {
+        return None;
+    }
+    for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
+        if is_def[i] {
+            continue;
+        }
+        if m.trim() == p.trim() {
+            return None;
+        }
+        if !contains_ident(m, &old_name) || !contains_ident(p, &new_name) {
+            return None;
+        }
+    }
+    // Def-only classes stay with the slot sweep (today's definition
+    // hunk alone); the follow needs at least one call to ride.
+    if is_def.iter().all(|d| *d) {
+        return None;
+    }
+    let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
+    let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
+    if !all_indented || !plus_indented {
+        return None;
+    }
+    // Every def line must sit in an inherent `impl` block; trait blocks
+    // and `impl <T> for _` blocks veto (different items, D9). All defs
+    // must name one self type (last-segment discipline, D8).
+    let mut def_lines: Vec<usize> = Vec::new();
+    let mut domain: Option<String> = None;
+    for (i, &site) in changed.iter().enumerate() {
+        if !is_def[i] {
+            continue;
+        }
+        if in_trait_block(pre, site) || !site_in_inherent_impl(pre, site) {
+            return None;
+        }
+        let self_ty = inherent_self_ident_for_site(pre, site)?;
+        if domain.as_ref().is_some_and(|d| *d != self_ty) {
+            return None;
+        }
+        domain = Some(self_ty);
+        def_lines.push(site);
+    }
+    if def_lines.is_empty() {
+        return None;
+    }
+    let _domain = domain?;
+    // Inherent definitions are bodies (`{`); a `;` pair in an inherent
+    // block is unparseable Rust (the file would not parse above), and a
+    // mixed class is never one intent.
+    let mut term_of: std::collections::HashMap<usize, char> = std::collections::HashMap::new();
+    for (i, &site) in changed.iter().enumerate() {
+        if let Some(t) = terms[i] {
+            if t != '{' {
+                return None;
+            }
+            term_of.insert(site, t);
+        }
+    }
+    let impl_groups = super::block_headers::group_sites_by_impl_block(file_old, &def_lines)?;
+    // All def groups share the domain by the per-site check; the
+    // document-first group owns the emitted hunk, the follow claims
+    // the rest (the scratch probe proves it).
+    let first = impl_groups.first()?;
+    let mut term = None;
+    for s in &first.sites {
+        let t = term_of.get(s)?;
+        if term.is_some_and(|c| c != *t) {
+            return None;
+        }
+        term = Some(*t);
+    }
+    let minus_fn = format!("V Q fn {old_name} G (...) W {}", term?);
+    let plus_fn = format!("V Q fn {new_name} G (...) W {}", term?);
+    if !super::block_headers::probe_block_hunk(
+        path,
+        pre,
+        &first.header_line,
+        &minus_fn,
+        &plus_fn,
+        first.sites.len(),
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
+    let mut single = String::new();
+    single.push_str(&item_emission_header(path, &rule, file_old, &first.sites));
+    single.push_str("# follow=uses\n");
+    single.push_str(&super::block_headers::block_hunk_body(
+        &first.header_line,
+        &minus_fn,
+        &plus_fn,
+    ));
+    if scratch_single_reproduces(pre, path, &single, changed, minuses, pluses) {
+        return Some(single);
+    }
+    None
+}
+
+/// Self-type last ident of the smallest enclosing inherent `impl`
+/// block at 1-based `site`. `None` for trait-impl blocks and outside
+/// every inherent block.
+fn inherent_self_ident_for_site(pre: &str, site: usize) -> Option<String> {
+    use syn::spanned::Spanned;
+    let file: syn::File = syn::parse_str(pre).ok()?;
+    fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, String)>) {
+        for it in items {
+            match it {
+                syn::Item::Impl(imp) if imp.trait_.is_none() => {
+                    if imp.span().start().line <= site && site <= imp.span().end().line {
+                        let len = imp.span().end().line - imp.span().start().line;
+                        if let syn::Type::Path(tp) = imp.self_ty.as_ref() {
+                            if tp.qself.is_none() {
+                                if let Some(seg) = tp.path.segments.last() {
+                                    let name = seg.ident.to_string();
+                                    if best.as_ref().is_none_or(|(bl, _)| len < *bl) {
+                                        *best = Some((len, name));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, site, best);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut best: Option<(usize, String)> = None;
+    walk(&file.items, site, &mut best);
+    best.map(|(_, name)| name)
+}
 fn contains_ident(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -505,6 +692,37 @@ mod tests {
     fn run(minuses: &[&str], pluses: &[&str], pre: &str, changed: &[usize]) -> Option<String> {
         let mut used = Vec::new();
         try_trait_method_rename(minuses, pluses, "f.rs", Some(pre), changed, &mut used)
+    }
+
+    fn run_inherent(
+        minuses: &[&str],
+        pluses: &[&str],
+        pre: &str,
+        changed: &[usize],
+    ) -> Option<String> {
+        let mut used = Vec::new();
+        try_inherent_method_rename(minuses, pluses, "f.rs", Some(pre), changed, &mut used)
+    }
+
+    fn roundtrip(pre: &str, out: &str, must_hold: &[&str], must_drop: &[&str]) {
+        rsmpl_patch::parse_patch(out).expect("emission must parse");
+        let parsed = rsmpl_patch::parse_patch(out).unwrap();
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        for h in must_hold {
+            assert!(
+                files["f.rs"].contains(h),
+                "missing {h}, got: {}",
+                files["f.rs"]
+            );
+        }
+        for d in must_drop {
+            assert!(
+                !files["f.rs"].contains(d),
+                "stale {d}, got: {}",
+                files["f.rs"]
+            );
+        }
     }
 
     #[test]
@@ -857,6 +1075,127 @@ mod tests {
             !files["f.rs"].contains("Self::old"),
             "got: {}",
             files["f.rs"]
+        );
+    }
+
+    // WI-6: inherent-method raising.
+
+    const I_PRE: &str =
+        "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f(s: S) {\n    s.old();\n}\n";
+
+    #[test]
+    fn inherent_defs_and_call_compress_to_single_follow() {
+        let out = run_inherent(
+            &["    fn old(&self) {", "    s.old();"],
+            &["    fn new(&self) {", "    s.new();"],
+            I_PRE,
+            &[3, 7],
+        )
+        .expect("inherent def+call must compress");
+        assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        assert!(out.contains("impl S {"), "out:\n{out}");
+        assert!(out.contains("-     V Q fn old G (...) W {"), "out:\n{out}");
+        roundtrip(
+            I_PRE,
+            &out,
+            &["fn new(&self) {", "s.new();"],
+            &["fn old", "s.old()"],
+        );
+    }
+
+    #[test]
+    fn inherent_def_only_declines_to_slot() {
+        // No call rides: the slot sweep keeps the definition hunk.
+        assert!(
+            run_inherent(
+                &["    fn old(&self) {"],
+                &["    fn new(&self) {"],
+                I_PRE,
+                &[3],
+            )
+            .is_none(),
+            "def-only classes stay with the slot sweep"
+        );
+    }
+
+    #[test]
+    fn inherent_unproven_call_declines_to_ordinary() {
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nstruct U;\nfn f(y: U) {\n    y.old();\n}\n";
+        assert!(
+            run_inherent(
+                &["    fn old(&self) {", "    y.old();"],
+                &["    fn new(&self) {", "    y.new();"],
+                pre,
+                &[3, 8],
+            )
+            .is_none(),
+            "unproven receivers never ride the follow"
+        );
+    }
+
+    #[test]
+    fn inherent_shadowed_call_declines_to_ordinary() {
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nstruct U;\nimpl U {\n    fn old(&self) {}\n}\nfn f(u: U) {\n    u.old();\n}\n";
+        assert!(
+            run_inherent(
+                &["    fn old(&self) {", "    u.old();"],
+                &["    fn new(&self) {", "    u.new();"],
+                pre,
+                &[3, 12],
+            )
+            .is_none(),
+            "shadowed receivers never ride the follow"
+        );
+    }
+
+    #[test]
+    fn inherent_two_self_types_decline() {
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nstruct U;\nimpl U {\n    fn old(&self) {\n    }\n}\n";
+        assert!(
+            run_inherent(
+                &["    fn old(&self) {", "    fn old(&self) {"],
+                &["    fn new(&self) {", "    fn new(&self) {"],
+                pre,
+                &[3, 8],
+            )
+            .is_none(),
+            "two self types are two intents, never one follow"
+        );
+    }
+
+    #[test]
+    fn inherent_trait_side_in_class_declines() {
+        // Trait decl + inherent def: the trait half vetoes inherent
+        // defs and this half vetoes trait decls — ordinary, never a
+        // cross-item follow.
+        let pre =
+            "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl S {\n    fn old(&self) {}\n}\n";
+        assert!(
+            run_inherent(
+                &["    fn old(&self);", "    fn old(&self) {}"],
+                &["    fn new(&self);", "    fn new(&self) {}"],
+                pre,
+                &[2, 6],
+            )
+            .is_none(),
+            "trait+inherent mix stays ordinary"
+        );
+    }
+
+    #[test]
+    fn inherent_trait_impl_def_in_class_declines() {
+        // `impl T for S` defs are trait-impl blocks, not inherent.
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {}\n}\nimpl T for S {\n    fn old(&self) {}\n}\n";
+        assert!(
+            run_inherent(
+                &["    fn old(&self) {}", "    fn old(&self) {}"],
+                &["    fn new(&self) {}", "    fn new(&self) {}"],
+                pre,
+                &[3, 7],
+            )
+            .is_none(),
+            "trait-impl defs never join an inherent intent"
         );
     }
 }

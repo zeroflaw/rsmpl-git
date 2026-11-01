@@ -11,7 +11,8 @@
 //!
 //! Groupable detectors are exactly those emitting one single-delta
 //! pair per hunk: `item_rename`, `fn_slot_sweep`, `sig_evolution`,
-//! `trait_method_rename`, `macro_rules_rename` (WI-7b: item-shaped def
+//! `trait_method_rename`, `inherent_method_rename` (WI-6: same
+//! single-file posture as the trait half), `macro_rules_rename` (WI-7b: item-shaped def
 //! hunks and macro-shaped invocation hunks sharing one delta),
 //! `call_sweep`, `call_peel`,
 //! `qualified_call`, `turbofish`, `macro_rename`, `method_to_method`,
@@ -24,7 +25,8 @@
 //! concrete macro interiors (`macro_interior`, no ident delta), and
 //! non-pair shapes (`verbatim`, `delete`, `move`) never group. A
 //! group needs ≥2 hunks spanning ≥2 distinct files — except
-//! `trait_method_rename` (WI-4b) and `macro_rules_rename` (WI-7b),
+//! `trait_method_rename` (WI-4b), `inherent_method_rename` (WI-6),
+//! and `macro_rules_rename` (WI-7b),
 //! which may group within one file;
 //! single-file repeats of every other detector (sweeps) and divergent
 //! deltas stay `""`.
@@ -41,6 +43,7 @@ fn groupable(detector: &str) -> bool {
             | "fn_slot_sweep"
             | "sig_evolution"
             | "trait_method_rename"
+            | "inherent_method_rename"
             | "macro_rules_rename"
             | "call_sweep"
             | "call_peel"
@@ -108,7 +111,9 @@ pub(crate) fn assign_groups(prov: &mut [HunkProvenance], patch: &str) {
         // `macro_rules!` definition + invocation intent likewise lives
         // in one file (one def hunk plus one invocation sweep).
         let same_file_ok = members.iter().all(|&i| {
-            prov[i].detector == "trait_method_rename" || prov[i].detector == "macro_rules_rename"
+            prov[i].detector == "trait_method_rename"
+                || prov[i].detector == "inherent_method_rename"
+                || prov[i].detector == "macro_rules_rename"
         });
         if members.len() < 2 && !same_file_ok {
             continue;
@@ -118,9 +123,13 @@ pub(crate) fn assign_groups(prov: &mut [HunkProvenance], patch: &str) {
         // block + impl blocks); every other detector still needs ≥2
         // files to group (the sweep posture). WI-7b: same-file
         // `macro_rules_rename` groups like `trait_method_rename`.
+        // WI-6: same-file `inherent_method_rename` (def + anchored
+        // calls in one file) groups likewise.
         // WI-22c: cross-file trait_method_rename grouping joins on the method (old,new) delta only; each member intent stays per-file same-trait (WI-22b) — the shared rule is token sharing, not a global same-trait claim.
         let same_file_ok = members.iter().all(|&i| {
-            prov[i].detector == "trait_method_rename" || prov[i].detector == "macro_rules_rename"
+            prov[i].detector == "trait_method_rename"
+                || prov[i].detector == "inherent_method_rename"
+                || prov[i].detector == "macro_rules_rename"
         });
         if files.len() < 2 && !same_file_ok {
             continue;
@@ -334,9 +343,11 @@ fn is_definition_detector(detector: &str) -> bool {
 /// ident, unparseable, or multi-slot evolution without a rename).
 fn hunk_delta(detector: &str, minus: &str, plus: &str) -> Option<(String, String)> {
     match detector {
-        "item_rename" | "fn_slot_sweep" | "sig_evolution" | "trait_method_rename" => {
-            item_delta(minus, plus)
-        }
+        "item_rename"
+        | "fn_slot_sweep"
+        | "sig_evolution"
+        | "trait_method_rename"
+        | "inherent_method_rename" => item_delta(minus, plus),
         // WI-7b: the combined detector emits item-shaped definition hunks
         // and macro-shaped invocation hunks sharing one delta; either
         // spelling extracts it.

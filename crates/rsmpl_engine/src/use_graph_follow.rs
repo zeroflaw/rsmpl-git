@@ -18,12 +18,12 @@ use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::{FileState, LineIndex};
 use crate::use_graph::{raw_mentions, resolve_workspace, FollowVeto, WorkspaceOutcome};
 
-/// Shared C17 rejection (WI-3 widens the legal list to trait-method
-/// renames; every other shape keeps the follow-up hunks).
+/// Shared C17 rejection (WI-3/WI-6 widen the legal list to trait- and
+/// inherent-method renames; every other shape keeps the follow-up hunks).
 fn c17_err(rh: &rsmpl_patch::RsmplHunk, def_path: &str) -> StructuredError {
     StructuredError::new(
         ErrorCode::PatternConflict,
-        "# follow=uses is only supported on fn, item, field, variant, assoc, and trait-method rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
+        "# follow=uses is only supported on fn, item, field, variant, assoc, trait-method, and inherent-method rename hunks in v0.1 (other shapes keep the SPEC 14.8 follow-up hunks)",
     )
     .with_rule(rh.rule_name())
     .with_file(def_path)
@@ -326,22 +326,22 @@ pub(crate) fn follow_uses_workspace(
             (per_file, outcome.skipped)
         }
         FollowTarget::Method { impl_header } => {
-            if crate::use_graph_method::method_trait_name(impl_header).is_none() {
-                return Err(StructuredError::new(
+            let domain = crate::use_graph_method::method_domain(impl_header).ok_or_else(|| {
+                StructuredError::new(
                     ErrorCode::PatternConflict,
-                    "method follow header does not parse as a `trait` block header",
+                    "method follow header does not parse as a `trait` or bare inherent `impl` block header",
                 )
                 .with_rule(rh.rule_name())
                 .with_file(def_path)
-                .with_suggestion("copy the `trait T {` header verbatim from the file")
+                .with_suggestion("copy the `trait T {` or `impl S {` header verbatim from the file")
                 .with_repair(StructuredError::fix_pattern_repair(
                     "method",
-                    "copy the `trait T {` header verbatim from the file",
-                )));
-            }
+                    "copy the `trait T {` or `impl S {` header verbatim from the file",
+                ))
+            })?;
             let (spans, skipped) = crate::use_graph_method::resolve_method_follow(
                 &refs,
-                impl_header,
+                &domain,
                 &old,
                 def_path,
                 &renamed,
