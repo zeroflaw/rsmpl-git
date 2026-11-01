@@ -549,15 +549,21 @@ pub fn apply_general_hunk(
                         replacement = with_prefix;
                     }
                     // Strip: replacement already drops the envelope.
-                    edits.push(TextEdit::new(node.start, node.end, replacement));
-                    // WI-2b: same-shape binder rename completes block-scoped
-                    // uses in the same hunk (labelled `follow`).
+                    // WI-2b definition label: a binder-statement rename is
+                    // the `rename` (parity with fn/item renames); other
+                    // general statements stay unlabeled. Follows below
+                    // are `follow`.
                     if let Some((old, new)) =
                         crate::use_graph_local::let_binder_rename(&compiled.kind)
                     {
+                        edits.push(
+                            TextEdit::new(node.start, node.end, replacement).with_label("rename"),
+                        );
                         edits.extend(crate::use_graph_local::let_binder_follow_edits(
                             parsed, original, index, node.start, node.end, &old, &new,
                         ));
+                    } else {
+                        edits.push(TextEdit::new(node.start, node.end, replacement));
                     }
                 }
                 for &(s, e) in &accepted {

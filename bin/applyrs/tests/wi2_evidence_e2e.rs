@@ -362,6 +362,32 @@ fn span_edits_label_follow_use_spans() {
 }
 
 #[test]
+fn span_edits_label_binder_definition_rename() {
+    // WI-2b parity: binder definition is `rename` like every other
+    // rename, follows are `follow` (was `[null, "follow"]`).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn f() {\n    let total = 1;\n    let z = total;\n    z\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n- let total = 1;\n+ let sum = 1;\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(out.status.success());
+    let v = json_of(&out);
+    assert_eq!(
+        v["rules"][0]["spans"],
+        serde_json::json!([[2, 2], [3, 3]]),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["span_edits"],
+        serde_json::json!(["rename", "follow"]),
+        "got: {v}"
+    );
+}
+
+#[test]
 fn span_edits_omit_for_single_edit_rules() {
     // One span = nothing to disambiguate, even with a label present.
     let dir = init_repo();

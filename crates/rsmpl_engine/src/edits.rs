@@ -7,8 +7,9 @@ use crate::lines::LineIndex;
 /// A replacement of `original[start..end]` with `replacement`.
 ///
 /// WI-2 `label` names the slot for multi-edit rules (`generics`/`params`/
-/// `return`/`rename`/`follow`); `None` everywhere else. Labels never
-/// affect application or overlap checks — evidence only.
+/// `return`/`rename`/`follow`); `None` everywhere else. Binder-statement
+/// renames label the definition `rename` like every other rename.
+/// Labels never affect application or overlap checks — evidence only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
     pub start: usize,
