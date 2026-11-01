@@ -86,6 +86,7 @@ pub(crate) use arg_template::{
 };
 pub(crate) use calls::{
     try_call_arg_add_sweep, try_call_perm_sweep, try_call_single, try_call_sweep,
+    try_subline_call_single,
 };
 pub(crate) use literal::{try_call_literal_single, try_call_literal_sweep};
 pub(crate) use macro_rules::{try_macro_rules_def_only, try_macro_rules_rename};

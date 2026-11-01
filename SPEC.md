@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-    Precision singles (WI-7 slices 1-13, `PrecisionUnique`): N == 1
+    Precision singles (WI-7 slices 1-14, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7748,8 +7748,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     by `method_literal_holds` at n=1 keyed on the exact old-args tuple.
     The emission is the concrete tuple (no `E` arg holes — a holed
     template would match sites the tuple-keyed proof never counted;
-    `Receiver` is the only hole). Remaining families (sub-line) keep
-    `N ≥ 2` until their WI-7 slices land.
+    `Receiver` is the only hole). Slice-14 adds sub-line bare-call
+    callee-only pairs (`foo(alpha_argument) + 1` →
+    `bar(alpha_argument) + 1`, bare-statement and `let`-init framings
+    via the shared `side_expr` entry): the pair must not parse
+    whole-line (slice-1 owns that shape), `extract_bare_sites` yields
+    exactly one site with a real callee delta and the frame rule holds;
+    multi-subterm lines decline (multi territory by site count);
+    uniqueness proved by `template_expr_holds` at n=1 plus the T361
+    byte-compare. Remaining families (sub-line method/m2f/general/
+    literal/perm/wrap) keep `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
