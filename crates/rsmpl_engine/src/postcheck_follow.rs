@@ -115,7 +115,7 @@ pub(crate) fn post_starts_for(
                 found = true;
                 break;
             }
-            if e.end <= *os || (e.end == *os && e.start == e.end) {
+            if e.end <= *os {
                 shift += e.replacement.len() as i64 - (e.end as i64 - e.start as i64);
             } else if e.start < *os {
                 // Overlapping predecessor (should not happen: overlaps are
