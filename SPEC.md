@@ -7813,8 +7813,26 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     vetoed — twin-counting is the engine totality over the emitted
     pair; multi-subterm lines decline (multi territory by site count);
     uniqueness proved by `template_pair_holds` at n=1 over the emitted
-    pair plus the T361 byte-compare. Remaining families (sub-line
-    literal/wrap) keep `N ≥ 2` until their WI-7 slices land.
+    pair plus the T361 byte-compare. Slice-20 adds sub-line bare-call
+    trailing-literal pairs (`foo(bar(alpha_arg, 1));` ->
+    `foo(bar(alpha_arg, 2));`, bare-statement and `let`-init framings
+    via the shared `side_expr` entry, detector inline in `literal.rs`
+    — the file sits well under the D5 gates): the pair must not form a
+    whole-line literal pair with `prefix >= 1` (slice-12 owns that
+    shape; the emission tail and the `call_literal_holds` counter are
+    shared, so no bypass around its twin veto via a second counter —
+    wrapper pairs with `prefix == 0` fall through, since the whole-line
+    single vetoes them as zero-hole),
+    `extract_literal_sites` yields exactly one inner site with a real
+    trailing-literal delta (`k >= 1`; unchanged pairs and zero-hole
+    pairs are skipped, never vetoed — twin-counting is the engine
+    totality over the emitted triple) and the frame rule holds;
+    multi-subterm lines decline (multi territory by site count);
+    uniqueness proved by `call_literal_holds` at n=1 over the emitted
+    triple plus the T361 byte-compare; uppercase callees ride backticks
+    with the raw-callee re-parse check (TOOL-5). Remaining families
+    (sub-line method-literal/wrap) keep `N ≥ 2` until their WI-7 slices
+    land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

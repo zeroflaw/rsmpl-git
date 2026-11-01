@@ -743,6 +743,113 @@ pub(crate) fn extract_general_sites(minus: &str, plus: &str) -> Option<Vec<Gener
     Some(sites)
 }
 
+/// One trailing-literal subterm site (WI-7 slice-20): the inner bare
+/// call whose trailing arg carries the literal delta (raw trailing
+/// texts feed the totality probe and the shared emission tail).
+pub(crate) struct LiteralSite {
+    pub(crate) cal: String,
+    pub(crate) arity: usize,
+    pub(crate) old_lit: String,
+    pub(crate) new_lit: String,
+}
+
+/// Extract trailing-literal sites from one line pair (WI-7 slice-20):
+/// every minus/plus bare-call subterm pairs in order with the same
+/// callee and arity; leading args must be token-equal (a mixed delta
+/// vetoes the line — call/general territory). Only pairs with a real
+/// trailing token delta AND `k >= 1` become sites — unchanged pairs
+/// and zero-hole pairs are skipped, never vetoed (slice-19
+/// discipline: the outer wrapper `foo(bar(..))` must skip so the
+/// inner site fires; a twin that WOULD match the emitted template
+/// vetoes via the engine totality `call_literal_holds`, which counts
+/// the emitted triple file-wide). Macro/unsupported args veto (the
+/// engine never binds inside macro bodies). Within-line uniformity is
+/// on the full class key (template uniformity is the caller's — it
+/// owns the single-site gate). Frame deltas veto via the frame rule
+/// over the delta pairs.
+pub(crate) fn extract_literal_sites(minus: &str, plus: &str) -> Option<Vec<LiteralSite>> {
+    if minus.trim().starts_with('&') {
+        return None;
+    }
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let m_calls = bare_calls(&m_expr);
+    let p_calls = bare_calls(&p_expr);
+    if m_calls.is_empty() || m_calls.len() != p_calls.len() {
+        return None;
+    }
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    for ((o_cal, o_args, o_raw), (n_cal, n_args, n_raw)) in m_calls.iter().zip(p_calls.iter()) {
+        if o_cal != n_cal || o_args.len() != n_args.len() || o_args.is_empty() {
+            // Callee/arity deltas are call-family territory; mixed
+            // lines veto, never partially claim.
+            return None;
+        }
+        if !o_args[..o_args.len() - 1]
+            .iter()
+            .zip(n_args[..n_args.len() - 1].iter())
+            .all(|(a, b)| a.to_token_stream().to_string() == b.to_token_stream().to_string())
+        {
+            return None;
+        }
+        let (o_last, n_last) = (
+            o_args[o_args.len() - 1].to_token_stream().to_string(),
+            n_args[n_args.len() - 1].to_token_stream().to_string(),
+        );
+        if o_last == n_last {
+            // Unchanged subterm (the outer wrapper or an independent
+            // twin): skip, never veto — twin-counting is the engine
+            // totality over the emitted triple, not subterm counting.
+            continue;
+        }
+        if o_args.len() - 1 == 0 {
+            // Zero-hole pairs never raise (slice-12 precedent:
+            // fixture-57 verbatim shapes stay ordinary).
+            continue;
+        }
+        // Macro/unsupported args would inline unmatchable text into a
+        // hole (slice-12 precedent probes every arg, not just the
+        // trailing pair).
+        for arg in o_args.iter().chain(n_args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        sites.push(LiteralSite {
+            cal: o_cal.clone(),
+            arity: o_args.len(),
+            old_lit: o_last.clone(),
+            new_lit: n_last.clone(),
+        });
+        pairs.push((o_raw.clone(), n_raw.clone()));
+    }
+    if sites.is_empty() {
+        // No literal delta anywhere: a call/method-family delta owns
+        // this pair, never this extractor.
+        return None;
+    }
+    // Within-line uniformity on the full class key (cross-line
+    // uniformity is the caller's single-site gate).
+    let (c0, a0, o0, n0) = (
+        sites[0].cal.clone(),
+        sites[0].arity,
+        sites[0].old_lit.clone(),
+        sites[0].new_lit.clone(),
+    );
+    if sites
+        .iter()
+        .any(|s| s.cal != c0 || s.arity != a0 || s.old_lit != o0 || s.new_lit != n0)
+    {
+        return None;
+    }
+    if !frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;

@@ -10,11 +10,11 @@ use super::{call_parts, flat_ws, parse_call_expr, unique_rule};
 /// Leading args bind positionally per site (hetero values are the
 /// point); the trailing pair replays verbatim.
 #[derive(Debug, PartialEq, Eq)]
-struct LiteralClass {
-    cal: String,
-    prefix: usize,
-    old_lit: String,
-    new_lit: String,
+pub(crate) struct LiteralClass {
+    pub(crate) cal: String,
+    pub(crate) prefix: usize,
+    pub(crate) old_lit: String,
+    pub(crate) new_lit: String,
 }
 
 /// Parse one `-`/`+` line pair as a trailing-literal-delta call
@@ -23,7 +23,10 @@ struct LiteralClass {
 /// a real delta. `let`-init sites unwrap to their call init (T449:
 /// `parse_call_expr` handles the `Stmt::Local` form); the class key
 /// carries only the shared parts.
-fn parse_literal_pair(old_line: &str, new_line: &str) -> Option<LiteralClass> {
+/// `pub(crate)` so the WI-7 slice-20 sub-line literal single can
+/// decline whole-line-owned pairs (`prefix >= 1` — slice-12 owns them,
+/// even when vetoed; same totality counter, no bypass).
+pub(crate) fn parse_literal_pair(old_line: &str, new_line: &str) -> Option<LiteralClass> {
     use quote::ToTokens;
     let tok = |e: &syn::Expr| e.to_token_stream().to_string();
     let (o_cal, o_args) = call_parts(&parse_call_expr(old_line)?)?;
@@ -455,14 +458,35 @@ pub(crate) fn try_call_literal_single(
     if k == 0 {
         return None;
     }
-    if !crate::totality::call_literal_holds(
-        file_old,
-        &o_cal,
-        o_args.len(),
-        &o_last,
-        minuses,
-        changed,
-    ) {
+    emit_call_literal_single(
+        path, pre, file_old, minuses[0], pluses[0], minuses, changed, &o_cal, k, &o_last, &n_last,
+        used_rules,
+    )
+}
+
+/// Shared emission tail of the literal single paths (whole-line and
+/// WI-7 slice-20 sub-line): file-wide uniqueness at n=1 over the
+/// emitted `(cal, arity, old_trailing)` triple, the T361 byte-compare
+/// pre-reservation, and the allow-one emission. Returns `None` on any
+/// veto; reserves the rule name only for emissions that reproduce.
+/// `pub(crate)` so the slice-20 sub-line single reuses the same tail
+/// (no mirrored emission).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_call_literal_single(
+    path: &str,
+    pre: &str,
+    file_old: Option<&str>,
+    minus_line: &str,
+    plus_line: &str,
+    minuses: &[&str],
+    changed: &[usize],
+    o_cal: &str,
+    k: usize,
+    o_last: &str,
+    n_last: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if !crate::totality::call_literal_holds(file_old, o_cal, k + 1, o_last, minuses, changed) {
         return None;
     }
     let mut vars = Vec::with_capacity(k);
@@ -471,7 +495,7 @@ pub(crate) fn try_call_literal_single(
     }
     let head = vars.join(", ");
     // WI-7b: uppercase same callee rides backticks (literal).
-    let lit = super::shape::literal_callee(&o_cal);
+    let lit = super::shape::literal_callee(o_cal);
     let (minus_call, plus_call) = if head.is_empty() {
         (format!("{lit}({o_last})"), format!("{lit}({n_last})"))
     } else {
@@ -501,8 +525,8 @@ pub(crate) fn try_call_literal_single(
         path,
         pre,
         changed[0],
-        minuses[0],
-        pluses[0],
+        minus_line,
+        plus_line,
         &minus_call,
         &plus_call,
     ) {
@@ -513,6 +537,69 @@ pub(crate) fn try_call_literal_single(
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
     Some(hunk)
+}
+
+/// WI-7 slice-20: sub-line bare-call trailing-literal single (N=1)
+/// under `PrecisionUnique`. Fires iff the pair does NOT form a
+/// whole-line literal pair with `prefix >= 1` (slice-12 owns that
+/// shape — the emission tail and the totality counter are shared, so
+/// there is no bypass around its twin veto via a second counter), but
+/// `subline::extract_literal_sites` yields exactly one inner site with
+/// a real trailing-literal delta (`k >= 1`) and the frame rule holds
+/// (e.g. `foo(bar(alpha, 1));` → `foo(bar(alpha, 2));`, `let`-init
+/// included via the shared `side_expr` entry). Wrapper pairs
+/// (`prefix == 0`, e.g. arity-1 `foo(bar(..))`) are NOT declined — the
+/// whole-line single vetoes them as zero-hole, so the inner delta is
+/// sub-line territory. Uniqueness is proved by `call_literal_holds` at
+/// n=1 over the inner triple (one site file-wide, zero opaque hits);
+/// the T361 byte-compare pre-reservation (`single_reproduces`,
+/// slices-4–19 posture) vetoes any TokenStream spacing drift on the
+/// sub-expression rewrite path. Multi-subterm lines decline
+/// (`sites.len() == 1` only — uniform two-site lines are multi
+/// territory by site count, even at one pair). Emission is the
+/// slice-12 allow-one spelling (tight range, directive-free, default
+/// `allow=one`). Detector name `call_literal` (same family, provenance
+/// unchanged).
+pub(crate) fn try_subline_literal_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    // Whole-line-owned pairs belong to the slice-12 single — decline
+    // here even when it vetoed (shared counter, no bypass). Wrapper
+    // pairs (`prefix == 0`) fall through: the whole-line single vetoes
+    // them as zero-hole, so the inner delta is sub-line territory.
+    if parse_literal_pair(minuses[0], pluses[0]).is_some_and(|c| c.prefix >= 1) {
+        return None;
+    }
+    let sites = super::subline::extract_literal_sites(minuses[0], pluses[0])?;
+    if sites.len() != 1 {
+        return None;
+    }
+    let site = &sites[0];
+    emit_call_literal_single(
+        path,
+        pre,
+        file_old,
+        minuses[0],
+        pluses[0],
+        minuses,
+        changed,
+        &site.cal,
+        site.arity - 1,
+        &site.old_lit,
+        &site.new_lit,
+        used_rules,
+    )
 }
 
 pub(crate) fn try_call_literal_sweep(
@@ -1164,6 +1251,236 @@ mod tests {
         assert!(
             !out.contains("check(c1, \"a\");"),
             "covered lines must be consumed, got: {out}"
+        );
+    }
+
+    fn sslingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+        super::try_subline_literal_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_fires_and_round_trips() {
+        // WI-7 slice-20: unique sub-line single `foo(bar(alpha, 1));` →
+        // `foo(bar(alpha, 2));` raises to an allow-one hunk and
+        // real-applies byte-identical (fixed point `S″ == S′` below).
+        let pre = "fn m() {\n    foo(bar(alpha, 1));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha, 1));\n+    foo(bar(alpha, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique sub-line literal single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- bar(E0, 1)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0, 2)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    foo(bar(alpha, 2));\n}\n");
+        // Fixed point: re-diffing the applied tree re-emits the same
+        // single (canonical `S″ == S′`).
+        let re = super::super::infer_semantic_with_pre_images(
+            std::slice::from_ref(&section(
+                "f.rs",
+                "@@ -2 +2 @@\n-    foo(bar(alpha, 1));\n+    foo(bar(alpha, 2));\n",
+            )),
+            &pre_map,
+        )
+        .expect("re-raise must fire");
+        assert_eq!(out, re);
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_double_wrapped_fires() {
+        // Two wrappers skip free; the innermost literal site fires.
+        let pre = "fn m() {\n    foo(baz(bar(alpha, 1)));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(baz(bar(alpha, 1)));\n+    foo(baz(bar(alpha, 2)));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("double-wrapped sub-line literal single must fire");
+        assert!(out.contains("- bar(E0, 1)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0, 2)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_let_init_fires() {
+        // `let`-init framing shares the `side_expr` entry; the init is
+        // a wrapper call, so slice-12 declines and the inner site fires.
+        let pre = "fn m() {\n    let y = foo(bar(alpha, 1));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let y = foo(bar(alpha, 1));\n+    let y = foo(bar(alpha, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("let-init sub-line literal single must fire");
+        assert!(out.contains("- bar(E0, 1)\n"), "got: {out}");
+        assert!(out.contains("+ bar(E0, 2)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_uppercase_fires_literal() {
+        // Uppercase inner callee rides backticks (TOOL-5 precedent).
+        let out = sslingle(
+            "    foo(Bar(alpha, 1));",
+            "    foo(Bar(alpha, 2));",
+            Some("fn m() {\n    foo(Bar(alpha, 1));\n}\n"),
+            &[2],
+        )
+        .expect("uppercase sub-line literal single must fire");
+        assert!(out.contains("- `Bar`(E0, 1)"), "got: {out}");
+        assert!(out.contains("+ `Bar`(E0, 2)"), "got: {out}");
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_twin_vetoes() {
+        // An untouched same-trailing twin anywhere vetoes.
+        let pre = "fn m() {\n    foo(bar(alpha, 1));\n    bar(alpha, 1);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha, 1));\n+    foo(bar(alpha, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_different_trailing_twin_fires() {
+        // Totality keys on the trailing old literal: a same-arity site
+        // with a different trailing literal never matches and never
+        // vetoes (slice-12 precedent).
+        let pre = "fn m() {\n    foo(bar(alpha, 1));\n    bar(alpha, 9);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(alpha, 1));\n+    foo(bar(alpha, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-trailing twin must not veto");
+        assert!(out.contains("- bar(E0, 1)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_whole_line_declines() {
+        // Whole-line pairs with `prefix >= 1` belong to the slice-12
+        // arm, never this one (shared counter, no bypass).
+        assert!(
+            sslingle(
+                "    make_widget(a, false);",
+                "    make_widget(a, \"100644\");",
+                Some("fn m() {\n    make_widget(a, false);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "whole-line pair must decline"
+        );
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_zero_hole_inner_declines() {
+        // Zero-hole inner pairs never raise (slice-12 precedent:
+        // fixture-57 verbatim shapes stay ordinary).
+        assert!(
+            sslingle(
+                "    foo(bar(alpha));",
+                "    foo(bar(beta));",
+                Some("fn m() {\n    foo(bar(alpha));\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "zero-hole inner must decline"
+        );
+        assert!(
+            sslingle(
+                "    foo(&state.parsed);",
+                "    foo(parsed);",
+                Some("fn m() {\n    foo(&state.parsed);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "verbatim-shaped strip must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_two_site_line_declines() {
+        // Uniform two-site lines are multi territory by site count, even
+        // at one pair (no literal sub-line multi exists).
+        assert!(
+            sslingle(
+                "    foo(bar(alpha, 1), bar(beta, 1));",
+                "    foo(bar(alpha, 2), bar(beta, 2));",
+                Some("fn m() {\n    foo(bar(alpha, 1), bar(beta, 1));\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "two-site line must decline"
+        );
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_no_pre_image_vetoes() {
+        assert!(
+            sslingle(
+                "    foo(bar(alpha, 1));",
+                "    foo(bar(alpha, 2));",
+                None,
+                &[2]
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_callee_delta_declines() {
+        // A callee delta is call-family territory: mixed lines veto,
+        // never partially claim.
+        assert!(
+            sslingle(
+                "    foo(bar(alpha, 1));",
+                "    foo(baz(alpha, 1));",
+                Some("fn m() {\n    foo(bar(alpha, 1));\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "callee delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi20_subline_literal_single_macro_vetoes() {
+        // Macro args would inline unmatchable text into the hole (the
+        // engine never binds inside macro bodies).
+        assert!(
+            sslingle(
+                "    foo(bar(m!(x), 1));",
+                "    foo(bar(m!(x), 2));",
+                Some("fn m() {\n    foo(bar(m!(x), 1));\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro arg must veto"
         );
     }
 }
