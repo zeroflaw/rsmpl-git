@@ -753,12 +753,20 @@ impl<'a> AssocWalker<'a> {
     }
 }
 
-fn tokens_mention(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
-    tokens.clone().into_iter().any(|t| match t {
-        proc_macro2::TokenTree::Ident(id) => id == old,
-        proc_macro2::TokenTree::Group(g) => tokens_mention(&g.stream(), old),
-        _ => false,
-    })
+fn macro_ident_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for t in tokens.clone() {
+        match t {
+            proc_macro2::TokenTree::Ident(id) if id == old => {
+                out.push(id.span().start().line as u32);
+            }
+            proc_macro2::TokenTree::Group(g) => {
+                out.extend(macro_ident_lines(&g.stream(), old));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn path_segments(path: &syn::Path) -> Vec<String> {
@@ -913,11 +921,10 @@ impl<'ast> Visit<'ast> for AssocWalker<'_> {
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
         // No recursion: macro interiors are opaque, never claimed.
-        if tokens_mention(&node.tokens, &self.domain.old) {
-            self.opaque.push((
-                node.span().start().line as u32,
-                "a macro invocation".to_string(),
-            ));
+        // One entry per ident line (WI-2b ident-line parity — not the
+        // macro start line). Single-line macros are unchanged.
+        for line in macro_ident_lines(&node.tokens, &self.domain.old) {
+            self.opaque.push((line, "a macro invocation".to_string()));
         }
     }
 
@@ -932,5 +939,39 @@ impl<'ast> Visit<'ast> for AssocWalker<'_> {
             self.opaque
                 .push((node.span().start().line as u32, "an attribute".to_string()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ident_lines_for_tokens(src: &str, old: &str) -> Vec<u32> {
+        let parsed: syn::File = syn::parse_str(src).expect("test src must parse");
+        struct Grab(Vec<proc_macro2::TokenStream>);
+        impl<'ast> syn::visit::Visit<'ast> for Grab {
+            fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                self.0.push(node.tokens.clone());
+                syn::visit::visit_macro(self, node);
+            }
+        }
+        use syn::visit::Visit;
+        let mut g = Grab(Vec::new());
+        g.visit_file(&parsed);
+        assert_eq!(g.0.len(), 1, "one macro expected");
+        macro_ident_lines(&g.0[0], old)
+    }
+
+    #[test]
+    fn multiline_macro_reports_ident_line() {
+        let src = "fn f() {\n    println!(\n        \"{}\",\n        Item\n    );\n}\n";
+        // `Item` sits on line 4; the macro starts on line 2.
+        assert_eq!(ident_lines_for_tokens(src, "Item"), vec![4]);
+    }
+
+    #[test]
+    fn single_line_macro_reports_same_line() {
+        let src = "fn f() { println!(\"{}\", Item); }\n";
+        assert_eq!(ident_lines_for_tokens(src, "Item"), vec![1]);
     }
 }
