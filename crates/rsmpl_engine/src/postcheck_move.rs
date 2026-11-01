@@ -1743,4 +1743,171 @@ mod tests {
         assert_eq!(h.rules[0].semantics, RuleSemantics::Postcondition);
         assert_eq!(h.rules[1].semantics, RuleSemantics::Postcondition);
     }
+
+    /// WI-7a follow-up: paste exactly at `cut_start` (boundary, not
+    /// interior — `TextEdit::overlaps` uses strict `<`, so interior
+    /// anchors are rejected pre-probe in `check_overlaps` and never
+    /// reach here). The move is a no-op (`post == original`); presence
+    /// holds at the byte-exact offset and absence holds via the
+    /// same-file `paste_block` exclusion over the translated cut span.
+    #[test]
+    fn paste_at_cut_start_boundary_verifies() {
+        let original = SRC.to_string();
+        let index = LineIndex::new(&original);
+        let cut_start = index.line_start(2).unwrap();
+        let cut_end = index.line_start(3).unwrap();
+        let captured = original[cut_start..cut_end].to_string();
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![
+                TextEdit::new(cut_start, cut_start, captured.clone()),
+                TextEdit::new(cut_start, cut_end, String::new()),
+            ],
+        )]);
+        // No-op post: insertion at the cut start + deletion of the cut
+        // range restores the original text (`apply_edits` applies the
+        // wider deletion first at tied starts).
+        let post_text = original.clone();
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(&post_text).expect("post parses"),
+        )]);
+        let mut captures = CaptureStore::default();
+        captures
+            .define("H", captured, "cut_h", "f.rs")
+            .expect("bind");
+        let cuts = vec![MoveCut {
+            rule: "cut_h".to_string(),
+            file: "f.rs".to_string(),
+            spans: vec![(2, 2)],
+            name: "H".to_string(),
+        }];
+        let pastes = vec![MovePaste {
+            rule: "paste_h".to_string(),
+            file: "f.rs".to_string(),
+            name: "H".to_string(),
+            pos: cut_start,
+            bare: true,
+            template: None,
+        }];
+        let mut rules = vec![
+            RuleReport {
+                rule: "cut_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+            RuleReport {
+                rule: "paste_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+        ];
+        let states = HashMap::from([(
+            "f.rs".to_string(),
+            FileState {
+                original: original.clone(),
+                index: LineIndex::new(&original),
+                parsed: Some(syn::parse_str::<syn::File>(SRC).expect("pre parses")),
+            },
+        )]);
+        let files = HashMap::from([("f.rs".to_string(), post_text)]);
+        upgrade_verified_moves(
+            &cuts,
+            &pastes,
+            &captures,
+            &states,
+            &full_edits,
+            &files,
+            &post_parsed,
+            &mut rules,
+        )
+        .expect("boundary paste verifies");
+        assert_eq!(rules[0].semantics, RuleSemantics::Postcondition);
+        assert_eq!(rules[1].semantics, RuleSemantics::Postcondition);
+    }
+
+    /// WI-7a follow-up: paste exactly at `cut_end` (bottom boundary).
+    /// Complementary translation arm to the `cut_start` pin above
+    /// (neither edit's `end <= boundary`, so the cut span does not
+    /// shift); the `paste_block` exclusion still carries the absence
+    /// half. Interior anchors stay rejected pre-probe.
+    #[test]
+    fn paste_at_cut_end_boundary_verifies() {
+        let original = SRC.to_string();
+        let index = LineIndex::new(&original);
+        let cut_start = index.line_start(2).unwrap();
+        let cut_end = index.line_start(3).unwrap();
+        let captured = original[cut_start..cut_end].to_string();
+        let full_edits = HashMap::from([(
+            "f.rs".to_string(),
+            vec![
+                TextEdit::new(cut_end, cut_end, captured.clone()),
+                TextEdit::new(cut_start, cut_end, String::new()),
+            ],
+        )]);
+        // No-op post: insertion at the cut end + deletion of the cut
+        // range restores the original text (insertion at the higher
+        // offset applies first).
+        let post_text = original.clone();
+        let post_parsed = HashMap::from([(
+            "f.rs".to_string(),
+            syn::parse_str::<syn::File>(&post_text).expect("post parses"),
+        )]);
+        let mut captures = CaptureStore::default();
+        captures
+            .define("H", captured, "cut_h", "f.rs")
+            .expect("bind");
+        let cuts = vec![MoveCut {
+            rule: "cut_h".to_string(),
+            file: "f.rs".to_string(),
+            spans: vec![(2, 2)],
+            name: "H".to_string(),
+        }];
+        let pastes = vec![MovePaste {
+            rule: "paste_h".to_string(),
+            file: "f.rs".to_string(),
+            name: "H".to_string(),
+            pos: cut_end,
+            bare: true,
+            template: None,
+        }];
+        let mut rules = vec![
+            RuleReport {
+                rule: "cut_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+            RuleReport {
+                rule: "paste_h".to_string(),
+                file: "f.rs".to_string(),
+                semantics: RuleSemantics::ReparseOnly,
+                ..Default::default()
+            },
+        ];
+        let states = HashMap::from([(
+            "f.rs".to_string(),
+            FileState {
+                original: original.clone(),
+                index: LineIndex::new(&original),
+                parsed: Some(syn::parse_str::<syn::File>(SRC).expect("pre parses")),
+            },
+        )]);
+        let files = HashMap::from([("f.rs".to_string(), post_text)]);
+        upgrade_verified_moves(
+            &cuts,
+            &pastes,
+            &captures,
+            &states,
+            &full_edits,
+            &files,
+            &post_parsed,
+            &mut rules,
+        )
+        .expect("boundary paste verifies");
+        assert_eq!(rules[0].semantics, RuleSemantics::Postcondition);
+        assert_eq!(rules[1].semantics, RuleSemantics::Postcondition);
+    }
 }
