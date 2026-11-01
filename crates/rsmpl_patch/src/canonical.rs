@@ -868,6 +868,29 @@ mod tests {
     }
 
     #[test]
+    fn wi1_vis_follow_ranged_and_sweep_agree() {
+        // WI-1: an authored ranged `pub fn` follow and the inferred
+        // sweep follow over the same sites share the tight actual +
+        // `# allow=many` form — the WI-9 `follows_uses` normalisation
+        // is vis-agnostic (comparison-only; the engine proved the
+        // spans on both legs).
+        let ranged =
+            "diff --git src/lib.rs\n@@ -1,3 @@ rule=s\n# follow=uses\n- pub fn foo\n+ pub fn bar\n";
+        let sweep = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# follow=uses\n- pub fn foo\n+ pub fn bar\n";
+        let sites = spans(&[("src/lib.rs", "s", vec![(1, 1), (5, 5), (6, 6)])]);
+        let a = canonicalize_with_spans(ranged, &sites).unwrap();
+        let b = canonicalize_with_spans(sweep, &sites).unwrap();
+        assert_eq!(a, b, "ranged:\n{a}\nsweep:\n{b}");
+        assert!(
+            a.contains(
+                "@@ -1,6 @@ rule=r1\n# allow=many\n# follow=uses\n- pub fn foo\n+ pub fn bar\n"
+            ),
+            "tight actual + allow=many, vis kept:\n{a}"
+        );
+        assert_eq!(a, canon(&a), "must be pure-canonical fixed point");
+    }
+
+    #[test]
     fn wi9_follow_wide_spread_becomes_sweep_dummy() {
         // WI-9: the same exemption past 64 lines lands on the shared
         // sweep dummy instead of the tight range.

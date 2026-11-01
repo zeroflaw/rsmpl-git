@@ -8,16 +8,21 @@
 //! the rest at apply time (workspace-wide, WI-7a), so the emission is
 //! one hunk.
 //!
-//! WI-9 `fn` arm: a plain top-level `fn old` pure-rename definition
-//! (empty vis prefix, equal suffixes — any signature incl. `->`,
-//! generics, `where`) joined with N-1 *call-callee* use lines of
-//! `old` (bare, qualified, turbofish; `let`-wrapped included) emits
-//! the same single hunk in the terse `- fn old` / `+ fn new` diet
-//! form with `# sweep` + `# follow=uses`. Method calls, fields,
-//! bare value paths, macro heads, and `use` lines veto the whole
-//! intent (never a partial follow claim); the scratch-apply probe
-//! below is the uniqueness guard (an off-diff same-name call fails
-//! the unchanged-leg).
+//! WI-9 `fn` arm (widened WI-1): a top-level `fn old` pure-rename
+//! definition with a concrete vis from the closed set (`""`, `pub`,
+//! `pub(crate)`, `pub(super)`, `pub(in <path>)`), equal
+//! qualifier/signature suffixes (any signature incl. `->`, generics,
+//! `where`), joined with N-1 *call-callee* use lines of `old` (bare,
+//! qualified, turbofish; `let`-wrapped included) emits the same single
+//! hunk in the terse `- [pub …] fn old` / `+ [pub …] fn new` diet
+//! form with `# sweep` + `# follow=uses` — never a `V` hole, because
+//! the intent proved one concrete vis. One-line definitions join the
+//! same way (the `split_delta` suffix covers the identical body).
+//! `pub(…)` paths naming the old ident itself, vis changes, method
+//! calls, fields, bare value paths, macro heads, and `use` lines veto
+//! the whole intent (never a partial follow claim); the scratch-apply
+//! probe below is the uniqueness guard (an off-diff same-name call
+//! fails the unchanged-leg).
 //!
 //! Totality is a cross-file scratch-apply probe (member-rename
 //! posture, WI-9b): the authored emission applied to an in-memory
@@ -206,13 +211,20 @@ pub(crate) fn try_item_intent_sweep(
     }
     // The def pair must be emittable as a lone item rename (terse-`fn`
     // gates, column-0, suffix laws); otherwise the follow emission
-    // would carry a shape the engine rejects. WI-9 `fn` arm: plain
-    // top-level pure renames (empty prefix, equal suffixes — any
-    // signature) skip the `try_item_rename` suffix laws (`->` fns
-    // carry them; the scratch probe below subsumes the check since
-    // the bare terse emission always parses).
+    // would carry a shape the engine rejects. WI-9 `fn` arm (WI-1
+    // widened): vis from the closed set the terse form accepts —
+    // empty, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)` —
+    // with equal suffixes (any signature); `try_item_rename` suffix
+    // laws are skipped (`->` fns carry them; the scratch probe below
+    // subsumes the check since the concrete-vis terse emission always
+    // parses).
     if is_fn_intent {
-        if !def_prefix.is_empty() {
+        if !is_fn_vis_prefix(&def_prefix) {
+            return None;
+        }
+        // Self-referential vis (`pub(in foo)` renaming `foo`) is an
+        // evolution, never a pure rename (WI-4's domain).
+        if contains_ident(&def_prefix, &old_ident) {
             return None;
         }
     } else {
@@ -318,6 +330,39 @@ fn split_delta(minus: &str, plus: &str) -> Option<(String, String, String, Strin
         return None;
     }
     Some((old_prefix, old_kind, old_ident, new_ident))
+}
+
+/// WI-1: closed vis set the terse `fn` rename accepts (SPEC 14.1
+/// diet form — vis rides literally, never a `V` hole). `pub(in
+/// <path>)` paths are `::`-separated ident runs with an optional
+/// leading `crate`/`self`/`super`/`$crate` head.
+fn is_fn_vis_prefix(prefix: &str) -> bool {
+    if prefix.is_empty() || prefix == "pub " {
+        return true;
+    }
+    if prefix == "pub(crate) " || prefix == "pub(super) " {
+        return true;
+    }
+    let Some(inner) = prefix
+        .strip_prefix("pub(in ")
+        .and_then(|r| r.strip_suffix(") "))
+    else {
+        return false;
+    };
+    let mut segs = inner.split("::").peekable();
+    let mut first = true;
+    while let Some(seg) = segs.next() {
+        if seg.is_empty() {
+            return false;
+        }
+        let head_ok =
+            first && matches!(seg, "crate" | "self" | "super" | "$crate") && segs.peek().is_some();
+        if !head_ok && super::ident_len(seg) != Some(seg.len()) {
+            return false;
+        }
+        first = false;
+    }
+    !first
 }
 
 /// Ident-boundary containment (never substring).
@@ -467,7 +512,9 @@ fn emit(path: &str, rule: &str, kind: &str, prefix: &str, old: &str, new: &str) 
     out.push_str("# sweep\n");
     out.push_str("# follow=uses\n");
     if kind == "fn" {
-        out.push_str(&format!("- fn {old}\n+ fn {new}\n"));
+        // WI-1: concrete vis rides the terse pair (never a `V` hole —
+        // the intent proved one vis).
+        out.push_str(&format!("- {prefix}fn {old}\n+ {prefix}fn {new}\n"));
     } else {
         out.push_str(&format!("- {prefix}{kind} {old}\n+ {prefix}{kind} {new}\n"));
     }
@@ -856,8 +903,8 @@ mod tests {
     }
 
     #[test]
-    fn fn_intent_pub_prefix_declines() {
-        // `pub fn` needs a vis the terse emission does not carry.
+    fn fn_intent_pub_prefix_fires() {
+        // WI-1: `pub fn` carries its vis on the terse pair.
         let sections = vec![
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) -> i32 {\n+pub fn bar(x: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    let b = foo(2);\n+    let a = bar(1);\n+    let b = bar(2);\n"
                 .to_string(),
@@ -867,8 +914,107 @@ mod tests {
             "pub fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let b = foo(2);\n}\n",
         )]);
         let mut used = Vec::new();
+        let (out, _, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("pub fn must fire");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("- pub fn foo"), "got:\n{}", out[0]);
+        assert!(out[0].contains("+ pub fn bar"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            !files["src/lib.rs"].contains("foo"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            files["src/lib.rs"].contains("pub fn bar(x: i32) -> i32 {"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+    }
+
+    #[test]
+    fn fn_intent_vis_matrix_fires() {
+        // WI-1: every closed-set vis fires at N=1 (single use keeps the
+        // vis on the pair).
+        for vis in ["pub(crate) ", "pub(super) ", "pub(in crate::x) "] {
+            let def_minus = format!("{vis}fn foo(x: i32) -> i32 {{");
+            let def_plus = format!("{vis}fn bar(x: i32) -> i32 {{");
+            let sections = vec![format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-{def_minus}\n+{def_plus}\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+            )];
+            let pre_minus =
+                format!("{def_minus}\n    x + 1\n}}\nfn main() {{\n    let a = foo(1);\n}}\n");
+            let pre = pre_map(&[("src/lib.rs", pre_minus.as_str())]);
+            let mut used = Vec::new();
+            let (out, _, _) = try_item_intent_sweep(&sections, &pre, &mut used)
+                .unwrap_or_else(|| panic!("{vis} must fire"));
+            assert!(
+                out[0].contains(&format!("- {vis}fn foo")),
+                "got:\n{}",
+                out[0]
+            );
+            validated_live(&out[0], &pre);
+        }
+    }
+
+    #[test]
+    fn fn_intent_vis_change_vetoes() {
+        // A vis delta is an evolution (WI-14's domain), never this arm.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) -> i32 {\n+pub(crate) fn bar(x: i32) -> i32 {\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "pub fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n}\n",
+        )]);
+        let mut used = Vec::new();
         assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
         assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_self_referential_vis_vetoes() {
+        // `pub(in foo)` renaming `foo` is an evolution, not a rename.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-pub(in foo) fn foo(x: i32) -> i32 {\n+pub(in foo) fn bar(x: i32) -> i32 {\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "pub(in foo) fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        // `split_item` cannot parse `pub(in foo)` vis (parens hold a
+        // path, not an ident) — either decline path keeps the veto.
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+        // The gate itself fires on the parsed prefix shape.
+        assert!(!is_fn_vis_prefix("pub(in foo-bar) "));
+        assert!(is_fn_vis_prefix("pub(in crate::foo) "));
+        assert!(contains_ident("pub(in crate::foo) ", "foo"));
+    }
+
+    #[test]
+    fn fn_intent_one_line_def_fires() {
+        // WI-1: one-line headers join — the `split_delta` suffix covers
+        // the token-identical body.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 { x }\n+fn bar(x: i32) -> i32 { x }\n@@ -3,2 +3,2 @@\n-    let a = foo(1);\n-    let b = foo(2);\n+    let a = bar(1);\n+    let b = bar(2);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 { x }\nfn main() {\n    let a = foo(1);\n    let b = foo(2);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("one-line must fire");
+        assert!(out[0].contains("- fn foo"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
     }
 
     #[test]

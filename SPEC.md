@@ -7366,16 +7366,22 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   plus lines at the claimed sites with every other line byte-identical;
   twin definitions, missing pre-images, and unbalanced sections
   decline). The byte-win guard compares the one hunk against the
-  replaced native sections. WI-9 `fn` arm: a plain top-level `fn`
-  pure-rename definition (empty vis prefix, equal suffixes — any
-  signature) joined with N-1 call-callee use lines of the old name
-  (bare, qualified, turbofish; `let`-wrapped included) emits the terse
-  `- fn Old` / `+ fn New` diet form with `# sweep` + `# follow=uses`
-  (`# sweep` already carries file scope at any spread). Method calls,
-  fields, bare value paths, macro heads, and `use` lines veto the
-  whole intent (never a partial claim); the probe doubles as the
-  uniqueness guard (an off-diff same-name call fails the
-  unchanged-leg). `pub fn` and signature evolutions decline.
+  replaced native sections. WI-1 vis-qualified `fn` arm: a top-level `fn`
+  pure-rename definition with a concrete vis from the closed set
+  (empty, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)` with
+  `::`-separated ident segments) and equal qualifier/signature
+  suffixes (any signature) joined with N-1 call-callee use lines of
+  the old name (bare, qualified, turbofish; `let`-wrapped included)
+  emits the terse `- [vis] fn Old` / `+ [vis] fn New` diet form with
+  `# sweep` + `# follow=uses` (never a `V` hole — the intent proved
+  one concrete vis; `# sweep` already carries file scope at any
+  spread). One-line definitions (`fn foo(x: i32) -> i32 { x }`) join
+  the same way when the bodies are token-identical (the suffix covers
+  the body). `pub(…)` paths naming the old ident itself, vis changes,
+  signature evolutions, method calls, fields, bare value paths, macro
+  heads, and `use` lines veto the whole intent (never a partial
+  claim); the probe doubles as the uniqueness guard (an off-diff
+  same-name call fails the unchanged-leg).
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
   decline — there is no file to join) joined with N-1 same-delta
