@@ -252,6 +252,170 @@ pub(crate) fn try_partial_partition_section(
     Some((out, n_claimed))
 }
 
+/// WI-5 slice 2a: stranded-use veto for item rename + evolution
+/// co-location (the item analogue of the WI-4a call-sweep suppression).
+///
+/// A section holding an item definition rename whose use sits in the
+/// same native hunk as an evolution delta (alias/const/field/variant/
+/// discriminant — the `definition_evolution` shapes) would otherwise
+/// raise a bare rename single over the definition hunk while an
+/// ordinary hunk silently rewrites the same rename at the stranded use
+/// (probed: `- struct Old` sweep with `matches: 1` + orphan, the use
+/// carried ordinary). Hunk atomicity cannot split the evolution hunk,
+/// and no composed container-rename spelling exists yet (slice 2b owns
+/// the firing shape), so the section stays wholly ordinary: `true`
+/// asks the caller to decline.
+///
+/// Scope: balanced native hunks only (insertion shapes belong to slice
+/// 2b — any unbalanced hunk answers `false`); `fn` defs belong to WI-4,
+/// `mod`/`macro_rules!` decline like `item_intent`. A lone mixed hunk
+/// answers `false` (already wholly ordinary, nothing to suppress); an
+/// evolution with no stranded use answers `false` (independent singles
+/// still partition).
+pub(crate) fn section_has_stranded_item_joint(
+    section: &str,
+    path: &str,
+    file_old: Option<&str>,
+) -> bool {
+    // Split native hunks; `rule=` hunks never count (already semantic).
+    let mut hunks: Vec<String> = Vec::new();
+    for line in section.lines().skip(1) {
+        if line.starts_with("@@") {
+            hunks.push(String::new());
+        }
+        if let Some(h) = hunks.last_mut() {
+            h.push_str(line);
+            h.push('\n');
+        }
+    }
+    if hunks.len() < 2 {
+        return false;
+    }
+    struct Pairs {
+        minuses: Vec<String>,
+        pluses: Vec<String>,
+        sites: Vec<usize>,
+    }
+    let mut parsed: Vec<Pairs> = Vec::with_capacity(hunks.len());
+    for h in &hunks {
+        if h.lines().next().is_some_and(|l| l.contains("rule=")) {
+            return false;
+        }
+        let mut minuses: Vec<String> = Vec::new();
+        let mut pluses: Vec<String> = Vec::new();
+        for line in h.lines().skip(1) {
+            if line.starts_with('-') && !line.starts_with("---") {
+                minuses.push(line[1..].to_string());
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                pluses.push(line[1..].to_string());
+            }
+        }
+        if minuses.len() != pluses.len() || minuses.is_empty() {
+            return false;
+        }
+        let sites = crate::totality::changed_old_lines(h);
+        if sites.len() != minuses.len() {
+            return false;
+        }
+        parsed.push(Pairs {
+            minuses,
+            pluses,
+            sites,
+        });
+    }
+    // Rename definitions in the section (item shapes only).
+    let mut renames: Vec<(String, String)> = Vec::new();
+    for h in &parsed {
+        for (m, p) in h.minuses.iter().zip(h.pluses.iter()) {
+            if let Some((_, _, old, new)) = split_rename_delta(m, p) {
+                if !renames.iter().any(|(o, n)| o == &old && n == &new) {
+                    renames.push((old, new));
+                }
+            }
+        }
+    }
+    if renames.is_empty() {
+        return false;
+    }
+    // A hunk is stranded iff it holds an evolution pair plus a use pair.
+    for h in &parsed {
+        let mut has_evo = false;
+        let mut has_use = false;
+        for ((m, p), site) in h.minuses.iter().zip(h.pluses.iter()).zip(h.sites.iter()) {
+            if split_rename_delta(m, p).is_some() {
+                continue;
+            }
+            if !has_evo {
+                let mut scratch = Vec::new();
+                let ms = [m.as_str()];
+                let ps = [p.as_str()];
+                let ss = [*site];
+                if super::try_definition_evolution_sweep(
+                    &ms,
+                    &ps,
+                    path,
+                    file_old,
+                    &ss,
+                    &mut scratch,
+                )
+                .is_some()
+                {
+                    has_evo = true;
+                }
+            }
+            if !has_use {
+                for (old, new) in &renames {
+                    if contains_ident(m, old) && contains_ident(p, new) {
+                        has_use = true;
+                        break;
+                    }
+                }
+            }
+            if has_evo && has_use {
+                break;
+            }
+        }
+        if has_evo && has_use {
+            return true;
+        }
+    }
+    false
+}
+
+/// An item definition name delta, or `None` for use/evolution lines.
+/// Mirrors the `item_intent` gate: `fn` belongs to WI-4, `mod` and
+/// `macro_rules!` decline with it.
+fn split_rename_delta(minus: &str, plus: &str) -> Option<(String, String, String, String)> {
+    let (o_pre, o_kind, o_id, o_suf) = super::split_item(minus.trim_end())?;
+    let (n_pre, n_kind, n_id, n_suf) = super::split_item(plus.trim_end())?;
+    if o_kind != n_kind || o_pre != n_pre || o_suf != n_suf || o_id == n_id {
+        return None;
+    }
+    if o_kind == "fn" || o_kind == "mod" || o_kind == "macro_rules!" {
+        return None;
+    }
+    Some((o_pre, o_kind, o_id, n_id))
+}
+
+/// Ident-boundary containment (never substring).
+fn contains_ident(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut token = String::new();
+    for c in haystack.chars().chain(std::iter::once(' ')) {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            token.push(c);
+        } else {
+            if token == needle {
+                return true;
+            }
+            token.clear();
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +464,75 @@ mod tests {
         let mut used = Vec::new();
         assert!(try_partial_partition_section(dup, "g.rs", Some(pre2), &mut used).is_none());
         assert!(used.is_empty());
+    }
+
+    fn infer_section(section: &str, pre: &str) -> Option<String> {
+        super::super::infer_semantic_with_pre_images(
+            std::slice::from_ref(&section.to_string()),
+            &HashMap::from([("f.rs".to_string(), pre.to_string())]),
+        )
+    }
+
+    #[test]
+    fn stranded_item_joint_suppresses_rename_single() {
+        // WI-5 slice 2a probe A: def rename + alias evolution + use, the
+        // use sharing its hunk with the evolution. The bare def single
+        // would strand the use — the section stays wholly ordinary.
+        let pre = "struct Old {\n    x: u32,\n}\ntype A = Vec<u8>;\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-struct Old {\n+struct New {\n@@ -4,2 +4,2 @@\n-type A = Vec<u8>;\n+type A = Box<[u8]>;\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        assert!(section_has_stranded_item_joint(section, "f.rs", Some(pre)));
+        let out = infer_section(section, pre);
+        assert!(
+            out.is_none() || !out.as_ref().unwrap().contains("rule="),
+            "stranded section stays ordinary, got:\n{}",
+            out.unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn independent_evo_without_stranded_use_still_partitions() {
+        // Same def + evolution but no use anywhere: independent singles
+        // still partition (no over-suppression).
+        let pre = "struct Old {\n    x: u32,\n}\ntype A = Vec<u8>;\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-struct Old {\n+struct New {\n@@ -4 +4 @@\n-type A = Vec<u8>;\n+type A = Box<[u8]>;\n";
+        assert!(!section_has_stranded_item_joint(section, "f.rs", Some(pre)));
+        let out = infer_section(section, pre).expect("def single must still fire");
+        assert!(out.contains("rule="), "got:\n{out}");
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+    }
+
+    #[test]
+    fn use_with_def_plus_separate_evo_fires_intent() {
+        // Use claimed alongside its def across pure hunks, evolution in
+        // its own pure hunk: the follow intent still raises.
+        let pre = "struct Old {\n    x: u32,\n}\n\ntype A = Vec<u8>;\n\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-struct Old {\n+struct New {\n@@ -5 +5 @@\n-type A = Vec<u8>;\n+type A = Box<[u8]>;\n@@ -7 +7 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        assert!(!section_has_stranded_item_joint(section, "f.rs", Some(pre)));
+        let out = infer_section(section, pre).expect("follow intent must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+    }
+
+    #[test]
+    fn fn_defs_never_strand() {
+        // `fn` renames belong to WI-4: the item veto never claims them.
+        let pre = "fn old() -> u32 {\n    1\n}\ntype A = Vec<u8>;\nfn f() -> u32 {\n    old()\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-fn old() -> u32 {\n+fn new() -> u32 {\n@@ -5,2 +5,2 @@\n-type A = Vec<u8>;\n+type A = Box<[u8]>;\n-    old()\n+    new()\n";
+        assert!(!section_has_stranded_item_joint(section, "f.rs", Some(pre)));
+    }
+
+    #[test]
+    fn single_hunk_mixed_needs_no_veto() {
+        // Probe B: rename + field-type evolution in one hunk (same
+        // container) is already wholly ordinary — nothing to suppress,
+        // pinned here so slice 2b can flip it to a joint.
+        let pre = "struct Old {\n    x: u32,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n-struct Old {\n-    x: u32,\n+struct New {\n+    x: u64,\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        assert!(!section_has_stranded_item_joint(section, "f.rs", Some(pre)));
+        let out = infer_section(section, pre);
+        assert!(
+            out.is_none() || !out.as_ref().unwrap().contains("rule="),
+            "same-container joint stays ordinary until 2b, got:\n{}",
+            out.unwrap_or_default()
+        );
     }
 }

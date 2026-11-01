@@ -645,6 +645,12 @@ pub(crate) fn compress_section(
     let checkpoint = used_rules.len();
     // T411: old-side changed lines for the line-aware opaque veto.
     let changed = crate::totality::changed_old_lines(section);
+    // WI-5 slice 2a: a rename def stranded from its use by an evolution
+    // co-resident suppresses the bare rename single (WI-4a posture for
+    // items) — the section stays wholly ordinary.
+    if super::partial::section_has_stranded_item_joint(section, path, file_old) {
+        return None;
+    }
     // WI-4c: a vetoed fn joint suppresses its old callee name
     // workspace-wide — a section of pure call-callee sites of a
     // suppressed `(path, old)` stays ordinary instead of emitting a

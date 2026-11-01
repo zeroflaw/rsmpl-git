@@ -2406,6 +2406,12 @@ lowered diff is the observable truth as always (Section D.2).
   pair still applies and verifies as one follow hunk, and raising emits
   that spelling (SPEC D.4). Two attr deltas, or an attr delta detached
   from its definition, stay ordinary.
+  Evolution co-residents (WI-5 slice 2a): no composed spelling exists
+  yet for a rename plus a member/type evolution, so a section where an
+  evolution delta shares its native hunk with the rename's use raises
+  nothing — the bare rename single is suppressed and the section stays
+  wholly ordinary (the item analogue of the WI-4 claim-then-veto law).
+  Slice 2b owns the firing shape.
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
@@ -7548,8 +7554,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   native hunk never splits — it stays ordinary whole, owned by the
   per-hunk fallback (WI-19c permanent non-goal: no sub-hunk split, so
   fixture `12`'s header+`let` mixed hunk stays ordinary by decision).
-  Guard is the scaled precision guard (semantic ≤ ordinary
-  + 16 × claimed pairs). Detector name `item_rename`.
+   Guard is the scaled precision guard (semantic ≤ ordinary
+   + 16 × claimed pairs). Detector name `item_rename`.
+   Stranded-use veto (WI-5 slice 2a): when a native hunk holds both an
+   evolution pair (any `definition_evolution` shape) and the rename's
+   use while the definition sits in another hunk, the whole section
+   stays ordinary — the bare definition single would otherwise claim
+   the rename while an ordinary hunk rewrites the stranded use (the
+   item analogue of the WI-4 claim-then-veto suppression). Pure
+   definition + pure evolution hunks (no stranded use) still partition;
+   `fn` definitions never trigger this veto.
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/
