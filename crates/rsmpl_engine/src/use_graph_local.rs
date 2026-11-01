@@ -930,6 +930,48 @@ mod tests {
     }
 
     #[test]
+    fn general_orphans_shadowed_if_let_then_use() {
+        // An inner `if let total` shadows the outer `let total` inside
+        // the then-branch: the then use stays a `shadowed` orphan.
+        let src = "fn main() {\n    let total = 1;\n    if let total = Some(1) {\n        let x = total;\n    }\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
+    fn general_orphans_unshadowed_after_if_let_stays_off_target() {
+        // The `if let total` binder governs only the then-branch: the
+        // outer use after the whole `if`/`else` still names the outer
+        // binder (`off-target`).
+        let src = "fn main() {\n    let total = 1;\n    if let total = Some(1) {\n        let x = total;\n    } else {\n        let y = 0;\n    }\n    let c = total;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 2, "got: {orphans:?}");
+        assert!(
+            orphans
+                .iter()
+                .any(|o| o.line == 4 && o.reason == "shadowed"),
+            "got: {orphans:?}"
+        );
+        assert!(
+            orphans
+                .iter()
+                .any(|o| o.line == 8 && o.reason == "off-target"),
+            "got: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn general_orphans_shadowed_while_let_body_use() {
+        // An inner `while let total` shadows the outer `let total`
+        // inside the loop body: the body use stays a `shadowed` orphan.
+        let src = "fn main() {\n    let total = 1;\n    while let total = Some(1) {\n        let x = total;\n        break;\n    }\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
     fn general_orphans_macro_scope_precision() {
         // Macro in the enclosing block stays; macro in another fn drops.
         let same = "fn main() {\n    let total = 1;\n    println!(\"{}\", total);\n}\n";
