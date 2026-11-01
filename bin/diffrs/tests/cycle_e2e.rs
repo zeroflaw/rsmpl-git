@@ -245,7 +245,10 @@ fn commit_all(dir: &Path, what: &str) {
 /// vs actual-cited singles) over the same site, and WI-8b unifies
 /// template-diet spellings over the same site (default `# lang=rust`
 /// dropped, declared `# expr` holes diet-renamed, framed fn pure-rename
-/// pairs contracted to the bare diet).
+/// pairs contracted to the bare diet), and WI-9 unifies authored
+/// ranged plain-`fn` follows (default `allow == one`) vs inferred
+/// sweep follows over the same def + call sites (tight actual +
+/// `# allow=many` on both legs, comparison-only).
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
@@ -306,6 +309,8 @@ const CYCLE_OK: &[&str] = &[
     "51-drift-stale-range",
     "78-method-to-function",
     "79-general-expr-single",
+    "46-fn-follow",
+    "89-fn-follow-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -372,10 +377,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "45-macro-rules-rename",
         "partial (WI-19): def re-infers as precision item_rename single, use stays ordinary (no single-use macro detector, slice 2); S groups them with follow",
     ),
-    (
-        "46-fn-follow",
-        "hetero: fn+follow re-infers as ordinary def plus call sweep (no follow emission for plain fn)",
-    ),
+
     (
         "47-call-arg-wrap",
         "t375: single-line arg-wrap re-infers ordinary",
@@ -470,10 +472,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "86-token-tree-single",
         "t375: single-site token-tree arg rewrite re-infers ordinary",
     ),
-    (
-        "89-fn-follow-single",
-        "t375: single-use fn follow re-infers ordinary",
-    ),
+
     (
         "93-verbatim-single",
         "t375: single-site verbatim rewrite re-infers ordinary",

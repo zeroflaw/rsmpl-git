@@ -8,6 +8,17 @@
 //! the rest at apply time (workspace-wide, WI-7a), so the emission is
 //! one hunk.
 //!
+//! WI-9 `fn` arm: a plain top-level `fn old` pure-rename definition
+//! (empty vis prefix, equal suffixes — any signature incl. `->`,
+//! generics, `where`) joined with N-1 *call-callee* use lines of
+//! `old` (bare, qualified, turbofish; `let`-wrapped included) emits
+//! the same single hunk in the terse `- fn old` / `+ fn new` diet
+//! form with `# sweep` + `# follow=uses`. Method calls, fields,
+//! bare value paths, macro heads, and `use` lines veto the whole
+//! intent (never a partial follow claim); the scratch-apply probe
+//! below is the uniqueness guard (an off-diff same-name call fails
+//! the unchanged-leg).
+//!
 //! Totality is a cross-file scratch-apply probe (member-rename
 //! posture, WI-9b): the authored emission applied to an in-memory
 //! clone of the pre-image must reproduce exactly the native plus lines
@@ -143,6 +154,9 @@ pub(crate) fn try_item_intent_sweep(
     if def_kind == "macro_rules!" || def_kind == "mod" {
         return None;
     }
+    // WI-9: `fn` intents claim call-callee uses (the follow domain);
+    // every other shape keeps the item gate (any same-delta use line).
+    let is_fn_intent = def_kind == "fn";
     // Use-line gate per non-def pair (cheap, ident-boundary): the probe
     // below is authoritative.
     for (i, pair) in pairs.iter().enumerate() {
@@ -153,6 +167,9 @@ pub(crate) fn try_item_intent_sweep(
             return None;
         }
         if !contains_ident(&pair.minus, &old_ident) || !contains_ident(&pair.plus, &new_ident) {
+            return None;
+        }
+        if is_fn_intent && !is_fn_call_use_site(&pair.minus, &old_ident) {
             return None;
         }
     }
@@ -169,33 +186,47 @@ pub(crate) fn try_item_intent_sweep(
     if count_kind_defs(pre, &pairs, &def_kind, &old_ident) != 1 {
         return None;
     }
-    // Dedicated-position carve: a use line whose changed subterm sits
-    // in a call-callee or macro-head naming `old` belongs to the call
-    // / macro detectors (`call_sweep`, `macro_rules_rename`, …) and
-    // their pinned shapes — the intent never claims it. Impl headers,
-    // fn headers, type positions, struct literals/patterns, and `use`
-    // lines stay claimable; the probe below is authoritative for them.
-    for (i, pair) in pairs.iter().enumerate() {
-        if i == def_idx {
-            continue;
-        }
-        if is_dedicated_use_site(&pair.minus, &old_ident) {
-            return None;
+    // Dedicated-position carve (item shapes only — `fn` intents claim
+    // exactly the call-callee position via the gate above): a use line
+    // whose changed subterm sits in a call-callee or macro-head naming
+    // `old` belongs to the call / macro detectors (`call_sweep`,
+    // `macro_rules_rename`, …) and their pinned shapes — the intent
+    // never claims it. Impl headers, fn headers, type positions,
+    // struct literals/patterns, and `use` lines stay claimable; the
+    // probe below is authoritative for them.
+    if !is_fn_intent {
+        for (i, pair) in pairs.iter().enumerate() {
+            if i == def_idx {
+                continue;
+            }
+            if is_dedicated_use_site(&pair.minus, &old_ident) {
+                return None;
+            }
         }
     }
     // The def pair must be emittable as a lone item rename (terse-`fn`
     // gates, column-0, suffix laws); otherwise the follow emission
-    // would carry a shape the engine rejects.
-    let mut probe_used = vec![format!("probe{}", used_rules.len())];
-    let def_pre = pre.get(&def.path).map(String::as_str);
-    try_item_rename(
-        &def.minus,
-        &def.plus,
-        &def.path,
-        def_pre,
-        std::slice::from_ref(&def.site),
-        &mut probe_used,
-    )?;
+    // would carry a shape the engine rejects. WI-9 `fn` arm: plain
+    // top-level pure renames (empty prefix, equal suffixes — any
+    // signature) skip the `try_item_rename` suffix laws (`->` fns
+    // carry them; the scratch probe below subsumes the check since
+    // the bare terse emission always parses).
+    if is_fn_intent {
+        if !def_prefix.is_empty() {
+            return None;
+        }
+    } else {
+        let mut probe_used = vec![format!("probe{}", used_rules.len())];
+        let def_pre = pre.get(&def.path).map(String::as_str);
+        try_item_rename(
+            &def.minus,
+            &def.plus,
+            &def.path,
+            def_pre,
+            std::slice::from_ref(&def.site),
+            &mut probe_used,
+        )?;
+    }
     // Build the emission: sweep dummy + follow + def pair.
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
     let emission = emit(
@@ -336,6 +367,50 @@ fn is_dedicated_use_site(minus: &str, old: &str) -> bool {
         }
     }
     false
+}
+
+/// WI-9: true when the use line's changed subterm is a *call callee*
+/// naming `old` — the plain-`fn` follow domain (bare, qualified,
+/// turbofish; `let`-wrapped included). Method calls, fields, bare
+/// value paths, macro heads, and `use` lines all return false and
+/// veto the `fn` intent. Arguments never count — only the head.
+fn is_fn_call_use_site(minus: &str, old: &str) -> bool {
+    let mut text = minus.trim();
+    if let Some(stripped) = super::strip_one_terminator(text) {
+        text = stripped.trim_end();
+    }
+    if text.is_empty() {
+        return false;
+    }
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
+        if is_fn_call_expr(&expr, old) {
+            return true;
+        }
+    }
+    if let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(minus.trim()) {
+        if let Some(init) = local.init {
+            if is_fn_call_expr(&init.expr, old) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True for call callees naming `old` (qualified and turbofish
+/// spellings included — the engine's scalar follow rewrites them;
+/// method calls never count: different namespace).
+fn is_fn_call_expr(expr: &syn::Expr, old: &str) -> bool {
+    match expr {
+        syn::Expr::Call(call) => {
+            if let syn::Expr::Path(path) = call.func.as_ref() {
+                path.qself.is_none() && path.path.segments.last().is_some_and(|s| s.ident == old)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
 }
 
 /// True for call callees and macro heads naming `old` (qualified and
@@ -607,6 +682,215 @@ mod tests {
         let out = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
         assert!(out.contains("# follow=uses"), "got:\n{out}");
         assert!(out.contains("- struct Old"), "got:\n{out}");
+        validated_live(&out, &pre);
+    }
+
+    // WI-9: plain-`fn` intents raise with follow.
+
+    const FN_PRE: &str =
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let b = foo(2);\n}\n";
+
+    fn fn_sections_two_use() -> Vec<String> {
+        vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    let b = foo(2);\n+    let a = bar(1);\n+    let b = bar(2);\n"
+                .to_string(),
+        ]
+    }
+
+    fn assert_fn_follow_emission(out: &[String], pre: &HashMap<String, String>) {
+        assert_eq!(out.len(), 1, "one intent section, got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("# sweep"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- fn foo"), "got:\n{}", out[0]);
+        assert!(out[0].contains("+ fn bar"), "got:\n{}", out[0]);
+        validated_live(&out[0], pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["src/lib.rs"].contains("fn bar(x: i32) -> i32 {"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            !files["src/lib.rs"].contains("foo"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+    }
+
+    #[test]
+    fn fn_call_head_gate() {
+        // The `fn` follow domain is call callees only (bare,
+        // qualified, `let`-wrapped); methods, fields, value paths,
+        // macro heads, and `use` lines veto.
+        assert!(is_fn_call_use_site("    foo(1);", "foo"));
+        assert!(is_fn_call_use_site("    m::foo(2);", "foo"));
+        assert!(is_fn_call_use_site("    let a = foo(1);", "foo"));
+        assert!(!is_fn_call_use_site("    s.foo();", "foo"));
+        assert!(!is_fn_call_use_site("    s.foo;", "foo"));
+        assert!(!is_fn_call_use_site("    let x = foo;", "foo"));
+        assert!(!is_fn_call_use_site("    foo!(2);", "foo"));
+        assert!(!is_fn_call_use_site("    let b = foo!(2);", "foo"));
+        assert!(!is_fn_call_use_site("use m::foo;", "foo"));
+        assert!(!is_fn_call_use_site("    Some(foo);", "foo"));
+    }
+
+    #[test]
+    fn fn_intent_fires_with_return_type() {
+        // 46 shape: `->` return in the def suffix skips the
+        // `try_item_rename` laws; the scratch probe proves the bare
+        // terse emission instead.
+        let sections = fn_sections_two_use();
+        let pre = pre_map(&[("src/lib.rs", FN_PRE)]);
+        let mut used = Vec::new();
+        let (out, path, rule) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("fn intent must fire");
+        assert_eq!(path, "src/lib.rs");
+        assert!(!rule.is_empty());
+        assert_fn_follow_emission(&out, &pre);
+    }
+
+    #[test]
+    fn fn_intent_single_use_fires() {
+        // 89 shape: def + one call collapses to the same hunk.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let _ = a;\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("single-use must fire");
+        assert_fn_follow_emission(&out, &pre);
+    }
+
+    #[test]
+    fn fn_intent_qualified_call_fires() {
+        // `m::foo` is in the scalar follow domain (round-4 WI-6a pin).
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    let b = m::foo(2);\n+    let a = bar(1);\n+    let b = m::bar(2);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let b = m::foo(2);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("qualified must fire");
+        assert_fn_follow_emission(&out, &pre);
+    }
+
+    #[test]
+    fn fn_intent_cross_file_fires() {
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,1 +2,1 @@\n-    foo(1);\n+    bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "fn foo(x: i32) -> i32 {\n    x + 1\n}\n"),
+            ("b.rs", "fn m() {\n    foo(1);\n}\n"),
+        ]);
+        let mut used = Vec::new();
+        let (out, path, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("cross-file must fire");
+        assert_eq!(path, "a.rs");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("- fn foo"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+    }
+
+    #[test]
+    fn fn_intent_method_use_vetoes() {
+        // A use pair whose head is a method ident is outside the
+        // scalar follow domain — never a partial claim.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    let b = s.foo();\n+    let a = bar(1);\n+    let b = s.bar();\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let b = s.foo();\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_macro_head_vetoes() {
+        // `foo!(…)` is a macro head (different namespace) — the call
+        // carve declines it.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    foo!(2);\n+    let a = bar(1);\n+    bar!(2);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    foo!(2);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_off_diff_twin_fails_the_probe() {
+        // An untouched `foo(3)` elsewhere fails the unchanged-leg:
+        // the follow would rewrite it, so the intent declines instead
+        // of under-claiming.
+        let sections = fn_sections_two_use();
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let b = foo(2);\n    let c = foo(3);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_pub_prefix_declines() {
+        // `pub fn` needs a vis the terse emission does not carry.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) -> i32 {\n+pub fn bar(x: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    let b = foo(2);\n+    let a = bar(1);\n+    let b = bar(2);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "pub fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n    let b = foo(2);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_evolution_declines() {
+        // Signature deltas are evolutions (C17), never renames.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32, y: i32) -> i32 {\n@@ -5,2 +5,2 @@\n-    let a = foo(1);\n-    let b = foo(2);\n+    let a = bar(1, 2);\n+    let b = bar(2, 3);\n"
+                .to_string(),
+        ];
+        let mut used = Vec::new();
+        let pre = pre_map(&[("src/lib.rs", FN_PRE)]);
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn fn_intent_full_pipeline_compresses() {
+        let sections = fn_sections_two_use();
+        let pre = pre_map(&[("src/lib.rs", FN_PRE)]);
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- fn foo"), "got:\n{out}");
         validated_live(&out, &pre);
     }
 }

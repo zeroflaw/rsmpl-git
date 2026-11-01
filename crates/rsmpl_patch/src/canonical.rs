@@ -102,7 +102,12 @@ fn normalize_file_markers(patch: &mut Patch) {
 /// actual range; a stale cited single re-ranges to its proven span).
 /// `allow == one` hunks with ≠1 spans never occur on success (the apply
 /// would fail, leaving no spans) and stay untouched, so error shapes
-/// never widen.
+/// never widen — except `# follow=uses` hunks (WI-9): a follow hunk
+/// legitimately proves def + follow spans under the default `allow ==
+/// one` (the authored 46/89 fixtures carry no `# allow` line), so
+/// multi-site follow hunks normalize like `allow == many` (tight
+/// actual + `# allow=many`, comparison-only; the engine already proved
+/// the spans).
 fn normalize_ranges_with_spans(
     patch: &mut Patch,
     spans: &HashMap<(String, String), Vec<(u32, u32)>>,
@@ -126,9 +131,11 @@ fn normalize_ranges_with_spans(
             // WI-8: single-site hunks (either cardinality) collapse to
             // the diet single form; multi-site `allow == one` is an
             // error shape (apply fails → no spans in practice) and is
-            // left byte-identical.
+            // left byte-identical — unless the hunk carries
+            // `# follow=uses` (WI-9), whose def + follow spans are
+            // legitimate under the default `allow == one`.
             let single = sites.len() == 1;
-            if r.allow() != Allow::Many && !single {
+            if r.allow() != Allow::Many && !single && !r.follows_uses() {
                 continue;
             }
             let min_s = sites.iter().map(|(s, _)| *s).min().unwrap_or(1);
@@ -148,9 +155,14 @@ fn normalize_ranges_with_spans(
                         !matches!(d, Directive::Allow(_) | Directive::Scope(Scope::File))
                     });
                 } else {
-                    // Tight multi: `# allow=many` alone (drop file scope).
+                    // Tight multi: `# allow=many` alone (drop file
+                    // scope; WI-9 follow hunks gain the line —
+                    // comparison-only, spans already proved).
                     r.directives
                         .retain(|d| !matches!(d, Directive::Scope(Scope::File)));
+                    if r.allow() != Allow::Many {
+                        r.directives.push(Directive::Allow(Allow::Many));
+                    }
                 }
             } else {
                 r.header.old_start = 1;
@@ -832,6 +844,44 @@ mod tests {
         assert_ne!(a, b, "site sets differ:\n{a}\n{b}");
         assert!(a.contains("@@ -2,1 @@"), "got:\n{a}");
         assert!(b.contains("@@ -9,1 @@"), "got:\n{b}");
+    }
+
+    #[test]
+    fn wi9_follow_allow_one_multi_tightens_like_many() {
+        // WI-9: an authored ranged follow under the default
+        // `allow == one` (the 46 fixture spelling) and an inferred
+        // sweep follow over the same def + follow sites share the
+        // tight actual + `# allow=many` form (comparison-only; the
+        // engine proved the spans on both legs).
+        let ranged =
+            "diff --git src/lib.rs\n@@ -1,3 @@ rule=s\n# follow=uses\n- fn foo\n+ fn bar\n";
+        let sweep = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# follow=uses\n- fn foo\n+ fn bar\n";
+        let sites = spans(&[("src/lib.rs", "s", vec![(1, 1), (5, 5), (6, 6)])]);
+        let a = canonicalize_with_spans(ranged, &sites).unwrap();
+        let b = canonicalize_with_spans(sweep, &sites).unwrap();
+        assert_eq!(a, b, "ranged:\n{a}\nsweep:\n{b}");
+        assert!(
+            a.contains("@@ -1,6 @@ rule=r1\n# allow=many\n# follow=uses\n"),
+            "tight actual + allow=many, follow kept:\n{a}"
+        );
+        assert_eq!(a, canon(&a), "must be pure-canonical fixed point");
+    }
+
+    #[test]
+    fn wi9_follow_wide_spread_becomes_sweep_dummy() {
+        // WI-9: the same exemption past 64 lines lands on the shared
+        // sweep dummy instead of the tight range.
+        let ranged =
+            "diff --git src/lib.rs\n@@ -1,3 @@ rule=s\n# follow=uses\n- fn foo\n+ fn bar\n";
+        let got = canonicalize_with_spans(
+            ranged,
+            &spans(&[("src/lib.rs", "s", vec![(1, 1), (100, 100)])]),
+        )
+        .unwrap();
+        assert!(
+            got.contains("@@ -1,1 @@ rule=r1\n# sweep\n# follow=uses\n"),
+            "got:\n{got}"
+        );
     }
 
     #[test]

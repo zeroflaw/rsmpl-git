@@ -101,6 +101,7 @@ counts in the JSON report).
 | 41-cross-file-field-rename (field def + 4 anchored uses across 2 files, 1 hunk with `# follow=uses`, WI-15b) | 1176 B / 21 ln | 155 B / 7 ln | 87% |
 | 42-mod-rename (mod def + 4 `old::` path uses across 2 files, 1 hunk with `# follow=uses`, WI-15c) | 555 B / 20 ln | 83 B / 6 ln | 85% |
 | 43-compact-frame (3 one-line-fn call sites + 3 one-line-fn operator sites across 2 files, 2 subterm hunks, WI-4) | 473 B / 20 ln | 149 B / 10 ln | 68% |
+| 44-cross-file-fn-rename (fn def + 2 call sites across 2 files, 1 hunk with `# follow=uses`, WI-9) | 274 B / 14 ln | 75 B / 6 ln | 73% |
 
 `diffrs/` benches compare `git diff -U0` (`native.patch`, `index` lines
 stripped) against the `diffrs` compression (`sem.patch`) for the same end

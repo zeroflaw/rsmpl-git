@@ -1,0 +1,14 @@
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-fn foo(x: i32) -> i32 {
++fn bar(x: i32) -> i32 {
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -2,2 +2,2 @@ fn main() {
+-    let a = foo(1);
+-    let b = m::foo(2);
++    let a = bar(1);
++    let b = m::bar(2);

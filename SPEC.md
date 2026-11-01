@@ -7366,7 +7366,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   plus lines at the claimed sites with every other line byte-identical;
   twin definitions, missing pre-images, and unbalanced sections
   decline). The byte-win guard compares the one hunk against the
-  replaced native sections.
+  replaced native sections. WI-9 `fn` arm: a plain top-level `fn`
+  pure-rename definition (empty vis prefix, equal suffixes — any
+  signature) joined with N-1 call-callee use lines of the old name
+  (bare, qualified, turbofish; `let`-wrapped included) emits the terse
+  `- fn Old` / `+ fn New` diet form with `# sweep` + `# follow=uses`
+  (`# sweep` already carries file scope at any spread). Method calls,
+  fields, bare value paths, macro heads, and `use` lines veto the
+  whole intent (never a partial claim); the probe doubles as the
+  uniqueness guard (an off-diff same-name call fails the
+  unchanged-leg). `pub fn` and signature evolutions decline.
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
   decline — there is no file to join) joined with N-1 same-delta
@@ -8850,9 +8859,13 @@ form). Only single-pair bare-symbol call hunks normalize this way;
  `- fn Old` / `+ fn New` diet — so terse-framed, explicit-framed, and
  bare legs over the same sites compare equal (evolutions, concrete
  vis, multi-pair bodies, the `N` name hole, and stray context keep
- the authored spelling). Anchors,
- `allow == one` hunks with ≠1 proven spans, ordinary hunks, non-contained/file scopes, and
- hunks with no matched spans keep their authored ranges. Hunks keep
+  the authored spelling). A multi-site `# follow=uses` hunk under the
+  default `allow == one` normalizes like `allow == many` (tight actual
+  range + `# allow=many`, comparison-only): follow spans are def +
+  follow sites by construction, so an authored ranged follow and an
+  inferred sweep follow over the same sites share one form. Anchors,
+  non-follow `allow == one` hunks with ≠1 proven spans, ordinary hunks, non-contained/file scopes, and
+  hunks with no matched spans keep their authored ranges. Hunks keep
 document order rather than range-sorting: an insertion anchor at a
 range edge applies in document order (Section 20.2 — a paste at
 `(1,0)` plus an edit of `[1,1]` yields different trees when swapped,
@@ -8936,7 +8949,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(116), all example benches (32 applyrs, 43 diffrs), plus the history_e2e pins. Out of scope
+(116), all example benches (32 applyrs, 44 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
