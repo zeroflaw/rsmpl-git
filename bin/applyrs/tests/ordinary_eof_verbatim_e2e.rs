@@ -50,7 +50,8 @@ fn context_mismatch_verbatim() {
     assert!(stderr.contains("old_range: 1..2"), "got: {stderr}");
     assert!(stderr.contains("repair:"), "got: {stderr}");
     assert!(stderr.contains("fix_context"), "got: {stderr}");
-    assert!(!stderr.contains("suggestion:"), "got: {stderr}");
+    assert!(stderr.contains("suggestion:"), "got: {stderr}");
+    assert!(stderr.contains("1-char marker"), "got: {stderr}");
     let got = read(dir.path(), "a.rs");
     assert_eq!(got, content);
     let v = check_json(patch, "a.rs", content);
@@ -59,7 +60,13 @@ fn context_mismatch_verbatim() {
     assert_eq!(v["error"]["file"], serde_json::json!("a.rs"));
     assert_eq!(v["error"]["range"], serde_json::json!("1..2"));
     assert_eq!(v["error"]["reason"], serde_json::json!(reason));
-    assert!(v["error"]["suggestion"].is_null(), "got: {v}");
+    assert!(
+        v["error"]["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("1-char marker"),
+        "got: {v}"
+    );
     let repair = &v["error"]["repair"];
     assert_eq!(repair["action"], serde_json::json!("fix_context"));
     assert_eq!(repair["line"], serde_json::json!(1));
@@ -117,7 +124,8 @@ fn removal_mismatch_verbatim() {
     assert!(stderr.contains("GIT_HUNK_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains(reason), "got: {stderr}");
     assert!(stderr.contains("old_range: 1..3"), "got: {stderr}");
-    assert!(!stderr.contains("suggestion:"), "got: {stderr}");
+    assert!(stderr.contains("suggestion:"), "got: {stderr}");
+    assert!(stderr.contains("1-char marker"), "got: {stderr}");
     assert!(stderr.contains("repair:"), "got: {stderr}");
     assert!(stderr.contains("fix_context"), "got: {stderr}");
     let got = read(dir.path(), "a.rs");
@@ -126,7 +134,13 @@ fn removal_mismatch_verbatim() {
     assert_eq!(v["error"]["code"], serde_json::json!("GIT_HUNK_CONFLICT"));
     assert_eq!(v["error"]["range"], serde_json::json!("1..3"));
     assert_eq!(v["error"]["reason"], serde_json::json!(reason));
-    assert!(v["error"]["suggestion"].is_null(), "got: {v}");
+    assert!(
+        v["error"]["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("1-char marker"),
+        "got: {v}"
+    );
     let repair = &v["error"]["repair"];
     assert_eq!(repair["action"], serde_json::json!("fix_context"));
     assert_eq!(repair["line"], serde_json::json!(2));

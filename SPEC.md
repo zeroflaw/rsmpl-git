@@ -5606,6 +5606,7 @@ hunk's line text, `actual` the file's line text (full single-line texts,
 never truncated). The two EOF shapes carry `fix_range` instead (SPEC
 D.2): there is no actual line to show, but the clamped header tells the
 agent where the file ends — paste it and retry.
+Both mismatch shapes also carry a `suggestion:` naming the 1-char marker rule (` ` context / `-` removal / `+` addition + verbatim file text): when header counts look right, the failure is marker indent (exactly one marker char, not zero/two), not counts -- check the marker and paste `actual` from the repair. Blank-involved mismatches prepend the empty-context sentence to the same suggestion.
 
 Three further engine arms never surface via the CLI, so they carry no fence
 here (defensive backstops for library callers, documented but not pinnable):

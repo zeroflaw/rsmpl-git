@@ -9,6 +9,17 @@ use rsmpl_patch::{ErrorCode, OrdinaryHunk, StructuredError};
 use crate::edits::TextEdit;
 use crate::lines::LineIndex;
 
+/// Suggestion for `fix_context` mismatches (TOOL-gitrs-hint): the most
+/// common non-count failure is marker indent (zero/two markers instead of
+/// exactly one), so the hint names the 1-char marker rule explicitly.
+fn marker_hint(blank: bool) -> String {
+    if blank {
+        "blank file lines are empty context: write them as ` ` (single space) or an empty line inside the hunk body; ordinary hunk lines need a 1-char marker (` ` context / `-` removal / `+` addition) + verbatim file text -- if counts look right, check marker indent (exactly one marker char, not zero/two) and paste `actual` from the repair".to_string()
+    } else {
+        "ordinary hunk lines need a 1-char marker (` ` context / `-` removal / `+` addition) + verbatim file text -- if counts look right, check marker indent (exactly one marker char, not zero/two) and paste `actual` from the repair".to_string()
+    }
+}
+
 /// Convert an ordinary hunk into byte-range edits against the original file.
 /// Context and removal lines are strictly verified at `old_start`.
 pub fn ordinary_hunk_edits(
@@ -87,7 +98,8 @@ pub fn ordinary_hunk_edits(
                 }
                 let actual = lines[(cur_line - 1) as usize];
                 if actual != bl.text {
-                    let mut err = fail(format!(
+                    let blank = bl.text.trim().is_empty() || actual.trim().is_empty();
+                    let err = fail(format!(
                         "context mismatch at line {cur_line}: expected `{}`",
                         bl.text
                     ))
@@ -96,10 +108,8 @@ pub fn ordinary_hunk_edits(
                         "line": cur_line,
                         "expected": bl.text,
                         "actual": actual
-                    }));
-                    if bl.text.trim().is_empty() || actual.trim().is_empty() {
-                        err = err.with_suggestion("blank file lines are empty context: write them as ` ` (single space) or an empty line inside the hunk body");
-                    }
+                    }))
+                    .with_suggestion(marker_hint(blank));
                     return Err(err);
                 }
                 cur_line += 1;
@@ -118,7 +128,8 @@ pub fn ordinary_hunk_edits(
                 }
                 let actual = lines[(cur_line - 1) as usize];
                 if actual != bl.text {
-                    let mut err = fail(format!(
+                    let blank = bl.text.trim().is_empty() || actual.trim().is_empty();
+                    let err = fail(format!(
                         "removal mismatch at line {cur_line}: expected `{}`",
                         bl.text
                     ))
@@ -127,10 +138,8 @@ pub fn ordinary_hunk_edits(
                         "line": cur_line,
                         "expected": bl.text,
                         "actual": actual
-                    }));
-                    if bl.text.trim().is_empty() || actual.trim().is_empty() {
-                        err = err.with_suggestion("blank file lines are empty context: write them as ` ` (single space) or an empty line inside the hunk body");
-                    }
+                    }))
+                    .with_suggestion(marker_hint(blank));
                     return Err(err);
                 }
                 let ls = index
@@ -234,6 +243,10 @@ mod tests {
         assert_eq!(repair["line"], serde_json::json!(1));
         assert_eq!(repair["expected"], serde_json::json!("WRONG-CTX"));
         assert_eq!(repair["actual"], serde_json::json!("fn main() {}"));
+        let s = err
+            .suggestion
+            .expect("non-blank mismatch must name the marker rule");
+        assert!(s.contains("1-char marker"), "got: {s}");
     }
 
     #[test]
@@ -250,6 +263,10 @@ mod tests {
         assert_eq!(repair["line"], serde_json::json!(2));
         assert_eq!(repair["expected"], serde_json::json!("WRONG"));
         assert_eq!(repair["actual"], serde_json::json!("fn b() {}"));
+        let s = err
+            .suggestion
+            .expect("non-blank removal must name the marker rule");
+        assert!(s.contains("1-char marker"), "got: {s}");
     }
 
     #[test]
@@ -265,6 +282,7 @@ mod tests {
         assert_eq!(err.code, ErrorCode::GitHunkConflict);
         let s = err.suggestion.expect("blank mismatch must hint prefix");
         assert!(s.contains("empty context"), "got: {s}");
+        assert!(s.contains("1-char marker"), "got: {s}");
     }
 
     #[test]

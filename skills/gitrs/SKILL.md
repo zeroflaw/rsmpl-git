@@ -134,7 +134,7 @@ gitrs apply --file change.rsmpl                       # apply for real
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ best-match preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# sweep` + `@@ -1,1 @@`; stale ranged hunk retries once file-scoped with `drift` evidence (terse: uniqueness gate; anchored: context must agree, else original conflict, SPEC 10.8); too many — add `# allow=many`; if the preview shows mixed `let-else`/macro-type, use an ordinary hunk (SPEC 18.6 R1/R2/R4/R5; fn-body `use` — SPEC 14.9); matcher partial overlap (`partially overlapping matches cannot be merged`, MATCH, rule+file, no suggestion, SPEC 17.6/25.4) vs plan-stage overlap (`overlapping edits cannot be merged`, GIT, file-only + suggestion, SPEC 10.6/25.7) |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` anywhere in the patch — fix names (order irrelevant, paste may precede cut, SPEC 20.3) |
-| `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
+| `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context (every content mismatch names the 1-char marker rule: ` ` / `-` + verbatim text, exactly one marker char) |
 | `RSMPL_BUILD_CONFLICT` | post-lowering `--verify build` failure — read `repair.file` at `repair.range` and fix the build breakage (SPEC 25.10) |
 | `RSMPL_IO_CONFLICT` | unreadable path or bad flags (`--format json` → stdout envelope) — fix per suggestion; absolute/`..`-escaping targets rejected |
 
