@@ -207,9 +207,17 @@ pub(crate) fn try_item_intent_sweep(
         hunk_pairs[*hi].push(pi);
     }
     let def_hunk = pair_hunk[def_idx];
-    // No partial def hunk: the def hunk must hold exactly the def pair.
-    if hunk_pairs[def_hunk].len() != 1 {
-        return None;
+    // WI-4f-next3: relaxed co-resident law (member/mod posture) — every
+    // non-def pair in the def hunk must itself be a claimable use
+    // (adjacent def+use lines share one hunk in real git output); a def
+    // hunk carrying an unclaimable pair declines the whole intent.
+    for pi in &hunk_pairs[def_hunk] {
+        if *pi == def_idx {
+            continue;
+        }
+        if !pair_claimable(&pairs[*pi]) {
+            return None;
+        }
     }
     // Partition balanced hunks into claimable vs leftover.
     let mut claimed_hunks: HashSet<usize> = HashSet::new();
@@ -245,8 +253,10 @@ pub(crate) fn try_item_intent_sweep(
     if claimed_idx.len() < 2 {
         return None;
     }
-    // No claimable use hunk beyond the def → nothing to join.
-    if claimed_hunks.len() < 2 {
+    // No claimable use beyond the def → nothing to join. WI-4f-next3:
+    // a lone def hunk holding def + claimable co-resident uses joins
+    // (the gap's literal case); def-only still declines.
+    if !claimed_idx.iter().any(|pi| *pi != def_idx) {
         return None;
     }
     claimed_idx.sort_unstable();
@@ -1471,12 +1481,57 @@ mod tests {
 
     #[test]
     fn def_hunk_with_extra_pair_still_declines() {
-        // No partial def hunk: def + extra pair in the SAME hunk declines.
+        // WI-4f-next3: def + UNCLAIMABLE pair in the SAME hunk declines
+        // (field-type delta carries no ident).
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-struct Old {\n-    x: i32,\n+struct New {\n+    x: u32,\n"
             .to_string();
         let pre = pre_map(&[("f.rs", "struct Old {\n    x: i32,\n}\n")]);
         let mut used = Vec::new();
         assert!(try_item_intent_sweep(std::slice::from_ref(&section), &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn def_hunk_with_claimable_co_resident_fires() {
+        // WI-4f-next3: adjacent def+use in ONE hunk joins (member/mod
+        // relaxed law). Single-section lone hunk with def + claimable
+        // use fires to one follow hunk, real-apply byte-identical.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-struct Old;\n-fn f(s: Old) -> i32 {\n+struct New;\n+fn f(s: New) -> i32 {\n"
+            .to_string();
+        let pre = pre_map(&[("f.rs", "struct Old;\nfn f(s: Old) -> i32 {\n    0\n}\n")]);
+        let mut used = Vec::new();
+        let (out, _, _) = try_item_intent_sweep(std::slice::from_ref(&section), &pre, &mut used)
+            .expect("def+claimable co-resident must fire");
+        assert_eq!(out.len(), 1, "one intent section, got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- struct Old"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["f.rs"].contains("struct New;"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(files["f.rs"].contains("s: New"), "got: {}", files["f.rs"]);
+        assert!(!files["f.rs"].contains("Old"), "got: {}", files["f.rs"]);
+    }
+
+    #[test]
+    fn def_hunk_with_method_co_resident_still_declines() {
+        // WI-4f-next3 fn-form veto: def + method-ident co-resident is
+        // unclaimable under the fn gate, so the whole intent declines
+        // (never a partial claim).
+        let section = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let b = s.foo();\n+fn bar(x: i32) -> i32 {\n+    let b = s.bar();\n"
+            .to_string();
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    let b = s.foo();\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(std::slice::from_ref(&section), &pre, &mut used).is_none());
+        assert!(used.is_empty());
     }
 
     #[test]
