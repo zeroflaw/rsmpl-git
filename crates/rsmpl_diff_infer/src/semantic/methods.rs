@@ -161,7 +161,10 @@ fn emit_method_to_fn(
 /// (method ident, function callee, minus-arity) when the delta is a
 /// receiver prepend (plus `[0]` token-equals the minus receiver, rest
 /// token-equal pairwise).
-fn parse_method_to_fn_pair(old_line: &str, new_line: &str) -> Option<(String, String, usize)> {
+pub(crate) fn parse_method_to_fn_pair(
+    old_line: &str,
+    new_line: &str,
+) -> Option<(String, String, usize)> {
     let mut old_text = old_line.trim();
     if old_text.is_empty() {
         return None;

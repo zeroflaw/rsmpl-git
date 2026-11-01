@@ -7766,7 +7766,17 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     uniqueness proved by `template_expr_holds` at n=1 over the emitted
     `Receiver.old(E0…)` template plus the T361 byte-compare; uppercase
     idents ride backticks with the raw-method re-parse check (TOOL-5).
-    Remaining families (sub-line m2f/general/
+    Slice-16 adds sub-line method-to-function pairs
+    (`val.old_method(alpha_argument) + 1` →
+    `new_func(val, alpha_argument) + 1`, bare-statement and `let`-init
+    framings via the shared `side_expr` entry): the pair must not parse
+    whole-line (slice-3 owns that shape), `extract_method_fn_sites`
+    yields exactly one site with a receiver-prepend delta and the frame
+    rule holds; multi-subterm lines decline (multi territory by site
+    count); uniqueness proved by `template_expr_holds` at n=1 over the
+    emitted `Receiver.old(E0…)` template plus the T361 byte-compare;
+    uppercase idents ride backticks with the raw-probe re-parse check
+    on both sides (TOOL-5). Remaining families (sub-line general/
     literal/perm/wrap) keep `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
