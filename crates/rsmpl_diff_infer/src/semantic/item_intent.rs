@@ -80,6 +80,10 @@ pub(crate) fn try_item_intent_sweep(
     // emission stays byte-identical to the pre-4e path).
     let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
     let mut native_lens: HashMap<usize, usize> = HashMap::new();
+    // WI-5 2b-next2b-first: unbalanced entries for the field-add joint
+    // (shape-A insertions) + decomposed shape-B records.
+    let mut unbals: Vec<super::item_joint_field_add::Unbal> = Vec::new();
+    let mut shape_bs: Vec<super::item_joint_field_add::ShapeB> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -104,6 +108,17 @@ pub(crate) fn try_item_intent_sweep(
         preserved.insert(i, (prelude, semantic_hunks));
         native_lens.insert(i, native_sec.len());
         for nh in super::split_native_hunks(&native_sec).into_iter() {
+            let hi = hunks.len();
+            if !nh.balanced {
+                unbals.push(super::item_joint_field_add::Unbal {
+                    hi,
+                    sec: i,
+                    path: path.clone(),
+                    minuses: nh.minuses.clone(),
+                    pluses: nh.pluses.clone(),
+                    text: nh.text.clone(),
+                });
+            }
             hunks.push(HunkEntry {
                 sec: i,
                 text: nh.text,
@@ -125,6 +140,28 @@ pub(crate) fn try_item_intent_sweep(
     let mut pair_hunk: Vec<usize> = Vec::new();
     for (hi, he) in hunks.iter().enumerate() {
         if !he.balanced {
+            // Shape B (1 minus, 2 plus: def rename + adjacent field
+            // line) decomposes to a virtual def pair; every other
+            // unbalanced shape stays skipped as before.
+            if let Some((dm, dp, add_plus, point)) =
+                super::item_joint_field_add::decompose_shape_b(&he.minuses, &he.pluses, &he.text)
+            {
+                pairs.push(Pair {
+                    sec: he.sec,
+                    path: he.path.clone(),
+                    minus: dm,
+                    plus: dp,
+                    site: point,
+                });
+                pair_hunk.push(hi);
+                shape_bs.push(super::item_joint_field_add::ShapeB {
+                    hi,
+                    sec: he.sec,
+                    path: he.path.clone(),
+                    point,
+                    add_plus,
+                });
+            }
             continue;
         }
         if he.minuses.len() != he.sites.len() {
@@ -257,7 +294,29 @@ pub(crate) fn try_item_intent_sweep(
     } else {
         None
     };
-    if attr_joint.is_none() && field_joint.is_none() && variant_joint.is_none() {
+    // WI-5 slice 2b-next2b-first: struct rename + field-addition joint
+    // (distant insertion hunk or adjacent shape-B hunk, same file and
+    // section; runs only when the attr/evo arms decline).
+    let add_joint = if attr_joint.is_none() && field_joint.is_none() && variant_joint.is_none() {
+        super::item_joint_field_add::find_field_add_joint(
+            &pairs,
+            def_idx,
+            is_fn_intent,
+            &def_kind,
+            &old_ident,
+            pre,
+            &pair_claimable,
+            &unbals,
+            &shape_bs,
+        )
+    } else {
+        None
+    };
+    if attr_joint.is_none()
+        && field_joint.is_none()
+        && variant_joint.is_none()
+        && add_joint.is_none()
+    {
         for pi in &hunk_pairs[def_hunk] {
             if *pi == def_idx {
                 continue;
@@ -265,6 +324,12 @@ pub(crate) fn try_item_intent_sweep(
             if !pair_claimable(&pairs[*pi]) {
                 return None;
             }
+        }
+        // Shape B traps the def pair in an unbalanced hunk: the pure
+        // path cannot strand its insertion half, so it declines unless
+        // the add joint fires (today's wholly-ordinary posture).
+        if shape_bs.iter().any(|b| b.hi == def_hunk) {
+            return None;
         }
     }
     // Partition balanced hunks into claimable vs leftover.
@@ -298,12 +363,23 @@ pub(crate) fn try_item_intent_sweep(
     if let Some(mpi) = attr_joint.or(field_joint).or(variant_joint) {
         claimed_hunks.insert(pair_hunk[mpi]);
     }
+    // WI-5 2b-next2b-first: the insertion hunk holds no balanced pair
+    // so the loop above skips it; claim it explicitly (shape B re-inserts
+    // the def hunk, idempotent).
+    if let Some(add) = &add_joint {
+        claimed_hunks.insert(add.hi);
+    }
     // Claimed pairs = def + pairs in claimable hunks.
     let mut claimed_idx: Vec<usize> = Vec::new();
     for hi in claimed_hunks.iter() {
         for pi in &hunk_pairs[*hi] {
             claimed_idx.push(*pi);
         }
+    }
+    // WI-5 2b-next2b-first: shape-B def pairs ride an unbalanced hunk
+    // with no balanced entry — lift the virtual def explicitly.
+    if add_joint.as_ref().is_some_and(|a| a.shape_b) {
+        claimed_idx.push(def_idx);
     }
     if claimed_idx.len() < 2 {
         return None;
@@ -321,6 +397,7 @@ pub(crate) fn try_item_intent_sweep(
         return None;
     }
     claimed_idx.sort_unstable();
+    claimed_idx.dedup();
     let claimed_pairs: Vec<Pair> = claimed_idx
         .iter()
         .map(|pi| Pair {
@@ -379,8 +456,8 @@ pub(crate) fn try_item_intent_sweep(
     // the member delta rides below it — field and variant joints share
     // the def-above-member emit).
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let emission = match (attr_joint, field_joint, variant_joint) {
-        (Some(api), None, None) => super::item_joint_attr::joint_emit(
+    let emission = match (attr_joint, field_joint, variant_joint, add_joint.as_ref()) {
+        (Some(api), None, None, None) => super::item_joint_attr::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -390,7 +467,7 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[api].minus,
             &pairs[api].plus,
         ),
-        (None, Some(fpi), None) => super::item_joint_field_evo::joint_emit(
+        (None, Some(fpi), None, None) => super::item_joint_field_evo::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -400,7 +477,7 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[fpi].minus,
             &pairs[fpi].plus,
         ),
-        (None, None, Some(vpi)) => super::item_joint_field_evo::joint_emit(
+        (None, None, Some(vpi), None) => super::item_joint_field_evo::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -410,7 +487,17 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[vpi].minus,
             &pairs[vpi].plus,
         ),
-        (None, None, None) => super::item_joint_attr::emit(
+        (None, None, None, Some(add)) => super::item_joint_field_add::add_emit(
+            &def.path,
+            &rule,
+            &def_kind,
+            &def_prefix,
+            &old_ident,
+            &new_ident,
+            add.point,
+            &add.member_plus,
+        ),
+        (None, None, None, None) => super::item_joint_attr::emit(
             &def.path,
             &rule,
             &def_kind,
@@ -425,7 +512,24 @@ pub(crate) fn try_item_intent_sweep(
     };
     // Scratch-apply probe: every claimed site must show its native plus
     // line, every other line byte-identical (per file, claimed subset).
-    if !probe_reproduces(pre, &emission, &claimed_pairs) {
+    // The add joint inserts a line, so it probes composed-emission vs
+    // claimed-native full-post equality instead (D13, multi-file).
+    let probed = match &add_joint {
+        Some(_) => {
+            let mut claimed_map: HashMap<String, Vec<String>> = HashMap::new();
+            for (hi, he) in hunks.iter().enumerate() {
+                if claimed_hunks.contains(&hi) {
+                    claimed_map
+                        .entry(he.path.clone())
+                        .or_default()
+                        .push(he.text.clone());
+                }
+            }
+            super::item_joint_field_add::probe_add_joint(pre, &emission, &claimed_map)
+        }
+        None => probe_reproduces(pre, &emission, &claimed_pairs),
+    };
+    if !probed {
         used_rules.truncate(checkpoint);
         return None;
     }

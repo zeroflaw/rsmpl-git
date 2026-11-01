@@ -2425,10 +2425,18 @@ lowered diff is the observable truth as always (Section D.2).
    never half-applied), and raising emits that spelling for same-file
    same-section same-container groups (at most one joint per def section;
    2b-next2a: the def pair and the member pair may ride distinct balanced
-   hunks of one section, claimed together with the uses). Two evolutions,
-   an evolution of another container, bare renames, cross-kind members,
-   alias/const shapes, and additions never joint-fire (follow-up slices
-   own additions and cross-file joints).
+   hunks of one section, claimed together with the uses). Struct rename
+   + field-addition joint (WI-5 slice 2b-next2b-first): a `struct` rename
+   plus exactly one field-addition line in the same file and section —
+   either a distant pure-insertion hunk (`@@ -N,0 @@`) or a hunk adjacent
+   to the def change (one minus, two plus) — plus claimable uses raises
+   to a shared-rule two-hunk emission (the WI-12b addition hunk naming
+   the old container, then the terse rename follow hunk), proved by the
+   one multi-file full-post probe (D13) under strict T375. Two evolutions,
+   two additions, an addition of another container, bare renames,
+   cross-kind members, alias/const shapes, and variant-addition lines
+   never joint-fire (variant-addition and cross-file-member joints
+   belong to follow-up slices).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
@@ -7467,8 +7475,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   attr deltas, detached attr hunks, non-attr co-residents, `fn` defs
   (WI-4 B2 owns those), and attr+def without a use stay ordinary
    (a detached attr hunk falls back to the pure rename intent with the
-   attr left ordinary). Field-add, variant-add, multi-hunk, and
-   cross-file joints stay ordinary (future slices).
+   attr left ordinary). Variant-add, multi-addition, and cross-file-member
+   joints stay ordinary (future slices).
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)
@@ -7587,7 +7595,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     renamed struct) plus claimable uses raises as one follow hunk with
     the member pair below the def pair, proved by the one scratch-apply
     probe (D13) under strict T375. Two evolutions, another container's
-    evolution, variant/alias/const shapes, and insertions never joint.
+    evolution, variant/alias/const shapes, and variant-addition insertions
+    never joint (field-addition joints raise per 2b-next2b-first).
     Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
     the enum half of the same law — a def hunk holding the `enum`
     rename plus exactly one attached variant-evolution pair (tuple
@@ -7599,8 +7608,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     scratch-apply probe (D13) under strict T375. At most one joint fires
     per def hunk (attr, field, and variant joints are mutually
     exclusive). Bare variant renames, field-type lines, another
-    container's evolution, two evolutions, alias/const shapes,
-    insertions, multi-hunk joints, and cross-file joints never joint.
+    container's evolution, two evolutions, alias/const shapes, and
+    variant-addition insertions never joint; a member in another file than
+    its container cannot joint (container law non-goal).
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/

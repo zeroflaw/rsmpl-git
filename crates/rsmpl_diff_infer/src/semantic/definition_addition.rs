@@ -657,7 +657,7 @@ fn is_ident(s: &str) -> bool {
 /// The `struct S` spanning insertion `point` (1-based, `start <= point
 /// < end`) that lacks `field`. `None` when no carrier spans the point
 /// or the member already exists there.
-fn struct_spanning(pre: &str, field: &str, point: usize) -> Option<String> {
+pub(crate) fn struct_spanning(pre: &str, field: &str, point: usize) -> Option<String> {
     let file: syn::File = syn::parse_str(pre).ok()?;
     let mut found: Option<String> = None;
     fn walk(items: &[syn::Item], field: &str, point: usize, found: &mut Option<String>) {

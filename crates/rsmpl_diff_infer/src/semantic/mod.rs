@@ -73,6 +73,7 @@ mod verbatim;
 mod hybrid;
 mod item_intent;
 mod item_joint_attr;
+mod item_joint_field_add;
 mod item_joint_field_evo;
 mod item_span;
 mod mod_rename;
