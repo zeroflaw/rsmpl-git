@@ -5213,13 +5213,33 @@ reason: ordinary hunk body has 3 old-side and 3 new-side lines but header claims
 suggestion: fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines); if the counts look right, a line may be missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char) so it never entered the body -- check marker indent before changing the header, then paste `expected_header` from the repair
 ```
 
+When the body was truncated by an unprefixed line, the same code
+names the suspect instead of offering a drop-in header (a header
+computed from the truncated body would silently drop that line, so it
+is never offered):
+
+```text
+RSMPL_PARSE_CONFLICT
+file: src/lib.rs
+old_range: line 4
+reason: ordinary hunk body has 1 old-side and 1 new-side lines but header claims -1,3 +1,3: @@ -1,3 +1,3 @@; suspect line 6: `foo` never entered the body (missing 1-char marker?)
+suggestion: line 6 never entered the body — it is missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char); prefix line 6 with the marker so it enters the body, then recount (do not shrink the header past the dropped line)
+```
+
 Both carry file + header-line range + suggestion (no `rule:` line
 unless the hunk header carries one; JSON explicit throughout), plus
 the machine repair: the whitespace arm a header-template `fix_pattern`,
-the count arm the `fix_header` drop-in header (SPEC D.2). A body line
+the pure-miscount arm the `fix_header` drop-in header (SPEC D.2), the
+suspect arm `fix_header` with `expected_header: null` plus
+`suspect_line` / `suspect_text` / `fix_line` (SPEC D.2). A body line
 missing its 1-char prefix never enters the body, so marker-indent
 surfaces as a count symptom: the count-arm suggestion names the
-1-char marker rule before directing the agent to the repair.
+1-char marker rule before directing the agent to the repair. Hunk
+headers, blank separators, file metadata, and EOF are never suspects:
+a mismatch ending there is a pure miscount with a well-formed body.
+The T431 trailing-blank repair runs before this gate, so a suspect is
+only named when the body still mismatches after trailing blanks are
+consumed.
 
 ```text
 RSMPL_PARSE_CONFLICT
@@ -7041,6 +7061,12 @@ prints one JSON object to stdout:
 - "expected_header":"@@ -s,N +t,M @@"}` — `N`/`M` are the counted body lines
 - (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines), `A`/`B` the claimed
 - header counts, and `expected_header` the drop-in corrected header line.
+- When the body was truncated by an unprefixed line (WI-1b suspect arm),
+- the same action carries `"expected_header":null` plus
+- `"suspect_line":N,"suspect_text":"...","fix_line":"prefix line N ..."` —
+- `N` is the 1-based patch line that never entered the body; prefix it
+- with its marker and recount instead of pasting a header. Headers,
+- blank separators, metadata, and EOF are never suspects (pure miscount).
 - Ordinary-hunk content mismatch (25.7): `{"action":"fix_context","line":N,
 - "expected":"...","actual":"..."}` — `N` is the 1-based original-file line,
 - `expected` the hunk's line text, `actual` the file's line text. Full

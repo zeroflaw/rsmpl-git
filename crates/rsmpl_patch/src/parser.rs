@@ -360,27 +360,91 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
             .filter(|b| b.prefix == ' ' || b.prefix == '+')
             .count() as u32;
         if old_count != header.old_len || new_count != header.new_len {
-            let mut err = StructuredError::new(
-                ErrorCode::ParseConflict,
-                format!(
-                    "ordinary hunk body has {old_count} old-side and {new_count} new-side lines but header claims -{},{} +{},{}: {}",
-                    header.old_start, header.old_len, header.new_start, header.new_len, lines[at]
-                ),
-            )
-            .with_file(file)
-            .with_range(format!("line {}", at + 1))
-            .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines); if the counts look right, a line may be missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char) so it never entered the body -- check marker indent before changing the header, then paste `expected_header` from the repair")
-            .with_repair(serde_json::json!({
-                "action": "fix_header",
-                "expected_old": old_count,
-                "expected_new": new_count,
-                "claimed_old": header.old_len,
-                "claimed_new": header.new_len,
-                "expected_header": format!(
-                    "@@ -{},{} +{},{} @@",
-                    header.old_start, old_count, header.new_start, new_count
-                ),
-            }));
+            // WI-1b: name the suspect — the first body-breaking line.
+            // `parse_body_lines` stops at the first line that is not a
+            // body line and returns its index as `next`; an unprefixed
+            // content line (missing 1-char marker) truncates the body
+            // here, so the drop-in header computed from the truncated
+            // body would silently drop that line. T431 already ran
+            // above, so a suspect is only named when the body still
+            // mismatches after trailing-blank repair; headers, blank
+            // separators, file metadata, and EOF mean a pure miscount
+            // with a well-formed body (drop-in header stays safe).
+            let suspect: Option<(usize, &str)> = if next < lines.len() {
+                let cand = lines[next];
+                let is_header = cand.starts_with("diff --git ")
+                    || cand.starts_with("@@ ")
+                    || cand.starts_with("@@-")
+                    || cand.starts_with("@@");
+                let is_blank = cand.is_empty() || cand.trim().is_empty();
+                let is_metadata = cand.starts_with("--- ")
+                    || cand.starts_with("+++ ")
+                    || cand.starts_with("index ")
+                    || cand.starts_with("new file")
+                    || cand.starts_with("deleted file")
+                    || cand.starts_with("old mode")
+                    || cand.starts_with("new mode")
+                    || cand.starts_with("similarity")
+                    || cand.starts_with("rename ")
+                    || cand.starts_with("Binary ");
+                if is_header || is_blank || is_metadata {
+                    None
+                } else if is_body_start(cand) {
+                    // Unreachable: body lines are consumed above — a
+                    // body-start line at `next` means the body loop
+                    // stopped on a header/blank instead. No suspect.
+                    None
+                } else {
+                    Some((next + 1, cand))
+                }
+            } else {
+                None
+            };
+            let mut err = if let Some((suspect_line, suspect_text)) = suspect {
+                StructuredError::new(
+                    ErrorCode::ParseConflict,
+                    format!(
+                        "ordinary hunk body has {old_count} old-side and {new_count} new-side lines but header claims -{},{} +{},{}: {}; suspect line {suspect_line}: `{suspect_text}` never entered the body (missing 1-char marker?)",
+                        header.old_start, header.old_len, header.new_start, header.new_len, lines[at]
+                    ),
+                )
+                .with_file(file)
+                .with_range(format!("line {}", at + 1))
+                .with_suggestion(format!("line {suspect_line} never entered the body — it is missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char); prefix line {suspect_line} with the marker so it enters the body, then recount (do not shrink the header past the dropped line)"))
+                .with_repair(serde_json::json!({
+                    "action": "fix_header",
+                    "expected_old": old_count,
+                    "expected_new": new_count,
+                    "claimed_old": header.old_len,
+                    "claimed_new": header.new_len,
+                    "expected_header": null,
+                    "suspect_line": suspect_line,
+                    "suspect_text": suspect_text,
+                    "fix_line": format!("prefix line {suspect_line} with ` `/`-`/`+` (exactly one marker char) so it enters the body, then recount"),
+                }))
+            } else {
+                StructuredError::new(
+                    ErrorCode::ParseConflict,
+                    format!(
+                        "ordinary hunk body has {old_count} old-side and {new_count} new-side lines but header claims -{},{} +{},{}: {}",
+                        header.old_start, header.old_len, header.new_start, header.new_len, lines[at]
+                    ),
+                )
+                .with_file(file)
+                .with_range(format!("line {}", at + 1))
+                .with_suggestion("fix the header counts to match the body lines (old-side = ` ` + `-` lines, new-side = ` ` + `+` lines); if the counts look right, a line may be missing its 1-char marker (` ` context / `-` removal / `+` addition, exactly one marker char) so it never entered the body -- check marker indent before changing the header, then paste `expected_header` from the repair")
+                .with_repair(serde_json::json!({
+                    "action": "fix_header",
+                    "expected_old": old_count,
+                    "expected_new": new_count,
+                    "claimed_old": header.old_len,
+                    "claimed_new": header.new_len,
+                    "expected_header": format!(
+                        "@@ -{},{} +{},{} @@",
+                        header.old_start, old_count, header.new_start, new_count
+                    ),
+                }))
+            };
             if let Some(rule) = &header.rule {
                 err = err.with_rule(rule.clone());
             }
@@ -1286,9 +1350,9 @@ mod tests {
         // `\ No newline` markers are neither side: exact counts pass.
         let marker_ok = "diff --git a/link b/link\n--- /dev/null\n+++ b/link\n@@ -0,0 +1,1 @@\n+real.txt\n\\ No newline at end of file\n";
         parse_patch(marker_ok).unwrap();
-        // TOOL-gitrs-hint2 micro-pin: an unprefixed body line never enters
-        // the body, so the miscount hint (not a new error) carries the
-        // marker clause.
+        // WI-1b: an unprefixed body line truncates the body, so the
+        // error names the suspect and offers no pasteable header
+        // (a drop-in from the truncated body would silently drop it).
         let unprefixed = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n a\nfoo\n-b\n";
         let err = parse_patch(unprefixed).unwrap_err();
         let ParseError::Structured(s) = &err else {
@@ -1296,6 +1360,47 @@ mod tests {
         };
         assert_eq!(s.code, ErrorCode::ParseConflict);
         assert!(s.suggestion.as_deref().unwrap().contains("1-char marker"));
+        assert!(
+            s.message.contains("suspect line 6: `foo`"),
+            "reason must name the suspect, got: {}",
+            s.message
+        );
+        assert!(
+            s.suggestion.as_deref().unwrap().contains("line 6"),
+            "suggestion must point at the suspect, got: {:?}",
+            s.suggestion
+        );
+        let repair = s
+            .repair
+            .clone()
+            .expect("suspect mismatch must carry repair");
+        assert_eq!(repair["action"], serde_json::json!("fix_header"));
+        assert!(repair["expected_header"].is_null(), "got: {repair}");
+        assert_eq!(repair["suspect_line"], serde_json::json!(6));
+        assert_eq!(repair["suspect_text"], serde_json::json!("foo"));
+        assert!(
+            repair["fix_line"].as_str().unwrap().contains("line 6"),
+            "got: {repair}"
+        );
+        // WI-1b: blank separators and hunk headers are never suspects —
+        // a miscount ending at a separator/header is a pure miscount.
+        // (T431 already consumed the blank below as trailing context,
+        // so the counts below already include it — the interaction pin.)
+        let sep_miscount = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@\n a\n-b\n+c\n a\n\n@@ -10,3 +10,3 @@\n x\n-y\n+Y\n z\n";
+        let err = parse_patch(sep_miscount).unwrap_err();
+        let ParseError::Structured(s) = &err else {
+            panic!("expected structured PARSE_CONFLICT, got: {err}");
+        };
+        assert!(
+            !s.message.contains("suspect line"),
+            "separator must not name a suspect, got: {}",
+            s.message
+        );
+        let repair = s.repair.clone().expect("pure miscount must carry repair");
+        assert_eq!(
+            repair["expected_header"],
+            serde_json::json!("@@ -1,4 +1,4 @@")
+        );
     }
 
     #[test]

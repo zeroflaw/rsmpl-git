@@ -100,6 +100,51 @@ fn ordinary_hunk_count_mismatch_rejected() {
 }
 
 #[test]
+fn ordinary_hunk_unprefixed_line_names_suspect() {
+    // WI-1b: an unprefixed body line truncates the body — the error
+    // names the suspect line and offers no pasteable header
+    // (`expected_header: null` + `fix_line`), so a verbatim consumer
+    // cannot shrink the header past the dropped line.
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn a() {}\nfn b() {}\n-fn c() {}\n";
+    let (stderr, v) = check_rejected(patch, "src/lib.rs", "fn a() {}\nfn c() {}\n");
+    assert!(stderr.contains("RSMPL_PARSE_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("suspect line 6"), "got: {stderr}");
+    assert!(stderr.contains("fn b() {}"), "got: {stderr}");
+    assert!(
+        v["error"]["repair"]["expected_header"].is_null(),
+        "got: {v}"
+    );
+    assert_eq!(v["error"]["repair"]["suspect_line"], serde_json::json!(6));
+    assert_eq!(
+        v["error"]["repair"]["suspect_text"],
+        serde_json::json!("fn b() {}")
+    );
+    assert!(
+        v["error"]["repair"]["fix_line"]
+            .as_str()
+            .unwrap()
+            .contains("line 6"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["error"]["repair"]["action"],
+        serde_json::json!("fix_header")
+    );
+    assert!(
+        v["error"]["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("line 6"),
+        "got: {v}"
+    );
+    // Worktree untouched (fail-fast, never half-applied).
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PARSE_CONFLICT")
+    );
+}
+
+#[test]
 fn well_formed_ordinary_hunk_applies() {
     // Control: truthful headers still apply for real (T361 doctrine).
     let dir = init_repo();
