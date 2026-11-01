@@ -388,8 +388,10 @@ pub fn general_orphans(
     Vec::new()
 }
 
-/// WI-2a file-wide orphan scan for `let`-binder renames (block scope:
-/// uses after the binder anywhere in the file may dangle).
+/// WI-2a post-binder orphan scan for `let`-binder renames (same file
+/// only: locals can never dangle cross-file; uses before the binder
+/// statement end name the outer scope, including the binder's own init
+/// RHS `let total = total;`).
 fn let_binder_orphans(
     states: &HashMap<String, FileState>,
     file_edits: &HashMap<String, Vec<TextEdit>>,
@@ -397,35 +399,125 @@ fn let_binder_orphans(
     edits_before: usize,
     old: &str,
 ) -> Vec<crate::OrphanReport> {
-    let renamed: Vec<(usize, usize)> = file_edits
+    let Some(st) = states.get(path) else {
+        return Vec::new();
+    };
+    let Some(parsed) = st.parsed.as_ref() else {
+        return Vec::new();
+    };
+    let original = st.original.as_str();
+    let index = &st.index;
+    let hunk_edits: &[TextEdit] = file_edits
         .get(path)
-        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
-        .unwrap_or_default();
-    let mut refs: Vec<(String, &syn::File, &str, &crate::lines::LineIndex)> = Vec::new();
-    let mut paths: Vec<&String> = states.keys().collect();
-    paths.sort();
-    for p in paths {
-        if let Some(st) = states.get(p) {
-            if let Some(parsed) = st.parsed.as_ref() {
-                refs.push((p.clone(), parsed, st.original.as_str(), &st.index));
+        .map(|v| &v[edits_before.min(v.len())..])
+        .unwrap_or(&[]);
+    if hunk_edits.is_empty() {
+        return Vec::new();
+    }
+    let renamed: Vec<(usize, usize)> = hunk_edits.iter().map(|e| (e.start, e.end)).collect();
+    let binder_spans: Vec<(usize, usize)> = hunk_edits
+        .iter()
+        .filter(|e| e.label != Some("follow"))
+        .map(|e| (e.start, e.end))
+        .collect();
+    let fallback = binder_spans
+        .iter()
+        .map(|(s, _)| *s)
+        .min()
+        .unwrap_or(usize::MAX);
+    struct LocalEnds<'a> {
+        original: &'a str,
+        index: &'a LineIndex,
+        binders: &'a [(usize, usize)],
+        ends: Vec<usize>,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for LocalEnds<'_> {
+        fn visit_local(&mut self, node: &'ast syn::Local) {
+            use syn::spanned::Spanned;
+            if let Some((a, b)) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            {
+                if self.binders.iter().any(|(s, e)| a <= *s && *e <= b) {
+                    self.ends.push(b);
+                }
             }
+            syn::visit::visit_local(self, node);
         }
     }
+    let mut grab = LocalEnds {
+        original,
+        index,
+        binders: &binder_spans,
+        ends: Vec::new(),
+    };
+    {
+        use syn::visit::Visit;
+        grab.visit_file(parsed);
+    }
+    let thresh = grab.ends.into_iter().min().unwrap_or(fallback);
+    if thresh == usize::MAX {
+        return Vec::new();
+    }
+    let thresh_line = index.line_of(thresh);
+    let refs = vec![(path.to_string(), parsed, original, index)];
     let mut out = collect_orphans(&refs, old, path, &renamed, false);
     // Inline format-string captures (`println!("{total}")`) hide the
     // ident inside a string literal — no `Ident` token for the path
-    // collector above. Scan macro interiors for `{old}` captures and
-    // report them as `macro-hidden` (safe direction: downgrade).
-    for (fpath, parsed, original, index) in &refs {
-        for line in format_capture_lines(parsed, old) {
-            out.push(crate::OrphanReport {
-                file: (*fpath).clone(),
-                line,
-                text: orphan_line_text(original, index, line),
-                reason: "macro-hidden".to_string(),
-            });
+    // collector above. Pre-binder macros never dangle, so only
+    // post-binder capture lines are kept (safe direction: downgrade).
+    for line in format_capture_lines(parsed, old) {
+        if line < thresh_line {
+            continue;
         }
+        out.push(crate::OrphanReport {
+            file: path.to_string(),
+            line,
+            text: orphan_line_text(original, index, line),
+            reason: "macro-hidden".to_string(),
+        });
     }
+    out.retain(|o| {
+        if o.line < thresh_line {
+            return false;
+        }
+        if o.line > thresh_line {
+            return true;
+        }
+        if o.reason == "macro-hidden" {
+            return true;
+        }
+        let Some(ls) = index.line_start(o.line) else {
+            return true;
+        };
+        let le = index.line_start(o.line + 1).unwrap_or(original.len());
+        let line_text = &original[ls..le.min(original.len())];
+        let mut off = 0;
+        while let Some(pos) = line_text[off..].find(old) {
+            let a = ls + off + pos;
+            let b = a + old.len();
+            let prev_ok = a == 0 || {
+                let c = original[..a].chars().next_back().unwrap();
+                !(c.is_alphanumeric() || c == '_')
+            };
+            let next_ok = original
+                .get(b..)
+                .map(|r| {
+                    r.chars()
+                        .next()
+                        .map(|c| !(c.is_alphanumeric() || c == '_'))
+                        .unwrap_or(true)
+                })
+                .unwrap_or(true);
+            if prev_ok && next_ok && a >= thresh && !renamed.iter().any(|(s, e)| a < *e && *s < b) {
+                return true;
+            }
+            off += pos + 1;
+            if off >= line_text.len() {
+                break;
+            }
+        }
+        false
+    });
     out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     out.dedup_by(|a, b| a.file == b.file && a.line == b.line);
     out
@@ -1156,6 +1248,127 @@ mod tests {
         let compiled = compiled(kind);
         let orphans = general_orphans(&states, &file_edits, "src/main.rs", 0, &compiled);
         assert!(orphans.is_empty());
+    }
+
+    #[test]
+    fn general_orphans_excludes_pre_binder_use() {
+        use std::collections::HashMap;
+        let src = "fn main() {\n    let y = total;\n    let total = 1;\n    let z = total;\n}\n";
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        let binder_off = src.find("let total").unwrap() + 4;
+        let mut states = HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            crate::lines::FileState {
+                original: src.to_string(),
+                index,
+                parsed: Some(parsed),
+            },
+        );
+        let mut file_edits = HashMap::new();
+        file_edits.insert(
+            "src/main.rs".to_string(),
+            vec![crate::edits::TextEdit {
+                start: binder_off,
+                end: binder_off + "total".len(),
+                replacement: "sum".to_string(),
+                label: None,
+            }],
+        );
+        let kind = general_stmt("let total = 1;", "let sum = 1;");
+        let mut kind = kind;
+        if let PatternKind::General { placeholders, .. } = &mut kind {
+            placeholders.clear();
+        }
+        let compiled = compiled(kind);
+        let orphans = general_orphans(&states, &file_edits, "src/main.rs", 0, &compiled);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 4);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn general_orphans_excludes_binder_init_rhs() {
+        use std::collections::HashMap;
+        let src = "fn main() {\n    let total = total;\n}\n";
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        let binder_off = src.find("let total").unwrap() + 4;
+        let mut states = HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            crate::lines::FileState {
+                original: src.to_string(),
+                index,
+                parsed: Some(parsed),
+            },
+        );
+        let mut file_edits = HashMap::new();
+        file_edits.insert(
+            "src/main.rs".to_string(),
+            vec![crate::edits::TextEdit {
+                start: binder_off,
+                end: binder_off + "total".len(),
+                replacement: "sum".to_string(),
+                label: None,
+            }],
+        );
+        let kind = general_stmt("let total = 1;", "let sum = 1;");
+        let mut kind = kind;
+        if let PatternKind::General { placeholders, .. } = &mut kind {
+            placeholders.clear();
+        }
+        let compiled = compiled(kind);
+        let orphans = general_orphans(&states, &file_edits, "src/main.rs", 0, &compiled);
+        assert!(orphans.is_empty(), "got: {orphans:?}");
+    }
+
+    #[test]
+    fn general_orphans_ignores_other_files() {
+        use std::collections::HashMap;
+        let src = "fn main() {\n    let total = 1;\n    let z = total;\n}\n";
+        let other = "fn other() {\n    let y = total;\n}\n";
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let other_parsed: syn::File = syn::parse_str(other).unwrap();
+        let binder_off = src.find("let total").unwrap() + 4;
+        let mut states = HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            crate::lines::FileState {
+                original: src.to_string(),
+                index: crate::lines::LineIndex::new(src),
+                parsed: Some(parsed),
+            },
+        );
+        states.insert(
+            "src/other.rs".to_string(),
+            crate::lines::FileState {
+                original: other.to_string(),
+                index: crate::lines::LineIndex::new(other),
+                parsed: Some(other_parsed),
+            },
+        );
+        let mut file_edits = HashMap::new();
+        file_edits.insert(
+            "src/main.rs".to_string(),
+            vec![crate::edits::TextEdit {
+                start: binder_off,
+                end: binder_off + "total".len(),
+                replacement: "sum".to_string(),
+                label: None,
+            }],
+        );
+        let kind = general_stmt("let total = 1;", "let sum = 1;");
+        let mut kind = kind;
+        if let PatternKind::General { placeholders, .. } = &mut kind {
+            placeholders.clear();
+        }
+        let compiled = compiled(kind);
+        let orphans = general_orphans(&states, &file_edits, "src/main.rs", 0, &compiled);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].file, "src/main.rs");
+        assert_eq!(orphans[0].line, 3);
     }
 
     fn follow_edits_for(src: &str) -> Vec<crate::edits::TextEdit> {
