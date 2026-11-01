@@ -5609,7 +5609,7 @@ hunk's line text, `actual` the file's line text (full single-line texts,
 never truncated). The two EOF shapes carry `fix_range` instead (SPEC
 D.2): there is no actual line to show, but the clamped header tells the
 agent where the file ends — paste it and retry.
-Both mismatch shapes also carry a `suggestion:` naming the 1-char marker rule (` ` context / `-` removal / `+` addition + verbatim file text): when header counts look right, the failure is marker indent (exactly one marker char, not zero/two), not counts -- check the marker and paste `actual` from the repair. Blank-involved mismatches prepend the empty-context sentence to the same suggestion.
+Both mismatch shapes also carry a content-discipline `suggestion:` (the file line differs from the hunk text: paste `actual` from the repair or re-read the file) — by the time the engine runs, the parser has already stripped exactly one marker char and proved header counts equal body counts, so a missing marker cannot cause this error. Blank-involved mismatches carry the empty-context sentence instead: blank file lines are empty context, written as ` ` (single space) or an empty line inside the hunk body.
 
 Three further engine arms never surface via the CLI, so they carry no fence
 here (defensive backstops for library callers, documented but not pinnable):
@@ -5639,7 +5639,7 @@ carries explicit `rule: null` / `range: null` with `file` set and the same
 
 | conflict | `rule` | `old_range`/`range` | `suggestion` |
 |---|---|---|---|
-| ordinary-hunk content mismatch | `""` (empty line in text) | present (`start..start+len` / JSON `range`) | null (no line in text) |
+| ordinary-hunk content mismatch | `""` (empty line in text) | present (`start..start+len` / JSON `range`) | present (content discipline; the blank arm carries the empty-context sentence) |
 | overlap (`overlapping edits ...`) | absent in text / `null` in JSON | absent in text / `null` in JSON | present (repair pointer) |
 
 The overlap shape carries a `fix_pattern` repair beside the suggestion
