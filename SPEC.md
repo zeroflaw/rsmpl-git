@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
-  Precision singles (WI-7 slices 1-9, `PrecisionUnique`): N == 1
+   Precision singles (WI-7 slices 1-10, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7695,20 +7695,29 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    (`wrapper_tpl_single` method arm: receiver-is-hole or exactly one
    arg token-equals the minus, every other position a concrete anchor
    — receiver/token is the anchor beyond the hole); zero holes, two
-   holes (`r.foo(x, x)`, `x.foo(x)`), and pure concrete deltas veto.
-   The
-   callee/method/function/operator token is the anchor beyond the holes
-   (`Receiver`/`E`; uppercase rides backticks, same rule as above).
-   Emission is the ranged allow-one spelling (tight original range,
-   directive-free, default `allow=one`); the `let`-init emission stays
-   the bare anchored template (pattern/type ride each site's own
-   wrapper) and carries the same T361 byte-compare pre-reservation as
-   slice-4. Guard is the precision guard (semantic ≤ ordinary + 16).
-   `None` pre-image vetoes (no guessing); an untouched same-shape twin
-   vetoes (same-arity for call/method shapes, same-template for
-   general); non-matching twins never count. Remaining families
-   (literal, sub-line, perm) keep `N ≥ 2`
-   until their WI-7 slices land.
+    holes (`r.foo(x, x)`, `x.foo(x)`), and pure concrete deltas veto.
+    Slice-10 adds whole-line bare-call arg-permutation pairs
+    (`swap(E0, E1)` → `swap(E1, E0)`, whole-line plus `let`-init via the
+    shared T449 entry) in a sibling module (`perm_single.rs`, D5 split):
+    the N ≥ 2 perm sweep owns sub-line-only classes and vetoes
+    whole-line pairs, so the single proves structurally from one pair
+    (same callee, uniform arity k ≥ 2, plus args a non-trivial
+    permutation of the minus args — pure token multiset bijection via
+    first-unused mapping; identity, non-bijective deltas, callee
+    deltas, and macro/unsupported args veto; the callee token is the
+    anchor beyond the holes). The
+    callee/method/function/operator token is the anchor beyond the holes
+    (`Receiver`/`E`; uppercase rides backticks, same rule as above).
+    Emission is the ranged allow-one spelling (tight original range,
+    directive-free, default `allow=one`); the `let`-init emission stays
+    the bare anchored template (pattern/type ride each site's own
+    wrapper) and carries the same T361 byte-compare pre-reservation as
+    slice-4. Guard is the precision guard (semantic ≤ ordinary + 16).
+    `None` pre-image vetoes (no guessing); an untouched same-shape twin
+    vetoes (same-arity for call/method shapes, same-template for
+    general); non-matching twins never count. Remaining families
+    (literal, sub-line, method-perm) keep `N ≥ 2`
+    until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

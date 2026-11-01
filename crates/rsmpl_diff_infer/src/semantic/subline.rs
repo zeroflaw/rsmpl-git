@@ -748,8 +748,11 @@ mod tests {
     }
 
     #[test]
-    fn perm_single_site_stays_ordinary() {
-        // t375: one subterm site never wins as a sweep (fixture 74).
+    fn perm_single_site_fires_precision_single() {
+        // WI-7 slice-10: the fixture-74 shape (one whole-line perm
+        // pair) now raises as an allow-one precision single —
+        // `template_pair_holds` at n=1 plus the T361 byte-compare prove
+        // the unique site, so the t375 demotion no longer applies.
         let raw = section(
             "src/lib.rs",
             "@@ -5 +5 @@\n-    swap(x, y)\n+    swap(y, x)\n",
@@ -758,10 +761,11 @@ mod tests {
             "src/lib.rs",
             "fn swap(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn f(x: i32, y: i32) -> i32 {\n    swap(x, y)\n}\n",
         )]);
-        assert!(
-            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none()
-        );
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("perm single must fire");
+        assert!(out.contains("- swap(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ swap(E1, E0)\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
     }
 }
 

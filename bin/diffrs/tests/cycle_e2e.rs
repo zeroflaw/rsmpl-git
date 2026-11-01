@@ -436,7 +436,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "74-call-swap-single",
-        "t375: single-site call arg-swap re-infers ordinary",
+        "WI-7 slice-10: single-site call perm re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "75-macro-verbatim-single",

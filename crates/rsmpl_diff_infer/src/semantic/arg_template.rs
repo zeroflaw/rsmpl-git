@@ -18,7 +18,7 @@ use super::{call_parts, ident_len, strip_one_terminator, unique_rule};
 use quote::ToTokens;
 
 /// Token-normalized text for agreement comparison.
-fn tok<T: ToTokens>(node: &T) -> String {
+pub(crate) fn tok<T: ToTokens>(node: &T) -> String {
     node.to_token_stream().to_string()
 }
 
@@ -341,7 +341,9 @@ fn wrapper_tpl(minus: &[syn::Expr], plus: &[syn::Expr], hole: &str) -> Option<St
 
 /// Parse one `-`/`+` line pair as bare calls; return
 /// (old callee, new callee, minus args per site, plus args per site).
-fn parse_bare_pair(
+/// `pub(crate)` for the WI-7 slice-10 perm single (`perm_single.rs`,
+/// D5 split — same whole-line/T449 entry, no duplicated parser).
+pub(crate) fn parse_bare_pair(
     old_line: &str,
     new_line: &str,
 ) -> Option<(String, String, Vec<syn::Expr>, Vec<syn::Expr>)> {

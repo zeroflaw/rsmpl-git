@@ -56,6 +56,8 @@ pub(crate) mod partial;
 mod pat_template;
 mod paths;
 mod peel;
+
+pub(crate) mod perm_single;
 pub(crate) mod prefix;
 pub(crate) mod prov;
 mod repeat;
@@ -110,6 +112,7 @@ pub(crate) use header_evolution::try_header_evolution_sweep;
 pub(crate) use impl_single::try_impl_header_single;
 pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;
+pub(crate) use perm_single::try_call_perm_single;
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
 pub(crate) use single_block::try_single_block_sweep;
 
