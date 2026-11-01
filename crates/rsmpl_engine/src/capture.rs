@@ -232,7 +232,7 @@ pub(crate) fn eval_collection_cut(
         let cap_start = state
             .index
             .line_start(sl)
-            .ok_or_else(|| super::plan::range_err(rule, path, sl))?;
+            .ok_or_else(|| super::plan_dispatch::range_err(rule, path, sl))?;
         let cap_end = state
             .index
             .line_start(el + 1)

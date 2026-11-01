@@ -38,6 +38,7 @@ mod matcher_use;
 mod matcher_value;
 mod ordinary;
 mod plan;
+mod plan_dispatch;
 mod plan_symbol;
 mod postcheck;
 mod postcheck_assoc;

@@ -185,7 +185,7 @@ pub(crate) fn cited_is_disjoint(cited: (u32, u32), region: (u32, u32)) -> bool {
 /// WI-10b drift retry (SPEC 10.8): re-run the same matcher with scope
 /// overridden to `File`, keeping the edits. Moved from `plan.rs` per
 /// the D5 size gate (the planner calls back in via
-/// `crate::plan::apply_rsmpl_hunk`).
+/// `crate::plan_dispatch::apply_rsmpl_hunk`).
 pub(crate) fn try_drift_apply(
     state: &crate::lines::FileState,
     path: &str,
@@ -200,7 +200,7 @@ pub(crate) fn try_drift_apply(
         .directives
         .push(rsmpl_patch::Directive::Scope(Scope::File));
     let mut probe_edits = Vec::new();
-    let (n, bindings) = crate::plan::apply_rsmpl_hunk(
+    let (n, bindings) = crate::plan_dispatch::apply_rsmpl_hunk(
         state,
         path,
         &wide_hunk,
@@ -263,7 +263,7 @@ pub(crate) fn probe_whole_file(
         .directives
         .push(rsmpl_patch::Directive::Scope(Scope::File));
     let mut probe_edits = Vec::new();
-    crate::plan::apply_rsmpl_hunk(
+    crate::plan_dispatch::apply_rsmpl_hunk(
         state,
         path,
         &wide_hunk,
