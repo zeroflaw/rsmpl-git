@@ -308,7 +308,7 @@ pub(crate) fn classify(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "evolution paste template must be a single-line `fn` header with `(...)` + `...` or a concrete signature + `{{ ... }}` (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}`, `+ <vis>fn <New>(args) -> ret {{ ... }}` or paste the bare capture name for a verbatim move",
+                    "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, or a concrete signature + `{{ ... }}` (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}`, `+ <vis>fn <Old> as <New>(...) {{ ... }}`, `+ <vis>fn <New>(args) -> ret {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));

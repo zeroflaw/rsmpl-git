@@ -120,6 +120,124 @@ pub(crate) fn struct_evolved_match(
     }
     Some(plus.ident.to_string())
 }
+/// All body-evolving `fn` hits of one minus item text in a pure-plus
+/// hunk body (WI-6 slice 3b). Mirrors `find_evolved_hits`; spans
+/// coincide with parsed `fn` item spans by construction. Returns
+/// `(plus_first, plus_last, plus_prefix, old_name, new_name)`: the paste
+/// spells `+ <prefix>fn <old> as <new>(...) { ... }` and the engine
+/// renames the captured body's self-references through the shared
+/// [`rsmpl_pattern::rename_ident_in_code`] scanner — the same scanner
+/// proves the pairing here (renamed minus text == plus run text, raw
+/// string equality), so pairing and splice agree by construction.
+pub(crate) fn find_fn_body_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemFn>(minus_text) else {
+        return Vec::new();
+    };
+    let old = minus.sig.ident.to_string();
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Fn(plus) = it else {
+            continue;
+        };
+        let Some(new) = fn_body_evolved_match(&minus, plus) else {
+            continue;
+        };
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let Some(prefix) = header_prefix(&plus_body[(s - 1)..e], &new) else {
+            continue;
+        };
+        // Full-text agreement: the scanner-renamed minus item must equal
+        // the plus run verbatim. Any non-rename delta (vis, qualifier,
+        // signature, attr, unrenamed string/comment occurrence) vetoes —
+        // sound by construction, conservative on shadows (a shadowing
+        // local the author kept vetoes to ordinary).
+        let plus_text: String = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if rsmpl_pattern::rename_ident_in_code(minus_text, &old, &new) != plus_text {
+            continue;
+        }
+        out.push((s - 1, e - 1, prefix, old.clone(), new));
+    }
+    out
+}
+
+/// Body-evolving `fn` pair check (WI-6 slice 3b): same shape modulo the
+/// header ident, with a token-different body the full-text agreement in
+/// [`find_fn_body_evolved_hits`] proves is exactly the old→new rename.
+/// Name-only scope: vis, qualifiers, attrs, generics, params, return, and
+/// `where` must be token-equal (any wider delta fails the full-text
+/// agreement downstream anyway; the explicit gates pin the scope).
+/// Returns the plus-side ident when the pair evolves.
+pub(crate) fn fn_body_evolved_match(minus: &syn::ItemFn, plus: &syn::ItemFn) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    if tok(&minus.vis) != tok(&plus.vis) {
+        return None;
+    }
+    if opt_tok(&minus.sig.constness) != opt_tok(&plus.sig.constness)
+        || opt_tok(&minus.sig.asyncness) != opt_tok(&plus.sig.asyncness)
+        || opt_tok(&minus.sig.unsafety) != opt_tok(&plus.sig.unsafety)
+        || opt_tok(&minus.sig.abi) != opt_tok(&plus.sig.abi)
+    {
+        return None;
+    }
+    if minus.sig.ident == plus.sig.ident {
+        return None; // vacuous — the abstract path owns renames without body delta
+    }
+    let (a, b) = (&minus.sig, &plus.sig);
+    let sig_same = tok(&a.generics.params) == tok(&b.generics.params)
+        && opt_tok(&a.generics.where_clause) == opt_tok(&b.generics.where_clause)
+        && tok(&a.inputs) == tok(&b.inputs)
+        && a.variadic.is_some() == b.variadic.is_some()
+        && opt_tok(&a.variadic) == opt_tok(&b.variadic)
+        && tok(&a.output) == tok(&b.output);
+    if !sig_same {
+        return None;
+    }
+    if tok(&minus.block) == tok(&plus.block) {
+        return None; // no body delta — the abstract path owns it
+    }
+    Some(plus.sig.ident.to_string())
+}
+
+/// Single-line body-evolution paste template: the plus-side prefix
+/// verbatim, `fn <old> as <new>(...) { ... }`. The `as` names the
+/// captured ident the engine renames in the body; `prefix` is trimmed,
+/// an empty prefix yields a bare `fn` header.
+pub(crate) fn body_evolution_template(prefix: &str, old: &str, new: &str) -> String {
+    let pre = prefix.trim_end();
+    if pre.is_empty() {
+        format!("fn {old} as {new}(...) {{ ... }}")
+    } else {
+        format!("{pre} fn {old} as {new}(...) {{ ... }}")
+    }
+}
+
 /// All evolved hits of one minus item text in a pure-plus hunk body.
 /// Returns `(plus_first, plus_last, plus_prefix, plus_name)` with
 /// 0-based hunk-body spans; the spans coincide with parsed `fn` item
@@ -669,6 +787,95 @@ mod tests {
             evolution_template("pub(crate) async ", "new"),
             "pub(crate) async fn new(...) { ... }"
         );
+    }
+
+    #[test]
+    fn body_evolution_template_shapes() {
+        // WI-6 slice 3b: the `as` paste names the captured ident and the
+        // new ident; the engine renames the body between them.
+        assert_eq!(
+            body_evolution_template("", "fact", "factorial"),
+            "fn fact as factorial(...) { ... }"
+        );
+        assert_eq!(
+            body_evolution_template("pub ", "fact", "factorial"),
+            "pub fn fact as factorial(...) { ... }"
+        );
+    }
+
+    #[test]
+    fn body_evolved_self_reference_fires() {
+        // WI-6 slice 3b: the 124-shape — move+rename whose body renames
+        // its recursive call — pairs through the body-evolving finder
+        // (the abstract finder still vetoes, pinned above).
+        let minus = "fn fact(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * fact(n - 1)\n}";
+        let plus_body: Vec<String> = "fn factorial(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * factorial(n - 1)\n}"
+            .lines()
+            .map(|l| format!("+{l}"))
+            .collect();
+        let hits = find_fn_body_evolved_hits(minus, &plus_body);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        let (first, last, prefix, old, new) = &hits[0];
+        assert_eq!((*first, *last), (0, 5));
+        assert_eq!(prefix, "");
+        assert_eq!((old.as_str(), new.as_str()), ("fact", "factorial"));
+    }
+
+    #[test]
+    fn body_evolved_matcher_gates() {
+        // Identical bodies belong to the abstract path, never here.
+        let body = "{\n    let y = x + 1;\n    y * 2\n}";
+        let minus = item_fn(&format!("fn old(x: i32) -> i32 {body}"));
+        let same_body = item_fn(&format!("fn new(x: i32) -> i32 {body}"));
+        assert_eq!(fn_body_evolved_match(&minus, &same_body), None);
+        // Same name is vacuous.
+        let same_name = item_fn("fn old(x: i32) -> i32 {\n    old(x)\n}");
+        let same_name2 = item_fn("fn old(x: i32) -> i32 {\n    old(x)\n}");
+        assert_eq!(fn_body_evolved_match(&same_name, &same_name2), None);
+        // Vis / qualifier / signature deltas stay out (name-only scope).
+        let plus_vis = item_fn("pub fn new(x: i32) -> i32 {\n    new(x)\n}");
+        let minus_plain = item_fn("fn old(x: i32) -> i32 {\n    old(x)\n}");
+        assert_eq!(fn_body_evolved_match(&minus_plain, &plus_vis), None);
+        let plus_sig = item_fn("fn new(x: i64) -> i32 {\n    new(x)\n}");
+        assert_eq!(fn_body_evolved_match(&minus_plain, &plus_sig), None);
+        // Attr deltas stay out.
+        let plus_attr = item_fn("#[inline]\nfn new(x: i32) -> i32 {\n    new(x)\n}");
+        assert_eq!(fn_body_evolved_match(&minus_plain, &plus_attr), None);
+    }
+
+    #[test]
+    fn body_evolved_finder_vetoes() {
+        // Stale self-ref (plus keeps the old call): bodies are
+        // token-equal, so the abstract path owns it (verbatim paste
+        // preserves the stale call, pinned in `moves.rs`) — the body
+        // finder yields no double-pair.
+        let minus = "fn fact(n: u64) -> u64 {\n    n * fact(n - 1)\n}";
+        let stale: Vec<String> = "fn factorial(n: u64) -> u64 {\n    n * fact(n - 1)\n}"
+            .lines()
+            .map(|l| format!("+{l}"))
+            .collect();
+        assert!(find_fn_body_evolved_hits(minus, &stale).is_empty());
+        assert_eq!(find_evolved_hits(minus, &stale).len(), 1);
+        // Kept shadowing local: token-equal bodies, abstract owns it
+        // (verbatim paste preserves the local) — no body pair.
+        let minus_s = "fn fact() -> i32 {\n    let fact = 1;\n    fact\n}";
+        let plus_s: Vec<String> = "fn factorial() -> i32 {\n    let fact = 1;\n    fact\n}"
+            .lines()
+            .map(|l| format!("+{l}"))
+            .collect();
+        assert!(find_fn_body_evolved_hits(minus_s, &plus_s).is_empty());
+        assert_eq!(find_evolved_hits(minus_s, &plus_s).len(), 1);
+        // Unrenamed string occurrence with no code occurrence: bodies
+        // are token-equal, so the abstract path owns it (verbatim paste
+        // keeps the string) — the body finder declines, no double-pair.
+        let minus_l = "fn fact() -> String {\n    let s = \"fact\";\n    s.to_string()\n}";
+        let plus_l: Vec<String> =
+            "fn factorial() -> String {\n    let s = \"fact\";\n    s.to_string()\n}"
+                .lines()
+                .map(|l| format!("+{l}"))
+                .collect();
+        assert!(find_fn_body_evolved_hits(minus_l, &plus_l).is_empty());
+        assert_eq!(find_evolved_hits(minus_l, &plus_l).len(), 1);
     }
 
     #[test]

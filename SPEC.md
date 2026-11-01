@@ -8806,9 +8806,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     token-equal and both sides declare empty traits (any trait item
     vetoes, the scalar cut cannot isolate it — same narrowing as
     `mod`) (paste `+ <vis>trait <New> { ... }`, with `unsafe`
-     riding verbatim in the prefix like `fn` qualifiers; any `auto`
-     token or `impl Trait for` restriction vetoes).
-   WI-6 collection cells: one (minus hunk, plus hunk) cell holding ≥3
+      riding verbatim in the prefix like `fn` qualifiers; any `auto`
+      token or `impl Trait for` restriction vetoes).
+    WI-6 slice 3b pairs `fn` moves whose rename also renames the body's
+    self-references (`fn fact` → `fn factorial` with `fact(n-1)` →
+    `factorial(n-1)` in the moved body) while vis, qualifiers, attrs,
+    generics, params, return, and `where` stay token-equal — the paste
+    carries the body-evolving template
+    `+ <prefix>fn <Old> as <New>(...) { ... }` (the `as` names the
+    captured ident; the old spelling `+ fn <New>(...) { ... }` keeps its
+    verbatim-body splice, so stale-self-ref and shadowed-local moves
+    still fire unchanged) and the engine splices the header to the new
+    name and renames word-bounded `<Old>` → `<New>` in the captured body
+    through a comment/string/raw-string-aware scanner, leaving string
+    literals, char literals, and comments byte-verbatim. The pairing
+    proves the same scanner first (renamed minus item text == plus run
+    text, raw string equality), so pairing and splice agree by
+    construction; any non-rename delta vetoes to ordinary.
+    WI-6 collection cells: one (minus hunk, plus hunk) cell holding ≥3
    distinct moved items that owns every pair of its minus hunk and every
    paired run of its plus hunk (no fan-out interleave, no split anchors)
    emits one ranged `# allow=many` + `# bind` cut plus one paste (bare
@@ -8820,10 +8835,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    above applies unchanged, except a source file emptied to zero bytes
    (minus hunk covering BOF..EOF) is sound for multi-item cuts (WI-18
    gate: no outside line to double-claim).
-     Everything else (other item kinds, attr/body deltas — including a
-     renamed self-reference inside the moved body, which the paste
-     cannot carry because the splice keeps the captured body verbatim —
-     multi-line `fn` headers) stays ordinary.
+      Everything else (other item kinds, attr deltas, signature+body
+      combos, vis+body combos, non-`fn` self-references, shadowed-body
+      renames the pairing scanner disagrees with, multi-line `fn`
+      headers) stays ordinary.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -9154,7 +9169,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(125), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
+(126), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

@@ -1040,22 +1040,65 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
-    } else if name == "124-move-rename-selfref-stays-ordinary" {
-        // WI-6 slice 1: a renamed self-reference inside the moved body
-        // is a body delta, so no move pair may claim it (the splice
-        // keeps the captured body verbatim) — honest ordinary, no
-        // bind/use claim, still byte-identical via the harness loop.
+    } else if name == "124-move-body-evolve-fires" {
+        // WI-6 slice 3b: move+rename whose body renames its self-reference
+        // fires as one evolving cut/paste — the `as` template carries the
+        // body delta, the splice renames the captured recursive call.
         assert!(
-            !semantic.contains("# bind="),
-            "body-delta move must not cut, got: {semantic}"
+            semantic.contains("# bind="),
+            "body-evolving move must cut, got: {semantic}"
         );
         assert!(
-            !semantic.contains("# use="),
-            "body-delta move must not paste, got: {semantic}"
+            semantic.contains("# use="),
+            "body-evolving move must paste, got: {semantic}"
         );
         assert!(
-            semantic.contains("+fn factorial"),
-            "renamed item rides ordinary, got: {semantic}"
+            semantic.contains("+ fn fact as factorial(...) { ... }"),
+            "paste must carry the `as` template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn fact"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("+fn factorial"),
+            "plus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "body-evolving move must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "127-move-body-evolve-strings-kept" {
+        // WI-6 slice 3b variant: the moved body renames its self-reference
+        // but keeps a `"fact"` string literal and a `// fact` comment
+        // byte-verbatim (the shared scanner skips both).
+        assert!(
+            semantic.contains("# bind="),
+            "body-evolving move must cut, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "body-evolving move must paste, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn fact as factorial(...) { ... }"),
+            "paste must carry the `as` template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn fact"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("+fn factorial"),
+            "plus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "body-evolving move must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
         );
     }
 }

@@ -1812,11 +1812,11 @@ mod tests {
     }
 
     #[test]
-    fn move_rename_selfref_body_stays_ordinary() {
-        // WI-6 slice 1: a move+rename whose body renames its own
-        // recursive call is a body delta — no evolved pair may form
-        // (the splice keeps the captured body verbatim), so the whole
-        // sweep declines and the section stays ordinary downstream.
+    fn move_rename_selfref_body_fires_with_as_paste() {
+        // WI-6 slice 3b (flipped from the slice-1 ordinary pin by design):
+        // a move+rename whose body renames its own recursive call fires
+        // as one body-evolving cut/paste — the `as` template carries the
+        // body delta, the splice renames the captured self-reference.
         let minus = "fn fact(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * fact(n - 1)\n}\n";
         let plus = "fn factorial(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * factorial(n - 1)\n}\n";
         let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
@@ -1828,7 +1828,15 @@ mod tests {
             ("b.rs", "fn keep2() {}\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("self-ref rename-move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ fn fact as factorial(...) { ... }"),
+            "paste must carry the `as` template, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]

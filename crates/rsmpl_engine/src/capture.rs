@@ -264,21 +264,33 @@ pub(crate) fn eval_collection_cut(
     })
 }
 
-/// WI-8a + WI-8 slices 1-8 + WI-8 slice 9: splice a captured item under an
-/// evolution-template header (`pub fn New(...) { ... }`,
+/// WI-8a + WI-8 slices 1-8 + WI-8 slice 9 + WI-6 slice 3b: splice a
+/// captured item under an evolution-template header (`pub fn New(...) { ... }`,
 /// `pub fn New(x: i64) -> i64 { ... }` (slice 9 concrete signature),
-/// `pub struct New { ... }`, `pub enum New { ... }`,
+/// `pub fn Old as New(...) { ... }` (slice 3b body-evolving: header **and**
+/// self-reference body rename), `pub struct New { ... }`,
+/// `pub enum New { ... }`,
 /// `pub union New { ... }`, `pub type New = ...;`,
 /// `pub const New = ...;`, `pub static [mut ]New = ...;`,
 /// `pub mod New { ... }`, or `pub trait New { ... }`). The
 /// template's prefix and new ident replace the capture's header line;
-/// every other line stays byte-verbatim. Returns the spliced item text.
+/// every other line stays byte-verbatim — except the slice-3b `as` form,
+/// which additionally renames the captured body's self-references.
+/// Returns the spliced item text.
 pub(crate) fn splice_evolved_header(
     captured: &str,
     template: &str,
     rule: &str,
 ) -> Result<String, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    // WI-6 slice 3b: the `as` body-evolving form is checked before the
+    // abstract `(...)` form (its tail also contains `(...)`+`...`, but the
+    // abstract parser declines the `as` spelling by ownership).
+    if let Some((new_prefix, old_t, new_t)) =
+        rsmpl_pattern::parse_fn_body_evolution_template(template.trim())
+    {
+        return splice_fn_body_evolution(captured, &new_prefix, &old_t, &new_t, rule);
+    }
     // WI-8 slice 9: the concrete-signature `fn` template carries the new
     // signature verbatim — checked before the abstract `(...)` form (a
     // concrete template never contains `(...)`, so the two shapes are
@@ -314,7 +326,7 @@ pub(crate) fn splice_evolved_header(
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...` or a concrete signature + `{{ ... }}` (got `{}`), a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...`",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, or a concrete signature + `{{ ... }}` (got `{}`), a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...`",
                 template.trim()
             ))
         })?;
@@ -384,6 +396,101 @@ pub(crate) fn splice_evolved_header(
         format!("{pre} fn {new_name}")
     };
     lines[idx] = format!("{ws}{head}{suffix}");
+    Ok(lines.join("\n"))
+}
+
+/// WI-6 slice 3b: splice a captured `fn` item under a body-evolving
+/// template header (`pub fn Old as New(...) { ... }`). The header splices
+/// abstract-style (new prefix + new name, captured params/return/where
+/// suffix verbatim) and every body line renames `old` → `new` through
+/// [`rsmpl_pattern::rename_ident_in_code`] (strings, chars, and comments
+/// ride byte-verbatim). The template `old` must equal the captured fn
+/// ident — a mismatch fails loud, never guesses. Whole-text (not
+/// per-line) renaming keeps multi-line block comments sound.
+fn splice_fn_body_evolution(
+    captured: &str,
+    new_prefix: &str,
+    old_t: &str,
+    new_t: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name = match file.items.as_slice() {
+        [syn::Item::Fn(f)] => f.sig.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `fn` item for a `fn <Old> as <New>` template"
+                    .to_string(),
+            ));
+        }
+    };
+    if old_name != old_t {
+        return Err(fail(format!(
+            "body-evolving paste names `{old_t}` but the capture holds `fn {old_name}`"
+        )));
+    }
+    // First `fn <Old>` header line (same word-bounded search as the
+    // abstract splice; doc/comment lines never evolve).
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if fn_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx =
+        target.ok_or_else(|| fail(format!("captured text has no `fn {old_name}` header line")))?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, rest) = line.split_at(ws_len);
+    let mut fn_at = None;
+    let mut search = rest;
+    let mut base = 0;
+    while let Some(pos) = search.find("fn ") {
+        let after = &search[pos + 3..];
+        let boundary = after[old_name.len()..]
+            .chars()
+            .next()
+            .map(|c| c != '_' && !c.is_ascii_alphanumeric())
+            .unwrap_or(true);
+        if after.starts_with(old_name.as_str()) && boundary {
+            fn_at = Some(base + pos);
+            break;
+        }
+        search = &search[pos + 3..];
+        base += pos + 3;
+    }
+    let fn_at =
+        fn_at.ok_or_else(|| fail(format!("captured text has no `fn {old_name}` header line")))?;
+    let after_fn = &rest[fn_at + 3..];
+    let suffix = after_fn[old_name.len()..].to_string();
+    let pre = new_prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("fn {new_t}")
+    } else {
+        format!("{pre} fn {new_t}")
+    };
+    lines[idx] = format!("{ws}{head}{suffix}");
+    // Body rename over the whole post-header text (one scanner pass, so
+    // multi-line block comments stay sound); the header line above is
+    // already spliced and excluded.
+    if idx + 1 < lines.len() {
+        let body = lines[idx + 1..].join("\n");
+        let renamed = rsmpl_pattern::rename_ident_in_code(&body, &old_name, new_t);
+        let mut new_lines: Vec<String> = renamed.split('\n').map(str::to_string).collect();
+        lines.truncate(idx + 1);
+        lines.append(&mut new_lines);
+    }
     Ok(lines.join("\n"))
 }
 
@@ -1494,4 +1601,56 @@ fn fn_line_ident(line: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FACT: &str = "fn fact(n: u64) -> u64 {\n    if n <= 1 {\n        return 1;\n    }\n    n * fact(n - 1)\n}";
+
+    #[test]
+    fn body_evolution_splice_renames_header_and_self_ref() {
+        let out = splice_evolved_header(FACT, "fn fact as factorial(...) { ... }", "r")
+            .expect("as splice must fire");
+        assert!(out.contains("fn factorial(n: u64) -> u64 {"), "got:\n{out}");
+        assert!(out.contains("n * factorial(n - 1)"), "got:\n{out}");
+        assert!(
+            !out.contains("n * fact(n - 1)"),
+            "old call gone, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn body_evolution_splice_keeps_strings_and_comments() {
+        let cap =
+            "fn fact(n: u64) -> u64 {\n    let s = \"fact\";\n    // fact\n    n * fact(n - 1)\n}";
+        let out = splice_evolved_header(cap, "fn fact as factorial(...) { ... }", "r")
+            .expect("as splice must fire");
+        assert!(out.contains("\"fact\""), "string kept, got:\n{out}");
+        assert!(out.contains("// fact"), "comment kept, got:\n{out}");
+        assert!(
+            out.contains("n * factorial(n - 1)"),
+            "call renamed, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn body_evolution_old_mismatch_fails_loud() {
+        let err = splice_evolved_header(FACT, "fn other as factorial(...) { ... }", "r")
+            .expect_err("old mismatch must fail");
+        assert!(err.to_string().contains("other"), "got: {err}");
+    }
+
+    #[test]
+    fn abstract_splice_stays_verbatim_on_self_ref() {
+        // The old spelling never renames: a stale self-ref rides verbatim.
+        let out = splice_evolved_header(FACT, "fn factorial(...) { ... }", "r")
+            .expect("abstract splice must fire");
+        assert!(out.contains("fn factorial(n: u64) -> u64 {"), "got:\n{out}");
+        assert!(
+            out.contains("n * fact(n - 1)"),
+            "stale call kept, got:\n{out}"
+        );
+    }
 }
