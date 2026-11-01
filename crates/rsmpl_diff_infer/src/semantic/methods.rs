@@ -114,7 +114,7 @@ pub(crate) fn try_method_to_fn_sweep(
 }
 
 /// Comma-joined `E0…` arg list for the sub-line occurrence probe.
-fn m2f_args(arity: usize) -> String {
+pub(crate) fn m2f_args(arity: usize) -> String {
     (0..arity)
         .map(|i| format!("E{i}"))
         .collect::<Vec<_>>()
@@ -446,7 +446,10 @@ fn emit_method_to_method(
 /// Parse a `-`/`+` line pair as a method-to-method rename; return
 /// (old method, new method, arity) when receivers and args are
 /// token-equal pairwise and only the method ident differs.
-fn parse_method_to_method_pair(old_line: &str, new_line: &str) -> Option<(String, String, usize)> {
+pub(crate) fn parse_method_to_method_pair(
+    old_line: &str,
+    new_line: &str,
+) -> Option<(String, String, usize)> {
     let mut old_text = old_line.trim();
     if old_text.is_empty() {
         return None;
