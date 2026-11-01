@@ -53,6 +53,7 @@ mod use_graph;
 mod use_graph_anchor;
 mod use_graph_assoc;
 mod use_graph_binder;
+mod use_graph_follow;
 mod use_graph_local;
 mod use_graph_local_follow;
 mod use_graph_local_orphan;

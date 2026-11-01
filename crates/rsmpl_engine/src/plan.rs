@@ -28,7 +28,7 @@ use crate::postcheck::{
     sweep_edits_are_noop, sweep_hunk_needs_postcheck,
 };
 use crate::suggest::candidate_preview;
-use crate::use_graph::follow_uses_workspace;
+use crate::use_graph_follow::follow_uses_workspace;
 use crate::use_graph_orphan::collect_orphans;
 use crate::validate::{ensure_match_count, gate_directives, unbound_plus, ZeroMatchHint};
 use crate::{ordinary_hunk_edits, RuleReport, RuleSemantics};
