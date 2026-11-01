@@ -573,6 +573,221 @@ pub(crate) fn try_general_expr_sweep(
     Some(hunk)
 }
 
+/// Single-pair anti-unification (WI-7 slice-4): one minus/plus `Expr`
+/// pair of the same variant yields a template pair with exactly one
+/// hole, or `None` (stays ordinary). Within-pair rule: an
+/// expression-child position token-equal across minus/plus becomes
+/// hole `E0`; a differing child becomes a concrete anchor delta.
+/// Token columns ride as anchors (stable or delta, as in multis --
+/// the operator/member/type token is the anchor beyond the hole).
+/// Exactly one hole is required: binary/index need one equal and one
+/// differing child; single-child variants need an equal child plus a
+/// token delta. Zero-hole (pure literal) and two-delta shapes veto,
+/// as do identical pairs. `Call`/`MethodCall` never arrive here
+/// (`variant()` returns `None` for them -- the tighter call/method
+/// detectors own those shapes); `Await` singles always veto (no token
+/// delta exists, so a holed shape is identical and a delta shape is
+/// hole-free).
+fn antiunify_general_expr_single(minus: &syn::Expr, plus: &syn::Expr) -> Option<(String, String)> {
+    let key = variant(minus)?;
+    if variant(plus) != Some(key) {
+        return None;
+    }
+    // One hole renders `E0` on both sides; a delta renders per-side
+    // concrete text.
+    let hole = || ("E0".to_string(), "E0".to_string());
+    let (minus_tpl, plus_tpl) = match (minus, plus) {
+        (syn::Expr::Binary(m), syn::Expr::Binary(p)) => {
+            let (lm, lp) = (tok(&m.left), tok(&p.left));
+            let (rm, rp) = (tok(&m.right), tok(&p.right));
+            let (om, op) = (tok(&m.op), tok(&p.op));
+            // Exactly one hole: one child equal, the other differing
+            // (a pure operator delta with stable operands is a
+            // two-hole shape -- future work, never guessed).
+            let left_hole = lm == lp;
+            let right_hole = rm == rp;
+            if left_hole == right_hole {
+                return None;
+            }
+            let (l_m, l_p) = if left_hole { hole() } else { (lm, lp) };
+            let (r_m, r_p) = if right_hole { hole() } else { (rm, rp) };
+            (format!("{l_m} {om} {r_m}"), format!("{l_p} {op} {r_p}"))
+        }
+        (syn::Expr::Unary(m), syn::Expr::Unary(p)) => {
+            let (om, op) = (tok(&m.op), tok(&p.op));
+            let (em, ep) = (tok(&m.expr), tok(&p.expr));
+            // Holed operand plus an operator delta; an operand delta
+            // without a hole is a literal (veto).
+            if em != ep || om == op {
+                return None;
+            }
+            (format!("{om}E0"), format!("{op}E0"))
+        }
+        (syn::Expr::Cast(m), syn::Expr::Cast(p)) => {
+            let (em, ep) = (tok(&m.expr), tok(&p.expr));
+            let (tm, tp) = (tok(&m.ty), tok(&p.ty));
+            if em != ep || tm == tp {
+                return None;
+            }
+            (format!("E0 as {tm}"), format!("E0 as {tp}"))
+        }
+        (syn::Expr::Field(m), syn::Expr::Field(p)) => {
+            let (bm, bp) = (tok(&m.base), tok(&p.base));
+            let (mm, mp) = (tok(&m.member), tok(&p.member));
+            if bm != bp || mm == mp {
+                return None;
+            }
+            (format!("E0.{mm}"), format!("E0.{mp}"))
+        }
+        (syn::Expr::Index(m), syn::Expr::Index(p)) => {
+            let (bm, bp) = (tok(&m.expr), tok(&p.expr));
+            let (im, ip) = (tok(&m.index), tok(&p.index));
+            // Exactly one hole, same as binary (the bracket frame is
+            // literal by construction).
+            let base_hole = bm == bp;
+            let idx_hole = im == ip;
+            if base_hole == idx_hole {
+                return None;
+            }
+            let (b_m, b_p) = if base_hole { hole() } else { (bm, bp) };
+            let (i_m, i_p) = if idx_hole { hole() } else { (im, ip) };
+            (format!("{b_m}[{i_m}]"), format!("{b_p}[{i_p}]"))
+        }
+        (syn::Expr::Reference(m), syn::Expr::Reference(p)) => {
+            let (em, ep) = (tok(&m.expr), tok(&p.expr));
+            let (mm, mp) = (m.mutability.is_some(), p.mutability.is_some());
+            // Holed pointee plus a mutability delta (`&` vs `&mut`).
+            if em != ep || mm == mp {
+                return None;
+            }
+            let minus_tpl = if mm { "&mut E0" } else { "&E0" }.to_string();
+            let plus_tpl = if mp { "&mut E0" } else { "&E0" }.to_string();
+            (minus_tpl, plus_tpl)
+        }
+        (syn::Expr::Await(_), syn::Expr::Await(_)) => return None,
+        _ => return None,
+    };
+    if minus_tpl == plus_tpl {
+        return None;
+    }
+    // Defensive: both sides must re-parse as expressions (the
+    // totality probe re-checks, but a non-parsing template must never
+    // leave this core).
+    if syn::parse_str::<syn::Expr>(&minus_tpl).is_err()
+        || syn::parse_str::<syn::Expr>(&plus_tpl).is_err()
+    {
+        return None;
+    }
+    Some((minus_tpl, plus_tpl))
+}
+
+/// WI-7 slice-4: whole-line general-expression single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair parses whole-line as one
+/// expression of the same variant (frame-unwrapped, same entry as the
+/// multi sweep -- `let`-init lines decline here and stay ordinary for
+/// the `let` slice), the single-pair anti-unification yields exactly
+/// one hole plus an anchor delta, a pre-image is present (`None`
+/// vetoes -- uniqueness needs the whole file, D3), and
+/// `template_pair_holds` proves exactly one site file-wide with zero
+/// opaque hits (conditions (a)+(b) of `PrecisionUnique`; (c) is
+/// structural: the template carries the operator/member/type token
+/// beyond the `E0` hole). Emission is the WI-19b allow-one spelling
+/// (tight range, directive-free, default `allow=one`). Detector name
+/// `general_expr` (same family, provenance unchanged).
+/// Plus-side re-verification is the engine's apply itself
+/// (validated_live in tests, T361).
+/// T361 byte-compare probe (attr_sweep `probe_reproduces` precedent
+/// for N=1): the ranged allow-one emission built from `minus_tpl` /
+/// `plus_tpl` must real-apply to the pre-image byte-identical to the
+/// native single-line swap (`minus_line` -> `plus_line` at `line_no`).
+/// Count equality alone (`template_pair_holds`) cannot see TokenStream
+/// spacing drift (`use_it(a)` renders `use_it (a)`): the rewritten
+/// region would carry template spacing instead of source spelling
+/// (116 miniature). Any failure -- line mismatch, unparseable probe,
+/// match-count mismatch, or byte mismatch -- vetoes the single. The
+/// probe mirrors the real emission shape (tight original range,
+/// directive-free allow-one) under a scratch id, so reservation via
+/// `unique_rule` happens only for emissions that reproduce.
+fn single_reproduces(
+    path: &str,
+    pre: &str,
+    line_no: usize,
+    minus_line: &str,
+    plus_line: &str,
+    minus_tpl: &str,
+    plus_tpl: &str,
+) -> bool {
+    if line_no == 0 {
+        return false;
+    }
+    let mut lines: Vec<&str> = pre.split('\n').collect();
+    let Some(cur) = lines.get(line_no - 1).copied() else {
+        return false;
+    };
+    if cur != minus_line {
+        return false;
+    }
+    lines[line_no - 1] = plus_line;
+    let expected = lines.join("\n");
+    let probe_section = format!(
+        "{}\n@@ -{line_no},1 @@ rule=probe\n- {minus_tpl}\n+ {plus_tpl}\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe_section) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == 1
+        && files.get(path).is_some_and(|got| *got == expected)
+}
+
+pub(crate) fn try_general_expr_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    let minus = parse_line_expr(minuses[0])?;
+    let plus = parse_line_expr(pluses[0])?;
+    for e in [&minus, &plus] {
+        let probe = shape::probe_expr(e);
+        if probe.macros > 0 || probe.unsupported > 0 {
+            return None;
+        }
+    }
+    let (minus_tpl, plus_tpl) = antiunify_general_expr_single(&minus, &plus)?;
+    if !is_anchored(&minus_tpl, &plus_tpl) {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), &minus_tpl, &plus_tpl, 1) {
+        return None;
+    }
+    // Byte-compare pre-reservation: reserve the rule name only for
+    // emissions that reproduce the native swap exactly.
+    if !single_reproduces(
+        path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "general_expr");
+    // Allow-one: directive-free ranged hunk (slices-1-3 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic_with_pre_images;
@@ -925,6 +1140,150 @@ mod tests {
         assert!(
             infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
             "single pair must stay ordinary (WI-7 owns N=1)"
+        );
+    }
+    #[test]
+    fn wi7_general_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-4: unique single `x + 1` -> `x + 2` raises to an
+        // allow-one hunk and real-applies byte-identical.
+        let pre = "fn m() {\n    x + 1;\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    x + 1;\n+    x + 2;\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique general single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(out.contains("+ E0 + 2\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    x + 2;\n}\n");
+    }
+
+    #[test]
+    fn wi7_general_single_twin_vetoes() {
+        // An untouched same-shape twin anywhere vetoes (totality).
+        let pre = "fn m() {\n    x + 1;\n    y + 1;\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    x + 1;\n+    x + 2;\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_general_single_different_delta_twin_keeps_firing() {
+        // Totality keys on the emitted minus template: a twin with a
+        // different delta never matches `E0 + 1` and never vetoes.
+        let pre = "fn m() {\n    x + 1;\n    y + 9;\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    x + 1;\n+    x + 2;\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-delta twin must not veto");
+        assert!(out.contains("- E0 + 1\n"), "got: {out}");
+        assert!(out.contains("+ E0 + 2\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi7_general_single_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3).
+        assert!(
+            super::try_general_expr_single(
+                &["    x + 1;"],
+                &["    x + 2;"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_general_single_zero_hole_vetoes() {
+        // Two deltas, no hole: a pure literal (stays ordinary).
+        assert!(
+            super::try_general_expr_single(
+                &["    x + 1;"],
+                &["    y + 2;"],
+                "f.rs",
+                Some("fn m() {\n    x + 1;\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "two-delta shape must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_general_single_token_delta_fires() {
+        // Single-child variant: holed operand plus a type delta.
+        let out = super::try_general_expr_single(
+            &["    x as u8;"],
+            &["    x as u16;"],
+            "f.rs",
+            Some("fn m() {\n    x as u8;\n}\n"),
+            &[2],
+            &mut Vec::new(),
+        )
+        .expect("cast single must fire");
+        assert!(out.contains("- E0 as u8\n"), "got: {out}");
+        assert!(out.contains("+ E0 as u16\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map(&[("f.rs", "fn m() {\n    x as u8;\n}\n")]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    x as u16;\n}\n");
+    }
+
+    #[test]
+    fn wi7_general_single_let_init_declines() {
+        // `let` lines never parse whole-line as expressions: the `let`
+        // slice owns init singles, this detector declines.
+        assert!(
+            super::try_general_expr_single(
+                &["    let a = x + 1;"],
+                &["    let a = x + 2;"],
+                "f.rs",
+                Some("fn m() {\n    let a = x + 1;\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "let-init must decline"
+        );
+    }
+    #[test]
+    fn wi7_general_single_call_anchor_drift_stays_ordinary() {
+        // 116 miniature: the single-pair anti-unification proves one
+        // site (`use_it (a) + E0` matches once), but the TokenStream
+        // anchor spacing is not the source spelling -- real-apply
+        // would rewrite `use_it(a)` as `use_it (a . clone ())`. The
+        // T361 byte-compare vetoes the drift; the class stays
+        // ordinary (the multi path shares the latent drift: TASKS).
+        let pre = "fn f(a: i32, b: i32) -> i32 {\n    use_it(a) + other(b)\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    use_it(a) + other(b)\n+    use_it(a.clone()) + other(b)\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "spacing-drifted single must stay ordinary"
         );
     }
 }

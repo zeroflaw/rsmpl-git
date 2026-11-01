@@ -98,7 +98,7 @@ pub(crate) use control_template::try_control_template_sweep;
 pub(crate) use definition_addition::{try_definition_addition, try_definition_addition_follow};
 pub(crate) use definition_arm_follow::try_variant_addition_follow;
 pub(crate) use definition_evolution::{try_definition_evolution_sweep, PRECISION_GUARD};
-pub(crate) use general_expr::try_general_expr_sweep;
+pub(crate) use general_expr::{try_general_expr_single, try_general_expr_sweep};
 pub(crate) use generalized::{
     try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep,
     try_sig_evolution_sweep, try_type_sweep, try_untyped_let_sweep,

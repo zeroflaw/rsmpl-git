@@ -7656,21 +7656,26 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
- Precision singles (WI-7 slices 1-3, `PrecisionUnique`): N == 1
- whole-line bare-call callee-only pairs (slice-1, `call_holds` over
- `old_callee/arity`), whole-line method-to-method renames (slice-2,
- `method_holds` over `old_method/arity`) and whole-line
- method-to-function refactors (slice-3, `method_holds` over
- `old_method/arity` with a receiver-prepend delta), each with a
- pre-image proving exactly one site file-wide with zero opaque hits.
- The callee/method/function token is the anchor beyond the holes
- (`Receiver`/`E`; uppercase rides backticks, same rule as above).
- Emission is the ranged allow-one spelling (tight original range,
- directive-free, default `allow=one`); guard is the precision guard
- (semantic ≤ ordinary + 16). `None` pre-image vetoes (no guessing);
- an untouched same-shape same-arity twin vetoes; different-arity twins
- never count. Remaining families (general/let, sub-line shapes) keep
- `N ≥ 2` until their WI-7 slices land.
+ Precision singles (WI-7 slices 1-4, `PrecisionUnique`): N == 1
+  whole-line bare-call callee-only pairs (slice-1, `call_holds` over
+  `old_callee/arity`), whole-line method-to-method renames (slice-2,
+  `method_holds` over `old_method/arity`), whole-line
+  method-to-function refactors (slice-3, `method_holds` over
+  `old_method/arity` with a receiver-prepend delta) and whole-line
+  general-expression pairs (slice-4, `template_pair_holds` at n=1 over
+  the single-pair anti-unification: exactly one hole plus an
+  operator/member/type anchor delta; zero-hole and two-delta shapes
+  veto), each with a pre-image proving exactly one site file-wide
+  with zero opaque hits. The callee/method/function/operator token is
+  the anchor beyond the holes (`Receiver`/`E`; uppercase rides
+  backticks, same rule as above). Emission is the ranged allow-one
+  spelling (tight original range, directive-free, default
+  `allow=one`); guard is the precision guard
+  (semantic ≤ ordinary + 16). `None` pre-image vetoes (no guessing);
+  an untouched same-shape twin vetoes (same-arity for
+  call/method shapes, same-template for general); non-matching twins
+  never count. Remaining families (let, literal, sub-line shapes) keep
+  `N ≥ 2` until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

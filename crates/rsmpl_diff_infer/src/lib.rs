@@ -497,6 +497,18 @@ pub(crate) fn compress_balanced_pair_body(
             }
             used_rules.truncate(checkpoint);
         }
+        // WI-7 slice-4: whole-line general-expression single under the
+        // precision guard (uniqueness proved by `template_pair_holds`
+        // at n=1, `guard_for("general_expr")` stays Strict for multis).
+        if let Some(single) =
+            semantic::try_general_expr_single(minuses, pluses, path, file_old, changed, used_rules)
+        {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "general_expr"));
+            }
+            used_rules.truncate(checkpoint);
+        }
     }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         // Single pairs: definition shapes under the precision guard
