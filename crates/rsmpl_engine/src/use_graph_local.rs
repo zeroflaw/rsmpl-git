@@ -95,14 +95,16 @@ pub fn is_let_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {
     let_binder_rename(&compiled.kind).is_some()
 }
 
-/// WI-2c: true when `compiled` renames exactly one local binder — a
-/// `let` binder (WI-2a), a closure parameter, or a match-arm pattern —
-/// and nothing else in the pattern changes. The downgrade gate uses
-/// this: any leftover use forces `reparse-only` (global `partial`).
+/// WI-2c/2d: true when `compiled` renames exactly one local binder —
+/// a `let` binder (WI-2a), a closure parameter, a match-arm pattern
+/// (WI-2c), or a `for` / `if let` / `while let` binder (WI-2d) — and
+/// nothing else in the pattern changes. The downgrade gate uses this:
+/// any leftover use forces `reparse-only` (global `partial`).
 pub fn is_local_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool {
     is_let_binder_rename(compiled)
         || closure_param_rename(&compiled.kind).is_some()
         || match_arm_binder_rename(&compiled.kind).is_some()
+        || crate::use_graph_binder::is_wi2d_expr_binder_rename(compiled)
 }
 
 /// `(old, new)` binder idents when `kind` is a plain `let old = E;` →
@@ -360,6 +362,16 @@ pub fn general_orphans(
             edits_before,
             &old,
             false,
+        );
+    }
+    // WI-2d: `for` / `if let` / `while let` binders (empty otherwise).
+    if crate::use_graph_binder::is_wi2d_expr_binder_rename(compiled) {
+        return crate::use_graph_scope::wi2d_orphans_for_compiled(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            compiled,
         );
     }
     Vec::new()
@@ -840,7 +852,7 @@ pub(crate) fn pat_old_offsets(
 }
 
 /// Single `x` binder (no subpattern); returns `(ident, has_mut)`.
-fn single_ident_binder(pat: &syn::Pat) -> Option<(String, bool)> {
+pub(crate) fn single_ident_binder(pat: &syn::Pat) -> Option<(String, bool)> {
     match pat {
         syn::Pat::Ident(pid) => {
             if pid.subpat.is_some() {
@@ -876,7 +888,7 @@ fn init_tokens(expr: &syn::Expr) -> String {
     quote::quote!(#expr).to_string()
 }
 
-fn normalize_placeholders(s: &str, ph_map: &HashMap<&str, &str>) -> String {
+pub(crate) fn normalize_placeholders(s: &str, ph_map: &HashMap<&str, &str>) -> String {
     let mut out = s.to_string();
     for (ph, name) in ph_map {
         out = out.replace(ph, name);

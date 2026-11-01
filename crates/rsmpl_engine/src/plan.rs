@@ -625,29 +625,46 @@ fn apply_inner(
                     let orphans = if !rh.follows_uses() && !sibling_follow && found > 0 {
                         match &compiled.kind {
                             PatternKind::Fn { minus_name, .. } => {
-                                let renamed: Vec<(usize, usize)> = file_edits
-                                    .get(path)
-                                    .map(|v| {
-                                        v[edits_before..].iter().map(|e| (e.start, e.end)).collect()
-                                    })
-                                    .unwrap_or_default();
-                                let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> =
-                                    Vec::new();
-                                let mut paths: Vec<&String> = states.keys().collect();
-                                paths.sort();
-                                for p in paths {
-                                    if let Some(st) = states.get(p) {
-                                        if let Some(parsed) = st.parsed.as_ref() {
-                                            refs.push((
-                                                p.clone(),
-                                                parsed,
-                                                st.original.as_str(),
-                                                &st.index,
-                                            ));
+                                // WI-2d: a same-name header with one renamed
+                                // param owns fn-body orphans, not fn-name uses.
+                                if let Some((old, _)) =
+                                    crate::use_graph_binder::fn_param_binder_rename_from_hunk(rh)
+                                {
+                                    crate::use_graph_scope::fn_param_orphans(
+                                        &states,
+                                        &file_edits,
+                                        path,
+                                        edits_before,
+                                        &old,
+                                    )
+                                } else {
+                                    let renamed: Vec<(usize, usize)> = file_edits
+                                        .get(path)
+                                        .map(|v| {
+                                            v[edits_before..]
+                                                .iter()
+                                                .map(|e| (e.start, e.end))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> =
+                                        Vec::new();
+                                    let mut paths: Vec<&String> = states.keys().collect();
+                                    paths.sort();
+                                    for p in paths {
+                                        if let Some(st) = states.get(p) {
+                                            if let Some(parsed) = st.parsed.as_ref() {
+                                                refs.push((
+                                                    p.clone(),
+                                                    parsed,
+                                                    st.original.as_str(),
+                                                    &st.index,
+                                                ));
+                                            }
                                         }
                                     }
+                                    collect_orphans(&refs, minus_name, path, &renamed, false)
                                 }
-                                collect_orphans(&refs, minus_name, path, &renamed, false)
                             }
                             PatternKind::FieldRename {
                                 struct_name, old, ..
@@ -752,7 +769,9 @@ fn apply_inner(
                         (RuleSemantics::NotApplicable, false)
                     } else if !is_rewrite_kind(&compiled)
                         || (!orphans.is_empty()
-                            && crate::use_graph_local::is_local_binder_rename(&compiled))
+                            && (crate::use_graph_local::is_local_binder_rename(&compiled)
+                                || crate::use_graph_binder::fn_param_binder_rename_from_hunk(rh)
+                                    .is_some()))
                     {
                         (RuleSemantics::ReparseOnly, false)
                     } else if sweep_gate_ran {

@@ -38,7 +38,6 @@ pub(crate) fn closure_or_arm_orphans(
     old: &str,
     is_closure: bool,
 ) -> Vec<crate::OrphanReport> {
-    use syn::spanned::Spanned;
     use syn::visit::Visit;
 
     let Some(st) = states.get(path) else {
@@ -182,6 +181,24 @@ pub(crate) fn closure_or_arm_orphans(
         return Vec::new();
     }
 
+    interior_reports(parsed, original, index, path, &scopes, old)
+}
+
+/// Shared scope-interior report builder (WI-2c + WI-2d): value-path
+/// uses in the regions (binder spans excluded) are `off-target` past
+/// no inner binder and `shadowed` past one; in-scope macro interiors
+/// and inline `{old}` captures are `macro-hidden`.
+fn interior_reports(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    path: &str,
+    scopes: &NodeScopes,
+    old: &str,
+) -> Vec<crate::OrphanReport> {
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+
     struct Interior<'a> {
         original: &'a str,
         index: &'a LineIndex,
@@ -289,7 +306,7 @@ pub(crate) fn closure_or_arm_orphans(
         original,
         index,
         old,
-        scopes: &scopes,
+        scopes,
         uses: Vec::new(),
         inner_defs: Vec::new(),
         opaque_lines: Vec::new(),
@@ -325,6 +342,299 @@ pub(crate) fn closure_or_arm_orphans(
     out
 }
 
+/// WI-2d dispatcher: detect a `for` / `if let` / `while let` binder
+/// rename from the compiled pattern and scan its scope interior.
+/// Returns empty for every other shape (never alters verdicts).
+pub(crate) fn wi2d_orphans_for_compiled(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    compiled: &rsmpl_pattern::CompiledPattern,
+) -> Vec<crate::OrphanReport> {
+    if let Some((old, _)) = crate::use_graph_binder::for_loop_binder_rename(&compiled.kind) {
+        return wi2d_expr_orphans(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            &old,
+            Wi2dExprKind::For,
+        );
+    }
+    if let Some((old, _)) = crate::use_graph_binder::if_let_binder_rename(&compiled.kind) {
+        return wi2d_expr_orphans(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            &old,
+            Wi2dExprKind::IfLet,
+        );
+    }
+    if let Some((old, _)) = crate::use_graph_binder::while_let_binder_rename(&compiled.kind) {
+        return wi2d_expr_orphans(
+            states,
+            file_edits,
+            path,
+            edits_before,
+            &old,
+            Wi2dExprKind::WhileLet,
+        );
+    }
+    Vec::new()
+}
+
+/// WI-2d expression-binder kind selector (for / `if let` / `while let`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wi2dExprKind {
+    For,
+    IfLet,
+    WhileLet,
+}
+
+/// WI-2d: `for` / `if let` / `while let` binder renames. Same duty
+/// as [`closure_or_arm_orphans`]: only the rewritten node's interior
+/// that can dangle is scanned — the loop body (`for`, `while let`) or
+/// the then-branch (`if let`). Iter/scrutinee/`else`/outer uses can
+/// never dangle and are never orphans.
+pub(crate) fn wi2d_expr_orphans(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    old: &str,
+    kind: Wi2dExprKind,
+) -> Vec<crate::OrphanReport> {
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+
+    let Some(st) = states.get(path) else {
+        return Vec::new();
+    };
+    let Some(parsed) = st.parsed.as_ref() else {
+        return Vec::new();
+    };
+    let original = st.original.as_str();
+    let index = &st.index;
+    let spans: Vec<(usize, usize)> = file_edits
+        .get(path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    if spans.is_empty() {
+        return Vec::new();
+    }
+
+    struct ScopeGrab<'a> {
+        original: &'a str,
+        index: &'a LineIndex,
+        old: &'a str,
+        spans: &'a [(usize, usize)],
+        kind: Wi2dExprKind,
+        kept: Vec<(usize, usize)>,
+        scopes: NodeScopes,
+    }
+    impl ScopeGrab<'_> {
+        fn contained(&self, a: usize, b: usize) -> bool {
+            self.spans.iter().any(|(s, e)| *s <= a && b <= *e)
+        }
+        fn binders_of(&self, pat: &syn::Pat) -> Vec<(usize, usize)> {
+            let mut out = Vec::new();
+            for off in pat_old_offsets(pat, self.old, self.original, self.index) {
+                let end = off + self.old.len();
+                if self.original.get(off..end) == Some(self.old) {
+                    out.push((off, end));
+                }
+            }
+            out
+        }
+    }
+    impl<'ast> Visit<'ast> for ScopeGrab<'_> {
+        fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+            if self.kind == Wi2dExprKind::For {
+                if let Some(ab) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
+                {
+                    if self.contained(ab.0, ab.1)
+                        && !self.kept.iter().any(|(s, e)| *s <= ab.0 && ab.1 <= *e)
+                    {
+                        let binders = self.binders_of(&node.pat);
+                        if !binders.is_empty() {
+                            if let Some(body) = crate::matcher_item::span_bytes(
+                                self.original,
+                                self.index,
+                                node.body.span(),
+                            ) {
+                                self.kept.push(ab);
+                                self.scopes.push((vec![body], binders));
+                            }
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr_for_loop(self, node);
+        }
+        fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+            if self.kind == Wi2dExprKind::IfLet {
+                if let Some(ab) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
+                {
+                    if self.contained(ab.0, ab.1)
+                        && !self.kept.iter().any(|(s, e)| *s <= ab.0 && ab.1 <= *e)
+                    {
+                        if let syn::Expr::Let(let_) = &*node.cond {
+                            let binders = self.binders_of(&let_.pat);
+                            if !binders.is_empty() {
+                                if let Some(then) = crate::matcher_item::span_bytes(
+                                    self.original,
+                                    self.index,
+                                    node.then_branch.span(),
+                                ) {
+                                    self.kept.push(ab);
+                                    self.scopes.push((vec![then], binders));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr_if(self, node);
+        }
+        fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+            if self.kind == Wi2dExprKind::WhileLet {
+                if let Some(ab) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.span())
+                {
+                    if self.contained(ab.0, ab.1)
+                        && !self.kept.iter().any(|(s, e)| *s <= ab.0 && ab.1 <= *e)
+                    {
+                        if let syn::Expr::Let(let_) = &*node.cond {
+                            let binders = self.binders_of(&let_.pat);
+                            if !binders.is_empty() {
+                                if let Some(body) = crate::matcher_item::span_bytes(
+                                    self.original,
+                                    self.index,
+                                    node.body.span(),
+                                ) {
+                                    self.kept.push(ab);
+                                    self.scopes.push((vec![body], binders));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr_while(self, node);
+        }
+    }
+    let mut grab = ScopeGrab {
+        original,
+        index,
+        old,
+        spans: &spans,
+        kind,
+        kept: Vec::new(),
+        scopes: Vec::new(),
+    };
+    grab.visit_file(parsed);
+    let scopes = grab.scopes;
+    if scopes.is_empty() {
+        return Vec::new();
+    }
+    interior_reports(parsed, original, index, path, &scopes, old)
+}
+
+/// WI-2d: scope-interior orphans for fn-param renames. The scope is the
+/// matched `fn`'s body block; the renamed param ident in the signature
+/// is excluded. Only the hunk's own file is scanned. Unlike the
+/// whole-node Expr hunks, a fn header edit is *inside* its item, so the
+/// matched fn is the one *containing* the hunk's edit spans (reversed
+/// containment vs [`closure_or_arm_orphans`]).
+pub(crate) fn fn_param_orphans(
+    states: &HashMap<String, FileState>,
+    file_edits: &HashMap<String, Vec<TextEdit>>,
+    path: &str,
+    edits_before: usize,
+    old: &str,
+) -> Vec<crate::OrphanReport> {
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+
+    let Some(st) = states.get(path) else {
+        return Vec::new();
+    };
+    let Some(parsed) = st.parsed.as_ref() else {
+        return Vec::new();
+    };
+    let original = st.original.as_str();
+    let index = &st.index;
+    let spans: Vec<(usize, usize)> = file_edits
+        .get(path)
+        .map(|v| v[edits_before..].iter().map(|e| (e.start, e.end)).collect())
+        .unwrap_or_default();
+    if spans.is_empty() {
+        return Vec::new();
+    }
+
+    struct FnGrab<'a> {
+        original: &'a str,
+        index: &'a LineIndex,
+        old: &'a str,
+        spans: &'a [(usize, usize)],
+        scopes: NodeScopes,
+    }
+    impl<'ast> Visit<'ast> for FnGrab<'_> {
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            if let Some(ab) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            {
+                // Header edit lives inside the fn; every fn containing an
+                // edit claims it (a nested fn names its own param only
+                // when its signature also binds `old`, which the shadow
+                // discipline then labels).
+                let contains = self.spans.iter().any(|(s, e)| ab.0 <= *s && *e <= ab.1);
+                if contains {
+                    let mut binders: Vec<(usize, usize)> = Vec::new();
+                    for arg in &node.sig.inputs {
+                        if let syn::FnArg::Typed(t) = arg {
+                            for off in pat_old_offsets(&t.pat, self.old, self.original, self.index)
+                            {
+                                let end = off + self.old.len();
+                                if self.original.get(off..end) == Some(self.old) {
+                                    binders.push((off, end));
+                                }
+                            }
+                        }
+                    }
+                    if !binders.is_empty() {
+                        if let Some(body) = crate::matcher_item::span_bytes(
+                            self.original,
+                            self.index,
+                            node.block.span(),
+                        ) {
+                            self.scopes.push((vec![body], binders));
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+    let mut grab = FnGrab {
+        original,
+        index,
+        old,
+        spans: &spans,
+        scopes: Vec::new(),
+    };
+    grab.visit_file(parsed);
+    let scopes = grab.scopes;
+    if scopes.is_empty() {
+        return Vec::new();
+    }
+    interior_reports(parsed, original, index, path, &scopes, old)
+}
+
 /// True when macro tokens mention `old` as an ident or an inline
 /// `{old}` format capture (the WI-2a capture rule: a trailing ident
 /// continue disqualifies the capture).
@@ -348,4 +658,276 @@ fn macro_mentions_old(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn states_for(src: &str) -> (HashMap<String, FileState>, LineIndex, syn::File) {
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = LineIndex::new(src);
+        let mut states = HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            FileState {
+                original: src.to_string(),
+                index: index.clone(),
+                parsed: Some(parsed.clone()),
+            },
+        );
+        (states, index, parsed)
+    }
+
+    fn edits_for_node(
+        src: &str,
+        index: &LineIndex,
+        span: proc_macro2::Span,
+    ) -> HashMap<String, Vec<TextEdit>> {
+        let (a, b) = crate::matcher_item::span_bytes(src, index, span).unwrap();
+        let mut m = HashMap::new();
+        m.insert(
+            "src/main.rs".to_string(),
+            vec![TextEdit::new(a, b, "X".to_string())],
+        );
+        m
+    }
+
+    fn first_for_span(src: &str) -> proc_macro2::Span {
+        struct Find(Vec<proc_macro2::Span>);
+        impl<'ast> syn::visit::Visit<'ast> for Find {
+            fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+                use syn::spanned::Spanned;
+                self.0.push(node.span());
+                syn::visit::visit_expr_for_loop(self, node);
+            }
+        }
+        use syn::visit::Visit;
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let mut f = Find(Vec::new());
+        f.visit_file(&parsed);
+        f.0.into_iter().next().expect("test src has a for loop")
+    }
+
+    fn first_if_span(src: &str) -> proc_macro2::Span {
+        struct Find(Vec<proc_macro2::Span>);
+        impl<'ast> syn::visit::Visit<'ast> for Find {
+            fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+                use syn::spanned::Spanned;
+                self.0.push(node.span());
+                syn::visit::visit_expr_if(self, node);
+            }
+        }
+        use syn::visit::Visit;
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let mut f = Find(Vec::new());
+        f.visit_file(&parsed);
+        f.0.into_iter().next().expect("test src has an if")
+    }
+
+    fn first_while_span(src: &str) -> proc_macro2::Span {
+        struct Find(Vec<proc_macro2::Span>);
+        impl<'ast> syn::visit::Visit<'ast> for Find {
+            fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+                use syn::spanned::Spanned;
+                self.0.push(node.span());
+                syn::visit::visit_expr_while(self, node);
+            }
+        }
+        use syn::visit::Visit;
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let mut f = Find(Vec::new());
+        f.visit_file(&parsed);
+        f.0.into_iter().next().expect("test src has a while")
+    }
+
+    fn expr_orphans(src: &str, kind: Wi2dExprKind) -> Vec<crate::OrphanReport> {
+        let (states, index, _) = states_for(src);
+        let span = match kind {
+            Wi2dExprKind::For => first_for_span(src),
+            Wi2dExprKind::IfLet => first_if_span(src),
+            Wi2dExprKind::WhileLet => first_while_span(src),
+        };
+        let edits = edits_for_node(src, &index, span);
+        wi2d_expr_orphans(&states, &edits, "src/main.rs", 0, "total", kind)
+    }
+
+    fn fn_orphans(src: &str) -> Vec<crate::OrphanReport> {
+        let (states, index, _) = states_for(src);
+        // Header edit: the `total` param ident bytes (inside the fn).
+        let off = src.find("total").expect("test src names total");
+        let mut edits = HashMap::new();
+        edits.insert(
+            "src/main.rs".to_string(),
+            vec![TextEdit::new(off, off + "total".len(), "sum".to_string())],
+        );
+        let _ = index;
+        fn_param_orphans(&states, &edits, "src/main.rs", 0, "total")
+    }
+
+    #[test]
+    fn for_body_use_is_orphan() {
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        let x = total + total;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].line, 3);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn for_empty_body_is_clean() {
+        let src = "fn main() {\n    for total in 0..3 {\n        break;\n    }\n}\n";
+        assert!(expr_orphans(src, Wi2dExprKind::For).is_empty());
+    }
+
+    #[test]
+    fn for_iter_use_not_orphan() {
+        // `total` in the iterator names the outer scope, not the loop
+        // binder — body `break` uses nothing, so no orphans.
+        let src =
+            "fn main() {\n    let total = vec![1];\n    for total in total {\n        break;\n    }\n}\n";
+        assert!(expr_orphans(src, Wi2dExprKind::For).is_empty());
+    }
+
+    #[test]
+    fn for_inner_let_shadows() {
+        let src = "fn main() {\n    for total in 0..3 {\n        let total = 1;\n        let y = total;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
+    fn for_macro_hidden() {
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        println!(\"{}\", total);\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn iflet_then_use_is_orphan() {
+        let src =
+            "fn main() {\n    if let total = Some(1) {\n        let x = total + 1;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::IfLet);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn iflet_else_use_not_orphan() {
+        // The binder is not visible in `else`.
+        let src = "fn main() {\n    if let total = Some(1) {\n        let x = 1;\n    } else {\n        let y = total;\n    }\n}\n";
+        assert!(expr_orphans(src, Wi2dExprKind::IfLet).is_empty());
+    }
+
+    #[test]
+    fn whilelet_body_use_is_orphan() {
+        let src = "fn main() {\n    while let total = Some(1) {\n        let x = total;\n        break;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::WhileLet);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn fn_param_body_use_is_orphan() {
+        let src = "fn foo(total: u32) -> u32 {\n    total + 1\n}\n";
+        let orphans = fn_orphans(src);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].line, 2);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn fn_param_outside_use_not_orphan() {
+        // A same-name `total` in another fn is a different binding.
+        let src = "fn foo(total: u32) -> u32 {\n    1\n}\nfn bar() {\n    let total = 1;\n    let _ = total;\n}\n";
+        assert!(fn_orphans(src).is_empty());
+    }
+
+    fn apply_report(
+        patch_text: &str,
+        file_text: &str,
+    ) -> Result<(String, crate::ApplyReport), String> {
+        let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
+        let mut files = HashMap::new();
+        files.insert("src/lib.rs".to_string(), file_text.to_string());
+        let mut patch = patch;
+        for f in &mut patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        let report = crate::apply_patch_to_tree(&mut files, &patch).map_err(|e| e.render())?;
+        Ok((files["src/lib.rs"].clone(), report))
+    }
+
+    const HEAD: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+
+    #[test]
+    fn for_rename_leftover_downgrades() {
+        let patch = format!(
+            "{HEAD}@@ -2,3 @@ rule=rename_for\n# lang=rust\n# expr E\n- for total in E {{ ... }}\n+ for sum in E {{ ... }}\n"
+        );
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        let x = total + total;\n    }\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("for sum in"), "got: {out}");
+        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].orphans.len(), 1);
+    }
+
+    #[test]
+    fn iflet_rename_leftover_downgrades() {
+        let patch = format!(
+            "{HEAD}@@ -2,3 @@ rule=rename_iflet\n# lang=rust\n# expr E\n- if let total = E {{ ... }}\n+ if let sum = E {{ ... }}\n"
+        );
+        let src =
+            "fn main() {\n    if let total = Some(1) {\n        let x = total + 1;\n    }\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("if let sum ="), "got: {out}");
+        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].orphans.len(), 1);
+    }
+
+    #[test]
+    fn whilelet_rename_leftover_downgrades() {
+        let patch = format!(
+            "{HEAD}@@ -2,4 @@ rule=rename_whilelet\n# lang=rust\n# expr E\n- while let total = E {{ ... }}\n+ while let sum = E {{ ... }}\n"
+        );
+        let src =
+            "fn main() {\n    while let total = Some(1) {\n        let x = total;\n        break;\n    }\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("while let sum ="), "got: {out}");
+        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].orphans.len(), 1);
+    }
+
+    #[test]
+    fn fn_param_rename_leftover_downgrades() {
+        let patch = format!(
+            "{HEAD}@@ -1,3 @@ rule=rename_param\n- fn foo(total: u32) {{ ... }}\n+ fn foo(sum: u32) {{ ... }}\n"
+        );
+        let src = "fn foo(total: u32) -> u32 {\n    total + 1\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("fn foo(sum: u32)"), "got: {out}");
+        assert_eq!(report.rules[0].semantics, crate::RuleSemantics::ReparseOnly);
+        assert_eq!(report.rules[0].orphans.len(), 1);
+    }
+
+    #[test]
+    fn fn_param_rename_clean_stays_instantiated() {
+        let patch = format!(
+            "{HEAD}@@ -1,3 @@ rule=rename_param\n- fn foo(total: u32) {{ ... }}\n+ fn foo(sum: u32) {{ ... }}\n"
+        );
+        let src = "fn foo(total: u32) -> u32 {\n    1\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("fn foo(sum: u32)"), "got: {out}");
+        assert_eq!(
+            report.rules[0].semantics,
+            crate::RuleSemantics::Instantiated
+        );
+        assert!(report.rules[0].orphans.is_empty());
+    }
 }
