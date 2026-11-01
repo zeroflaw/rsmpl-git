@@ -164,7 +164,7 @@ pub fn let_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
 /// WI-2c: `(old, new)` when `kind` is a closure-parameter rename —
 /// `|old| Body` → `|new| Body` (or an annotated `|old: T| Body` pair
 /// with the same `T`) with placeholder-normalized-equal bodies.
-/// Qualifiers (async/move/capture/lifetimes/return type) must match;
+/// Qualifiers (async/static/move/capture/lifetimes/return type) must match;
 /// exactly one parameter may differ, and the differing pair must be a
 /// single ident with the same `P: T` annotation discipline as `let`
 /// (bare `P` never drops/adds an annotation). A full interior
@@ -203,6 +203,11 @@ pub fn closure_param_rename(kind: &PatternKind) -> Option<(String, String)> {
     }
     if crate::matcher_general::render(&minus.movability)
         != crate::matcher_general::render(&plus.movability)
+    {
+        return None;
+    }
+    if crate::matcher_general::render(&minus.capture)
+        != crate::matcher_general::render(&plus.capture)
     {
         return None;
     }
@@ -1239,17 +1244,13 @@ mod tests {
     }
 
     #[test]
-    fn closure_param_move_delta_fires_like_engine() {
-        // syn 2.x keeps `move` in `capture`, which the engine's
-        // `match_closure` does not compare — the hunk still applies as
-        // a closure rewrite, so the detector fires too (orphan duty is
-        // about the dangling body uses, which the `move` delta does not
-        // affect). Pinned for engine parity, not endorsed as pure.
+    fn closure_param_move_delta_vetoes() {
+        // `capture` is syn's `move` qualifier; a delta there is a
+        // different closure (engine `match_closure` parity).
         let kind = general_expr("|total| __RSMPL_E0", "move |sum| E");
-        assert_eq!(
-            closure_param_rename(&kind),
-            Some(("total".to_string(), "sum".to_string()))
-        );
+        assert_eq!(closure_param_rename(&kind), None);
+        let kind = general_expr("move |total| __RSMPL_E0", "|sum| E");
+        assert_eq!(closure_param_rename(&kind), None);
     }
 
     #[test]

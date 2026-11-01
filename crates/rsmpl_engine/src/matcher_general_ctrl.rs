@@ -429,7 +429,7 @@ pub(crate) fn match_for(pat: &syn::ExprForLoop, tgt: &syn::ExprForLoop, cx: &mut
         && match_block(&pat.body, &tgt.body, cx)
 }
 
-/// Match a closure: async/move/capture qualifiers plus lifetimes and
+/// Match a closure: async/static/move qualifiers plus lifetimes and
 /// constness compare strictly (a different qualifier is a different
 /// closure); params pairwise via the decomposed helper (mirrors the
 /// `P: T` rule of `match_local`); return type structurally; body as an
@@ -443,6 +443,9 @@ pub(crate) fn match_closure(
         return false;
     }
     if render(&pat.movability) != render(&tgt.movability) {
+        return false;
+    }
+    if render(&pat.capture) != render(&tgt.capture) {
         return false;
     }
     if render(&pat.lifetimes) != render(&tgt.lifetimes) {
@@ -716,6 +719,23 @@ mod tests {
             "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- |P| E\n+ |P| E + 1\n"
         );
         let src = "fn a() {\n    let f = async |x| x;\n    let _ = f;\n}\n";
+        assert!(apply(&patch, src).is_err());
+    }
+
+    #[test]
+    fn closure_move_mismatch_vetoes() {
+        // `capture` (`move`) compares strictly: a plain-closure pattern
+        // never matches a `move` closure (and vice versa), so the hunk
+        // cannot silently drop or add `move`.
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- |P| E\n+ |P| E + 1\n"
+        );
+        let src = "fn a() {\n    let f = move |x| x;\n    let _ = f;\n}\n";
+        assert!(apply(&patch, src).is_err());
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# pat P\n# expr E\n- move |P| E\n+ move |P| E + 1\n"
+        );
+        let src = "fn a() {\n    let f = |x| x;\n    let _ = f;\n}\n";
         assert!(apply(&patch, src).is_err());
     }
 
