@@ -155,12 +155,12 @@ pub(crate) fn try_move_sweep(
         }
     }
     let pairs = deduped;
-    // WI-6 slice 2: never pair the two halves of one native hunk
-    // (`is_twin_pair`: that relabels a same-spot edit as a move and
-    // starves the intent detectors that own it).
+    // WI-6 slice 3a: never pair two runs of one native hunk
+    // (`is_same_group_pair`: that relabels a same-spot edit as a move
+    // and starves the intent detectors that own it).
     let pairs: Vec<MovePair> = pairs
         .into_iter()
-        .filter(|p| !super::move_parts::is_twin_pair(&parsed, p))
+        .filter(|p| !super::move_parts::is_same_group_pair(&parsed, p))
         .collect();
     // Minus-hunk gate: whole-hunk drop only — every non-blank line must
     // belong to a paired item, no leading blank, no blank runs (a cut
@@ -294,11 +294,11 @@ pub(crate) fn try_move_sweep(
         used_rules.truncate(checkpoint);
         return None;
     }
-    // WI-6 slice 2: an untouched plus-virtual half anchored inside a
-    // cut's claimed range vetoes the whole sweep (`anchor_in_cut_veto`:
-    // the insertion anchor is unorderable there). Anchors outside every
-    // same-section cut range stay ordinary; cross-section adjacency (the
-    // slice's target) never trips this gate.
+    // WI-6 slice 3a: an untouched plus run anchored inside a cut's
+    // claimed range vetoes the whole sweep (`anchor_in_cut_veto`: the
+    // insertion anchor is unorderable there). Run-split anchors are
+    // exact, so trailing-edit runs anchor past the cut and fire;
+    // cross-section adjacency never trips this gate.
     if super::move_parts::anchor_in_cut_veto(&parsed, &final_pairs) {
         used_rules.truncate(checkpoint);
         return None;
@@ -428,29 +428,32 @@ pub(crate) fn try_move_sweep(
     for si in &touched_secs {
         let sec = &parsed[*si];
         let mut rebuilt = sec.prelude.clone();
-        // WI-6 slice 2: twin halves of a virtually split mixed hunk
-        // whose original is re-emitted verbatim (neither half touched).
-        let mut split_done: HashSet<(usize, usize)> = HashSet::new();
+        // WI-6 slice 3a: runs of a run-split mixed hunk whose whole
+        // group is untouched re-emit the original verbatim once.
+        let mut group_done: HashSet<usize> = HashSet::new();
         for (hi, hunk) in sec.hunks.iter().enumerate() {
-            if split_done.contains(&(*si, hi)) {
-                continue;
-            }
             if let Some((orig_header, orig_body)) = &hunk.unsplit {
-                let twin = hunk.twin.unwrap_or(hi);
-                let self_touched = named
-                    .iter()
-                    .any(|(p, _, _)| p.minus_hunk_key == (*si, hi) || p.plus_hunk_key == (*si, hi));
-                let twin_touched = named.iter().any(|(p, _, _)| {
-                    p.minus_hunk_key == (*si, twin) || p.plus_hunk_key == (*si, twin)
+                let gid = hunk.group.unwrap_or(hi);
+                if group_done.contains(&gid) {
+                    continue;
+                }
+                let group_touched = named.iter().any(|(p, _, _)| {
+                    [p.minus_hunk_key, p.plus_hunk_key]
+                        .iter()
+                        .any(|(ksi, khi)| {
+                            *ksi == *si
+                                && sec.hunks[*khi].group == hunk.group
+                                && sec.hunks[*khi].unsplit.is_some()
+                        })
                 });
-                if !self_touched && !twin_touched {
+                if !group_touched {
                     rebuilt.push_str(orig_header);
                     rebuilt.push('\n');
                     for line in orig_body {
                         rebuilt.push_str(line);
                         rebuilt.push('\n');
                     }
-                    split_done.insert((*si, twin));
+                    group_done.insert(gid);
                     continue;
                 }
             }
@@ -803,13 +806,12 @@ mod tests {
     }
 
     #[test]
-    fn move_mixed_hunk_stays_ordinary() {
-        // WI-6 slice 2: a cut sharing its section with an untouched
-        // plus-virtual half vetoes — the insertion anchor inside the
-        // cut's claimed range is unorderable, so the minus-side mixed
-        // shape (moved item + adjacent edit, one `-U0` hunk) stays
-        // ordinary. Plus-side adjacency across sections is unaffected
-        // (see move_adjacent_caller_edit_fires_via_virtual_split).
+    fn move_minus_side_mixed_fires() {
+        // WI-6 slice 3a: the minus-side mixed shape — a moved item
+        // deleted adjacent to a trailing edit in one `-U0` hunk — now
+        // fires. The ordered run-split anchors the trailing plus run
+        // past the cut, so the veto lifts and the edit rides ordinary
+        // leftovers around the cut/paste.
         let big = big_fn("big");
         let mut a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
         a_minus.push_str("-fn edited() {}\n+fn edited2() {}\n");
@@ -821,7 +823,19 @@ mod tests {
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
-        assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("minus-side mixed must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("-fn edited() {}"),
+            "edited minus rides leftover, got:\n{text}"
+        );
+        assert!(
+            text.contains("+fn edited2() {}"),
+            "edited plus rides leftover, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1842,6 +1856,50 @@ mod tests {
         let mut used = Vec::new();
         let out =
             try_move_sweep(&[a, b], &pre, &mut used).expect("adjacent move must fire via split");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved header, got:\n{text}"
+        );
+        assert!(
+            text.contains("-fn caller() { let r = foo(1); }"),
+            "caller minus rides leftover, got:\n{text}"
+        );
+        assert!(
+            text.contains("+fn caller() { let r = bar(1); }"),
+            "caller plus rides leftover, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_minus_side_rename_adjacent_fires() {
+        // WI-6 slice 3a: move+rename whose source deletion merges with
+        // an adjacent one-line caller edit into one mixed `-U0` hunk.
+        // The caller plus run anchors past the cut, so the evolved
+        // cut/paste fires and the caller rides ordinary leftovers.
+        let foo = big_fn("foo");
+        let bar = big_fn("bar");
+        let mut a_minus: String = foo.lines().map(|l| format!("-{l}\n")).collect();
+        a_minus.push_str("-fn caller() { let r = foo(1); }\n+fn caller() { let r = bar(1); }\n");
+        let n_old = foo.lines().count() + 1;
+        let a =
+            format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,{n_old} +2,1 @@\n{a_minus}");
+        let b_plus: String = bar.lines().map(|l| format!("+{l}\n")).collect();
+        let m = bar.lines().count();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,{m} @@\n{b_plus}");
+        let pre = pre_map(&[
+            (
+                "a.rs",
+                &format!("fn keep() {{}}\n{foo}fn caller() {{ let r = foo(1); }}\n"),
+            ),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            try_move_sweep(&[a, b], &pre, &mut used).expect("minus-side rename-move must fire");
         let text = out.join("");
         assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(text.contains("# use="), "paste must fire, got:\n{text}");

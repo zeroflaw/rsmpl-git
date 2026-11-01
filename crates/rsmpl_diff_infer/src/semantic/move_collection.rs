@@ -387,7 +387,7 @@ mod tests {
             new_start: old_start,
             new_len: 0,
             body: body.iter().map(|s| s.to_string()).collect(),
-            twin: None,
+            group: None,
             unsplit: None,
         }
     }

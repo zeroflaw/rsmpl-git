@@ -67,12 +67,12 @@ pub(crate) struct HunkParts {
     pub(crate) new_start: u32,
     pub(crate) new_len: u32,
     pub(crate) body: Vec<String>,
-    /// WI-6 slice 2: sibling virtual-half index for the two halves of a
-    /// virtually split mixed native hunk (`None` for native hunks).
-    pub(crate) twin: Option<usize>,
-    /// WI-6 slice 2: the original header+body of a virtually split
-    /// mixed native hunk, re-emitted verbatim when neither half is
-    /// touched by the move (`None` for native hunks).
+    /// WI-6 slice 3a: native-hunk group id for runs of an ordered
+    /// run-split mixed native hunk (`None` for native pure hunks).
+    pub(crate) group: Option<usize>,
+    /// WI-6 slice 3a: the original header+body of a run-split mixed
+    /// native hunk, re-emitted verbatim when no run of the group is
+    /// touched by the move (`None` for native pure hunks).
     pub(crate) unsplit: Option<(String, Vec<String>)>,
 }
 
@@ -259,28 +259,30 @@ pub(crate) fn plus_runs_hold(body: &[String], runs: &[(usize, usize)]) -> bool {
     true
 }
 
-/// WI-6 slice 2: twin-half pairing veto — never pair the two halves of
-/// one virtually split native hunk. The split separates deletion
-/// groups from insertion groups for cross-hunk pairing; pairing twins
+/// WI-6 slice 3a: same-group pairing veto — never pair two runs of one
+/// run-split native hunk. The split separates deletion runs from
+/// insertion runs for cross-hunk pairing; pairing same-group runs
 /// relabels a same-spot edit (e.g. a same-file rename) as a move and
 /// starves the intent detectors that own it (assoc/member/item
 /// follow). A genuine adjacent same-file swap stays ordinary
 /// (conservative, sound).
-pub(crate) fn is_twin_pair(parsed: &[SectionParts], p: &MovePair) -> bool {
+pub(crate) fn is_same_group_pair(parsed: &[SectionParts], p: &MovePair) -> bool {
     let (msi, mhi) = p.minus_hunk_key;
     let (psi, phi) = p.plus_hunk_key;
-    msi == psi && parsed[msi].hunks[mhi].twin == Some(phi)
+    msi == psi
+        && parsed[msi].hunks[mhi].group.is_some()
+        && parsed[msi].hunks[mhi].group == parsed[psi].hunks[phi].group
 }
 
-/// WI-6 slice 2: anchor-in-cut veto — true when an untouched
-/// plus-virtual half anchors inside a same-section cut's claimed range
-/// (closed: the engine overlaps an insertion at the cut's first line,
-/// while an anchor past the last line is the proven same-file order).
-/// The half would re-emit as a zero-width insertion at its native
-/// position — unorderable inside the cut — and no subtler
-/// disjointness proof is computed yet. Untouched minus-virtual halves
-/// need no check: leftover deletions are disjoint from cuts by
-/// construction, and paste/leftover coexistence is probe-proven.
+/// WI-6 slice 3a: anchor-in-cut veto — true when an untouched plus run
+/// anchors inside a same-section cut's claimed range (closed: the
+/// engine overlaps an insertion at the cut's first line, while an
+/// anchor past the last line is the proven same-file order). Run-split
+/// anchors are exact by construction (ordered walk), so only genuinely
+/// interior insertions veto — a trailing-edit run anchors past the cut
+/// and fires. Untouched minus runs need no check: leftover deletions
+/// are disjoint from cuts by construction, and paste/leftover
+/// coexistence is probe-proven.
 pub(crate) fn anchor_in_cut_veto(parsed: &[SectionParts], pairs: &[MovePair]) -> bool {
     let mut cut_ranges: Vec<(usize, u32, u32)> = Vec::new();
     for q in pairs {
@@ -304,15 +306,18 @@ pub(crate) fn anchor_in_cut_veto(parsed: &[SectionParts], pairs: &[MovePair]) ->
     })
 }
 
-/// WI-6 slice 2: push one native hunk, virtually splitting mixed
-/// (`-`+`+`) `-U0` hunks into adjacent minus/plus halves for pairing.
-/// A moved item pasted adjacent to an edited line merges into one
-/// mixed hunk (no unchanged line separates them); without the split
-/// the plus run is invisible to pairing and the move vetoes. Halves
-/// carry twin links plus the original header+body so the rebuild can
-/// re-emit untouched originals verbatim. Anything beyond `-`/`+` lines
-/// (context, empty, `\` markers) declines the split — the whole hunk
-/// stays single and invisible, as before.
+/// WI-6 slice 3a: push one native hunk, splitting mixed (`-`+`+`)
+/// `-U0` hunks into ordered pure runs for pairing. A moved item
+/// deleted adjacent to an edited line merges into one mixed hunk (no
+/// unchanged line separates them); without the split the minority side
+/// is invisible to pairing and the move vetoes. Runs keep file order
+/// with exact anchors (a plus run cites the insertion point after the
+/// last consumed old line, `@@ -0,0 @@` for a leading run), so the
+/// anchor-in-cut veto only fires on genuinely interior insertions.
+/// Every run carries the group id plus the original header+body so the
+/// rebuild re-emits untouched groups verbatim. Anything beyond `-`/`+`
+/// lines (context, empty, `\` markers) declines the split — the whole
+/// hunk stays single and invisible, as before.
 fn push_hunk(
     hunks: &mut Vec<HunkParts>,
     header: String,
@@ -343,47 +348,61 @@ fn push_hunk(
             new_start,
             new_len,
             body,
-            twin: None,
+            group: None,
             unsplit: None,
         });
         return;
     }
-    let minus_body: Vec<String> = body
-        .iter()
-        .filter(|l| l.starts_with('-'))
-        .cloned()
-        .collect();
-    let plus_body: Vec<String> = body
-        .iter()
-        .filter(|l| l.starts_with('+'))
-        .cloned()
-        .collect();
-    // Virtual ranges cite actual line counts (a `-U0` header agrees by
-    // construction; actuals keep the halves self-consistent regardless).
-    let mlen = minus_body.len() as u32;
-    let plen = plus_body.len() as u32;
-    let minus_idx = hunks.len();
-    let plus_idx = minus_idx + 1;
-    hunks.push(HunkParts {
-        header: format!("@@ -{old_start},{mlen} +{new_start},0 @@"),
-        old_start,
-        old_len: mlen,
-        new_start,
-        new_len: 0,
-        body: minus_body,
-        twin: Some(plus_idx),
-        unsplit: Some((header.clone(), body.clone())),
-    });
-    hunks.push(HunkParts {
-        header: format!("@@ -{old_start},0 +{new_start},{plen} @@"),
-        old_start,
-        old_len: 0,
-        new_start,
-        new_len: plen,
-        body: plus_body,
-        twin: Some(minus_idx),
-        unsplit: Some((header, body)),
-    });
+    // Ordered maximal pure runs with walked anchors: a minus run of k
+    // cites the next k old lines; a plus run of k cites the insertion
+    // point after the last consumed old line (`old_start - 1`, possibly
+    // `0`, when the run leads the hunk). Virtual ranges cite actual
+    // line counts (a `-U0` header agrees by construction).
+    let gid = hunks.len();
+    let mut minus_done: u32 = 0;
+    let mut plus_done: u32 = 0;
+    let mut idx = 0;
+    while idx < body.len() {
+        let is_minus = body[idx].starts_with('-');
+        let mut j = idx;
+        while j < body.len() && body[j].starts_with('-') == is_minus {
+            j += 1;
+        }
+        let run: Vec<String> = body[idx..j].to_vec();
+        let k = run.len() as u32;
+        if is_minus {
+            hunks.push(HunkParts {
+                header: format!(
+                    "@@ -{},{} +{},0 @@",
+                    old_start + minus_done,
+                    k,
+                    new_start + plus_done
+                ),
+                old_start: old_start + minus_done,
+                old_len: k,
+                new_start: new_start + plus_done,
+                new_len: 0,
+                body: run,
+                group: Some(gid),
+                unsplit: Some((header.clone(), body.clone())),
+            });
+            minus_done += k;
+        } else {
+            let anchor = old_start.saturating_add(minus_done).saturating_sub(1);
+            hunks.push(HunkParts {
+                header: format!("@@ -{anchor},0 +{},{} @@", new_start + plus_done, k),
+                old_start: anchor,
+                old_len: 0,
+                new_start: new_start + plus_done,
+                new_len: k,
+                body: run,
+                group: Some(gid),
+                unsplit: Some((header.clone(), body.clone())),
+            });
+            plus_done += k;
+        }
+        idx = j;
+    }
 }
 
 /// Split a collapsed section into prelude + hunks; `None` when the
@@ -566,17 +585,19 @@ mod tests {
     }
 
     #[test]
-    fn mixed_hunk_splits_into_virtual_twins() {
-        // WI-6 slice 2: a mixed `-U0` hunk (insertion adjacent to an
-        // edit) parses as adjacent minus/plus halves with twin links
-        // and recomputed ranges, keeping the original for verbatim
+    fn ordered_runs_split_with_precise_anchors() {
+        // WI-6 slice 3a: a mixed `-U0` hunk (insertion adjacent to an
+        // edit) parses as ordered pure runs with walked anchors,
+        // sharing one group id and keeping the original for verbatim
         // re-emission when untouched.
         let section = "diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,2 @@\n-fn old() {}\n+fn bar() {}\n+fn new() {}\n";
         let parts = split_section(section, 0).expect("must parse");
         assert_eq!(parts.hunks.len(), 2);
         let (m, p) = (&parts.hunks[0], &parts.hunks[1]);
-        assert_eq!(m.twin, Some(1));
-        assert_eq!(p.twin, Some(0));
+        assert_eq!(m.group, Some(0));
+        assert_eq!(p.group, Some(0));
+        assert_eq!(m.header, "@@ -1,1 +1,0 @@");
+        assert_eq!(p.header, "@@ -1,0 +1,2 @@");
         assert_eq!(
             (m.old_start, m.old_len, m.new_start, m.new_len),
             (1, 1, 1, 0)
@@ -597,17 +618,58 @@ mod tests {
     }
 
     #[test]
-    fn pure_hunks_keep_no_twins() {
-        // WI-6 slice 2: pure hunks parse exactly as before — no twin
-        // links, no unsplit original.
+    fn pure_hunks_keep_no_group() {
+        // WI-6 slice 3a: pure hunks parse exactly as before — no group
+        // id, no unsplit original.
         let section = "diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,1 +2,0 @@\n-fn old() {}\n@@ -5,0 +5,1 @@\n+fn new() {}\n";
         let parts = split_section(section, 0).expect("must parse");
         assert_eq!(parts.hunks.len(), 2);
         for h in &parts.hunks {
-            assert_eq!(h.twin, None);
+            assert_eq!(h.group, None);
             assert!(h.unsplit.is_none());
         }
         assert_eq!(parts.hunks[0].body, vec!["-fn old() {}".to_string()]);
         assert_eq!(parts.hunks[1].body, vec!["+fn new() {}".to_string()]);
+    }
+
+    #[test]
+    fn interleaved_body_splits_into_ordered_runs() {
+        // WI-6 slice 3a: interleaved `-`/`+` lines split into one run
+        // per maximal pure block with walked anchors — a later plus
+        // run anchors past the consumed old lines, not at the native
+        // hunk start.
+        let section =
+            "diff --git c.rs\n--- a/c.rs\n+++ b/c.rs\n@@ -5,2 +7,2 @@\n-l5\n+m7\n-l6\n+m8\n";
+        let parts = split_section(section, 0).expect("must parse");
+        assert_eq!(parts.hunks.len(), 4);
+        for h in &parts.hunks {
+            assert_eq!(h.group, Some(0));
+            assert!(h.unsplit.is_some());
+        }
+        assert_eq!(parts.hunks[0].header, "@@ -5,1 +7,0 @@");
+        assert_eq!(parts.hunks[1].header, "@@ -5,0 +7,1 @@");
+        assert_eq!(parts.hunks[2].header, "@@ -6,1 +8,0 @@");
+        assert_eq!(parts.hunks[3].header, "@@ -6,0 +8,1 @@");
+        assert_eq!(
+            (
+                parts.hunks[1].old_start,
+                parts.hunks[1].old_len,
+                parts.hunks[1].new_start,
+                parts.hunks[1].new_len
+            ),
+            (5, 0, 7, 1)
+        );
+        assert_eq!(
+            (
+                parts.hunks[3].old_start,
+                parts.hunks[3].old_len,
+                parts.hunks[3].new_start,
+                parts.hunks[3].new_len
+            ),
+            (6, 0, 8, 1)
+        );
+        let (h, b) = parts.hunks[0].unsplit.clone().unwrap();
+        assert_eq!(h, "@@ -5,2 +7,2 @@");
+        assert_eq!(b.len(), 4);
     }
 }

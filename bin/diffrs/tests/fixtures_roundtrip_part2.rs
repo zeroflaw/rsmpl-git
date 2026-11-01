@@ -1007,6 +1007,39 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "126-move-minus-side-adjacent-fires" {
+        // WI-6 slice 3a: the moved item deleted adjacent to an edited
+        // one-line caller merges into one mixed `-U0` hunk. The ordered
+        // run-split anchors the caller plus run past the cut, so the
+        // move+rename fires as an evolved cut/paste; the edited caller
+        // rides ordinary leftovers (the one-line `fn` frame is not a
+        // sweepable call shape — WI-9 domain).
+        assert!(
+            semantic.contains("# bind="),
+            "rename-move cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "rename-move paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved header, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("-fn caller() { let r = foo(1); }"),
+            "caller minus rides leftover, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+fn caller() { let r = bar(1); }"),
+            "caller plus rides leftover, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "minus-side move must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "124-move-rename-selfref-stays-ordinary" {
         // WI-6 slice 1: a renamed self-reference inside the moved body
         // is a body delta, so no move pair may claim it (the splice

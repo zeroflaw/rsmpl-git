@@ -8758,12 +8758,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    rides a metavar, never respelled) while replaced ordinary grows with
    content, so the same 3-line shape with a longer body fires — no fixed
    line threshold). A mixed `-U0` hunk (an insertion adjacent to an edit,
-   with no unchanged line between them) virtually splits into adjacent
-   minus/plus halves for pairing (WI-6 slice 2); untouched halves
-   re-emit verbatim, while a section holding both a cut and an untouched
-   plus half stays ordinary (the insertion anchor inside the cut's
-   claimed range is unorderable — a range-disjointness proof is future
-   work);
+   with no unchanged line between them) splits into ordered pure runs
+   for pairing (WI-6 slice 3a): each run cites exact walked anchors, so
+   a trailing-edit plus run anchors past the cut and fires while a
+   genuinely interior insertion still vetoes the section (the anchor
+   inside the cut's claimed range is unorderable); two runs of one hunk
+   never pair (same-spot edits stay with the intent detectors), and a
+   group no pair touches re-emits verbatim;
   inter-run gap relaxation stays vetoed (the same-anchor paste join
    restores exactly one blank); WI-8a pairs `fn` moves whose header prefix
    (vis + qualifiers, verbatim) and/or name evolve while attrs, generics,
@@ -9153,7 +9154,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(124), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
+(125), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
