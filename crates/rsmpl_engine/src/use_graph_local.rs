@@ -899,6 +899,37 @@ mod tests {
     }
 
     #[test]
+    fn general_orphans_shadowed_for_loop_body_use() {
+        // An inner `for total` shadows the outer `let total` inside the
+        // loop body: the body use stays a `shadowed` orphan.
+        let src = "fn main() {\n    let total = 1;\n    for total in 0..3 {\n        let x = total;\n    }\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
+    fn general_orphans_unshadowed_after_for_loop_stays_off_target() {
+        // The `for total` binder governs only the loop body: the outer
+        // use after the loop still names the outer binder.
+        let src = "fn main() {\n    let total = 1;\n    for total in 0..3 {\n        break;\n    }\n    let c = total;\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 6);
+        assert_eq!(orphans[0].reason, "off-target");
+    }
+
+    #[test]
+    fn general_orphans_shadowed_match_arm_use() {
+        // An inner match-arm `total` shadows the outer `let total`
+        // inside the arm body.
+        let src = "fn main() {\n    let total = 1;\n    match 1 {\n        total => total,\n        _ => 0,\n    }\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "shadowed");
+    }
+
+    #[test]
     fn general_orphans_macro_scope_precision() {
         // Macro in the enclosing block stays; macro in another fn drops.
         let same = "fn main() {\n    let total = 1;\n    println!(\"{}\", total);\n}\n";
