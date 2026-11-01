@@ -13,7 +13,8 @@ use crate::edits::TextEdit;
 use crate::lines::FileState;
 use crate::{
     matcher_assoc, matcher_expr, matcher_fn, matcher_general_apply, matcher_impl, matcher_item,
-    matcher_macro, matcher_member, matcher_member_evo, matcher_use, matcher_value,
+    matcher_item_joint, matcher_macro, matcher_member, matcher_member_evo, matcher_use,
+    matcher_value,
 };
 
 /// Dispatch one pass-2 RSmPL hunk to its matcher (SPEC 23.1 step 7).
@@ -132,6 +133,16 @@ pub(crate) fn apply_rsmpl_hunk(
         ),
         PatternKind::FieldTypeEvolution { .. } => {
             matcher_member_evo::apply_field_type_hunk(
+                parsed,
+                &state.original,
+                &state.index,
+                rh,
+                compiled,
+                edits,
+            )
+        }
+        PatternKind::StructRenameFieldEvo { .. } => {
+            matcher_item_joint::apply_struct_rename_field_evo_hunk(
                 parsed,
                 &state.original,
                 &state.index,

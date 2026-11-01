@@ -2411,7 +2411,17 @@ lowered diff is the observable truth as always (Section D.2).
   evolution delta shares its native hunk with the rename's use raises
   nothing — the bare rename single is suppressed and the section stays
   wholly ordinary (the item analogue of the WI-4 claim-then-veto law).
-  Slice 2b owns the firing shape.
+  Composed rename+evolution joints (WI-5 slice 2b, first): a `struct`
+  rename pair may carry exactly one attached field-type evolution pair
+  written below it on its own diff lines (same field, types differ and
+  both parse, no container header — the def pair names the container,
+  the member pair rides it; `# follow=uses` allowed, the rename half
+  owns uses). The hunk applies and verifies atomically (rename ident +
+  field-type span + follow in one matcher pass; twin containers veto at
+  the raiser, never half-applied), and raising emits that spelling for
+  single-hunk same-container sections. Two evolutions, an evolution of
+  another container, variant/alias/const shapes, and additions stay
+  ordinary (follow-up slices).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).
@@ -7564,6 +7574,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    item analogue of the WI-4 claim-then-veto suppression). Pure
    definition + pure evolution hunks (no stranded use) still partition;
    `fn` definitions never trigger this veto.
+   Struct rename + field-type joint (WI-5 slice 2b, first): a def hunk
+   holding the `struct` rename plus exactly one attached field-type
+   evolution pair (same file/section, field's pre-image carrier is the
+   renamed struct) plus claimable uses raises as one follow hunk with
+   the member pair below the def pair, proved by the one scratch-apply
+   probe (D13) under strict T375. Two evolutions, another container's
+   evolution, variant/alias/const shapes, and insertions never joint.
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/

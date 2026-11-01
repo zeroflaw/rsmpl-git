@@ -521,18 +521,26 @@ mod tests {
     }
 
     #[test]
-    fn single_hunk_mixed_needs_no_veto() {
-        // Probe B: rename + field-type evolution in one hunk (same
-        // container) is already wholly ordinary — nothing to suppress,
-        // pinned here so slice 2b can flip it to a joint.
+    fn single_hunk_mixed_fires_field_evo_joint() {
+        // WI-5 slice 2b flip target: rename + field-type evolution in one
+        // hunk (same container) now raises as one joint intent hunk with
+        // follow (previously wholly ordinary — the slice-2a pin).
         let pre = "struct Old {\n    x: u32,\n}\nfn f(s: Old) {\n}\n";
-        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n-struct Old {\n-    x: u32,\n+struct New {\n+    x: u64,\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,5 +1,5 @@\n-struct Old {\n-    x: u32,\n+struct New {\n+    x: u64,\n }\n-fn f(s: Old) {\n+fn f(s: New) {\n";
         assert!(!section_has_stranded_item_joint(section, "f.rs", Some(pre)));
-        let out = infer_section(section, pre);
-        assert!(
-            out.is_none() || !out.as_ref().unwrap().contains("rule="),
-            "same-container joint stays ordinary until 2b, got:\n{}",
-            out.unwrap_or_default()
+        let out = infer_section(section, pre).expect("same-container joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+        assert!(out.contains("+ struct New"), "got:\n{out}");
+        assert!(out.contains("- x: u32"), "got:\n{out}");
+        assert!(out.contains("+ x: u64"), "got:\n{out}");
+        // Real-apply byte-compare: post equals the native post.
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "struct New {\n    x: u64,\n}\nfn f(s: New) {\n}\n"
         );
     }
 }

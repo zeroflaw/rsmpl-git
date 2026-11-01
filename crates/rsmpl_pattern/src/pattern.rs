@@ -156,6 +156,24 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// WI-5 slice 2b: struct rename + field-type evolution joint
+    /// (`- struct Old` / `+ struct New` plus `- x: u32` / `+ x: u64`,
+    /// no container header — the def pair names the container, the
+    /// member pair rides it). The field name is concrete and preserved,
+    /// the type is a type template. `# follow=uses` is allowed (the
+    /// rename half owns uses; pure evolutions stay C17).
+    StructRenameFieldEvo {
+        old_container: String,
+        new_container: String,
+        field: String,
+        vis: String,
+        minus_sub: String,
+        plus_raw: String,
+        /// Placeholder idents per metavariable, for substitution checks.
+        placeholders: Vec<(String, String)>,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// Enum-variant payload/discriminant evolution (`enum E {` context):
     /// the variant name is concrete and preserved, exactly one region
     /// evolves — tuple payload types, struct payload field types (field
@@ -641,6 +659,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::TypeAliasEvolution { .. } => "type-alias evolution",
             PatternKind::ConstEvolution { .. } => "const/static evolution",
             PatternKind::FieldTypeEvolution { .. } => "field-type evolution",
+            PatternKind::StructRenameFieldEvo { .. } => "struct-rename-field-evolution",
             PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
             PatternKind::FieldAddition { .. } => "field addition",
             PatternKind::VariantAddition { .. } => "variant addition",

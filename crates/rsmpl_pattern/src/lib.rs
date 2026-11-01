@@ -20,6 +20,7 @@ mod pattern_def_evo;
 mod pattern_ellipsis;
 mod pattern_evolution;
 mod pattern_general;
+mod pattern_item_joint;
 mod pattern_member_evo;
 mod quote_utils;
 mod terse_fn;

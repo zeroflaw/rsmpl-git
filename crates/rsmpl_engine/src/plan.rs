@@ -78,6 +78,7 @@ fn apply_inner(
             rsmpl_pattern::compile(rh).map(|c| c.kind),
             Ok(PatternKind::Fn { .. }
                 | PatternKind::ItemRename { .. }
+                | PatternKind::StructRenameFieldEvo { .. }
                 | PatternKind::FieldRename { .. }
                 | PatternKind::VariantRename { .. }
                 | PatternKind::AssocRename { .. })
@@ -694,6 +695,31 @@ fn apply_inner(
                                     rh,
                                     &compiled,
                                 )
+                            }
+                            PatternKind::StructRenameFieldEvo { old_container, .. } => {
+                                let renamed: Vec<(usize, usize)> = file_edits
+                                    .get(path)
+                                    .map(|v| {
+                                        v[edits_before..].iter().map(|e| (e.start, e.end)).collect()
+                                    })
+                                    .unwrap_or_default();
+                                let mut refs: Vec<(String, &syn::File, &str, &LineIndex)> =
+                                    Vec::new();
+                                let mut paths: Vec<&String> = states.keys().collect();
+                                paths.sort();
+                                for p in paths {
+                                    if let Some(st) = states.get(p) {
+                                        if let Some(parsed) = st.parsed.as_ref() {
+                                            refs.push((
+                                                p.clone(),
+                                                parsed,
+                                                st.original.as_str(),
+                                                &st.index,
+                                            ));
+                                        }
+                                    }
+                                }
+                                collect_orphans(&refs, old_container, path, &renamed, false)
                             }
                             PatternKind::ItemRename {
                                 minus_name, kind, ..

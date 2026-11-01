@@ -41,6 +41,7 @@ pub(crate) fn follow_new_name(compiled: &CompiledPattern) -> Option<String> {
     match &compiled.kind {
         PatternKind::Fn { plus_name, .. } => Some(plus_name.clone()),
         PatternKind::ItemRename { plus_name, .. } => Some(plus_name.clone()),
+        PatternKind::StructRenameFieldEvo { new_container, .. } => Some(new_container.clone()),
         PatternKind::FieldRename { new, .. } => Some(new.clone()),
         PatternKind::VariantRename { new, .. } => Some(new.clone()),
         PatternKind::AssocRename { plus_name, .. } => Some(plus_name.clone()),

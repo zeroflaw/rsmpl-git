@@ -125,6 +125,15 @@ pub(crate) fn follow_uses_workspace(
                 macro_paths: *kind == rsmpl_pattern::ItemKind::MacroRules,
             },
         ),
+        PatternKind::StructRenameFieldEvo {
+            old_container,
+            new_container,
+            ..
+        } => (
+            old_container.clone(),
+            new_container.clone(),
+            FollowTarget::Scalar { macro_paths: false },
+        ),
         PatternKind::FieldRename {
             struct_name,
             old,

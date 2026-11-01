@@ -438,6 +438,14 @@ pub(crate) fn classify(
     if let Some(add) = crate::pattern_member_evo::classify_match_arm_addition(m, p, c, table)? {
         return Ok(add);
     }
+    // WI-5 slice 2b joint (struct rename + field-type evolution, bare-def
+    // + member, no header). Claims only exact 2-pair rename+field hunks;
+    // everything else falls through to the single-pair shapes below.
+    if let Some(joint) =
+        crate::pattern_item_joint::classify_struct_rename_field_evo(m, p, c, table)?
+    {
+        return Ok(joint);
+    }
     if let Some(evo) = crate::pattern_member_evo::classify_member_evolution(m, p, c, table)? {
         return Ok(evo);
     }

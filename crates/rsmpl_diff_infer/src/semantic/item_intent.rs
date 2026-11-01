@@ -221,7 +221,25 @@ pub(crate) fn try_item_intent_sweep(
         is_fn_intent,
         &pair_claimable,
     );
-    if attr_joint.is_none() {
+    // WI-5 slice 2b: struct rename + field-type evolution joint (same
+    // def-hunk posture as the attr joint; at most one joint fires — a
+    // def hunk carrying two deltas declines both).
+    let field_joint = if attr_joint.is_none() {
+        super::item_joint_field_evo::find_field_evo_joint(
+            &pairs,
+            &hunk_pairs,
+            def_hunk,
+            def_idx,
+            is_fn_intent,
+            &def_kind,
+            &old_ident,
+            pre,
+            &pair_claimable,
+        )
+    } else {
+        None
+    };
+    if attr_joint.is_none() && field_joint.is_none() {
         for pi in &hunk_pairs[def_hunk] {
             if *pi == def_idx {
                 continue;
@@ -268,10 +286,10 @@ pub(crate) fn try_item_intent_sweep(
     // No claimable use beyond the def → nothing to join. WI-4f-next3:
     // a lone def hunk holding def + claimable co-resident uses joins
     // (the gap's literal case); def-only still declines. WI-5: the
-    // attr pair is not a use — the joint still needs one real use.
+    // attr/field pair is not a use — the joint still needs one real use.
     if !claimed_idx
         .iter()
-        .any(|pi| *pi != def_idx && Some(*pi) != attr_joint)
+        .any(|pi| *pi != def_idx && Some(*pi) != attr_joint && Some(*pi) != field_joint)
     {
         return None;
     }
@@ -330,10 +348,11 @@ pub(crate) fn try_item_intent_sweep(
         )?;
     }
     // Build the emission: sweep dummy + follow + def pair (WI-5: the
-    // attr delta rides above the def pair in the joint arm).
+    // attr delta rides above the def pair in the joint arm; slice 2b:
+    // the member delta rides below it).
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let emission = match attr_joint {
-        Some(api) => super::item_joint_attr::joint_emit(
+    let emission = match (attr_joint, field_joint) {
+        (Some(api), None) => super::item_joint_attr::joint_emit(
             &def.path,
             &rule,
             &def_kind,
@@ -343,7 +362,17 @@ pub(crate) fn try_item_intent_sweep(
             &pairs[api].minus,
             &pairs[api].plus,
         ),
-        None => super::item_joint_attr::emit(
+        (None, Some(fpi)) => super::item_joint_field_evo::joint_emit(
+            &def.path,
+            &rule,
+            &def_kind,
+            &def_prefix,
+            &old_ident,
+            &new_ident,
+            &pairs[fpi].minus,
+            &pairs[fpi].plus,
+        ),
+        (None, None) => super::item_joint_attr::emit(
             &def.path,
             &rule,
             &def_kind,
@@ -351,6 +380,10 @@ pub(crate) fn try_item_intent_sweep(
             &old_ident,
             &new_ident,
         ),
+        (Some(_), Some(_)) => {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
     };
     // Scratch-apply probe: every claimed site must show its native plus
     // line, every other line byte-identical (per file, claimed subset).
