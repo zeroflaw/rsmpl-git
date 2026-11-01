@@ -126,6 +126,83 @@ pub(crate) fn try_call_perm_single(
     Some(hunk)
 }
 
+/// WI-7 slice-17: sub-line bare perm single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair does NOT parse whole-line as a
+/// same-callee perm pair (slice-10 owns that shape, including the T449
+/// `let`-init entry), but `subline::extract_arg_permutation_sites`
+/// yields exactly one site with a real non-trivial permutation and the
+/// frame rule holds (e.g. `swap(aa, bb) + 1` -> `swap(bb, aa) + 1`,
+/// `let`-init included via the shared `side_expr` entry). Uniqueness is
+/// proved by `template_pair_holds` at n=1 over the emitted pair (same
+/// probe as the multi - one site file-wide, zero opaque hits via the
+/// engine count); the T361 byte-compare pre-reservation
+/// (`single_reproduces`, slices-4-16 posture) vetoes any TokenStream
+/// spacing drift on the sub-expression rewrite path. Whole-line pairs
+/// decline here (slice-10 owns them, even when it vetoed - no bypass
+/// around its twin veto via a second counter). Multi-subterm lines
+/// decline (`sites.len() == 1` only - uniform two-site lines are multi
+/// territory by site count, even at one pair). Emission is the slice-10
+/// allow-one spelling (tight range, directive-free, default
+/// `allow=one`). Detector name `call_arg_template` (same family,
+/// provenance unchanged).
+pub(crate) fn try_subline_perm_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    if super::arg_template::parse_bare_pair(minuses[0], pluses[0]).is_some() {
+        return None;
+    }
+    let sites = super::subline::extract_arg_permutation_sites(minuses[0], pluses[0])?;
+    if sites.len() != 1 {
+        return None;
+    }
+    let (cal, arity, perm) = (sites[0].cal.clone(), sites[0].arity, sites[0].perm.clone());
+    if arity < 2 {
+        return None;
+    }
+    let minus_tpl: Vec<String> = (0..arity).map(|i| format!("E{i}")).collect();
+    let mut plus_tpl = Vec::with_capacity(arity);
+    for p in perm.iter().take(arity) {
+        plus_tpl.push(format!("E{p}"));
+    }
+    let lit = super::shape::literal_callee(&cal);
+    let minus_call = format!("{lit}({})", minus_tpl.join(", "));
+    let plus_call = format!("{lit}({})", plus_tpl.join(", "));
+    let raw_minus = format!("{cal}({})", minus_tpl.join(", "));
+    let raw_plus = format!("{cal}({})", plus_tpl.join(", "));
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minuses[0],
+        pluses[0],
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "call_arg_template");
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
 /// WI-7 slice-11: whole-line method-call arg-permutation single (N=1)
 /// under `PrecisionUnique`. Twin of the slice-10 bare-call entry:
 /// same receiver and same method (receiver deltas stay with the m2f
@@ -659,5 +736,164 @@ mod tests {
         .expect("uppercase method wrap single must fire");
         assert!(out.contains("Receiver.`Foo`(E0)"), "got: {out}");
         assert!(out.contains("Receiver.`Foo`(E0.clone())"), "got: {out}");
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_fires_and_round_trips() {
+        let pre = "fn m() {\n    swap(alpha_arg, beta_arg) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    swap(alpha_arg, beta_arg) + 1;\n+    swap(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique sub-line perm single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- swap(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ swap(E1, E0)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    swap(beta_arg, alpha_arg) + 1;\n}\n"
+        );
+        let re = super::super::infer_semantic_with_pre_images(
+            std::slice::from_ref(&section(
+                "f.rs",
+                "@@ -2 +2 @@\n-    swap(alpha_arg, beta_arg) + 1;\n+    swap(beta_arg, alpha_arg) + 1;\n",
+            )),
+            &pre_map,
+        )
+        .expect("re-raise must fire");
+        assert_eq!(out, re);
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_let_init_fires() {
+        let pre = "fn m() {\n    let x = swap(alpha_arg, beta_arg) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let x = swap(alpha_arg, beta_arg) + 1;\n+    let x = swap(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("let-init sub-line perm single must fire");
+        assert!(out.contains("- swap(E0, E1)\n"), "got: {out}");
+        assert!(out.contains("+ swap(E1, E0)\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_uppercase_fires_literal() {
+        let pre = "fn m() {\n    Swap(alpha_arg, beta_arg) + 1;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    Swap(alpha_arg, beta_arg) + 1;\n+    Swap(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("uppercase sub-line perm single must fire");
+        assert!(out.contains("`Swap`(E0, E1)"), "got: {out}");
+        assert!(out.contains("`Swap`(E1, E0)"), "got: {out}");
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_twin_vetoes() {
+        let pre = "fn m() {\n    swap(alpha_arg, beta_arg) + 1;\n    swap(first_value, second_value);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    swap(alpha_arg, beta_arg) + 1;\n+    swap(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_different_arity_twin_keeps_firing() {
+        let pre = "fn m() {\n    swap(alpha_arg, beta_arg) + 1;\n    swap(alpha_arg, beta_arg, gamma_arg);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    swap(alpha_arg, beta_arg) + 1;\n+    swap(beta_arg, alpha_arg) + 1;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-arity twin must not veto");
+        assert!(out.contains("- swap(E0, E1)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_whole_line_declines() {
+        assert!(
+            super::try_subline_perm_single(
+                &["    swap(alpha_arg, beta_arg);"],
+                &["    swap(beta_arg, alpha_arg);"],
+                "f.rs",
+                Some("fn m() {\n    swap(alpha_arg, beta_arg);\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "whole-line pair must decline"
+        );
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_two_site_line_declines() {
+        let pre = "fn m() {\n    swap(alpha_arg, beta_arg) + swap(gamma_arg, delta_arg);\n}\n";
+        assert!(
+            super::try_subline_perm_single(
+                &["    swap(alpha_arg, beta_arg) + swap(gamma_arg, delta_arg);"],
+                &["    swap(beta_arg, alpha_arg) + swap(delta_arg, gamma_arg);"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "two-site line must decline"
+        );
+    }
+
+    #[test]
+    fn wi17_subline_perm_single_none_and_nonperm_veto() {
+        assert!(
+            super::try_subline_perm_single(
+                &["    swap(alpha_arg, beta_arg) + 1;"],
+                &["    swap(beta_arg, alpha_arg) + 1;"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+        assert!(
+            super::try_subline_perm_single(
+                &["    swap(alpha_arg, beta_arg) + 1;"],
+                &["    swap(beta_arg, gamma_arg) + 1;"],
+                "f.rs",
+                Some("fn m() {\n    swap(alpha_arg, beta_arg) + 1;\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "non-bijective delta must decline"
+        );
     }
 }

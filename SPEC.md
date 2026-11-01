@@ -7777,7 +7777,19 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     emitted `Receiver.old(E0…)` template plus the T361 byte-compare;
     uppercase idents ride backticks with the raw-probe re-parse check
     on both sides (TOOL-5). Remaining families (sub-line general/
-    literal/perm/wrap) keep `N ≥ 2` until their WI-7 slices land.
+    literal/perm/wrap) keep `N ≥ 2` until their WI-7 slices land. Slice-17
+    adds sub-line bare perm pairs (`swap(alpha_arg, beta_arg) + 1` ->
+    `swap(beta_arg, alpha_arg) + 1`, bare-statement and `let`-init
+    framings via the shared `side_expr` entry): the pair must not parse
+    whole-line (slice-10 owns that shape, including the T449 `let`-init
+    entry), `extract_arg_permutation_sites` yields exactly one site with
+    a real non-trivial permutation and the frame rule holds;
+    multi-subterm lines decline (multi territory by site count);
+    uniqueness proved by `template_pair_holds` at n=1 over the emitted
+    pair plus the T361 byte-compare; uppercase callees ride backticks
+    with the raw-callee re-parse check (TOOL-5). Remaining families
+    (sub-line method-perm/general/literal/wrap) keep `N ≥ 2` until their
+    WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
