@@ -850,6 +850,93 @@ pub(crate) fn extract_literal_sites(minus: &str, plus: &str) -> Option<Vec<Liter
     Some(sites)
 }
 
+/// One method same-literal subterm site (WI-7 slice-21): the inner
+/// method call whose arg tuple carries the literal delta (raw token
+/// texts feed the totality probe and the shared emission tail).
+pub(crate) struct MethodLiteralSite {
+    pub(crate) method: String,
+    pub(crate) old_args: Vec<String>,
+    pub(crate) new_args: Vec<String>,
+}
+
+/// Extract method same-literal sites from one line pair (WI-7 slice-21):
+/// every minus/plus method subterm pairs in order with the same method,
+/// token-equal receivers and same arity; only pairs with a real arg-tuple
+/// token delta become sites — unchanged pairs are skipped, never vetoed
+/// (slice-19/20 discipline: an unchanged twin that cannot match the
+/// emitted template is harmless; a twin that WOULD match vetoes via the
+/// engine totality `method_literal_holds`, which counts the emitted
+/// exact old-args tuple file-wide). Method/receiver/arity deltas veto
+/// (slice-15/m2f territory, never partially claimed).
+/// Macro/unsupported args veto (the engine never binds inside macro
+/// bodies). Within-line uniformity is on the full class key (cross-line
+/// uniformity is the caller's single-site gate). Frame deltas veto via
+/// the frame rule over the delta pairs.
+pub(crate) fn extract_method_literal_sites(
+    minus: &str,
+    plus: &str,
+) -> Option<Vec<MethodLiteralSite>> {
+    if minus.trim().starts_with('&') || plus.trim().starts_with('&') {
+        return None;
+    }
+    let m_expr = side_expr(minus)?;
+    let p_expr = side_expr(plus)?;
+    let m_calls = method_calls(&m_expr);
+    let p_calls = method_calls(&p_expr);
+    if m_calls.is_empty() || m_calls.len() != p_calls.len() {
+        return None;
+    }
+    let mut sites = Vec::new();
+    let mut pairs = Vec::new();
+    for ((o_m, o_r, o_args, o_raw), (n_m, n_r, n_args, n_raw)) in m_calls.iter().zip(p_calls.iter())
+    {
+        if o_m != n_m || o_r != n_r || o_args.len() != n_args.len() {
+            return None;
+        }
+        for arg in o_args.iter().chain(n_args.iter()) {
+            let probe = super::shape::probe_expr(arg);
+            if probe.macros > 0 || probe.unsupported > 0 {
+                return None;
+            }
+        }
+        let o_vals: Vec<String> = o_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        let n_vals: Vec<String> = n_args
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect();
+        if o_vals == n_vals {
+            continue;
+        }
+        sites.push(MethodLiteralSite {
+            method: o_m.clone(),
+            old_args: o_vals,
+            new_args: n_vals,
+        });
+        pairs.push((o_raw.clone(), n_raw.clone()));
+    }
+    if sites.is_empty() {
+        return None;
+    }
+    let (m0, o0, n0) = (
+        sites[0].method.clone(),
+        sites[0].old_args.clone(),
+        sites[0].new_args.clone(),
+    );
+    if sites
+        .iter()
+        .any(|s| s.method != m0 || s.old_args != o0 || s.new_args != n0)
+    {
+        return None;
+    }
+    if !frame_holds(minus, plus, &pairs) {
+        return None;
+    }
+    Some(sites)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic;

@@ -236,8 +236,10 @@ const CASES: &[Case] = &[
         // (probe-bisected) — those sites stay ordinary. T472 EOF-touch
         // relaxation: the 4-line render_parse_error deletion at EOF of
         // main.rs (non-blank preceding line) compresses to one
-        // delete_items hunk (native 20458B -> sem 14908B, 27%).
-        expect_sem: 1,
+        // delete_items hunk. WI-7 slice-21: the unique sub-line
+        // `map_err(render_parse_error)` -> `map_err(parse_err)` site
+        // (let-init framing) raises as one `method_same_literal` single.
+        expect_sem: 2,
     },
     Case {
         commit: "05de4d15bdbe2e44ea2628c8d990ad2a2512e841",

@@ -3,7 +3,9 @@
 //! `try_method_to_method_sweep` WI-4 sub-line fallback under
 //! `PrecisionUnique`.
 
-use super::methods::{m2f_args, parse_method_to_fn_pair, parse_method_to_method_pair};
+use super::methods::{
+    m2f_args, parse_method_same_literal_pair, parse_method_to_fn_pair, parse_method_to_method_pair,
+};
 use super::unique_rule;
 
 /// WI-7 slice-15: sub-line method-to-method rename-only single (N=1)
@@ -191,6 +193,136 @@ pub(crate) fn try_subline_method_fn_single(
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
     Some(hunk)
+}
+
+/// Shared emission tail of the method same-literal paths (whole-line
+/// slice-13 and WI-7 slice-21 sub-line): file-wide uniqueness at n=1
+/// over the emitted `(method, old_args)` tuple, the backtick method,
+/// the raw-method re-parse check (TOOL-5), the T361 byte-compare
+/// pre-reservation, and the allow-one emission. Returns `None` on any
+/// veto; reserves the rule name only for emissions that reproduce.
+/// `pub(crate)` so the whole-line single reuses the same tail (no
+/// mirrored emission).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_method_literal_single(
+    path: &str,
+    pre: &str,
+    file_old: Option<&str>,
+    minus_line: &str,
+    plus_line: &str,
+    minuses: &[&str],
+    changed: &[usize],
+    o_method: &str,
+    old_toks: &[String],
+    new_toks: &[String],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if !crate::totality::method_literal_holds(file_old, o_method, old_toks, minuses, changed) {
+        return None;
+    }
+    // Permuted tuples belong to the perm domain (slices 10/11/17/18):
+    // a swap is a concrete-tuple delta too, so without this fence the
+    // literal arm would steal perm-vetoed pairs (same twin the perm
+    // template matches but the concrete tuple never counts). The fence
+    // lives in the shared tail so whole-line and sub-line agree.
+    let is_perm = {
+        let mut o_sorted = old_toks.to_vec();
+        let mut n_sorted = new_toks.to_vec();
+        o_sorted.sort();
+        n_sorted.sort();
+        o_sorted == n_sorted
+    };
+    if is_perm {
+        return None;
+    }
+    let old = old_toks.join(", ");
+    let new = new_toks.join(", ");
+    // WI-7b: uppercase same method rides backticks (literal).
+    let lit = super::shape::literal_callee(o_method);
+    let minus_call = format!("Receiver.{lit}({old})");
+    let plus_call = format!("Receiver.{lit}({new})");
+    // Defensive: both sides must re-parse as calls (the totality probe
+    // re-checks, but a non-parsing template must never leave this core).
+    // The check runs on the raw method: backticks are RSmPL-level
+    // literal spelling (SPEC 15.4), not Rust syntax (TOOL-5).
+    let raw_minus = format!("Receiver.{o_method}({old})");
+    let raw_plus = format!("Receiver.{o_method}({new})");
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minus_line,
+        plus_line,
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{o_method}_literal"));
+    // Allow-one: directive-free ranged hunk (slices-1-13 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
+/// WI-7 slice-21: sub-line method same-literal single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair does NOT form a whole-line
+/// method same-literal pair (slice-13 owns that shape — the emission
+/// tail and the `method_literal_holds` counter are shared, so there is
+/// no bypass around its twin veto via a second counter), but
+/// `subline::extract_method_literal_sites` yields exactly one inner
+/// site with a real arg-tuple delta and the frame rule holds (e.g.
+/// `foo(svc.configure(alpha, 1));` -> `foo(svc.configure(alpha, 2));`,
+/// `let`-init included via the shared `side_expr` entry). Unchanged
+/// subterms skip (slice-19/20 discipline); a twin that WOULD match the
+/// emitted template vetoes via the engine totality over the exact
+/// old-args tuple. Multi-subterm lines decline (`sites.len() == 1`
+/// only — uniform two-site lines are multi territory by site count,
+/// even at one pair). Emission is the slice-13 allow-one spelling
+/// (tight range, directive-free, default `allow=one`). Detector name
+/// `method_same_literal` (same family, provenance unchanged).
+pub(crate) fn try_subline_method_literal_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    // Whole-line-owned pairs belong to the slice-13 single — decline
+    // here even when it vetoed (shared counter, no bypass).
+    if parse_method_same_literal_pair(minuses[0], pluses[0]).is_some() {
+        return None;
+    }
+    let sites = super::subline::extract_method_literal_sites(minuses[0], pluses[0])?;
+    if sites.len() != 1 {
+        return None;
+    }
+    let site = &sites[0];
+    emit_method_literal_single(
+        path,
+        pre,
+        file_old,
+        minuses[0],
+        pluses[0],
+        minuses,
+        changed,
+        &site.method,
+        &site.old_args,
+        &site.new_args,
+        used_rules,
+    )
 }
 
 #[cfg(test)]
@@ -533,6 +665,275 @@ mod tests {
             )
             .is_none(),
             "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_fires_and_round_trips() {
+        // WI-7 slice-21: unique sub-line single
+        // `foo(svc.configure(alpha_arg, 1));` ->
+        // `foo(svc.configure(alpha_arg, 2));` raises to an allow-one
+        // hunk and real-applies byte-identical (fixed point `S" == S'`).
+        let pre = "fn m() {\n    foo(svc.configure(alpha_arg, 1));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(svc.configure(alpha_arg, 1));\n+    foo(svc.configure(alpha_arg, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique sub-line method literal single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(
+            out.contains("- Receiver.configure(alpha_arg, 1)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.configure(alpha_arg, 2)\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    foo(svc.configure(alpha_arg, 2));\n}\n"
+        );
+        // Fixed point: re-diffing the applied tree re-emits the same
+        // single (canonical `S" == S'`).
+        let re = super::super::infer_semantic_with_pre_images(
+            std::slice::from_ref(&section(
+                "f.rs",
+                "@@ -2 +2 @@\n-    foo(svc.configure(alpha_arg, 1));\n+    foo(svc.configure(alpha_arg, 2));\n",
+            )),
+            &pre_map,
+        )
+        .expect("re-raise must fire");
+        assert_eq!(out, re);
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_double_wrapped_fires() {
+        // Double-wrapped framing: the outer wrappers skip, the inner
+        // method literal site fires.
+        let pre = "fn m() {\n    foo(bar(svc.configure(alpha_arg, 1)));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(bar(svc.configure(alpha_arg, 1)));\n+    foo(bar(svc.configure(alpha_arg, 2)));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("double-wrapped sub-line method literal must fire");
+        assert!(
+            out.contains("- Receiver.configure(alpha_arg, 1)\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ Receiver.configure(alpha_arg, 2)\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_let_init_fires() {
+        // `let`-init framing shares the `side_expr` entry.
+        let pre = "fn m() {\n    let y = foo(svc.configure(alpha_arg, 1));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let y = foo(svc.configure(alpha_arg, 1));\n+    let y = foo(svc.configure(alpha_arg, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("let-init sub-line method literal must fire");
+        assert!(
+            out.contains("- Receiver.configure(alpha_arg, 1)\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_uppercase_fires_literal() {
+        let pre = "fn m() {\n    foo(svc.Configure(alpha_arg, 1));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(svc.Configure(alpha_arg, 1));\n+    foo(svc.Configure(alpha_arg, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("uppercase sub-line method literal must fire");
+        assert!(
+            out.contains("Receiver.`Configure`(alpha_arg, 1)"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("Receiver.`Configure`(alpha_arg, 2)"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_twin_vetoes() {
+        // An untouched same-method same-args twin anywhere vetoes.
+        let pre = "fn m() {\n    foo(svc.configure(alpha_arg, 1));\n    svc.configure(alpha_arg, 1);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(svc.configure(alpha_arg, 1));\n+    foo(svc.configure(alpha_arg, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_different_args_twin_keeps_firing() {
+        let pre = "fn m() {\n    foo(svc.configure(alpha_arg, 1));\n    svc.configure(other_arg, 9);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    foo(svc.configure(alpha_arg, 1));\n+    foo(svc.configure(alpha_arg, 2));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-args twin must not veto");
+        assert!(
+            out.contains("- Receiver.configure(alpha_arg, 1)\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_whole_line_declines() {
+        // Whole-line pairs belong to the slice-13 arm, never this one.
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    svc.configure(alpha_arg, 1);"],
+                &["    svc.configure(alpha_arg, 2);"],
+                "f.rs",
+                Some("fn m() {\n    svc.configure(alpha_arg, 1);\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "whole-line pair must decline"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_receiver_delta_declines() {
+        // Receiver deltas are m2f territory: the extractor vetoes.
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(alpha_arg, 1));"],
+                &["    foo(other.configure(alpha_arg, 2));"],
+                "f.rs",
+                Some("fn m() {\n    foo(svc.configure(alpha_arg, 1));\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "receiver delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_method_delta_declines() {
+        // Method deltas belong to the slice-15 arm, never this one.
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(alpha_arg, 1));"],
+                &["    foo(svc.setup(alpha_arg, 2));"],
+                "f.rs",
+                Some("fn m() {\n    foo(svc.configure(alpha_arg, 1));\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "method delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_no_pre_image_vetoes() {
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(alpha_arg, 1));"],
+                &["    foo(svc.configure(alpha_arg, 2));"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_macro_vetoes() {
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(m!(x), 1));"],
+                &["    foo(svc.configure(m!(x), 2));"],
+                "f.rs",
+                Some("fn m() {\n    foo(svc.configure(m!(x), 1));\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "macro arg must veto"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_two_site_line_declines() {
+        // Uniform two-site lines are multi territory by site count, even
+        // at one pair (the multi needs N>=2 pairs).
+        let pre = "fn m() {\n    foo(svc.configure(alpha_arg, 1)) + foo(svc.configure(alpha_arg, 1));\n}\n";
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(alpha_arg, 1)) + foo(svc.configure(alpha_arg, 1));"],
+                &["    foo(svc.configure(alpha_arg, 2)) + foo(svc.configure(alpha_arg, 2));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "two-site line must decline"
+        );
+    }
+
+    #[test]
+    fn wi21_subline_method_literal_single_perm_declines() {
+        // Permuted tuples belong to the perm domain (slices
+        // 10/11/17/18): a swap is a concrete-tuple delta too, so the
+        // literal arm fences it even when unique (pins the shared-tail
+        // fence that keeps the slice-18 twin-veto ordinary).
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(alpha_arg, beta_arg));"],
+                &["    foo(svc.configure(beta_arg, alpha_arg));"],
+                "f.rs",
+                Some("fn m() {\n    foo(svc.configure(alpha_arg, beta_arg));\n}\n"),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "perm must decline"
         );
     }
 }

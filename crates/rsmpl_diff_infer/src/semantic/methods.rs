@@ -616,42 +616,13 @@ pub(crate) fn try_method_same_literal_single(
     if old_toks == new_toks {
         return None;
     }
-    if !crate::totality::method_literal_holds(file_old, &o_method, &old_toks, minuses, changed) {
-        return None;
-    }
-    let old = old_toks.join(", ");
-    let new = new_toks.join(", ");
-    // WI-7b: uppercase same method rides backticks (literal).
-    let lit = super::shape::literal_callee(&o_method);
-    let minus_call = format!("Receiver.{lit}({old})");
-    let plus_call = format!("Receiver.{lit}({new})");
-    // Defensive: both sides must re-parse as calls (the totality probe
-    // re-checks, but a non-parsing template must never leave this core).
-    // The check runs on the raw method: backticks are RSmPL-level
-    // literal spelling (SPEC 15.4), not Rust syntax (TOOL-5).
-    let raw_minus = format!("Receiver.{o_method}({old})");
-    let raw_plus = format!("Receiver.{o_method}({new})");
-    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
-        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
-    {
-        return None;
-    }
-    if !super::general_expr::single_reproduces(
-        path,
-        pre,
-        changed[0],
-        minuses[0],
-        pluses[0],
-        &minus_call,
-        &plus_call,
-    ) {
-        return None;
-    }
-    let rule = unique_rule(used_rules, &format!("calls_{o_method}_literal"));
-    // Allow-one: directive-free ranged hunk (slices-1-12 precedent).
-    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
-    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    // Shared tail (slice-21): totality + backtick + re-parse +
+    // byte-compare + allow-one live in `method_subline` so the sub-line
+    // arm reuses the same counter (no bypass, no mirrored emission).
+    super::method_subline::emit_method_literal_single(
+        path, pre, file_old, minuses[0], pluses[0], minuses, changed, &o_method, &old_toks,
+        &new_toks, used_rules,
+    )
 }
 
 /// Parse a `-`/`+` line pair as a same-method literal-arg delta; return
@@ -661,7 +632,7 @@ pub(crate) fn try_method_same_literal_single(
 /// verbatim (ref-strip precedent). Turbofish, `&`-led sides, arity
 /// mismatch, zero arity (no delta possible), and non-ident methods stay
 /// passthrough.
-fn parse_method_same_literal_pair(
+pub(crate) fn parse_method_same_literal_pair(
     old_line: &str,
     new_line: &str,
 ) -> Option<(String, Vec<String>, Vec<String>)> {

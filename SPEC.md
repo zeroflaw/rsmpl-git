@@ -7830,9 +7830,28 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     multi-subterm lines decline (multi territory by site count);
     uniqueness proved by `call_literal_holds` at n=1 over the emitted
     triple plus the T361 byte-compare; uppercase callees ride backticks
-    with the raw-callee re-parse check (TOOL-5). Remaining families
-    (sub-line method-literal/wrap) keep `N ≥ 2` until their WI-7 slices
-    land.
+    with the raw-callee re-parse check (TOOL-5). Slice-21 adds sub-line
+    method same-literal pairs (`foo(svc.configure(alpha_arg, 1));` ->
+    `foo(svc.configure(alpha_arg, 2));`, bare-statement and `let`-init
+    framings via the shared `side_expr` entry, detector in the
+    `method_subline.rs` sibling per D5 — `methods.rs` sat at ~1962, so
+    the detector plus the shared emission tail cannot land inline
+    without breaking the 2000 gate; the whole-line slice-13 arm keeps
+    its shape checks and delegates to the same tail, net-shrinking
+    `methods.rs`): the pair must not form a whole-line method
+    same-literal pair (slice-13 owns that shape; the emission tail and
+    the `method_literal_holds` counter are shared, so no bypass around
+    its twin veto via a second counter),
+    `extract_method_literal_sites` yields exactly one inner site with a
+    real arg-tuple delta (unchanged pairs are skipped, never vetoed —
+    twin-counting is the engine totality over the emitted exact
+    old-args tuple; method/receiver/arity deltas veto) and the frame
+    rule holds; multi-subterm lines decline (multi territory by site
+    count); uniqueness proved by `method_literal_holds` at n=1 over the
+    emitted tuple plus the T361 byte-compare; uppercase methods ride
+    backticks with the raw-method re-parse check (TOOL-5). Remaining
+    family (sub-line method-wrap) keeps `N ≥ 2` until its WI-7 slice
+    lands.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
