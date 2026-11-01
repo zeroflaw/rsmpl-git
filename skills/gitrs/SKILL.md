@@ -135,11 +135,10 @@ gitrs apply --file change.rsmpl                       # apply for real
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` anywhere in the patch — fix names (order irrelevant, paste may precede cut, SPEC 20.3) |
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context |
+| `RSMPL_BUILD_CONFLICT` | post-lowering `--verify build` failure — read `repair.file` at `repair.range` and fix the build breakage (SPEC 25.10) |
 | `RSMPL_IO_CONFLICT` | unreadable path or bad flags (`--format json` → stdout envelope) — fix per suggestion; absolute/`..`-escaping targets rejected |
 
-JSON failures (`--format json`) print `{version, error: {code, rule, file,
-range, reason, suggestion, repair}}` to stdout only, exit 2. `repair` carries machine self-correction
-on every patch-input failure (SPEC D.2/25.9); `null` only on environmental IO.
+JSON failures (`--format json`) print `{version, error: {code, rule, file, range, reason, suggestion, repair}}` to stdout only, exit 2. `repair` carries machine self-correction on every patch-input failure (SPEC D.2/25.9); `null` only on environmental IO.
 
 ## Dogfood rule
 

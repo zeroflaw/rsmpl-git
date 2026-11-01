@@ -161,13 +161,12 @@ is always 0-context, `--context N` renders reported/`--output` for vanilla `git 
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` for syntactic matching |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=Name` without matching `# bind=Name` anywhere in the patch (paste may precede cut, SPEC 20.3) — fix names |
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context (blank file lines are empty context: ` ` or empty line in-body; blank-mismatch hints the prefix) |
+| `RSMPL_BUILD_CONFLICT` | post-lowering `--verify build` failure — read `repair.file` at `repair.range` and fix the build breakage (SPEC 25.10) |
 | `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file or bad flags (`--format json` → stdout envelope, else clap text) — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
 
 With `--format json`, failures print `{version, error: {code, rule, file, range,
 reason, suggestion, repair}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
-`repair` carries machine self-correction on every patch-input failure (SPEC D.2/25.9;
-paste `fix_range`/`fix_directive`/`fix_header`/`fix_context` verbatim, follow the
-`widen_scope`/`read_file`/`add_directive`/`fix_pattern`/`fix_name` template); `null` only on environmental IO.
+`repair` carries machine self-correction on every patch-input failure (SPEC D.2/25.9; paste `fix_range`/`fix_directive`/`fix_header`/`fix_context` verbatim, follow the `widen_scope`/`read_file`/`add_directive`/`fix_pattern`/`fix_name` template); `null` only on environmental IO.
 
 ## Full reference
 

@@ -133,3 +133,147 @@ fn verify_build_json_applied_flag() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert_eq!(v["checked"]["build"], serde_json::json!("pass"), "got: {v}");
 }
+
+#[test]
+fn build_conflict_check_mode_names_diagnostic_site() {
+    // WI-2: a breaking lowering fails `--check --verify build` as
+    // `RSMPL_BUILD_CONFLICT` (not IO) with a `read_file` repair naming
+    // the E0425 site; the worktree stays untouched, `applied: false`.
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@\n-    x + 1\n+    undefined_fn(x)\n";
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--check", "--verify", "build"],
+    );
+    assert!(!out.status.success(), "expected failure");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_BUILD_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(v["applied"], serde_json::json!(false), "got: {v}");
+    assert_eq!(
+        v["error"]["repair"],
+        serde_json::json!({"action":"read_file","file":"src/lib.rs","range":"2..2"}),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["error"]["file"],
+        serde_json::json!("src/lib.rs"),
+        "got: {v}"
+    );
+    assert!(v["error"]["rule"].is_null(), "got: {v}");
+    assert!(
+        v["error"]["suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("src/lib.rs"),
+        "got: {v}"
+    );
+    assert_eq!(
+        read(dir.path(), "src/lib.rs"),
+        "pub fn plus_one(x: i32) -> i32 {\n    x + 1\n}\n"
+    );
+    // Text mode carries the same code + repair lines.
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    let out = run_stdin(dir.path(), patch, &["--check", "--verify", "build"]);
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_BUILD_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("read_file"), "got: {stderr}");
+}
+
+#[test]
+fn build_conflict_apply_mode_keeps_patch_applied() {
+    // WI-2: post-apply failure keeps the lowering (`applied: true`) under
+    // the same code + repair as check mode.
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,1 +2,1 @@\n-    x + 1\n+    undefined_fn(x)\n";
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--verify", "build"],
+    );
+    assert!(!out.status.success(), "expected failure");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_BUILD_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(v["applied"], serde_json::json!(true), "got: {v}");
+    assert_eq!(
+        v["error"]["repair"]["action"],
+        serde_json::json!("read_file"),
+        "got: {v}"
+    );
+    assert!(read(dir.path(), "src/lib.rs").contains("undefined_fn"));
+}
+
+#[test]
+fn build_conflict_orphan_fallback_when_no_location_parses() {
+    // WI-2: a location-less cargo failure (broken `[lib] path`, whose
+    // ` --> Cargo.toml` line carries no `:line`) falls back to the first
+    // orphan — a definition-only rename with a live call.
+    let dir = init_repo();
+    cargo_crate(dir.path());
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn foo() {}\npub fn call() {\n    foo();\n}\n",
+    );
+    let patch = "diff --git Cargo.toml Cargo.toml\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -4,1 +4,3 @@\n edition = \"2021\"\n+[lib]\n+path = \"src/missing.rs\"\ndiff --git src/lib.rs src/lib.rs\n@@ -1,3 @@ rule=rename_foo\n# lang=rust\n- pub fn foo(...) {\n+ pub fn bar(...) {\n     ...\n }\n";
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--check", "--verify", "build"],
+    );
+    assert!(
+        !out.status.success(),
+        "expected failure, stdout: {} stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_BUILD_CONFLICT"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["error"]["repair"]["file"],
+        serde_json::json!("src/lib.rs"),
+        "orphan fallback must name the left-behind call file, got: {v}"
+    );
+}
+
+#[test]
+fn build_environmental_missing_manifest_stays_io() {
+    // WI-2: missing `Cargo.toml` is environmental — `RSMPL_IO_CONFLICT`
+    // with null repair (second WI-3 allow-list entry), in both modes.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn a() {}\n");
+    let patch = "diff --git src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn a() {}\n+fn b() {}\n";
+    let out = run_stdin(
+        dir.path(),
+        patch,
+        &["--format", "json", "--verify", "build"],
+    );
+    assert!(!out.status.success(), "expected failure");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_IO_CONFLICT"),
+        "got: {v}"
+    );
+    assert!(v["error"]["repair"].is_null(), "got: {v}");
+    assert_eq!(v["applied"], serde_json::json!(true), "got: {v}");
+}

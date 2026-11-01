@@ -1,9 +1,12 @@
 //! WI-3: repair completeness — no patch failure without a next action.
 //!
 //! Every error class reachable from patch input carries a machine
-//! `repair`; the single allow-list entry is the unreadable-file
+//! `repair`; the allow-list entries are the unreadable-file
 //! `RSMPL_IO_CONFLICT` (environmental: the suggestion already names the
-//! path, no patch spelling can fix it). CLI argv errors (bad flags) are
+//! path, no patch spelling can fix it) plus the two WI-2 build entries —
+//! build-environmental (missing `Cargo.toml` / missing `cargo`, same code)
+//! and the build double-miss (location-less failure with no orphans).
+//! CLI argv errors (bad flags) are
 //! out of scope: they are not reachable from patch input, and their
 //! suggestion names the exact next command.
 //!

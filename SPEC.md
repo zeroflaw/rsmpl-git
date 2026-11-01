@@ -5657,14 +5657,48 @@ retry — never parse the English `reason` to recover.
 | `RSMPL_IO_CONFLICT` | unreadable repo/output file | none (`null`) | environmental; `file` + `reason` name the path (25.8) |
 | `RSMPL_IO_CONFLICT` | absolute / escaping target | `fix_pattern` (`paths`) | code stays IO (T94 pin); fix the target spelling (25.8) |
 | `RSMPL_IO_CONFLICT` | bad flags | none (`null`) | not patch-input reachable; suggestion names the fix (D.2) |
+| `RSMPL_BUILD_CONFLICT` | post-lowering `cargo check` failure | `read_file` | diagnostic location wins, else first orphan; null only on the location-less double-miss (allow-list, 25.10) |
+| `RSMPL_IO_CONFLICT` | missing `Cargo.toml` / missing `cargo` under `--verify build` | none (`null`, allow-list) | environmental; `suggestion` names the fix (25.10) |
 
-The IO rows above are the only classes that may carry a null
-`repair`: environment failures have no patch spelling to correct
-(partial overlap is a defensive backstop, but even it carries the
-`overlap` next action). Everything else is machine-applicable by
+The IO rows, the build-environmental row, and the build double-miss
+row above are the only classes that may carry a null `repair`:
+environment failures have no patch spelling to correct (partial
+overlap is a defensive backstop, but even it carries the `overlap`
+next action). Everything else is machine-applicable by
 construction.
 
 ---
+
+### 25.10 Build conflict
+
+A post-lowering `cargo check` failure under `--verify build`: the
+lowering applied cleanly but the resulting tree does not compile. Both
+modes fail loud with exit 2 — `--check` leaves the worktree untouched
+(`applied: false`, verified in a temp copy) while apply mode keeps the
+lowering (`applied: true`, carried as the top-level JSON `applied`
+key) — so the agent always knows the tree state.
+
+```text
+RSMPL_BUILD_CONFLICT
+file: src/lib.rs
+old_range: 2..2
+reason: --verify build: error[E0425]: cannot find function `undefined_fn` in this scope (patch stays applied)
+suggestion: read `src/lib.rs` at `2..2` and fix the build breakage, then retry
+repair: {"action":"read_file","file":"src/lib.rs","range":"2..2"}
+```
+
+`file`/`range` name the first cargo ` --> file:line` diagnostic
+(`range` is the `L..L` single-line range); when no diagnostic location
+parses, the first orphan's `file`/`line` is used instead (the report
+already lists it). Only a location-less failure with no orphans stays
+repair-null (allow-listed, 25.9). `rule` is null (the failure is not
+tied to one hunk); text mode omits the null `rule:` line, JSON carries
+explicit nulls.
+
+Environmental failures keep `RSMPL_IO_CONFLICT` (25.8) with null repair:
+a missing `cargo` binary or a missing `Cargo.toml` (`could not find
+Cargo.toml`). The `reason` names the cause; the `suggestion` names the
+fix.
 
 ## 26. Lowering to a Concrete Git Diff
 
@@ -6852,15 +6886,19 @@ prints one JSON object to stdout:
   rule file range reason suggestion repair`); absent optionals are `null` (so `repair` is
   `null` on errors that carry no machine payload). `code` is one of the SPEC 25
   codes, including `RSMPL_IO_CONFLICT` (25.8) for unreadable patch, repo,
-  or output files, stdin failures, and flag-usage errors.
+  or output files, stdin failures, and flag-usage errors, and
+  `RSMPL_BUILD_CONFLICT` (25.10) for post-lowering `--verify build` failures.
 - `repair` is the machine-readable self-correction payload (WI-10 direction,
 - additive under the `version` rule above: text mode prints it as a trailing
 - `repair: {...}` line only when present). Completeness rule (WI-3): every
 - error class reachable from patch input carries a `repair`, so no patch
-- failure is prose-only; the single allow-list entry is the unreadable
+- failure is prose-only; the allow-list entries are the unreadable
 - patch file (`RSMPL_IO_CONFLICT` with null `repair` — environmental, the
-- `suggestion` names the path instead; 25.8). A new null-`repair` error
-- fails the `wi3_repair_complete_e2e.rs` enumeration. CLI argv errors
+- `suggestion` names the path instead; 25.8), the build-environmental
+- failures (missing `Cargo.toml` / missing `cargo`, same code; 25.10),
+- and the build double-miss (location-less failure with no orphans;
+- 25.10). A new null-`repair` error fails the
+- `wi3_repair_complete_e2e.rs` enumeration. CLI argv errors
 - (bad flags) are outside the enumeration — not patch-input reachable —
 - and keep their suggestion-only envelope.
 - Zero-match with exactly one whole-file match (25.4): `{"action":"widen_scope",
@@ -6870,6 +6908,8 @@ prints one JSON object to stdout:
 - with `"candidate":T67-excerpt` when a nearest candidate exists (verbatim
 - string in v0.1; a structured `{line,text}` split is WI-3c).
 - Too-many (25.4): `{"action":"add_directive","directive":"# allow=many"}`.
+- Build failure under `--verify build` (25.10): `{"action":"read_file","file":F,"range":"L..L"}` —
+- the first cargo diagnostic wins, else the first orphan; null only on the double-miss (allow-list).
 - Range past EOF (25.1; ordinary-hunk EOF shapes, 25.7): `{"action":"fix_range",
 - "file":F,"file_lines":N,"write_instead":"@@ -s,l @@"}` — the largest
 - in-file `@@` range starting at the cited start (insertion anchors clamp

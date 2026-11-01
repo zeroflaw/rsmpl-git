@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 
+mod verify_build;
+
 use clap::{Parser, ValueEnum};
 use rsmpl_patch::{ErrorCode, StructuredError};
 
@@ -125,9 +127,41 @@ impl CliError {
 
     fn verify(message: String, applied: bool) -> Self {
         Self::Verify {
-            err: StructuredError::new(ErrorCode::IoConflict, message),
+            err: StructuredError::new(ErrorCode::IoConflict, message).with_suggestion(
+                "check that the repo has a Cargo.toml and cargo is installed, then retry",
+            ),
             applied,
         }
+    }
+
+    /// WI-2: post-lowering build breakage (SPEC 25.10). `file`/`range`
+    /// name the first diagnostic (or orphan fallback); `repair` is the
+    /// `read_file` payload, or null on the double-miss allow-list entry.
+    fn verify_build(
+        message: String,
+        file: Option<String>,
+        range: Option<String>,
+        repair: Option<serde_json::Value>,
+        applied: bool,
+    ) -> Self {
+        let suggestion = match (&file, &range) {
+            (Some(f), Some(r)) => {
+                format!("read `{f}` at `{r}` and fix the build breakage, then retry")
+            }
+            _ => "fix the build breakage, then retry".to_string(),
+        };
+        let mut err =
+            StructuredError::new(ErrorCode::BuildConflict, message).with_suggestion(suggestion);
+        if let Some(f) = file {
+            err = err.with_file(f);
+        }
+        if let Some(r) = range {
+            err = err.with_range(&r);
+        }
+        if let Some(rep) = repair {
+            err = err.with_repair(rep);
+        }
+        Self::Verify { err, applied }
     }
 
     fn err(&self) -> &StructuredError {
@@ -668,9 +702,8 @@ fn run() -> Result<(), CliError> {
         })?;
     }
 
-    // WI-7c: orphan context for `--verify build` failures (first
-    // diagnostic names the breakage the report already lists).
-    let orphans_hint = orphan_hint(&report);
+    // WI-2: verify-build classification reads the report directly
+    // (first diagnostic or orphan fallback, SPEC 25.10).
     if cli.format == Format::Json {
         // WI-2a: tracks whether `--verify build` actually ran so the
         // success payload can carry additive `"build": "pass"`.
@@ -690,7 +723,7 @@ fn run() -> Result<(), CliError> {
                         &rename_from,
                         &is_symlink,
                         &patch,
-                        orphans_hint.as_deref(),
+                        &report,
                     )?;
                     build_passed = true;
                 }
@@ -702,7 +735,7 @@ fn run() -> Result<(), CliError> {
             // WI-2a `--verify build`: post-apply run; failure names the
             // applied state explicitly (`applied: true` in JSON).
             if cli.verify.as_deref() == Some("build") {
-                run_verify_build_with_orphans(&cli.repo, orphans_hint.as_deref())?;
+                run_verify_build_with_orphans(&cli.repo, &report)?;
                 build_passed = true;
             }
         }
@@ -868,7 +901,7 @@ fn run() -> Result<(), CliError> {
                 &rename_from,
                 &is_symlink,
                 &patch,
-                orphans_hint.as_deref(),
+                &report,
             )?;
             eprintln!("check: lowered patch applies cleanly; semantics {semantics}; build check passed (temp copy, worktree untouched)");
         } else {
@@ -898,7 +931,7 @@ fn run() -> Result<(), CliError> {
     // WI-2a `--verify build`: post-apply run; failure keeps the patch
     // applied and reports `applied: true` in JSON.
     if cli.verify.as_deref() == Some("build") {
-        run_verify_build_with_orphans(&cli.repo, orphans_hint.as_deref())?;
+        run_verify_build_with_orphans(&cli.repo, &report)?;
     }
     // Single source of truth (T65): diff-based `changed` (old-vs-new
     // contents differ), the same set JSON reports as `files[].path`.
@@ -1207,23 +1240,65 @@ fn sites_json(sites: &[rsmpl_engine::SiteReport], full: bool) -> (serde_json::Va
     (serde_json::Value::Array(arr), omitted_total, cut_total)
 }
 
-/// WI-2a + WI-7c `--verify build`: `cargo check --quiet` in `repo`
+/// WI-2 + WI-7c `--verify build`: `cargo check --quiet` in `repo`
 /// after a successful apply, with orphan context — the first diagnostic
-/// names the `file:line` breakage the report already lists. Failure
+/// names the `file:line` breakage the report already lists. A real
+/// breakage fails as `RSMPL_BUILD_CONFLICT` with a `read_file` repair
+/// (diagnostic location, else first-orphan fallback); environmental
+/// failures (missing cargo/manifest) keep `RSMPL_IO_CONFLICT`. Failure
 /// exits 2 (the patch stays applied — the agent decides the next step;
 /// JSON carries `applied: true`).
 fn run_verify_build_with_orphans(
     repo: &std::path::Path,
-    orphans: Option<&str>,
+    report: &rsmpl_engine::ApplyReport,
 ) -> Result<(), CliError> {
-    match run_verify_build_in(repo) {
+    match verify_build::run_verify_build_in(repo) {
         Ok(()) => Ok(()),
-        Err(short) => {
-            let ctx = orphans.map_or(String::new(), |o| format!(" [{o}]"));
-            Err(CliError::verify(
-                format!("--verify build: {short}{ctx} (patch stays applied)"),
-                true,
-            ))
+        Err(outcome) => Err(verify_build_error(
+            outcome,
+            report,
+            "(patch stays applied)",
+            true,
+        )),
+    }
+}
+/// WI-2: flatten every rule's orphans (report order) for the repair fallback.
+fn flat_orphans(report: &rsmpl_engine::ApplyReport) -> Vec<rsmpl_engine::OrphanReport> {
+    report
+        .rules
+        .iter()
+        .flat_map(|r| r.orphans.iter().cloned())
+        .collect()
+}
+/// WI-2: map a classified build outcome to the CLI failure (SPEC 25.10).
+fn verify_build_error(
+    outcome: verify_build::VerifyBuildOutcome,
+    report: &rsmpl_engine::ApplyReport,
+    tail: &str,
+    applied: bool,
+) -> CliError {
+    let hint = orphan_hint(report);
+    let ctx = hint.map_or(String::new(), |o| format!(" [{o}]"));
+    match outcome {
+        verify_build::VerifyBuildOutcome::Environmental(msg) => {
+            CliError::verify(format!("--verify build: {msg}{ctx} {tail}"), applied)
+        }
+        verify_build::VerifyBuildOutcome::BuildFailed { short, stderr } => {
+            let orphans = flat_orphans(report);
+            let repair = verify_build::build_repair_for(&stderr, &orphans);
+            let (file, range) = repair.as_ref().map_or((None, None), |r| {
+                (
+                    r["file"].as_str().map(str::to_string),
+                    r["range"].as_str().map(str::to_string),
+                )
+            });
+            CliError::verify_build(
+                format!("--verify build: {short}{ctx} {tail}"),
+                file,
+                range,
+                repair,
+                applied,
+            )
         }
     }
 }
@@ -1337,33 +1412,13 @@ fn orphan_text_line(report: &rsmpl_engine::ApplyReport) -> Option<String> {
     ))
 }
 
-/// Core `cargo check --quiet` probe in `dir`: `Ok` on success, `Err(short)`
-/// with the first `error` diagnostic line (300 chars) on failure.
-fn run_verify_build_in(dir: &std::path::Path) -> Result<(), String> {
-    let out = std::process::Command::new("cargo")
-        .arg("check")
-        .arg("--quiet")
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("cannot run `cargo check`: {e}"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let first = stderr
-        .lines()
-        .find(|l| l.contains("error"))
-        .map(str::trim)
-        .unwrap_or("cargo check failed");
-    Err(first.chars().take(300).collect())
-}
-
 /// WI-2a: verify the in-memory post-images in a temp copy of `repo` so
 /// `--check --verify build` answers "would this build?" without touching
-/// the worktree. Copies the tree (minus `.git`/`target`/`.history`),
+/// the worktree (the cargo probe lives in `verify_build`, SPEC 25.10). Copies the tree (minus `.git`/`target`/`.history`),
 /// overlays `updated` contents for every `changed` path (plus rename
 /// cleanup), runs `cargo check --quiet` there, then removes the temp dir.
-/// Failure is `applied: false` (worktree untouched by construction).
+/// Failure is `applied: false` (worktree untouched by construction); the
+/// code/repair split mirrors the post-apply path (SPEC 25.10).
 #[allow(clippy::too_many_arguments)]
 fn verify_in_temp_copy(
     repo: &std::path::Path,
@@ -1372,10 +1427,10 @@ fn verify_in_temp_copy(
     rename_from: &std::collections::HashMap<String, String>,
     is_symlink: &std::collections::HashSet<String>,
     patch: &rsmpl_patch::Patch,
-    orphans: Option<&str>,
+    report: &rsmpl_engine::ApplyReport,
 ) -> Result<(), CliError> {
     let tmp = materialize_verify_tree(repo, updated, changed, rename_from, is_symlink, patch)?;
-    let result = run_verify_build_in(&tmp);
+    let result = verify_build::run_verify_build_in(&tmp);
     // Cleanup always; a removal fault warns but never masks the verdict.
     if let Err(e) = std::fs::remove_dir_all(&tmp) {
         eprintln!(
@@ -1385,13 +1440,12 @@ fn verify_in_temp_copy(
     }
     match result {
         Ok(()) => Ok(()),
-        Err(short) => {
-            let ctx = orphans.map_or(String::new(), |o| format!(" [{o}]"));
-            Err(CliError::verify(
-                format!("--verify build: {short}{ctx} (worktree untouched; verified in temp copy)"),
-                false,
-            ))
-        }
+        Err(outcome) => Err(verify_build_error(
+            outcome,
+            report,
+            "(worktree untouched; verified in temp copy)",
+            false,
+        )),
     }
 }
 

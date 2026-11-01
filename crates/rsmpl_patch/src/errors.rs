@@ -14,6 +14,8 @@ pub enum ErrorCode {
     GitHunkConflict,
     /// I/O failure reading the patch, a repo file, or writing output (SPEC 25.8).
     IoConflict,
+    /// Post-lowering cargo check failure under --verify build (SPEC 25.10).
+    BuildConflict,
 }
 
 impl ErrorCode {
@@ -27,6 +29,7 @@ impl ErrorCode {
             Self::CaptureConflict => "RSMPL_CAPTURE_CONFLICT",
             Self::GitHunkConflict => "GIT_HUNK_CONFLICT",
             Self::IoConflict => "RSMPL_IO_CONFLICT",
+            Self::BuildConflict => "RSMPL_BUILD_CONFLICT",
         }
     }
 }
@@ -82,6 +85,19 @@ impl StructuredError {
     pub fn with_repair(mut self, repair: serde_json::Value) -> Self {
         self.repair = Some(repair);
         self
+    }
+
+    /// WI-2: build-failure `read_file` repair payload (SPEC 25.10, D.2).
+    ///
+    /// `range` is the `L..L` single-line range of the first diagnostic
+    /// (or the first orphan fallback). The agent reads that range and
+    /// fixes the breakage, then retries.
+    pub fn read_file_repair(file: &str, range: &str) -> serde_json::Value {
+        serde_json::json!({
+            "action": "read_file",
+            "file": file,
+            "range": range,
+        })
     }
 
     /// WI-3b: C-table `fix_pattern` repair payload.
@@ -240,6 +256,15 @@ mod tests {
     #[test]
     fn io_code_renders() {
         assert_eq!(ErrorCode::IoConflict.as_str(), "RSMPL_IO_CONFLICT");
+    }
+
+    #[test]
+    fn build_conflict_code_and_repair_pin() {
+        assert_eq!(ErrorCode::BuildConflict.as_str(), "RSMPL_BUILD_CONFLICT");
+        let r = StructuredError::read_file_repair("src/lib.rs", "3..3");
+        assert_eq!(r["action"], serde_json::json!("read_file"));
+        assert_eq!(r["file"], serde_json::json!("src/lib.rs"));
+        assert_eq!(r["range"], serde_json::json!("3..3"));
     }
 
     #[test]
