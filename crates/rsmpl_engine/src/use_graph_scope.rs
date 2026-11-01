@@ -285,7 +285,6 @@ fn interior_reports(
             syn::visit::visit_pat_ident(self, node);
         }
         fn visit_macro(&mut self, node: &'ast syn::Macro) {
-            let line = node.span().start().line as u32;
             if let Some((a, b)) =
                 crate::matcher_item::span_bytes(self.original, self.index, node.span())
             {
@@ -293,9 +292,10 @@ fn interior_reports(
                     .scopes
                     .iter()
                     .any(|(rs, _)| rs.iter().any(|(s, e)| *s <= a && b <= *e))
-                    && macro_mentions_old(&node.tokens, self.old)
                 {
-                    self.opaque_lines.push(line);
+                    for line in macro_opaque_lines(&node.tokens, self.old) {
+                        self.opaque_lines.push(line);
+                    }
                 }
             }
             // Macro interiors stay opaque (never descended into).
@@ -635,29 +635,29 @@ pub(crate) fn fn_param_orphans(
     interior_reports(parsed, original, index, path, &scopes, old)
 }
 
-/// True when macro tokens mention `old` as an ident or an inline
-/// `{old}` format capture (the WI-2a capture rule: a trailing ident
-/// continue disqualifies the capture).
-fn macro_mentions_old(tokens: &proc_macro2::TokenStream, old: &str) -> bool {
+/// Opaque lines for macro interiors naming `old`: one entry per ident
+/// or inline `{old}` capture line (WI-2b ident-line parity — not the
+/// macro start line). Single-line macros are unchanged; multi-line
+/// macros attribute to the line holding the ident/literal.
+fn macro_opaque_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
     for t in tokens.clone() {
         match t {
             proc_macro2::TokenTree::Group(g) => {
-                if macro_mentions_old(&g.stream(), old) {
-                    return true;
-                }
+                out.extend(macro_opaque_lines(&g.stream(), old));
             }
             proc_macro2::TokenTree::Ident(id) => {
                 if id == old {
-                    return true;
+                    out.push(id.span().start().line as u32);
                 }
             }
             proc_macro2::TokenTree::Literal(lit) if literal_captures(&lit.to_string(), old) => {
-                return true;
+                out.push(lit.span().start().line as u32);
             }
             _ => {}
         }
     }
-    false
+    out
 }
 
 #[cfg(test)]
@@ -806,6 +806,28 @@ mod tests {
         let orphans = expr_orphans(src, Wi2dExprKind::For);
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn for_multiline_macro_reports_ident_line() {
+        // WI-2b ident-line parity: the macro starts line 3 but `total`
+        // sits on line 4 — the orphan reports line 4.
+        let src = "fn main() {\n    for total in 0..3 {\n        println!(\n            \"{}\", total\n        );\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "macro-hidden");
+        assert_eq!(orphans[0].line, 4);
+    }
+
+    #[test]
+    fn for_multiline_macro_literal_capture_reports_literal_line() {
+        // Inline `{total}` capture inside a multi-line macro: the
+        // literal sits on line 4, not the macro start line 3.
+        let src = "fn main() {\n    for total in 0..3 {\n        println!(\n            \"{total}\"\n        );\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].reason, "macro-hidden");
+        assert_eq!(orphans[0].line, 4);
     }
 
     #[test]
