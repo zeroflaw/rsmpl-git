@@ -13,7 +13,8 @@ use std::collections::HashMap;
 
 use rsmpl_pattern::{GeneralShape, PatternKind};
 
-use crate::use_graph_local::{normalize_placeholders, single_ident_binder};
+use crate::use_graph_local::single_ident_binder;
+use crate::use_graph_normalize::normalize_placeholders;
 
 /// Parse a general-expression pattern forgiving the block-tail `...`
 /// ellipsis (not valid `syn` on its own): retry with the engine's
@@ -555,5 +556,33 @@ mod tests {
             root: None,
         };
         assert!(is_wi2d_expr_binder_rename(&c));
+    }
+
+    #[test]
+    fn for_binder_single_hole_with_ellipsis_fires() {
+        // Parity: with the real `__RSMPL_E` naming the `for ... { ... }`
+        // shape must still compare equal (markers stay intact).
+        let kind = general_expr_single(
+            "for total in __RSMPL_E { __RSMPL_ELLIPSIS_0 }",
+            "for sum in E { ... }",
+        );
+        assert_eq!(
+            for_loop_binder_rename(&kind),
+            Some(("total".to_string(), "sum".to_string()))
+        );
+    }
+
+    fn general_expr_single(minus_sub: &str, plus_body: &str) -> PatternKind {
+        PatternKind::General {
+            shape: GeneralShape::Expr,
+            minus_sub: minus_sub.to_string(),
+            plus_raw: plus_body.to_string(),
+            plus_body: plus_body.to_string(),
+            placeholders: vec![("E".to_string(), "__RSMPL_E".to_string())],
+            literals: Vec::new(),
+            minus_attrs: Vec::new(),
+            plus_attrs: Vec::new(),
+            had_semi: false,
+        }
     }
 }

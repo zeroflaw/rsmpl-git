@@ -151,10 +151,11 @@ pub fn let_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
         return None;
     }
     // Both sides need the same init expression (token-equal after
-    // mapping `__RSMPL_*` placeholders back to their names).
+    // mapping `__RSMPL_*` placeholders back to their names; both sides
+    // normalized so `...` markers compare intact).
     let minus_init = minus_local.init.as_ref().map(|i| init_tokens(&i.expr))?;
     let plus_init = plus_local.init.as_ref().map(|i| init_tokens(&i.expr))?;
-    if normalize_placeholders(&minus_init, &ph_map) != plus_init {
+    if normalize_placeholders(&minus_init, &ph_map) != normalize_placeholders(&plus_init, &ph_map) {
         return None;
     }
     Some((old_id, new_id))
@@ -248,7 +249,9 @@ pub fn closure_param_rename(kind: &PatternKind) -> Option<(String, String)> {
     let (old, new) = diff?;
     let minus_body = crate::matcher_general::render(&*minus.body);
     let plus_raw_body = crate::matcher_general::render(&*plus.body);
-    if normalize_placeholders(&minus_body, &ph_map) != plus_raw_body {
+    if normalize_placeholders(&minus_body, &ph_map)
+        != normalize_placeholders(&plus_raw_body, &ph_map)
+    {
         return None;
     }
     Some((old, new))
@@ -288,7 +291,8 @@ pub fn match_arm_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
         .collect();
     let minus_scrut = crate::matcher_general::render(&*minus.expr);
     let plus_scrut = crate::matcher_general::render(&*plus.expr);
-    if normalize_placeholders(&minus_scrut, &ph_map) != plus_scrut {
+    if normalize_placeholders(&minus_scrut, &ph_map) != normalize_placeholders(&plus_scrut, &ph_map)
+    {
         return None;
     }
     if minus.arms.len() != plus.arms.len() {
@@ -297,7 +301,7 @@ pub fn match_arm_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
     let mut diff: Option<(String, String)> = None;
     for (ma, pa) in minus.arms.iter().zip(plus.arms.iter()) {
         let mn = normalize_placeholders(&quote::quote!(#ma).to_string(), &ph_map);
-        let pn = quote::quote!(#pa).to_string();
+        let pn = normalize_placeholders(&quote::quote!(#pa).to_string(), &ph_map);
         if mn == pn {
             continue;
         }
@@ -311,7 +315,7 @@ pub fn match_arm_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
             (Some((_, mg)), Some((_, pg))) => {
                 let mgs = crate::matcher_general::render(&**mg);
                 let pgs = crate::matcher_general::render(&**pg);
-                if normalize_placeholders(&mgs, &ph_map) != pgs {
+                if normalize_placeholders(&mgs, &ph_map) != normalize_placeholders(&pgs, &ph_map) {
                     return None;
                 }
             }
@@ -319,7 +323,9 @@ pub fn match_arm_binder_rename(kind: &PatternKind) -> Option<(String, String)> {
         }
         let minus_arm_body = crate::matcher_general::render(&*ma.body);
         let plus_arm_body = crate::matcher_general::render(&*pa.body);
-        if normalize_placeholders(&minus_arm_body, &ph_map) != plus_arm_body {
+        if normalize_placeholders(&minus_arm_body, &ph_map)
+            != normalize_placeholders(&plus_arm_body, &ph_map)
+        {
             return None;
         }
         if diff.replace((old_id, new_id)).is_some() {
@@ -888,13 +894,7 @@ fn init_tokens(expr: &syn::Expr) -> String {
     quote::quote!(#expr).to_string()
 }
 
-pub(crate) fn normalize_placeholders(s: &str, ph_map: &HashMap<&str, &str>) -> String {
-    let mut out = s.to_string();
-    for (ph, name) in ph_map {
-        out = out.replace(ph, name);
-    }
-    out
-}
+pub(crate) use crate::use_graph_normalize::normalize_placeholders;
 
 #[cfg(test)]
 mod tests {
