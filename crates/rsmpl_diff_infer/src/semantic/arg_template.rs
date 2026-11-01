@@ -650,6 +650,71 @@ pub(crate) fn try_call_arg_template_single(
     Some(hunk)
 }
 
+/// WI-7 slice-7: method-arg-template wrap single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair parses (whole-line or the
+/// shared T449 `let`-init entry — the emission stays the
+/// `Receiver.m(...)` pattern and the engine rewrites the method-call
+/// sub-expression in place) as one same-receiver same-method call whose
+/// args anti-unify to exactly one wrap plus holes, a pre-image is
+/// present (`None` vetoes — uniqueness needs the whole file, D3), and
+/// `template_pair_holds` proves exactly one site file-wide with zero
+/// opaque hits (conditions (a)+(b); (c) is structural: the method ident
+/// plus the wrapper anchor beyond the holes). Receiver deltas stay with
+/// the m2f single; method deltas stay with the slice-2 single. The T361
+/// byte-compare pre-reservation (`single_reproduces`, shared with the
+/// general-expr and bare-call singles) vetoes any TokenStream spacing
+/// drift. Emission is the WI-19b allow-one spelling (tight range,
+/// directive-free, default `allow=one`). Detector name
+/// `method_arg_template` (same family, provenance unchanged).
+pub(crate) fn try_method_arg_template_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    let (o_recv, o_method, o_args) = parse_method_line(minuses[0])?;
+    let (n_recv, n_method, n_args) = parse_method_line(pluses[0])?;
+    // Receiver deltas stay with the m2f single; method deltas stay with
+    // the slice-2 single.
+    if o_recv != n_recv || o_method != n_method {
+        return None;
+    }
+    let (m_tpl, p_tpl) = antiunify_call_args_single(&o_args, &n_args)?;
+    // WI-7b: uppercase method rides backticks (literal), else it infers
+    // as an `expr` hole and over-matches.
+    let lit = super::shape::literal_callee(&o_method);
+    let minus_tpl = format!("Receiver.{lit}({})", m_tpl.join(", "));
+    let plus_tpl = format!("Receiver.{lit}({})", p_tpl.join(", "));
+    // Defensive: both sides must re-parse as calls (the totality probe
+    // re-checks, but a non-parsing template must never leave this core).
+    if syn::parse_str::<syn::Expr>(&minus_tpl).is_err()
+        || syn::parse_str::<syn::Expr>(&plus_tpl).is_err()
+    {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), &minus_tpl, &plus_tpl, 1) {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "method_arg_template");
+    // Allow-one: directive-free ranged hunk (slices-1-6 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Some(hunk)
+}
+
 #[cfg(test)]
 mod tests {
     use super::antiunify_call_args;
@@ -970,6 +1035,248 @@ mod tests {
                 "    f(m!(x));",
                 "    f(m!(x).clone());",
                 Some("fn m() {\n    f(m!(x));\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro arg must veto"
+        );
+    }
+
+    fn msingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+        super::try_method_arg_template_single(
+            &[minus],
+            &[plus],
+            "f.rs",
+            pre,
+            changed,
+            &mut Vec::new(),
+        )
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-7: unique single `r.use_it(x)` -> `r.use_it(x.clone())`
+        // raises to an allow-one hunk and real-applies byte-identical.
+        let pre = "fn m() {\n    r.use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    r.use_it(x);\n+    r.use_it(x.clone());\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique method wrap single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- Receiver.use_it(E0)\n"), "got: {out}");
+        assert!(
+            out.contains("+ Receiver.use_it(E0.clone())\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    r.use_it(x.clone());\n}\n");
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_let_init_fires_and_round_trips() {
+        // The shared T449 entry unwraps `let` inits: the emission stays
+        // the `Receiver.m(...)` pattern and the engine rewrites the
+        // method call sub-expression in place.
+        let pre = "fn m() {\n    let a = r.use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = r.use_it(x);\n+    let a = r.use_it(x.clone());\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique let-init method wrap single must fire");
+        assert!(out.contains("- Receiver.use_it(E0)\n"), "got: {out}");
+        assert!(
+            out.contains("+ Receiver.use_it(E0.clone())\n"),
+            "got: {out}"
+        );
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let a = r.use_it(x.clone());\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_twin_vetoes() {
+        // An untouched same-method same-arity twin matches the minus
+        // pattern (2 != 1) and vetoes.
+        let pre = "fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    r.use_it(x);\n+    r.use_it(x.clone());\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_different_arity_twin_keeps_firing() {
+        // Totality keys on method + arity: a different-arity twin never
+        // matches the minus pattern and never vetoes.
+        let pre = "fn m() {\n    r.use_it(x);\n    q.use_it(x, y);\n}\n";
+        assert!(
+            msingle(
+                "    r.use_it(x);",
+                "    r.use_it(x.clone());",
+                Some(pre),
+                &[2]
+            )
+            .is_some(),
+            "different-arity twin must not veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3).
+        assert!(
+            msingle("    r.use_it(x);", "    r.use_it(x.clone());", None, &[2]).is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_receiver_delta_declines() {
+        // Receiver deltas stay with the m2f single, never a wrap.
+        assert!(
+            msingle(
+                "    r.use_it(x);",
+                "    q.use_it(x.clone());",
+                Some("fn m() {\n    r.use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "receiver delta must decline"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_method_delta_declines() {
+        // Method deltas stay with the slice-2 single.
+        assert!(
+            msingle(
+                "    r.use_it(x);",
+                "    r.other(x);",
+                Some("fn m() {\n    r.use_it(x);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "method delta must decline here"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_zero_wrap_vetoes() {
+        // Pure concrete delta (`1` -> `2`) is literal territory, never a
+        // wrap single (disjoint by construction).
+        assert!(
+            msingle(
+                "    r.check(a, 1);",
+                "    r.check(a, 2);",
+                Some("fn m() {\n    r.check(a, 1);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "concrete delta must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_two_wrap_vetoes() {
+        // Two wraps need a two-hole template — future work, never
+        // guessed at N=1.
+        assert!(
+            msingle(
+                "    r.f(a, b);",
+                "    r.f(a.clone(), b.clone());",
+                Some("fn m() {\n    r.f(a, b);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "two wraps must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_perm_vetoes() {
+        // Permuted holes (`swap(a, b)` -> `swap(b, a)`) are the perm
+        // domain, never a wrap single.
+        assert!(
+            msingle(
+                "    r.swap(a, b);",
+                "    r.swap(b, a);",
+                Some("fn m() {\n    r.swap(a, b);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "perm must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_subline_declines() {
+        // A wrap buried in a larger line never parses as a method call —
+        // sub-line shapes stay ordinary.
+        assert!(
+            msingle(
+                "    r.use_it(a) + other(b);",
+                "    r.use_it(a.clone()) + other(b);",
+                Some("fn m() {\n    r.use_it(a) + other(b);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "sub-line wrap must decline"
+        );
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_reference_wrap_fires() {
+        // Reference wraps ride the same core (`x` -> `&x`).
+        let out = msingle(
+            "    r.f(x);",
+            "    r.f(&x);",
+            Some("fn m() {\n    r.f(x);\n}\n"),
+            &[2],
+        )
+        .expect("reference wrap single must fire");
+        assert!(out.contains("- Receiver.f(E0)\n"), "got: {out}");
+        assert!(out.contains("+ Receiver.f(&E0)\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    r.f(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi7_method_arg_template_single_macro_arg_vetoes() {
+        // Macro-hiding args never raise: the engine cannot match
+        // TokenStream-normalized macro text.
+        assert!(
+            msingle(
+                "    r.f(m!(x));",
+                "    r.f(m!(x).clone());",
+                Some("fn m() {\n    r.f(m!(x));\n}\n"),
                 &[2]
             )
             .is_none(),

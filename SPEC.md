@@ -7656,7 +7656,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    already literal). A bare pattern never matches a leading-`::` site
    (parity, probed); a bare single-segment `::foo` rename stays
    ordinary (no prefix to anchor the win).
- Precision singles (WI-7 slices 1-6, `PrecisionUnique`): N == 1
+ Precision singles (WI-7 slices 1-7, `PrecisionUnique`): N == 1
   whole-line bare-call callee-only pairs (slice-1, `call_holds` over
   `old_callee/arity`), whole-line method-to-method renames (slice-2,
   `method_holds` over `old_method/arity`), whole-line
@@ -7673,19 +7673,26 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   multi's `wrapper_tpl` vocabulary — method-receiver and reference
   shapes — all other args holes; zero/two wraps, pure concrete deltas,
   and permuted holes veto) via `template_pair_holds` at n=1 over the
-  emitted call pair. The
-  callee/method/function/operator token is the anchor beyond the holes
-  (`Receiver`/`E`; uppercase rides backticks, same rule as above).
-  Emission is the ranged allow-one spelling (tight original range,
-  directive-free, default `allow=one`); the `let`-init emission stays
-  the bare anchored template (pattern/type ride each site's own
-  wrapper) and carries the same T361 byte-compare pre-reservation as
-  slice-4. Guard is the precision guard (semantic ≤ ordinary + 16).
-  `None` pre-image vetoes (no guessing); an untouched same-shape twin
-  vetoes (same-arity for call/method shapes, same-template for
-  general); non-matching twins never count. Remaining families
-  (literal, sub-line, method-arg-template, bare-call/binary arg wraps,
-  perm) keep `N ≥ 2` until their WI-7 slices land.
+   emitted call pair. Slice-7 adds method-arg-template wrap pairs
+   (whole-line plus `let`-init via the shared T449 `parse_method_line`
+   entry, same receiver and same method, exactly one structural wrap
+   from the same `wrapper_tpl` vocabulary via the shared
+   single-pair core — all other args holes; receiver/method deltas,
+   zero/two wraps, pure concrete deltas, and permuted holes veto) via
+   `template_pair_holds` at n=1 over the emitted `Receiver.m(...)`
+   pair. The
+   callee/method/function/operator token is the anchor beyond the holes
+   (`Receiver`/`E`; uppercase rides backticks, same rule as above).
+   Emission is the ranged allow-one spelling (tight original range,
+   directive-free, default `allow=one`); the `let`-init emission stays
+   the bare anchored template (pattern/type ride each site's own
+   wrapper) and carries the same T361 byte-compare pre-reservation as
+   slice-4. Guard is the precision guard (semantic ≤ ordinary + 16).
+   `None` pre-image vetoes (no guessing); an untouched same-shape twin
+   vetoes (same-arity for call/method shapes, same-template for
+   general); non-matching twins never count. Remaining families
+   (literal, sub-line, bare-call/binary arg wraps, perm) keep `N ≥ 2`
+   until their WI-7 slices land.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
