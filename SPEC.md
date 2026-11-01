@@ -2419,14 +2419,16 @@ lowered diff is the observable truth as always (Section D.2).
    and ≥1 differing type, or discriminant with differing exprs), each
    written below the def pair on its own diff lines (same member, no
    container header — the def pair names the container, the member pair
-   rides it; `# follow=uses` allowed, the rename half owns uses). Each
+   rides it; `# follow=uses` allowed, the rename half owns uses).    Each
    hunk applies and verifies atomically (rename ident + member span(s)
    + follow in one matcher pass; twin containers veto at the raiser,
-   never half-applied), and raising emits that spelling for single-hunk
-   same-container sections (at most one joint per def hunk). Two
-   evolutions, an evolution of another container, bare renames,
-   cross-kind members, alias/const shapes, and additions stay ordinary
-   (follow-up slices).
+   never half-applied), and raising emits that spelling for same-file
+   same-section same-container groups (at most one joint per def section;
+   2b-next2a: the def pair and the member pair may ride distinct balanced
+   hunks of one section, claimed together with the uses). Two evolutions,
+   an evolution of another container, bare renames, cross-kind members,
+   alias/const shapes, and additions never joint-fire (follow-up slices
+   own additions and cross-file joints).
 
 Never rewritten: field accesses (`s.old`), method idents (`s.old()` —
 a different namespace), and `qself` paths (`<T as Tr>::Old`, declined).

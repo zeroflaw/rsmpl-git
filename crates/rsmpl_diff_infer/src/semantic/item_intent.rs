@@ -221,10 +221,11 @@ pub(crate) fn try_item_intent_sweep(
         is_fn_intent,
         &pair_claimable,
     );
-    // WI-5 slice 2b (+next): struct rename + field-type evolution joint
-    // and enum rename + variant-evolution joint (same def-hunk posture
-    // as the attr joint; at most one joint fires — a def hunk carrying
-    // two deltas declines both).
+    // WI-5 slice 2b (+next, 2b-next2a): struct rename + field-type
+    // evolution joint and enum rename + variant-evolution joint (same
+    // def-section posture — member may ride a distinct balanced hunk of
+    // the section; at most one joint fires — a def section carrying two
+    // deltas declines both).
     let field_joint = if attr_joint.is_none() {
         super::item_joint_field_evo::find_field_evo_joint(
             &pairs,
@@ -289,6 +290,13 @@ pub(crate) fn try_item_intent_sweep(
         if ok {
             claimed_hunks.insert(hi);
         }
+    }
+    // WI-5 2b-next2a: the joint member may ride a distinct balanced hunk
+    // of the def section (multi-hunk joint) — that hunk holds a
+    // non-claimable pair so the loop above skips it; claim it explicitly
+    // (single-hunk co-residence re-inserts the def hunk, idempotent).
+    if let Some(mpi) = attr_joint.or(field_joint).or(variant_joint) {
+        claimed_hunks.insert(pair_hunk[mpi]);
     }
     // Claimed pairs = def + pairs in claimable hunks.
     let mut claimed_idx: Vec<usize> = Vec::new();

@@ -96,12 +96,15 @@ pub(crate) fn field_carrier(pre: &str, field: &str, site: usize) -> Option<Strin
 }
 
 /// WI-5 joint search over the pre-pass pair/hunk tables: returns the
-/// field-evo pair index when the def hunk holds exactly one attached
+/// field-evo pair index when the def section holds exactly one attached
 /// field-evo pair (same file and section, carrier is the renamed
 /// struct) plus claimable uses otherwise, with no other joint-grade
-/// pair in the def hunk. `pair_claimable` is the caller's gate (it owns
-/// the fn/item distinction); `is_fn` excludes `fn` defs outright (WI-4
-/// owns fn rename+evolve). `def_kind`/`old` gate the container law
+/// pair in the def section. WI-5 slice 2b-next2a: the member may ride a
+/// distinct balanced hunk of the same section (multi-hunk same-container
+/// joint); single-hunk co-residence is the one-hunk case of the same law.
+/// `pair_claimable` is the caller's gate (it owns the fn/item
+/// distinction); `is_fn` excludes `fn` defs outright (WI-4 owns fn
+/// rename+evolve). `def_kind`/`old` gate the container law
 /// (struct-only). `None` means no joint — the caller falls back to the
 /// pure-intent path (or declines on a real co-resident veto).
 #[allow(clippy::too_many_arguments)]
@@ -119,24 +122,29 @@ pub(crate) fn find_field_evo_joint(
     if is_fn || def_kind != "struct" {
         return None;
     }
+    let _ = def_hunk;
+    let _ = hunk_pairs;
+    // Section-wide scan: exactly one non-claimable pair sharing the def's
+    // file+section. The def hunk's own cleanliness is subsumed (any second
+    // non-claimable anywhere in the section declines).
+    let def_sec = pairs[def_idx].sec;
+    let def_path = pairs[def_idx].path.clone();
     let mut bad: Vec<usize> = Vec::new();
-    for pi in &hunk_pairs[def_hunk] {
-        if *pi == def_idx {
+    for (pi, pair) in pairs.iter().enumerate() {
+        if pi == def_idx {
             continue;
         }
-        if !pair_claimable(&pairs[*pi]) {
-            bad.push(*pi);
+        if pair.sec != def_sec || pair.path != def_path {
+            continue;
+        }
+        if !pair_claimable(pair) {
+            bad.push(pi);
         }
     }
     if bad.len() != 1 {
         return None;
     }
     let pi = bad[0];
-    // Same file and section as the definition (one native hunk, the
-    // flip-target shape; cross-hunk joints are a follow-up).
-    if pairs[pi].path != pairs[def_idx].path || pairs[pi].sec != pairs[def_idx].sec {
-        return None;
-    }
     let evo = parse_field_evo_pair(&pairs[pi].minus, &pairs[pi].plus)?;
     // Same-container law: the field's carrier is the renamed struct.
     let pre_text = pre.get(&pairs[pi].path)?;
@@ -279,9 +287,10 @@ pub(crate) fn enum_of_variant(pre: &str, variant: &str, site: usize) -> Option<S
 }
 
 /// WI-5 joint search for the enum half: returns the variant-evo pair
-/// index when the def hunk holds exactly one attached variant-evo pair
+/// index when the def section holds exactly one attached variant-evo pair
 /// (same file and section, carrier is the renamed enum) plus claimable
-/// uses otherwise. Mirrors `find_field_evo_joint` (`enum`-only).
+/// uses otherwise. Mirrors `find_field_evo_joint` (`enum`-only, 2b-next2a
+/// multi-hunk: member may ride a distinct balanced hunk of the section).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_variant_evo_joint(
     pairs: &[super::item_intent::Pair],
@@ -297,22 +306,26 @@ pub(crate) fn find_variant_evo_joint(
     if is_fn || def_kind != "enum" {
         return None;
     }
+    let _ = def_hunk;
+    let _ = hunk_pairs;
+    let def_sec = pairs[def_idx].sec;
+    let def_path = pairs[def_idx].path.clone();
     let mut bad: Vec<usize> = Vec::new();
-    for pi in &hunk_pairs[def_hunk] {
-        if *pi == def_idx {
+    for (pi, pair) in pairs.iter().enumerate() {
+        if pi == def_idx {
             continue;
         }
-        if !pair_claimable(&pairs[*pi]) {
-            bad.push(*pi);
+        if pair.sec != def_sec || pair.path != def_path {
+            continue;
+        }
+        if !pair_claimable(pair) {
+            bad.push(pi);
         }
     }
     if bad.len() != 1 {
         return None;
     }
     let pi = bad[0];
-    if pairs[pi].path != pairs[def_idx].path || pairs[pi].sec != pairs[def_idx].sec {
-        return None;
-    }
     let evo = parse_variant_evo_pair(&pairs[pi].minus, &pairs[pi].plus)?;
     let pre_text = pre.get(&pairs[pi].path)?;
     if enum_of_variant(pre_text, &evo.variant, pairs[pi].site)? != old {
@@ -596,6 +609,90 @@ mod tests {
             std::slice::from_ref(&section.to_string()),
             &std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]),
         )
+    }
+
+    #[test]
+    fn struct_multi_hunk_joint_fires() {
+        // WI-5 2b-next2a: def + member-evo in distinct balanced hunks of
+        // one section raise as one follow hunk.
+        let pre = "struct Old {\n    a: u32,\n    b: u32,\n    c: u32,\n    d: u32,\n    e: u32,\n    x: u32,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -7,1 +7,1 @@\n-    x: u32,\n+    x: u64,\n@@ -9,1 +9,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let out = infer(section, pre).expect("multi-hunk joint must fire");
+        assert!(out.contains("rule="), "got:\n{out}");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+        assert!(out.contains("+ struct New"), "got:\n{out}");
+        assert!(out.contains("- x: u32"), "got:\n{out}");
+        assert!(out.contains("+ x: u64"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(
+            files["f.rs"].contains("struct New"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(files["f.rs"].contains("x: u64"), "got: {}", files["f.rs"]);
+        assert!(files["f.rs"].contains("s: New"), "got: {}", files["f.rs"]);
+        assert!(!files["f.rs"].contains("Old"), "got: {}", files["f.rs"]);
+    }
+
+    #[test]
+    fn enum_multi_hunk_joint_fires() {
+        // Enum discriminant across hunks: same law, distinct hunk.
+        let pre = "enum Old {\n    A = 1,\n    B = 2,\n    C = 3,\n    D = 4,\n    E = 5,\n}\nfn f(x: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -2,1 +2,1 @@\n-    A = 1,\n+    A = 2,\n@@ -8,1 +8,1 @@\n-fn f(x: Old) {\n+fn f(x: New) {\n";
+        let out = infer(section, pre).expect("enum multi-hunk joint must fire");
+        assert!(out.contains("- enum Old"), "got:\n{out}");
+        assert!(out.contains("A = 2"), "got:\n{out}");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+    }
+
+    #[test]
+    fn multi_hunk_two_evos_decline() {
+        // Two member deltas across hunks: single-evo law declines the joint
+        // — never a half joint. A pure rename may still claim def+use with
+        // both evos left ordinary (hunk-level claiming); the joint member
+        // lines must never emit.
+        let pre = "struct Old {\n    a: u32,\n    b: u32,\n    c: u32,\n    d: u32,\n    e: u32,\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -7,1 +7,1 @@\n-    x: u32,\n+    x: u64,\n@@ -8,1 +8,1 @@\n-    y: u32,\n+    y: u64,\n@@ -10,1 +10,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let out = infer(section, pre);
+        if let Some(o) = out {
+            assert!(
+                !o.contains("- x: u32") && !o.contains("- y: u32"),
+                "two-evo multi-hunk must never joint-fire, got:\n{o}"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_delta_never_joints() {
+        // Alias value tracks the rename as a use: a pure rename may claim
+        // it, but no joint member lines ever emit (independent definition).
+        let pre = "struct Old {\n    x: u32,\n}\ntype A = Old;\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,4 +1,4 @@\n-struct Old {\n-    x: u32,\n-type A = Old;\n+struct New {\n+    x: u32,\n+type A = New;\n }\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let out = infer(section, pre);
+        if let Some(o) = out {
+            assert!(
+                !o.contains("- x: u32") && !o.contains("- A("),
+                "alias delta must never joint-fire, got:\n{o}"
+            );
+        }
+    }
+
+    #[test]
+    fn const_delta_never_joints() {
+        // Unrelated const value change alongside the rename: never a joint
+        // member (independent definition, not a container member).
+        let pre = "struct Old {\n    x: u32,\n}\nconst MAX: u32 = 1;\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -4,1 +4,1 @@\n-const MAX: u32 = 1;\n+const MAX: u32 = 2;\n@@ -5,1 +5,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let out = infer(section, pre);
+        if let Some(o) = out {
+            assert!(
+                !o.contains("- x: u32") && !o.contains("- MAX"),
+                "const delta must never joint-fire, got:\n{o}"
+            );
+        }
     }
 
     #[test]
