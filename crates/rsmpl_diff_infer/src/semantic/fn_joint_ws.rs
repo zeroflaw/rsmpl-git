@@ -229,6 +229,8 @@ pub(crate) fn joint_workspace_candidate(
                 .unwrap_or_default(),
             claims,
             claimed_secs,
+            leftover: std::collections::HashMap::new(),
+            claimed_hunk_bytes: 0,
             joint: Joint::A,
         }),
         def_path,

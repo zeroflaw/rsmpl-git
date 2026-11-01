@@ -1,19 +1,13 @@
-//! v1 semantic inference: fn/item rename + slot-sweep + call-sweep +
-//! array-head-peel call-migration sweep (T441) + method-to-function,
-//! method-to-method, &-receiver strip, use-path prefix,
-//! whole-file item-deletion (T464) + partial-file item-deletion (T465),
-//! and whole-item move (T430) fan-outs. Every emission clears a token-win guard (T375): the
-//! semantic hunk is kept only when byte-smaller than the ordinary
-//! hunk(s) it replaces (bytes proxy tokens), else the ordinary text
-//! stays — small singles and tiny sweeps never cost more than the
-//! passthrough.
+//! v1 semantic inference: fn/item rename + slot/call sweeps +
+//! method-to-function/method, &-receiver strip, use-path prefix,
+//! item-deletion (T464/T465) + whole-item move (T430) fan-outs. Every
+//! emission clears the T375 token-win guard (byte-smaller than the
+//! ordinary hunks it replaces, else passthrough).
 //!
-//! Pure detectors over a binary-stripped diff. Whole-file first (cross-hunk
-//! sweeps); else per balanced hunk (T349), leftovers ordinary in order
-//! (pairwise-disjoint, SPEC 10.6 option-1). Every per-hunk emission uses
-//! tight original range + `# allow=many` (SPEC D.5, WI-1b); probe-verified via `applyrs --check`.
-//! Whole-item moves (T430 pre-pass) cite real ranges/anchors instead — a
-//! scope=file cut would match every item in the file.
+//! Pure detectors over a binary-stripped diff. Whole-file first
+//! (cross-hunk sweeps); else per balanced hunk (T349), leftovers
+//! ordinary in order (SPEC 10.6 option-1, `# allow=many`, WI-1b probe
+//! via `applyrs --check`). Moves (T430) cite real ranges/anchors.
 pub(crate) mod antiunify;
 pub(crate) mod antiunify_types;
 mod arg_template;
@@ -28,6 +22,7 @@ pub(crate) mod definition_arm_follow;
 pub(crate) mod definition_evolution;
 mod deletes;
 mod fn_joint;
+mod fn_joint_b2;
 mod fn_joint_ws;
 pub(crate) mod frame;
 pub(crate) mod general_expr;
@@ -795,7 +790,7 @@ pub(crate) fn is_semantic_section(sec: &str) -> bool {
         .any(|l| l.starts_with("@@") && l.contains("rule="))
 }
 
-pub(crate) use hybrid::{emission_hunks, split_semantic_native};
+pub(crate) use hybrid::{emission_hunks, split_native_hunks, split_semantic_native};
 
 #[cfg(test)]
 mod tests {

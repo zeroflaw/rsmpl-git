@@ -41,16 +41,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::{split_item, try_item_rename, unique_rule};
 
-/// One parsed eligible section: its index, b-side path, balanced
-/// minus/plus lines, and old-side changed lines (aligned by position).
-struct SectionPairs {
-    idx: usize,
-    path: String,
-    minuses: Vec<String>,
-    pluses: Vec<String>,
-    changed: Vec<usize>,
-}
-
 /// One native pair at its old-side site.
 pub(crate) struct Pair {
     pub(crate) sec: usize,
@@ -73,9 +63,18 @@ pub(crate) fn try_item_intent_sweep(
     let checkpoint = used_rules.len();
     // Eligible: `.rs` non-rename sections (non-`.rs` passes through;
     // rename sections own the file move and stay out of the intent).
-    let mut eligible: Vec<usize> = Vec::new();
-    // (section idx, path, minuses, pluses, changed)
-    let mut parsed: Vec<SectionPairs> = Vec::new();
+    // WI-4f-next: hunk-level claiming — per-hunk pairs with verbatim
+    // text; unclaimable hunks stay ordinary in place.
+    struct HunkEntry {
+        sec: usize,
+        text: String,
+        minuses: Vec<String>,
+        pluses: Vec<String>,
+        sites: Vec<usize>,
+        balanced: bool,
+        path: String,
+    }
+    let mut hunks: Vec<HunkEntry> = Vec::new();
     // WI-4e: preserved pre-existing semantic hunks + native byte lens
     // per claimed section (pure-native sections hold empty vecs, so
     // emission stays byte-identical to the pre-4e path).
@@ -102,46 +101,45 @@ pub(crate) fn try_item_intent_sweep(
         if !path.ends_with(".rs") {
             continue;
         }
-        eligible.push(i);
         preserved.insert(i, (prelude, semantic_hunks));
         native_lens.insert(i, native_sec.len());
-        let (minuses, pluses, balanced) = section_pairs(&native_sec);
-        if !balanced || minuses.is_empty() {
-            used_rules.truncate(checkpoint);
-            return None;
+        for nh in super::split_native_hunks(&native_sec).into_iter() {
+            hunks.push(HunkEntry {
+                sec: i,
+                text: nh.text,
+                minuses: nh.minuses,
+                pluses: nh.pluses,
+                sites: nh.sites,
+                balanced: nh.balanced,
+                path: path.clone(),
+            });
         }
-        let changed = crate::totality::changed_old_lines(&native_sec);
-        if changed.len() != minuses.len() {
-            used_rules.truncate(checkpoint);
-            return None;
-        }
-        parsed.push(SectionPairs {
-            idx: i,
-            path,
-            minuses,
-            pluses,
-            changed,
-        });
     }
-    if parsed.is_empty() {
+    if hunks.is_empty() {
         return None;
     }
-    // Flatten to one pair per changed line, in section order.
+    // Flatten balanced hunks to one pair per changed line, in section
+    // order. Unbalanced hunks are always leftovers (never pairs).
     let mut pairs: Vec<Pair> = Vec::new();
-    for sp in &parsed {
-        for ((m, p), s) in sp
-            .minuses
-            .iter()
-            .zip(sp.pluses.iter())
-            .zip(sp.changed.iter())
-        {
+    // (pair index -> hunk entry index)
+    let mut pair_hunk: Vec<usize> = Vec::new();
+    for (hi, he) in hunks.iter().enumerate() {
+        if !he.balanced {
+            continue;
+        }
+        if he.minuses.len() != he.sites.len() {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+        for ((m, p), s) in he.minuses.iter().zip(he.pluses.iter()).zip(he.sites.iter()) {
             pairs.push(Pair {
-                sec: sp.idx,
-                path: sp.path.clone(),
+                sec: he.sec,
+                path: he.path.clone(),
                 minus: m.clone(),
                 plus: p.clone(),
                 site: *s,
             });
+            pair_hunk.push(hi);
         }
     }
     if pairs.len() < 2 {
@@ -182,55 +180,98 @@ pub(crate) fn try_item_intent_sweep(
     // the definition set, D9); every other shape keeps the item gate
     // (any same-delta use line).
     let is_fn_intent = def_kind == "fn";
-    // Use-line gate per non-def pair (cheap, ident-boundary): the probe
-    // below is authoritative.
-    for (i, pair) in pairs.iter().enumerate() {
-        if i == def_idx {
-            continue;
-        }
+    // WI-4f-next: per-pair claimability (cheap, ident-boundary); the
+    // probe below is authoritative. Hunks with any unclaimable pair
+    // become leftovers instead of vetoing the whole patch.
+    let pair_claimable = |pair: &Pair| -> bool {
         if pair.minus.trim() == pair.plus.trim() {
-            return None;
+            return false;
         }
         if !contains_ident(&pair.minus, &old_ident) || !contains_ident(&pair.plus, &new_ident) {
-            return None;
+            return false;
         }
-        if is_fn_intent
-            && !is_fn_call_use_site(&pair.minus, &old_ident)
-            && !is_fn_use_tail_site(&pair.minus, &pair.plus, &old_ident, &new_ident)
-        {
-            return None;
+        if is_fn_intent {
+            if !is_fn_call_use_site(&pair.minus, &old_ident)
+                && !is_fn_use_tail_site(&pair.minus, &pair.plus, &old_ident, &new_ident)
+            {
+                return false;
+            }
+        } else if is_dedicated_use_site(&pair.minus, &old_ident) {
+            return false;
+        }
+        true
+    };
+    // Group pair indices per hunk entry.
+    let mut hunk_pairs: Vec<Vec<usize>> = vec![Vec::new(); hunks.len()];
+    for (pi, hi) in pair_hunk.iter().enumerate() {
+        hunk_pairs[*hi].push(pi);
+    }
+    let def_hunk = pair_hunk[def_idx];
+    // No partial def hunk: the def hunk must hold exactly the def pair.
+    if hunk_pairs[def_hunk].len() != 1 {
+        return None;
+    }
+    // Partition balanced hunks into claimable vs leftover.
+    let mut claimed_hunks: HashSet<usize> = HashSet::new();
+    claimed_hunks.insert(def_hunk);
+    for (hi, pis) in hunk_pairs.iter().enumerate() {
+        if pis.is_empty() {
+            continue;
+        }
+        if hi == def_hunk {
+            continue;
+        }
+        let mut ok = true;
+        for pi in pis {
+            if *pi == def_idx {
+                continue;
+            }
+            if !pair_claimable(&pairs[*pi]) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            claimed_hunks.insert(hi);
         }
     }
+    // Claimed pairs = def + pairs in claimable hunks.
+    let mut claimed_idx: Vec<usize> = Vec::new();
+    for hi in claimed_hunks.iter() {
+        for pi in &hunk_pairs[*hi] {
+            claimed_idx.push(*pi);
+        }
+    }
+    if claimed_idx.len() < 2 {
+        return None;
+    }
+    // No claimable use hunk beyond the def → nothing to join.
+    if claimed_hunks.len() < 2 {
+        return None;
+    }
+    claimed_idx.sort_unstable();
+    let claimed_pairs: Vec<Pair> = claimed_idx
+        .iter()
+        .map(|pi| Pair {
+            sec: pairs[*pi].sec,
+            path: pairs[*pi].path.clone(),
+            minus: pairs[*pi].minus.clone(),
+            plus: pairs[*pi].plus.clone(),
+            site: pairs[*pi].site,
+        })
+        .collect();
     let def = &pairs[def_idx];
-    // Pre-image for every involved file (precision-first).
-    for pair in &pairs {
+    // Pre-image for every involved file (precision-first, claimed only).
+    for pair in &claimed_pairs {
         if !pre.contains_key(&pair.path) {
             return None;
         }
     }
     // Twin-definition veto (unique-definition rule, SPEC 14.8): exactly
     // one `split_item` definition of `old` with the def kind across
-    // the involved pre-images.
-    if count_kind_defs(pre, &pairs, &def_kind, &old_ident) != 1 {
+    // the involved pre-images (claimed set).
+    if count_kind_defs(pre, &claimed_pairs, &def_kind, &old_ident) != 1 {
         return None;
-    }
-    // Dedicated-position carve (item shapes only — `fn` intents claim
-    // exactly the call-callee position via the gate above): a use line
-    // whose changed subterm sits in a call-callee or macro-head naming
-    // `old` belongs to the call / macro detectors (`call_sweep`,
-    // `macro_rules_rename`, …) and their pinned shapes — the intent
-    // never claims it. Impl headers, fn headers, type positions,
-    // struct literals/patterns, and `use` lines stay claimable; the
-    // probe below is authoritative for them.
-    if !is_fn_intent {
-        for (i, pair) in pairs.iter().enumerate() {
-            if i == def_idx {
-                continue;
-            }
-            if is_dedicated_use_site(&pair.minus, &old_ident) {
-                return None;
-            }
-        }
     }
     // The def pair must be emittable as a lone item rename (terse-`fn`
     // gates, column-0, suffix laws); otherwise the follow emission
@@ -273,42 +314,77 @@ pub(crate) fn try_item_intent_sweep(
         &new_ident,
     );
     // Scratch-apply probe: every claimed site must show its native plus
-    // line, every other line byte-identical (per file).
-    if !probe_reproduces(pre, &emission, &pairs) {
+    // line, every other line byte-identical (per file, claimed subset).
+    if !probe_reproduces(pre, &emission, &claimed_pairs) {
         used_rules.truncate(checkpoint);
         return None;
     }
-    // T375: the one hunk must beat the replaced native bytes (WI-4e:
-    // native-view bytes, so preserved semantic hunks never tax the win).
-    let claimed_bytes: usize = parsed
-        .iter()
-        .map(|sp| native_lens.get(&sp.idx).copied().unwrap_or(0))
-        .sum();
-    if emission.len() >= claimed_bytes {
+    // T375: pure sections keep today's whole-native-view comparison
+    // (pins byte-identical); mixed sections compare emission hunks vs
+    // claimed native hunk bytes (shared header stays in place).
+    let has_leftover = hunks.iter().enumerate().any(|(hi, _)| {
+        if claimed_hunks.contains(&hi) {
+            false
+        } else {
+            // Unbalanced hunks and unclaimed balanced hunks in touched
+            // sections are leftovers; untouched sections are not leftovers
+            // (they pass through, never counted).
+            let sec_touched = hunks
+                .iter()
+                .enumerate()
+                .any(|(hj, _)| claimed_hunks.contains(&hj) && hunks[hj].sec == hunks[hi].sec);
+            sec_touched && preserved.contains_key(&hunks[hi].sec)
+        }
+    });
+    let claimed_bytes: usize = if has_leftover {
+        claimed_hunks.iter().map(|hi| hunks[*hi].text.len()).sum()
+    } else {
+        let claimed_secs: HashSet<usize> = claimed_hunks.iter().map(|hi| hunks[*hi].sec).collect();
+        claimed_secs
+            .iter()
+            .map(|s| native_lens.get(s).copied().unwrap_or(0))
+            .sum()
+    };
+    let emission_bytes: usize = if has_leftover {
+        super::emission_hunks(&emission)
+            .iter()
+            .map(|h| h.len())
+            .sum()
+    } else {
+        emission.len()
+    };
+    if emission_bytes >= claimed_bytes {
         used_rules.truncate(checkpoint);
         return None;
     }
-    // Rebuild: claimed sections collapse to the emission at the def
-    // section's slot; anything unclaimed passes through byte-identical.
-    // WI-4e: hybrid sections keep their pre-existing semantic hunks
-    // ahead of the new emission hunks.
-    let claimed: HashSet<usize> = eligible.into_iter().collect();
+    // Rebuild: claimed hunks collapse to the emission at the def
+    // section; leftover native hunks stay verbatim in place (WI-4f-next).
+    // WI-4e: hybrid sections keep pre-existing semantic hunks ahead.
+    let claimed_secs: HashSet<usize> = claimed_hunks.iter().map(|hi| hunks[*hi].sec).collect();
+    // Leftover native hunk texts per section, in original hunk order.
+    let mut leftovers: HashMap<usize, Vec<String>> = HashMap::new();
+    for (hi, he) in hunks.iter().enumerate() {
+        if claimed_hunks.contains(&hi) {
+            continue;
+        }
+        if !claimed_secs.contains(&he.sec) {
+            continue;
+        }
+        leftovers.entry(he.sec).or_default().push(he.text.clone());
+    }
     let new_hunks = super::emission_hunks(&emission);
     let mut out: Vec<String> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
-        if !claimed.contains(&i) {
+        if !claimed_secs.contains(&i) {
             out.push(sec.clone());
             continue;
         }
+        let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+        let rest = leftovers.get(&i).cloned().unwrap_or_default();
         if i == def.sec {
-            let keep = preserved
-                .get(&i)
-                .map(|(_, h)| h.clone())
-                .unwrap_or_default();
-            if keep.is_empty() {
+            if keep.is_empty() && rest.is_empty() {
                 out.push(emission.clone());
             } else {
-                let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
                 let mut rebuilt = prelude;
                 for h in &keep {
                     rebuilt.push_str(h);
@@ -316,63 +392,25 @@ pub(crate) fn try_item_intent_sweep(
                 for h in &new_hunks {
                     rebuilt.push_str(h);
                 }
+                for h in &rest {
+                    rebuilt.push_str(h);
+                }
                 out.push(rebuilt);
             }
-        } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
-            // Non-def claimed hybrid sections collapse away: their native
-            // hunks are claimed by the def emission, but their semantic
-            // hunks must survive — re-emit them under the original header.
-            let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+        } else if keep.is_empty() && rest.is_empty() {
+            // Fully claimed non-def section collapses away.
+        } else {
             let mut rebuilt = prelude;
             for h in &keep {
+                rebuilt.push_str(h);
+            }
+            for h in &rest {
                 rebuilt.push_str(h);
             }
             out.push(rebuilt);
         }
     }
     Some((out, def.path.clone(), rule))
-}
-
-/// One section's minus/plus lines plus the balanced gate (same walk as
-/// `chain.rs`: every hunk balanced, global counts equal, non-empty).
-fn section_pairs(section: &str) -> (Vec<String>, Vec<String>, bool) {
-    let mut minuses: Vec<String> = Vec::new();
-    let mut pluses: Vec<String> = Vec::new();
-    let mut hunk_minus = 0usize;
-    let mut hunk_plus = 0usize;
-    let mut balanced = true;
-    let mut in_hunk = false;
-    let mut saw_hunk = false;
-    for line in section.lines().skip(1) {
-        if line.starts_with("@@") {
-            if in_hunk && hunk_minus != hunk_plus {
-                balanced = false;
-            }
-            in_hunk = true;
-            saw_hunk = true;
-            hunk_minus = 0;
-            hunk_plus = 0;
-            continue;
-        }
-        if !in_hunk {
-            if line.starts_with("old mode ") || line.starts_with("new mode ") {
-                balanced = false;
-            }
-            continue;
-        }
-        if line.starts_with('-') && !line.starts_with("---") {
-            minuses.push(line[1..].to_string());
-            hunk_minus += 1;
-        } else if line.starts_with('+') && !line.starts_with("+++") {
-            pluses.push(line[1..].to_string());
-            hunk_plus += 1;
-        }
-    }
-    if in_hunk && hunk_minus != hunk_plus {
-        balanced = false;
-    }
-    let ok = balanced && saw_hunk && minuses.len() == pluses.len() && !minuses.is_empty();
-    (minuses, pluses, ok)
 }
 
 /// A `split_item` definition delta, or `None` for use lines.
@@ -1400,6 +1438,45 @@ mod tests {
         assert!(out.contains("# follow=uses"), "got:\n{out}");
         assert!(out.contains("- fn foo"), "got:\n{out}");
         validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn mixed_section_claims_subset_leaves_leftover() {
+        // WI-4f-next: one section holds def + use hunks plus an unrelated
+        // hunk — the intent fires on the subset, leftover stays verbatim.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -4,1 +4,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n@@ -8,1 +8,1 @@\n-    let z = 1;\n+    let z = 2;\n"
+            .to_string();
+        let pre = pre_map(&[(
+            "f.rs",
+            "struct Old {\n    x: i32,\n}\nfn f(s: Old) -> i32 {\n    0\n}\nfn u() {\n    let z = 1;\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) = try_item_intent_sweep(std::slice::from_ref(&section), &pre, &mut used)
+            .expect("subset must fire");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- struct Old"), "got:\n{}", out[0]);
+        assert!(
+            out[0].contains("-    let z = 1;"),
+            "leftover verbatim:\n{}",
+            out[0]
+        );
+        assert!(
+            out[0].contains("+    let z = 2;"),
+            "leftover verbatim:\n{}",
+            out[0]
+        );
+        validated_live(&out[0], &pre);
+    }
+
+    #[test]
+    fn def_hunk_with_extra_pair_still_declines() {
+        // No partial def hunk: def + extra pair in the SAME hunk declines.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-struct Old {\n-    x: i32,\n+struct New {\n+    x: u32,\n"
+            .to_string();
+        let pre = pre_map(&[("f.rs", "struct Old {\n    x: i32,\n}\n")]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(std::slice::from_ref(&section), &pre, &mut used).is_none());
     }
 
     #[test]

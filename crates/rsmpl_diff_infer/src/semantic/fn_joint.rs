@@ -30,6 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::fn_joint_b2::{attr_def_shape, attr_joint_fire, probe_attr_joint};
 use super::fn_joint_ws::{joint_workspace_candidate, Workspace};
 use super::generalized::parse_sig_slots;
 use super::item_intent::{count_kind_defs, probe_reproduces, Pair};
@@ -92,6 +93,13 @@ pub(crate) struct Fire {
     pub(crate) claims: Vec<FlatPair>,
     pub(crate) claimed_secs: Vec<usize>,
     pub(crate) joint: Joint,
+    /// WI-4f-next leftover native hunk texts per section (verbatim, in
+    /// original hunk order). Empty on pure-section fires (byte-identical
+    /// path).
+    pub(crate) leftover: HashMap<usize, Vec<String>>,
+    /// WI-4f-next claimed native hunk bytes (hunk texts only, no `diff`
+    /// header). Used for T375 only when `leftover` is nonempty.
+    pub(crate) claimed_hunk_bytes: usize,
 }
 
 /// Whole-patch fn-joint pre-pass: returns the rebuilt section list plus
@@ -113,6 +121,9 @@ pub(crate) fn try_fn_joint_intent(
     // WI-4e: preserved semantic hunks + native lens per claimed section.
     let mut preserved: HashMap<usize, (String, Vec<String>)> = HashMap::new();
     let mut native_lens: HashMap<usize, usize> = HashMap::new();
+    // WI-4f-next: verbatim native hunk texts per (sec, hunk-idx) for
+    // leftover preservation + claimed-bytes T375.
+    let mut hunk_texts: HashMap<(usize, usize), String> = HashMap::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -133,6 +144,12 @@ pub(crate) fn try_fn_joint_intent(
         preserved.insert(i, (prelude, semantic_hunks));
         native_lens.insert(i, native_sec.len());
         parsed.push((i, path, split_hunks(&native_sec)));
+        for (h, nh) in super::split_native_hunks(&native_sec)
+            .into_iter()
+            .enumerate()
+        {
+            hunk_texts.insert((i, h), nh.text);
+        }
     }
     if parsed.is_empty() {
         return None;
@@ -148,7 +165,7 @@ pub(crate) fn try_fn_joint_intent(
         if pre.get(*path).is_none() {
             continue;
         }
-        match joint_candidate(&parsed, keys, path, pre) {
+        match joint_candidate(&parsed, keys, path, pre, &hunk_texts) {
             Candidate::None => {}
             Candidate::Suppress(old) => {
                 suppressed.insert((path.to_string(), old));
@@ -190,11 +207,22 @@ pub(crate) fn try_fn_joint_intent(
                     continue;
                 }
                 // WI-4e: native-view bytes so preserved hunks never tax the win.
-                let claimed_bytes: usize = keys
-                    .iter()
-                    .map(|k| native_lens.get(&parsed[*k].0).copied().unwrap_or(0))
-                    .sum();
-                if emission.len() >= claimed_bytes {
+                // WI-4f-next: mixed sections compare emission hunks vs
+                // claimed hunk bytes (shared header stays in place).
+                let (claimed_bytes, emission_bytes) = if f.leftover.is_empty() {
+                    let claimed: usize = keys
+                        .iter()
+                        .map(|k| native_lens.get(&parsed[*k].0).copied().unwrap_or(0))
+                        .sum();
+                    (claimed, emission.len())
+                } else {
+                    let eh: usize = super::emission_hunks(&emission)
+                        .iter()
+                        .map(|h| h.len())
+                        .sum();
+                    (f.claimed_hunk_bytes, eh)
+                };
+                if emission_bytes >= claimed_bytes {
                     used_rules.truncate(checkpoint);
                     suppressed.insert((path.to_string(), f.old));
                     continue;
@@ -215,15 +243,12 @@ pub(crate) fn try_fn_joint_intent(
                     out.push(sec.clone());
                     continue;
                 }
+                let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+                let rest = f.leftover.get(&i).cloned().unwrap_or_default();
                 if i == first {
-                    let keep = preserved
-                        .get(&i)
-                        .map(|(_, h)| h.clone())
-                        .unwrap_or_default();
-                    if keep.is_empty() {
+                    if keep.is_empty() && rest.is_empty() {
                         out.push(emission.clone());
                     } else {
-                        let (prelude, _) = preserved.get(&i).cloned().unwrap_or_default();
                         let mut rebuilt = prelude;
                         for h in &keep {
                             rebuilt.push_str(h);
@@ -231,12 +256,19 @@ pub(crate) fn try_fn_joint_intent(
                         for h in &new_hunks {
                             rebuilt.push_str(h);
                         }
+                        for h in &rest {
+                            rebuilt.push_str(h);
+                        }
                         out.push(rebuilt);
                     }
-                } else if preserved.get(&i).is_some_and(|(_, h)| !h.is_empty()) {
-                    let (prelude, keep) = preserved.get(&i).cloned().unwrap_or_default();
+                } else if keep.is_empty() && rest.is_empty() {
+                    // Fully claimed non-def section collapses away.
+                } else {
                     let mut rebuilt = prelude;
                     for h in &keep {
+                        rebuilt.push_str(h);
+                    }
+                    for h in &rest {
                         rebuilt.push_str(h);
                     }
                     out.push(rebuilt);
@@ -367,12 +399,12 @@ fn joint_candidate(
     keys: &[usize],
     path: &str,
     pre: &HashMap<String, String>,
+    hunk_texts: &HashMap<(usize, usize), String>,
 ) -> Candidate {
     // Positional pairs from balanced hunks, plus header-pair candidates
     // scanned from unbalanced hunks (an unbalanced attr-shaped def hunk
     // fires as Joint-B2; any other unbalanced def hunk is a joint shape
     // that must suppress the fragmented fallback).
-    let mut unbalanced = false;
     let mut flat: Vec<FlatPair> = Vec::new();
     // (sec, hunk, minus, plus) header pairs found only via the
     // unbalanced scan (no sites — never fireable as Joint-A/B1).
@@ -383,7 +415,6 @@ fn joint_candidate(
         let (sec, _, hunks) = &parsed[*k];
         for (h, hp) in hunks.iter().enumerate() {
             if !hp.balanced {
-                unbalanced = true;
                 unbalanced_hunks.push((*sec, h, hp.minuses.clone(), hp.pluses.clone()));
                 for m in &hp.minuses {
                     for p in &hp.pluses {
@@ -480,43 +511,165 @@ fn joint_candidate(
     // the raiser cannot prove, and the fragmented fallback (ordinary
     // def + rename-claiming sweep) must not stand in for it.
     //
+    // WI-4f-next: hunk-level claiming — group balanced pairs per
+    // (sec, hunk); hunks whose pairs are not all call sites become
+    // leftovers instead of vetoing. Unbalanced hunks without a header
+    // delta are leftovers too (B2 attr hunk stays claimed).
+    let mut hunk_members: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (i, fp) in flat.iter().enumerate() {
+        hunk_members.entry((fp.sec, fp.hunk)).or_default().push(i);
+    }
     // WI-4b Joint-B2 (no positional def): an unbalanced attr-shaped
     // def hunk plus uniform callee-only calls composes to the
-    // shared-rule two-hunk form. Anything else unbalanced suppresses.
+    // shared-rule two-hunk form.
     if !def_single {
-        if unbalanced {
-            // Lone call sites (N=1) never pay the second hunk: the
-            // unique-single detector would re-harvest the call-template
-            // hunk on the emission's second pass and fragment the
-            // intent (pinned) — suppress like every other veto.
-            if call_count >= 2 {
-                if let Some(mut joint_fire) =
-                    attr_joint_fire(path, pre, &unbalanced_hunks, &flat, &old, &new)
-                {
-                    joint_fire.claimed_secs = keys.iter().map(|k| parsed[*k].0).collect();
-                    return Candidate::Ready(Box::new(joint_fire));
+        // Partition balanced hunks: call-site hunks claimed, others
+        // leftover. Other unbalanced hunks with a header delta are
+        // ambiguity (suppress); without one they are leftovers.
+        let mut claimed_flat_idx: Vec<usize> = Vec::new();
+        let mut leftover: HashMap<usize, Vec<String>> = HashMap::new();
+        for ((sec, h), members) in &hunk_members {
+            let all_call = members
+                .iter()
+                .all(|i| is_call_site_of(&flat[*i].minus, &flat[*i].plus, &old, &new));
+            if all_call {
+                claimed_flat_idx.extend(members.iter().copied());
+            } else if let Some(t) = hunk_texts.get(&(*sec, *h)) {
+                leftover.entry(*sec).or_default().push(t.clone());
+            }
+        }
+        // Attr-shaped unbalanced hunks: exactly one must match (the
+        // combo def); the rest are leftovers unless they carry a header
+        // delta (ambiguity → suppress).
+        let mut attr_hunks: Vec<(usize, usize)> = Vec::new();
+        for (sec, h, m, p) in &unbalanced_hunks {
+            if attr_def_shape(m, p).is_some() {
+                attr_hunks.push((*sec, *h));
+            } else {
+                let mut has_header = false;
+                for mm in m {
+                    for pp in p {
+                        if header_name_delta(mm, pp).is_some() {
+                            has_header = true;
+                        }
+                    }
+                }
+                if has_header {
+                    return Candidate::Suppress(old);
+                }
+                if let Some(t) = hunk_texts.get(&(*sec, *h)) {
+                    leftover.entry(*sec).or_default().push(t.clone());
                 }
             }
         }
-        return Candidate::Suppress(old);
-    }
-    if unbalanced {
+        if attr_hunks.len() != 1 || unbalanced_hunks.is_empty() {
+            return Candidate::Suppress(old);
+        }
+        // Lone call sites (N=1) never pay the second hunk: the
+        // unique-single detector would re-harvest the call-template
+        // hunk on the emission's second pass and fragment the
+        // intent (pinned) — suppress like every other veto.
+        let claimed_calls: Vec<FlatPair> = {
+            let mut v: Vec<FlatPair> = claimed_flat_idx.iter().map(|i| flat[*i].clone()).collect();
+            v.sort_by_key(|fp| (fp.sec, fp.hunk, fp.site));
+            v
+        };
+        if claimed_calls.len() < 2 {
+            return Candidate::Suppress(old);
+        }
+        let def_hunk = unbalanced_hunks
+            .iter()
+            .find(|(s, h, _, _)| attr_hunks.contains(&(*s, *h)))
+            .map(|(_, _, m, p)| (m.clone(), p.clone()));
+        let Some((dm, dp)) = def_hunk else {
+            return Candidate::Suppress(old);
+        };
+        let single_attr: Vec<(usize, usize, Vec<String>, Vec<String>)> = unbalanced_hunks
+            .iter()
+            .filter(|(s, h, _, _)| attr_hunks.contains(&(*s, *h)))
+            .cloned()
+            .collect();
+        if let Some(mut joint_fire) =
+            attr_joint_fire(path, pre, &single_attr, &claimed_calls, &old, &new)
+        {
+            let mut claimed_secs: Vec<usize> = Vec::new();
+            let mut seen: HashSet<usize> = HashSet::new();
+            for fp in &claimed_calls {
+                if seen.insert(fp.sec) {
+                    claimed_secs.push(fp.sec);
+                }
+            }
+            if let Some((s, _, _, _)) = single_attr.first() {
+                if seen.insert(*s) {
+                    claimed_secs.push(*s);
+                }
+            }
+            joint_fire.claimed_secs = claimed_secs;
+            joint_fire.leftover = leftover;
+            joint_fire.claimed_hunk_bytes = claimed_calls
+                .iter()
+                .map(|fp| {
+                    hunk_texts
+                        .get(&(fp.sec, fp.hunk))
+                        .map(|t| t.len())
+                        .unwrap_or(0)
+                })
+                .sum::<usize>()
+                + single_attr
+                    .first()
+                    .and_then(|(s, h, _, _)| hunk_texts.get(&(*s, *h)))
+                    .map(|t| t.len())
+                    .unwrap_or(0);
+            // Claims for B2 are the call pairs; the attr def rides the
+            // def hunk (kept in `def_minus/plus`).
+            let _ = (dm, dp);
+            return Candidate::Ready(Box::new(joint_fire));
+        }
         return Candidate::Suppress(old);
     }
     let def_idx = def.expect("def_single implies a positional def");
-    // Every other pair must be a call-callee site of old→new.
-    for (i, fp) in flat.iter().enumerate() {
-        if i == def_idx {
+    // WI-4f-next partition: def hunk claimed; every other balanced hunk
+    // claimed iff all its pairs are call-callee sites. Unbalanced hunks
+    // without a header delta are leftovers (combo_defs already vetoed
+    // the header-delta case above).
+    let mut claimed_flat_idx: Vec<usize> = Vec::new();
+    let mut leftover: HashMap<usize, Vec<String>> = HashMap::new();
+    for ((sec, h), members) in &hunk_members {
+        if members.contains(&def_idx) {
+            claimed_flat_idx.extend(members.iter().copied());
             continue;
         }
-        if !is_call_site_of(&fp.minus, &fp.plus, &old, &new) {
-            return Candidate::Suppress(old);
+        let all_call = members
+            .iter()
+            .all(|i| is_call_site_of(&flat[*i].minus, &flat[*i].plus, &old, &new));
+        if all_call {
+            claimed_flat_idx.extend(members.iter().copied());
+        } else if let Some(t) = hunk_texts.get(&(*sec, *h)) {
+            leftover.entry(*sec).or_default().push(t.clone());
         }
     }
-    let callee_only = flat
+    for (sec, h, _, _) in &unbalanced_hunks {
+        if let Some(t) = hunk_texts.get(&(*sec, *h)) {
+            leftover.entry(*sec).or_default().push(t.clone());
+        }
+    }
+    claimed_flat_idx.sort_unstable();
+    let claimed_flat: Vec<FlatPair> = claimed_flat_idx.iter().map(|i| flat[*i].clone()).collect();
+    if claimed_flat.len() < 2 {
+        return Candidate::None;
+    }
+    let claimed_def_pos = claimed_flat
+        .iter()
+        .position(|fp| {
+            fp.sec == flat[def_idx].sec
+                && fp.hunk == flat[def_idx].hunk
+                && fp.site == flat[def_idx].site
+        })
+        .expect("def in claimed set");
+    let callee_only = claimed_flat
         .iter()
         .enumerate()
-        .all(|(i, fp)| i == def_idx || is_callee_only(&fp.minus, &fp.plus, &old, &new));
+        .all(|(i, fp)| i == claimed_def_pos || is_callee_only(&fp.minus, &fp.plus, &old, &new));
     let joint = if callee_only {
         // Joint-A (WI-4a) fire gates on the header: vis in the WI-1
         // closed set and preserved; qual/generics/where preserved;
@@ -531,13 +684,13 @@ fn joint_candidate(
         // only with the return preserved — a return delta plus an
         // arg-add is two evolutions the shared-rule pair cannot
         // restate. Lone additions (N=1) never pay the second hunk.
-        if flat.len() < 3 {
+        if claimed_flat.len() < 3 {
             return Candidate::Suppress(old);
         }
         if !header_argadd_gates(&flat[def_idx].minus, &flat[def_idx].plus) {
             return Candidate::Suppress(old);
         }
-        match arg_add_template(&flat, def_idx, &old, &new) {
+        match arg_add_template(&claimed_flat, claimed_def_pos, &old, &new) {
             Some((call_minus, call_plus)) => Joint::B1 {
                 call_minus,
                 call_plus,
@@ -548,17 +701,35 @@ fn joint_candidate(
     let def_minus = flat[def_idx].minus.clone();
     let def_plus = flat[def_idx].plus.clone();
     let mut claimed_secs: Vec<usize> = Vec::new();
-    for k in keys {
-        claimed_secs.push(parsed[*k].0);
+    let mut seen: HashSet<usize> = HashSet::new();
+    for fp in &claimed_flat {
+        if seen.insert(fp.sec) {
+            claimed_secs.push(fp.sec);
+        }
     }
+    let claimed_hunk_bytes: usize = {
+        let mut seen_h: HashSet<(usize, usize)> = HashSet::new();
+        let mut sum = 0usize;
+        for fp in &claimed_flat {
+            if seen_h.insert((fp.sec, fp.hunk)) {
+                sum += hunk_texts
+                    .get(&(fp.sec, fp.hunk))
+                    .map(|t| t.len())
+                    .unwrap_or(0);
+            }
+        }
+        sum
+    };
     Candidate::Ready(Box::new(Fire {
         old,
         new,
         def_minus,
         def_plus,
-        claims: flat,
+        claims: claimed_flat,
         claimed_secs,
         joint,
+        leftover,
+        claimed_hunk_bytes,
     }))
 }
 
@@ -689,7 +860,7 @@ fn header_argadd_gates(minus: &str, plus: &str) -> bool {
 
 /// Qualifier prefix for a call-template path: `""`, `"::"`, or
 /// `"{q}::"`.
-fn prefix_qual(qual: &str, callee: &str) -> String {
+pub(crate) fn prefix_qual(qual: &str, callee: &str) -> String {
     if qual.is_empty() {
         callee.to_string()
     } else if qual.ends_with("::") {
@@ -765,225 +936,9 @@ fn arg_add_template(
     ))
 }
 
-/// One single-line `#[…]` attribute (doc comments and multi-attr lines
-/// are not joint shapes — suppressed, pinned).
-fn is_attr_line(line: &str) -> bool {
-    let t = line.trim();
-    t.starts_with("#[") && t.ends_with(']') && t.len() > 3 && line.starts_with('#')
-}
-
-/// WI-4b Joint-B2 attr shape: the single unbalanced hunk of the group
-/// holds exactly one `fn`-header pair with a name delta plus exactly
-/// one extra `#[…]` attr line (add: 1 minus / 2 pluses; remove: 2
-/// minus / 1 plus). Returns `(attr_line, attr_add, def_minus,
-/// def_plus)`.
-fn attr_def_shape(minuses: &[String], pluses: &[String]) -> Option<(String, bool, String, String)> {
-    let (attr_line, attr_add, def_minus, def_plus) = match (minuses, pluses) {
-        ([m], [a, p]) => (a.clone(), true, m.clone(), p.clone()),
-        ([a, m], [p]) => (a.clone(), false, m.clone(), p.clone()),
-        _ => return None,
-    };
-    if !is_attr_line(&attr_line) {
-        return None;
-    }
-    let (old, new) = header_name_delta(&def_minus, &def_plus)?;
-    let (Some(m), Some(p)) = (parse_sig_slots(&def_minus), parse_sig_slots(&def_plus)) else {
-        return None;
-    };
-    if m.name != old || p.name != new {
-        return None;
-    }
-    // Rename-only header: every slot preserved (a slot evolution plus
-    // an attr delta is two evolutions — suppressed, pinned).
-    if m.vis != p.vis
-        || m.qual != p.qual
-        || m.generics != p.generics
-        || m.params != p.params
-        || m.ret != p.ret
-        || m.where_ != p.where_
-    {
-        return None;
-    }
-    if !is_fn_vis_prefix(&m.vis) || contains_ident(&m.vis, &m.name) {
-        return None;
-    }
-    Some((attr_line.trim().to_string(), attr_add, def_minus, def_plus))
-}
-
-/// WI-4b Joint-B2 fire attempt for a group with no positional def:
-/// exactly one unbalanced hunk (attr-shaped) plus balanced uniform
-/// callee-only call pairs. `None` keeps the caller's suppress-only
-/// posture.
-fn attr_joint_fire(
-    path: &str,
-    pre: &HashMap<String, String>,
-    unbalanced: &[(usize, usize, Vec<String>, Vec<String>)],
-    flat: &[FlatPair],
-    old: &str,
-    new: &str,
-) -> Option<Fire> {
-    if unbalanced.len() != 1 {
-        return None;
-    }
-    let (_, _, minuses, pluses) = &unbalanced[0];
-    let (attr_line, attr_add, def_minus, def_plus) = attr_def_shape(minuses, pluses)?;
-    // Every other pair is a uniform callee-only call site of old→new
-    // (one template must state them all — hetero arity/qual/turbo
-    // suppresses, pinned).
-    if flat.is_empty() {
-        return None;
-    }
-    let mut arity: Option<usize> = None;
-    let mut qual: Option<String> = None;
-    let mut turbo: Option<String> = None;
-    for fp in flat {
-        let (qm, cm, tm, am) = call_parts(&fp.minus)?;
-        let (qp, cp, tp, ap) = call_parts(&fp.plus)?;
-        if cm != old || cp != new || qm != qp {
-            return None;
-        }
-        if tm != tp || am != ap {
-            return None;
-        }
-        if arity.is_some_and(|k| k != am.len())
-            || qual.as_ref().is_some_and(|q| *q != qm)
-            || turbo.as_ref().is_some_and(|t| *t != tm)
-        {
-            return None;
-        }
-        arity = Some(am.len());
-        qual = Some(qm);
-        turbo = Some(tm);
-    }
-    let (q, t, k) = (qual?, turbo?, arity?);
-    // Locate the header site in the pre-image (unique by the def
-    // guard); an attr-remove additionally proves the attr line sits
-    // directly above it.
-    let pre_text = pre.get(path)?;
-    let head_site = pre_text
-        .lines()
-        .enumerate()
-        .find(|(_, l)| l.trim() == def_minus.trim())
-        .map(|(i, _)| i + 1)?;
-    if !attr_add {
-        if head_site < 2 {
-            return None;
-        }
-        let above = pre_text.lines().nth(head_site - 2)?;
-        if above.trim() != attr_line {
-            return None;
-        }
-    }
-    let holes: Vec<String> = (0..k).map(|i| format!("E{i}")).collect();
-    let args = holes.join(", ");
-    let old_path = super::shape::literal_path_last(&prefix_qual(&q, old));
-    let new_path = super::shape::literal_path_last(&prefix_qual(&q, new));
-    Some(Fire {
-        old: old.to_string(),
-        new: new.to_string(),
-        def_minus,
-        def_plus,
-        claims: flat.to_vec(),
-        claimed_secs: Vec::new(),
-        joint: Joint::B2 {
-            attr_line,
-            attr_add,
-            head_site,
-            call_minus: format!("{old_path}{t}({args})"),
-            call_plus: format!("{new_path}{t}({args})"),
-        },
-    })
-}
-
-/// Leading whitespace of a line (the probe re-indents claimed plus
-/// lines with the native line's own indent).
-fn indent_of(line: &str) -> &str {
-    &line[..line.len() - line.trim_start().len()]
-}
-
-/// WI-4b Joint-B2 scratch-apply probe (D13): the two-hunk emission
-/// applied to the pre-image must equal the splice-expected post text —
-/// the attr line inserted/removed at the header site, the header
-/// swapped, each call site showing its native plus line, every other
-/// line byte-identical (the insertion/removal shifts lines after the
-/// header site by one). The shared `probe_reproduces` cannot state
-/// this (it requires equal line counts), so the joint owns its probe.
-/// The whole-composition comparison is authoritative; the def hunk's
-/// per-hunk orphans under `--check` are sibling-covered by
-/// construction (SPEC D.4).
-fn probe_attr_joint(
-    pre: &HashMap<String, String>,
-    emission: &str,
-    path: &str,
-    fire: &Fire,
-    calls: &[(usize, String)],
-) -> bool {
-    let Joint::B2 {
-        attr_line,
-        attr_add,
-        head_site,
-        ..
-    } = &fire.joint
-    else {
-        return false;
-    };
-    let (head_site, attr_add) = (*head_site, *attr_add);
-    let (def_minus, def_plus) = (&fire.def_minus, &fire.def_plus);
-    let Ok(parsed) = rsmpl_patch::parse_patch(emission) else {
-        return false;
-    };
-    let mut files = pre.clone();
-    for section in &parsed.files {
-        files.entry(section.target_path.clone()).or_default();
-    }
-    if rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).is_err() {
-        return false;
-    }
-    let (Some(post), Some(pre_text)) = (files.get(path), pre.get(path)) else {
-        return false;
-    };
-    let pre_lines: Vec<&str> = pre_text.lines().collect();
-    if head_site == 0 || head_site > pre_lines.len() {
-        return false;
-    }
-    if !attr_add && head_site < 2 {
-        return false;
-    }
-    if pre_lines[head_site - 1].trim() != def_minus.trim() {
-        return false;
-    }
-    let call_map: HashMap<usize, String> = calls
-        .iter()
-        .map(|(s, p)| (*s, p.trim().to_string()))
-        .collect();
-    let mut expected: Vec<String> = Vec::new();
-    for (idx, line) in pre_lines.iter().enumerate() {
-        let no = idx + 1;
-        if attr_add && no == head_site {
-            expected.push(attr_line.trim().to_string());
-            expected.push(def_plus.trim().to_string());
-            continue;
-        }
-        if !attr_add && no == head_site - 1 {
-            continue;
-        }
-        if !attr_add && no == head_site {
-            expected.push(def_plus.trim().to_string());
-            continue;
-        }
-        if let Some(want) = call_map.get(&no) {
-            expected.push(format!("{}{}", indent_of(line), want));
-        } else {
-            expected.push(line.to_string());
-        }
-    }
-    let post_lines: Vec<&str> = post.lines().collect();
-    post_lines.len() == expected.len()
-        && post_lines.iter().zip(expected.iter()).all(|(p, e)| *p == e)
-}
 /// WI-1 closed vis set the terse `fn` rename admits (SPEC 14.1 diet
 /// form — vis rides literally, never a `V` hole).
-fn is_fn_vis_prefix(vis: &str) -> bool {
+pub(crate) fn is_fn_vis_prefix(vis: &str) -> bool {
     if vis.is_empty() {
         return true;
     }
@@ -1013,7 +968,7 @@ fn is_fn_vis_prefix(vis: &str) -> bool {
 }
 
 /// Ident-boundary containment (never substring).
-fn contains_ident(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ident(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
@@ -1058,7 +1013,7 @@ pub(crate) fn is_callee_only(minus: &str, plus: &str, old: &str, new: &str) -> b
 /// `(qualifier, callee ident, turbofish, args)` of a call expression,
 /// unwrapping one `let` init. `None` for method calls, macros,
 /// non-calls, and qualified-self paths.
-fn call_parts(line: &str) -> Option<(String, String, String, Vec<String>)> {
+pub(crate) fn call_parts(line: &str) -> Option<(String, String, String, Vec<String>)> {
     let mut text = line.trim();
     if let Some(stripped) = super::strip_one_terminator(text) {
         text = stripped.trim_end();
@@ -1829,6 +1784,45 @@ mod tests {
             out[0]
         );
         assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+    }
+
+    #[test]
+    fn joint_mixed_section_claims_subset_leaves_leftover() {
+        // WI-4f-next: Joint-A def+calls plus an unrelated hunk in one
+        // section fires, leftover stays verbatim in place.
+        let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\nfn u() {\n    let z = 1;\n}\n";
+        let section = "diff --git a/src.rs b/src.rs\n--- a/src.rs\n+++ b/src.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n@@ -9,1 +9,1 @@\n-    let z = 1;\n+    let z = 2;\n"
+            .to_string();
+        let sections = vec![section];
+        let pre_map = pre_map(&[("src.rs", pre)]);
+        let mut used = Vec::new();
+        let Some((out, def_path, rule, _)) = try_fn_joint_intent(&sections, &pre_map, &mut used)
+        else {
+            panic!("mixed joint subset must fire");
+        };
+        assert_eq!(def_path, "src.rs");
+        assert!(!rule.is_empty());
+        assert_eq!(out.len(), 1);
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(
+            out[0].contains("-    let z = 1;"),
+            "leftover verbatim:\n{}",
+            out[0]
+        );
+        validated_live(&out[0], &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["src.rs"].contains("fn bar(x: u32)"),
+            "got: {}",
+            files["src.rs"]
+        );
+        assert!(
+            files["src.rs"].contains("let z = 2;"),
+            "got: {}",
+            files["src.rs"]
+        );
     }
 
     #[test]
