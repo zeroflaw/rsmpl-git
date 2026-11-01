@@ -970,6 +970,43 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "125-move-adjacent-caller-fires" {
+        // WI-6 slice 2: the moved item pasted directly above an edited
+        // one-line caller merges into one mixed `-U0` hunk (no unchanged
+        // line separates insertion from edit). The virtual minus/plus
+        // split lets the move fire as an evolved cut/paste; the edited
+        // caller rides ordinary leftovers around the paste (the one-line
+        // `fn` frame is not a sweepable call shape — WI-9 domain).
+        assert!(
+            semantic.contains("# bind="),
+            "rename-move cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "rename-move paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved header, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("-fn caller() { let r = foo(1); }"),
+            "caller minus rides leftover, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+fn caller() { let r = bar(1); }"),
+            "caller plus rides leftover, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn foo"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "adjacent move must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "124-move-rename-selfref-stays-ordinary" {
         // WI-6 slice 1: a renamed self-reference inside the moved body
         // is a body delta, so no move pair may claim it (the splice

@@ -8754,11 +8754,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   absorbed blank from the prefix leftover hunk), and a global T375 byte-win
   guard (strict `emitted < replaced`, ties stay ordinary — e.g. a 3-line
   fn with short lines, 6 ordinary lines, costs more as cut+paste and
-  stays ordinary by design; emitted cut+paste is ~constant (the item
-  rides a metavar, never respelled) while replaced ordinary grows with
-  content, so the same 3-line shape with a longer body fires — no fixed
-  line threshold). Mixed-hunk input is unreachable (the source always runs
-  `git diff --unified=0`, so declining mixed hunks is defensive only);
+   stays ordinary by design; emitted cut+paste is ~constant (the item
+   rides a metavar, never respelled) while replaced ordinary grows with
+   content, so the same 3-line shape with a longer body fires — no fixed
+   line threshold). A mixed `-U0` hunk (an insertion adjacent to an edit,
+   with no unchanged line between them) virtually splits into adjacent
+   minus/plus halves for pairing (WI-6 slice 2); untouched halves
+   re-emit verbatim, while a section holding both a cut and an untouched
+   plus half stays ordinary (the insertion anchor inside the cut's
+   claimed range is unorderable — a range-disjointness proof is future
+   work);
   inter-run gap relaxation stays vetoed (the same-anchor paste join
    restores exactly one blank); WI-8a pairs `fn` moves whose header prefix
    (vis + qualifiers, verbatim) and/or name evolve while attrs, generics,
@@ -9148,7 +9153,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(123), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
+(124), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

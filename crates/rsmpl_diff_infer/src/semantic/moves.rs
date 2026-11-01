@@ -155,6 +155,13 @@ pub(crate) fn try_move_sweep(
         }
     }
     let pairs = deduped;
+    // WI-6 slice 2: never pair the two halves of one native hunk
+    // (`is_twin_pair`: that relabels a same-spot edit as a move and
+    // starves the intent detectors that own it).
+    let pairs: Vec<MovePair> = pairs
+        .into_iter()
+        .filter(|p| !super::move_parts::is_twin_pair(&parsed, p))
+        .collect();
     // Minus-hunk gate: whole-hunk drop only — every non-blank line must
     // belong to a paired item, no leading blank, no blank runs (a cut
     // absorbs exactly one following blank).
@@ -287,6 +294,15 @@ pub(crate) fn try_move_sweep(
         used_rules.truncate(checkpoint);
         return None;
     }
+    // WI-6 slice 2: an untouched plus-virtual half anchored inside a
+    // cut's claimed range vetoes the whole sweep (`anchor_in_cut_veto`:
+    // the insertion anchor is unorderable there). Anchors outside every
+    // same-section cut range stay ordinary; cross-section adjacency (the
+    // slice's target) never trips this gate.
+    if super::move_parts::anchor_in_cut_veto(&parsed, &final_pairs) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
     final_pairs.sort_by_key(|p| (p.minus_hunk_key.0, p.minus_hunk_key.1, p.item.first));
     // Name every pair, then rebuild each touched section once. Fan-out
     // shares one cut+bind per distinct minus item (one cut, N pastes);
@@ -412,7 +428,32 @@ pub(crate) fn try_move_sweep(
     for si in &touched_secs {
         let sec = &parsed[*si];
         let mut rebuilt = sec.prelude.clone();
+        // WI-6 slice 2: twin halves of a virtually split mixed hunk
+        // whose original is re-emitted verbatim (neither half touched).
+        let mut split_done: HashSet<(usize, usize)> = HashSet::new();
         for (hi, hunk) in sec.hunks.iter().enumerate() {
+            if split_done.contains(&(*si, hi)) {
+                continue;
+            }
+            if let Some((orig_header, orig_body)) = &hunk.unsplit {
+                let twin = hunk.twin.unwrap_or(hi);
+                let self_touched = named
+                    .iter()
+                    .any(|(p, _, _)| p.minus_hunk_key == (*si, hi) || p.plus_hunk_key == (*si, hi));
+                let twin_touched = named.iter().any(|(p, _, _)| {
+                    p.minus_hunk_key == (*si, twin) || p.plus_hunk_key == (*si, twin)
+                });
+                if !self_touched && !twin_touched {
+                    rebuilt.push_str(orig_header);
+                    rebuilt.push('\n');
+                    for line in orig_body {
+                        rebuilt.push_str(line);
+                        rebuilt.push('\n');
+                    }
+                    split_done.insert((*si, twin));
+                    continue;
+                }
+            }
             let mut cuts: Vec<&String> = Vec::new();
             for (p, c, _) in &named {
                 if p.minus_hunk_key == (*si, hi) && !cuts.contains(&c) {
@@ -763,8 +804,12 @@ mod tests {
 
     #[test]
     fn move_mixed_hunk_stays_ordinary() {
-        // v1 never does surgical line removal: a hunk mixing the moved
-        // item with an edited line stays ordinary (T432).
+        // WI-6 slice 2: a cut sharing its section with an untouched
+        // plus-virtual half vetoes — the insertion anchor inside the
+        // cut's claimed range is unorderable, so the minus-side mixed
+        // shape (moved item + adjacent edit, one `-U0` hunk) stays
+        // ordinary. Plus-side adjacency across sections is unaffected
+        // (see move_adjacent_caller_edit_fires_via_virtual_split).
         let big = big_fn("big");
         let mut a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
         a_minus.push_str("-fn edited() {}\n+fn edited2() {}\n");
@@ -1770,5 +1815,76 @@ mod tests {
         ]);
         let mut used = Vec::new();
         assert!(try_move_sweep(&[a, b], &pre, &mut used).is_none());
+    }
+
+    #[test]
+    fn move_adjacent_caller_edit_fires_via_virtual_split() {
+        // WI-6 slice 2: the moved item pasted directly above an edited
+        // one-line caller merges into one mixed `-U0` hunk (no unchanged
+        // line separates insertion from edit). The virtual minus/plus
+        // split lets the existing gates fire the move; the edited caller
+        // rides ordinary leftovers around the paste.
+        let foo = big_fn("foo");
+        let bar = big_fn("bar");
+        let a_minus: String = foo.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let mut b_body = String::from("-fn caller() { let r = foo(1); }\n");
+        for l in bar.lines() {
+            b_body.push_str(&format!("+{l}\n"));
+        }
+        b_body.push_str("+fn caller() { let r = bar(1); }\n");
+        let n = bar.lines().count() + 1;
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,{n} @@\n{b_body}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{foo}")),
+            ("b.rs", "fn caller() { let r = foo(1); }\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            try_move_sweep(&[a, b], &pre, &mut used).expect("adjacent move must fire via split");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved header, got:\n{text}"
+        );
+        assert!(
+            text.contains("-fn caller() { let r = foo(1); }"),
+            "caller minus rides leftover, got:\n{text}"
+        );
+        assert!(
+            text.contains("+fn caller() { let r = bar(1); }"),
+            "caller plus rides leftover, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn move_untouched_mixed_hunk_reemits_verbatim() {
+        // WI-6 slice 2: a move fires in a.rs→b.rs while c.rs holds an
+        // unrelated mixed edit hunk (sub-item lines, no whole items).
+        // The untouched mixed hunk re-emits byte-verbatim — the virtual
+        // halves never materialise in output.
+        let big = big_fn("big");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,42 +2,0 @@\n{a_minus}");
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,42 @@\n{b_plus}");
+        let c = "diff --git c.rs\n--- a/c.rs\n+++ b/c.rs\n@@ -2,1 +2,1 @@\n-    foo(1);\n+    foo(2);\n"
+            .to_string();
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{big}")),
+            ("b.rs", "use x;\n"),
+            ("c.rs", "fn keep() {\n    foo(1);\n}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b, c], &pre, &mut used).expect("move must fire");
+        let text = out.join("");
+        assert!(
+            text.contains("@@ -2,1 +2,1 @@\n-    foo(1);\n+    foo(2);\n"),
+            "untouched mixed hunk must re-emit verbatim, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 }
