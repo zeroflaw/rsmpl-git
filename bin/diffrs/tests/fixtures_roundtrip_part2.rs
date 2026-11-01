@@ -787,6 +787,60 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             !semantic.contains("rule="),
             "body veto must stay wholly ordinary, got: {semantic}"
         );
+    } else if name == "120-fn-joint-arg-add-fires" {
+        // WI-4b B1: rename+param-add with uniform arg-adding calls
+        // raises to the shared-rule two-hunk composition (def hunk +
+        // call-template hunk, no follow); the re-apply is byte-identical
+        // (harness asserts).
+        assert!(
+            semantic.matches("rule=r1").count() >= 2,
+            "both hunks share one rule, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("# follow=uses"),
+            "no follow in a joint, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn bar(x: i32, y: i32) { ... }"),
+            "def plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ bar(E0, 0)"),
+            "call template plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "121-fn-joint-attr-fires" {
+        // WI-4b B2: rename+attr-add with callee-only calls raises to
+        // the shared-rule two-hunk composition (def hunk carrying the
+        // attr line + call-template hunk); the re-apply is
+        // byte-identical (harness asserts).
+        assert!(
+            semantic.matches("rule=r1").count() >= 2,
+            "both hunks share one rule, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("# follow=uses"),
+            "no follow in a joint, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ #[must_use]"),
+            "attr line must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ bar(E0)"),
+            "call template plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "116-assoc-rename-fires" {
         // WI-28 + WI-3: trait decl + 2 impl decls + `::Item` use tails
         // sharing one delta compress to the single trait follow hunk

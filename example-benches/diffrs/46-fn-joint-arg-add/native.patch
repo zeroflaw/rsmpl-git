@@ -1,0 +1,11 @@
+diff --git a/src.rs b/src.rs
+--- a/src.rs
++++ b/src.rs
+@@ -1 +1 @@
+-fn foo(x: i32) {
++fn bar(x: i32, y: i32) {
+@@ -5,2 +5,2 @@ fn m() {
+-    foo(1);
+-    foo(2);
++    bar(1, 0);
++    bar(2, 0);

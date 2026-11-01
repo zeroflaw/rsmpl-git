@@ -2249,18 +2249,24 @@ Example (add visibility, generics, and a return type in one hunk, params and bod
 #### Raised joints (`fn_joint`)
 
 `diffrs` raises a rename+evolution joint as one intent (SPEC D.4):
-exactly one column-0 `fn` definition renamed while its params or
-return slot evolves, joined with its call-callee uses in the same
-file, emits the single header-pair hunk with `# sweep` +
-`# follow=uses` carrying both deltas. The authored spelling is the
-same pair an agent would write by hand (explicit slots, `{ ... }`
-body). Fire requires callee-only calls; anything else in the joint
-shape (body/attr delta, arg-delta calls, vis/qual/generics/where
-delta) suppresses the old callee name for the file, so the section
-stays wholly ordinary — the fragmented fallback (ordinary definition
-plus a rename-claiming call sweep) is unrepresentable by
-construction. Attr joints, arg-delta call compositions, and
-multi-file joints stay ordinary (future work).
+exactly one column-0 `fn` definition renamed while its header evolves,
+joined with its call-callee uses in the same file. Three shapes fire.
+Joint-A (rename+slot with callee-only calls) emits the single
+header-pair hunk with `# sweep` + `# follow=uses` carrying both
+deltas. Joint-B1 (rename+param-add with uniform arg-adding calls) and
+Joint-B2 (rename+attr add/remove with uniform callee-only calls) emit
+two hunks under one shared rule — the def hunk (header pair rebuilt
+from native lines, attr line on its own `+`/`-` line for B2) plus the
+call-template hunk (`- foo(E0)` / `+ bar(E0, 0)`) — with `# sweep` and
+no follow (a follow would claim the call hunk's sites and the lowering
+would refuse the overlap). The authored spelling is the same pair an
+agent would write by hand (explicit slots, `{ ... }` body). Anything
+else in the joint shape (body delta, hetero call shapes, vis/qual/
+generics/where delta, twin defs, N=1 joints) suppresses the old callee
+name for the file, so the section stays wholly ordinary — the
+fragmented fallback (ordinary definition plus a rename-claiming call
+sweep) is unrepresentable by construction. Multi-file joints stay
+ordinary (future work).
 
 #### Slot removal
 
@@ -7441,9 +7447,29 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   calls, vis/qual/generics/where delta, twin defs, probe or byte-win
   fail) suppresses its old callee name for the file, so the call
   hunks stay wholly ordinary instead of emitting a rename-claiming
-  sweep over a definition delta they cannot see. Out of scope (stays
-  ordinary): multi-file groups, attr-joint raising, and arg-delta
-  call compositions (two-hunk shared-rule form, future work).
+  sweep over a definition delta they cannot see.
+- Joint-B composition raising (WI-4b, detector `fn_joint`): the two
+  vetoed classes above that compose under one probe raise as two
+  hunks under one shared rule with `# sweep` and no follow. B1
+  (rename+param-add): the def hunk is exactly the header pair (name
+  delta, params evolve, return preserved, vis closed-set and
+  preserved, qual/generics/where preserved) and every call pair
+  anti-unifies to one uniform arg-add template (N≥2, equal
+  qualifier/turbofish, token-identical E-prefix, one shared concrete
+  trailing suffix: `- foo(E0)` / `+ bar(E0, 0)`). B2 (rename+attr):
+  the def hunk is exactly one header pair with a name delta plus one
+  `#[…]` attr add/remove (all other header slots preserved) and every
+  call pair is a uniform callee-only site (N≥2, one arity/qualifier/
+  turbofish). The whole-composition scratch-apply probe is
+  authoritative (for B2 a splice-aware probe: the attr insertion
+  shifts lines); each fired shape also clears the byte-win guard, and
+  N=1 joints suppress (the unique-single detector would re-harvest
+  the call-template hunk and fragment the intent — pinned). The
+  composed report is `partial` with the def hunk's orphans naming
+  exactly the sibling call sites (sibling-covered by construction —
+  the agent's next action is the sibling hunk under the same rule).
+  Out of scope (stays ordinary): multi-file groups, return-plus-
+  arg-add doubles, slot-plus-attr doubles, and hetero call shapes.
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
   decline — there is no file to join) joined with N-1 same-delta
@@ -9017,7 +9043,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(118), all example benches (32 applyrs, 45 diffrs), plus the history_e2e pins. Out of scope
+(120), all example benches (32 applyrs, 46 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

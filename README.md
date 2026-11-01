@@ -217,6 +217,7 @@ context would be larger, so these are lower bounds.)
 | 43-compact-frame (3 one-line-fn call sites + 3 one-line-fn operator sites + 3 match-arm call sites across 3 files, 3 subterm hunks) | 711 B / 30 ln | 254 B / 15 ln | 64% |
 | 44-cross-file-fn-rename (fn def + `use` tail + 2 call sites across 2 files, 1 hunk with `# follow=uses`, WI-2) | 326 B / 17 ln | 75 B / 6 ln | 77% |
 | 45-fn-joint-rename (rename+return-type joint: fn def + 2 call sites, 1 hunk with `# follow=uses`, WI-4a) | 194 B / 11 ln | 123 B / 6 ln | 37% |
+| 46-fn-joint-arg-add (rename+param-add joint: fn def + 2 arg-adding call sites, 2 hunks under one shared rule, WI-4b) | 194 B / 11 ln | 153 B / 9 ln | 21% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic
