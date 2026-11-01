@@ -531,15 +531,156 @@ pub(crate) fn try_method_arg_template_sweep(
     Some(hunk)
 }
 
+/// Single-pair anti-unification (WI-7 slice-6): one minus/plus arg
+/// vector pair of uniform arity `k ≥ 1` yields a template arg pair with
+/// holes on every token-equal position and a wrapper on exactly one
+/// differing position, or `None` (stays ordinary). Within-pair rule: a
+/// position token-equal across minus/plus binds hole `E{i}`; the single
+/// differing position must be a structural wrap via `wrapper_tpl`
+/// (same vocabulary as the multi — no new template language, no
+/// substring surgery). At N=1 the multi's cross-site uniformity gates
+/// are vacuous, so exactly the shapes `wrapper_tpl` proves from one
+/// pair fire (method-receiver and reference wraps); bare-call, binary,
+/// and method-arg wraps need cross-site evidence and stay ordinary.
+/// Zero wraps (callee/perm territory), two wraps, pure concrete deltas
+/// (`1` → `2`, literal territory), and permuted holes all veto, as do
+/// macro/unsupported args (multi precedent).
+fn antiunify_call_args_single(
+    minus_args: &[syn::Expr],
+    plus_args: &[syn::Expr],
+) -> Option<(Vec<String>, Vec<String>)> {
+    if minus_args.len() != plus_args.len() || minus_args.is_empty() {
+        return None;
+    }
+    for arg in minus_args.iter().chain(plus_args.iter()) {
+        let probe = super::shape::probe_expr(arg);
+        if probe.macros > 0 || probe.unsupported > 0 {
+            return None;
+        }
+    }
+    let mut minus_tpl = Vec::with_capacity(minus_args.len());
+    let mut plus_tpl = Vec::with_capacity(plus_args.len());
+    let mut wraps = 0usize;
+    for (i, (m, p)) in minus_args.iter().zip(plus_args.iter()).enumerate() {
+        if tok(m) == tok(p) {
+            minus_tpl.push(format!("E{i}"));
+            plus_tpl.push(format!("E{i}"));
+            continue;
+        }
+        let w = wrapper_tpl(
+            std::slice::from_ref(m),
+            std::slice::from_ref(p),
+            &format!("E{i}"),
+        )?;
+        minus_tpl.push(format!("E{i}"));
+        plus_tpl.push(w);
+        wraps += 1;
+    }
+    if wraps != 1 || minus_tpl == plus_tpl {
+        return None;
+    }
+    Some((minus_tpl, plus_tpl))
+}
+
+/// WI-7 slice-6: bare-call arg-template wrap single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair parses (whole-line or the
+/// shared T449 `let`-init entry — the emission stays the bare-call
+/// pattern and the engine rewrites the call sub-expression in place)
+/// as one same-callee call whose args anti-unify to exactly one wrap
+/// plus holes, a pre-image is present (`None` vetoes — uniqueness needs
+/// the whole file, D3), and `template_pair_holds` proves exactly one
+/// site file-wide with zero opaque hits (conditions (a)+(b); (c) is
+/// structural: the callee token plus the wrapper anchor beyond the
+/// holes). The T361 byte-compare pre-reservation
+/// (`single_reproduces`, shared with the general-expr singles) vetoes
+/// any TokenStream spacing drift. Emission is the WI-19b allow-one
+/// spelling (tight range, directive-free, default `allow=one`).
+/// Detector name `call_arg_template` (same family, provenance
+/// unchanged).
+pub(crate) fn try_call_arg_template_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    let (o_cal, n_cal, o_args, n_args) = parse_bare_pair(minuses[0], pluses[0])?;
+    // Callee deltas stay with the slice-1 single.
+    if o_cal != n_cal {
+        return None;
+    }
+    let (m_tpl, p_tpl) = antiunify_call_args_single(&o_args, &n_args)?;
+    // WI-7b: uppercase same callee rides backticks (literal), else it
+    // infers as an `expr` hole and over-matches.
+    let lit = super::shape::literal_callee(&o_cal);
+    let minus_call = format!("{lit}({})", m_tpl.join(", "));
+    let plus_call = format!("{lit}({})", p_tpl.join(", "));
+    // Defensive: both sides must re-parse as calls (the totality probe
+    // re-checks, but a non-parsing template must never leave this core).
+    if syn::parse_str::<syn::Expr>(&minus_call).is_err()
+        || syn::parse_str::<syn::Expr>(&plus_call).is_err()
+    {
+        return None;
+    }
+    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
+        return None;
+    }
+    if !super::general_expr::single_reproduces(
+        path,
+        pre,
+        changed[0],
+        minuses[0],
+        pluses[0],
+        &minus_call,
+        &plus_call,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "call_arg_template");
+    // Allow-one: directive-free ranged hunk (slices-1-5 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
+    Some(hunk)
+}
+
 #[cfg(test)]
 mod tests {
     use super::antiunify_call_args;
+    use std::collections::HashMap;
 
     fn exprs(texts: &[&str]) -> Vec<syn::Expr> {
         texts
             .iter()
             .map(|t| syn::parse_str::<syn::Expr>(t).expect("test expr must parse"))
             .collect()
+    }
+
+    fn section(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n{body}")
+    }
+
+    fn pre_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn validated_live(patch: &str, pre: &HashMap<String, String>) {
+        let parsed = rsmpl_patch::parse_patch(patch).expect("emitted patch must parse");
+        let mut files = pre.clone();
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("emitted patch must apply cleanly");
     }
 
     #[test]
@@ -616,5 +757,223 @@ mod tests {
         assert_eq!(super::count_hole("E0.clone()", "E0"), 1);
         assert_eq!(super::count_hole("E10", "E1"), 0);
         assert_eq!(super::count_hole("E1, E0", "E0"), 1);
+    }
+
+    fn single(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+        super::try_call_arg_template_single(
+            &[minus],
+            &[plus],
+            "f.rs",
+            pre,
+            changed,
+            &mut Vec::new(),
+        )
+    }
+
+    #[test]
+    fn wi7_arg_template_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-6: unique single `use_it(x)` -> `use_it(x.clone())`
+        // raises to an allow-one hunk and real-applies byte-identical.
+        let pre = "fn use_it(x: i32) -> i32 { x }\nfn a(x: i32) -> i32 {\n    use_it(x)\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -3 +3 @@\n-    use_it(x)\n+    use_it(x.clone())\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique wrap single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(E0.clone())\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn use_it(x: i32) -> i32 { x }\nfn a(x: i32) -> i32 {\n    use_it(x.clone())\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_let_init_fires_and_round_trips() {
+        // The shared T449 entry unwraps `let` inits: the emission stays
+        // the bare-call pattern and the engine rewrites the call
+        // sub-expression in place (pattern/type ride the site wrapper).
+        let pre = "fn m() {\n    let a = use_it(x);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let a = use_it(x);\n+    let a = use_it(x.clone());\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique let-init wrap single must fire");
+        assert!(out.contains("- use_it(E0)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(E0.clone())\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let a = use_it(x.clone());\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_twin_vetoes() {
+        // An untouched same-callee same-arity twin matches the minus
+        // pattern (2 != 1) and vetoes.
+        let pre = "fn m() {\n    use_it(x);\n    use_it(y);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(x.clone());\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_different_arity_twin_keeps_firing() {
+        // Totality keys on callee + arity: a different-arity twin never
+        // matches the minus pattern and never vetoes.
+        let pre = "fn m() {\n    use_it(x);\n    use_it(x, y);\n}\n";
+        assert!(
+            single("    use_it(x);", "    use_it(x.clone());", Some(pre), &[2]).is_some(),
+            "different-arity twin must not veto"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3).
+        assert!(
+            single("    use_it(x);", "    use_it(x.clone());", None, &[2]).is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_zero_wrap_vetoes() {
+        // Pure concrete delta (`1` -> `2`) is literal territory, never a
+        // wrap single (disjoint by construction).
+        assert!(
+            single(
+                "    check(a, 1);",
+                "    check(a, 2);",
+                Some("fn m() {\n    check(a, 1);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "concrete delta must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_two_wrap_vetoes() {
+        // Two wraps need a two-hole template — future work, never
+        // guessed at N=1.
+        assert!(
+            single(
+                "    f(a, b);",
+                "    f(a.clone(), b.clone());",
+                Some("fn m() {\n    f(a, b);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "two wraps must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_perm_vetoes() {
+        // Permuted holes (`swap(a, b)` -> `swap(b, a)`) are the perm
+        // domain, never a wrap single.
+        assert!(
+            single(
+                "    swap(a, b);",
+                "    swap(b, a);",
+                Some("fn m() {\n    swap(a, b);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "perm must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_callee_delta_declines() {
+        // Callee deltas stay with the slice-1 single.
+        assert!(
+            single(
+                "    foo(1);",
+                "    bar(1);",
+                Some("fn m() {\n    foo(1);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "callee delta must decline here"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_subline_declines() {
+        // A wrap buried in a larger line (`use_it(a) + other(b)`) never
+        // parses as a bare call — sub-line shapes stay ordinary.
+        assert!(
+            single(
+                "    use_it(a) + other(b);",
+                "    use_it(a.clone()) + other(b);",
+                Some("fn m() {\n    use_it(a) + other(b);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "sub-line wrap must decline"
+        );
+    }
+
+    #[test]
+    fn wi7_arg_template_single_reference_wrap_fires() {
+        // Reference wraps ride the same core (`x` -> `&x`).
+        let out = single(
+            "    f(x);",
+            "    f(&x);",
+            Some("fn m() {\n    f(x);\n}\n"),
+            &[2],
+        )
+        .expect("reference wrap single must fire");
+        assert!(out.contains("- f(E0)\n"), "got: {out}");
+        assert!(out.contains("+ f(&E0)\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        let pre_map = pre_map(&[("f.rs", "fn m() {\n    f(x);\n}\n")]);
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi7_arg_template_single_macro_arg_vetoes() {
+        // Macro-hiding args never raise: the engine cannot match
+        // TokenStream-normalized macro text.
+        assert!(
+            single(
+                "    f(m!(x));",
+                "    f(m!(x).clone());",
+                Some("fn m() {\n    f(m!(x));\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro arg must veto"
+        );
     }
 }

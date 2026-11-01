@@ -708,7 +708,9 @@ fn antiunify_general_expr_single(minus: &syn::Expr, plus: &syn::Expr) -> Option<
 /// probe mirrors the real emission shape (tight original range,
 /// directive-free allow-one) under a scratch id, so reservation via
 /// `unique_rule` happens only for emissions that reproduce.
-fn single_reproduces(
+/// `pub(crate)` so the WI-7 slice-6 arg-template single reuses the same
+/// byte gate (one probe, two callers — no mirrored duplicate).
+pub(crate) fn single_reproduces(
     path: &str,
     pre: &str,
     line_no: usize,
