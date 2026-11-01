@@ -326,24 +326,52 @@ pub fn general_orphans(
 /// (D5 split; re-exported here so existing paths keep working).
 pub use crate::use_graph_local_follow::let_binder_follow_edits;
 
-/// Lines of macros whose string literals capture `{old}` inline
-/// (`println!("{old}")`, `{old:?}`). `collect_orphans` sees only
-/// `Ident` tokens; format captures live inside `Literal`s.
-pub(crate) fn format_capture_lines(parsed: &syn::File, old: &str) -> Vec<u32> {
+/// Byte-precise spans of inline `{old}` captures: `(line, byte_offset)`
+/// of the capturing literal. The line is the literal's own line (not
+/// the macro start line), so multi-line macros attribute to the line
+/// holding the capture; the offset lets callers gate on the enclosing
+/// block byte-precisely instead of by line start. Unmappable spans fall
+/// back to the macro start line with `usize::MAX` offset (callers keep
+/// them — safe downgrade direction). `original`/`index` map spans to
+/// bytes; pass `("", empty_index)` for line-only callers.
+pub(crate) fn format_capture_spans(
+    parsed: &syn::File,
+    old: &str,
+    original: &str,
+    index: &crate::lines::LineIndex,
+) -> Vec<(u32, usize)> {
     use syn::visit::{self, Visit};
     struct Finder<'a> {
         old: &'a str,
-        lines: Vec<u32>,
+        original: &'a str,
+        index: &'a crate::lines::LineIndex,
+        out: Vec<(u32, usize)>,
     }
     impl Finder<'_> {
-        fn scan_tokens(&mut self, tokens: &proc_macro2::TokenStream, line: u32) {
+        fn scan_tokens(&mut self, tokens: &proc_macro2::TokenStream, fallback_line: u32) {
             for t in tokens.clone() {
                 match t {
-                    proc_macro2::TokenTree::Group(g) => self.scan_tokens(&g.stream(), line),
+                    proc_macro2::TokenTree::Group(g) => {
+                        self.scan_tokens(&g.stream(), fallback_line)
+                    }
                     proc_macro2::TokenTree::Literal(lit)
                         if literal_captures(&lit.to_string(), self.old) =>
                     {
-                        self.lines.push(line);
+                        let sp = lit.span();
+                        match (
+                            self.index.offset(sp.start().line as u32, sp.start().column),
+                            self.index.offset(sp.end().line as u32, sp.end().column),
+                        ) {
+                            (Some(a), Some(b))
+                                if self.original.get(a..b).is_some()
+                                    || self.original.is_empty() =>
+                            {
+                                self.out.push((sp.start().line as u32, a));
+                            }
+                            _ => {
+                                self.out.push((fallback_line, usize::MAX));
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -360,12 +388,14 @@ pub(crate) fn format_capture_lines(parsed: &syn::File, old: &str) -> Vec<u32> {
     }
     let mut finder = Finder {
         old,
-        lines: Vec::new(),
+        original,
+        index,
+        out: Vec::new(),
     };
     finder.visit_file(parsed);
-    finder.lines.sort_unstable();
-    finder.lines.dedup();
-    finder.lines
+    finder.out.sort_unstable();
+    finder.out.dedup();
+    finder.out
 }
 
 /// True when a string-literal token text contains an inline `{old}`
@@ -608,8 +638,25 @@ mod tests {
     fn format_capture_line_found_in_macro() {
         let src = "fn f() {\n    let total = 1;\n    println!(\"{total}\");\n}\n";
         let parsed: syn::File = syn::parse_str(src).unwrap();
-        let lines = format_capture_lines(&parsed, "total");
-        assert_eq!(lines, vec![3]);
+        let index = crate::lines::LineIndex::new(src);
+        let spans = format_capture_spans(&parsed, "total", src, &index);
+        assert_eq!(spans.len(), 1, "got: {spans:?}");
+        assert_eq!(spans[0].0, 3, "got: {spans:?}");
+    }
+
+    #[test]
+    fn format_capture_spans_reports_literal_line_and_offset() {
+        // Multi-line macro: the macro starts on line 3 but the
+        // capturing literal lives on line 4 — attribution must point
+        // at the literal (byte-precise), not the macro start.
+        let src = "fn f() {\n    let total = 1;\n    println!(\n        \"{total}\"\n    );\n}\n";
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        let spans = format_capture_spans(&parsed, "total", src, &index);
+        assert_eq!(spans.len(), 1, "got: {spans:?}");
+        assert_eq!(spans[0].0, 4, "got: {spans:?}");
+        let lit_off = src.find("\"{total}\"").unwrap();
+        assert_eq!(spans[0].1, lit_off, "got: {spans:?}");
     }
 
     #[test]
@@ -982,6 +1029,53 @@ mod tests {
             "fn foo() {\n    let total = 1;\n}\nfn bar() {\n    println!(\"{}\", total);\n}\n";
         let orphans = orphans_for_src(other);
         assert!(orphans.is_empty(), "got: {orphans:?}");
+    }
+
+    #[test]
+    fn general_orphans_multiline_macro_capture_inside_block_kept() {
+        // Multi-line macro fully inside the block: the capture reports
+        // the literal line (4), not the macro start line (3).
+        let src =
+            "fn main() {\n    let total = 1;\n    println!(\n        \"{total}\"\n    );\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 4, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn general_orphans_multiline_macro_capture_outside_block_dropped() {
+        // Binder lives in `foo`; the multi-line capture lives in `bar`.
+        // Byte attribution drops it (no widening past the block).
+        let src = "fn foo() {\n    let total = 1;\n}\nfn bar() {\n    println!(\n        \"{total}\"\n    );\n}\n";
+        let orphans = orphans_for_src(src);
+        assert!(orphans.is_empty(), "got: {orphans:?}");
+    }
+
+    #[test]
+    fn general_orphans_multiline_opaque_ident_kept_at_start_line() {
+        // Multi-line `println!("{}", total)`: the `old` ident lives on
+        // line 5 but `collect_orphans` reports the macro start line (3).
+        // Sibling-line scan keeps the legacy start line (failed mid-turn
+        // under a reported-line-only gate, which dropped this true
+        // orphan — unsafe direction).
+        let src = "fn main() {\n    let total = 1;\n    println!(\n        \"{}\",\n        total\n    );\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn general_orphans_prebinder_capture_on_binder_line_dropped() {
+        // Same-line pre-binder capture (`println!` before `let total`)
+        // shares the binder's line: line gates keep it, byte gates drop
+        // it (the literal sits before the binder).
+        let src = "fn main() {\n    println!(\"{total}\"); let total = 1;\n    println!(\"{total}\");\n}\n";
+        let orphans = orphans_for_src(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "macro-hidden");
     }
 
     // WI-2c: closure-param / match-arm binder evidence (orphans +

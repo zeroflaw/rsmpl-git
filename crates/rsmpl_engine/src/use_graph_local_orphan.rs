@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::edits::TextEdit;
 use crate::lines::{FileState, LineIndex};
-use crate::use_graph_local::{format_capture_lines, orphan_line_text};
+use crate::use_graph_local::{format_capture_spans, orphan_line_text};
 use crate::use_graph_orphan::collect_orphans;
 
 /// WI-2a post-binder orphan scan for `let`-binder renames (same file
@@ -516,27 +516,157 @@ pub(crate) fn let_binder_orphans(
     // Inline format-string captures (`println!("{total}")`) hide the
     // ident inside a string literal — no `Ident` token for the path
     // collector above. Pre-binder macros never dangle, so only
-    // post-binder capture lines inside the enclosing block are kept
-    // (safe direction: downgrade).
-    for line in format_capture_lines(parsed, old) {
-        if line < thresh_line {
-            continue;
-        }
-        if !line_in_scope(line) {
-            continue;
+    // post-binder captures inside the enclosing block are kept
+    // (safe direction: downgrade). Byte-precise: the literal's own
+    // offset (not the macro start line) gates block membership, so a
+    // multi-line macro straddling the boundary attributes correctly.
+    // Unmappable spans (`usize::MAX`) keep the legacy line gate.
+    let capture_spans = format_capture_spans(parsed, old, original, index);
+    let mut capture_off_by_line: std::collections::HashMap<u32, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (line, off) in &capture_spans {
+        capture_off_by_line.entry(*line).or_default().push(*off);
+    }
+    for (line, off) in &capture_spans {
+        if *off == usize::MAX {
+            if *line < thresh_line {
+                continue;
+            }
+            if !line_in_scope(*line) {
+                continue;
+            }
+        } else {
+            if *off < thresh {
+                continue;
+            }
+            if !in_enc(*off) || in_nested(*off) {
+                continue;
+            }
         }
         out.push(crate::OrphanReport {
             file: path.to_string(),
-            line,
-            text: orphan_line_text(original, index, line),
+            line: *line,
+            text: orphan_line_text(original, index, *line),
             reason: "macro-hidden".to_string(),
         });
     }
+    // Byte offsets of `old` idents on `line` that sit inside a macro
+    // invocation (opaque Ident case, e.g. `println!("{}", total)` split
+    // across lines). Non-empty means the line truly holds a post-binder
+    // in-block macro use — not just a macro start line.
+    let macro_ident_offsets = |line: u32| -> Vec<usize> {
+        let mut found = Vec::new();
+        let Some(ls) = index.line_start(line) else {
+            return vec![usize::MAX];
+        };
+        let le = index.line_start(line + 1).unwrap_or(original.len());
+        let Some(line_text) = original.get(ls..le.min(original.len())) else {
+            return vec![usize::MAX];
+        };
+        let mut off = 0;
+        while let Some(pos) = line_text[off..].find(old) {
+            let a = ls + off + pos;
+            let b = a + old.len();
+            let prev_ok = a == 0 || {
+                let c = original[..a].chars().next_back().unwrap();
+                !(c.is_alphanumeric() || c == '_')
+            };
+            let next_ok = original
+                .get(b..)
+                .map(|r| {
+                    r.chars()
+                        .next()
+                        .map(|c| !(c.is_alphanumeric() || c == '_'))
+                        .unwrap_or(true)
+                })
+                .unwrap_or(true);
+            if prev_ok
+                && next_ok
+                && a >= thresh
+                && in_enc(a)
+                && !renamed.iter().any(|(s, e)| a < *e && *s < b)
+                && !in_nested(a)
+                && in_macro(a)
+                && !is_pat_def(a)
+            {
+                found.push(a);
+            }
+            off += pos + 1;
+            if off >= line_text.len() {
+                break;
+            }
+        }
+        found
+    };
+    // Macros by start line: `collect_orphans` reports the macro start
+    // line while the `old` ident may live on a later line of the same
+    // multi-line invocation. Sibling-line scan keeps the legacy start
+    // line (no line-number change) while gating on the ident bytes.
+    let mut macros_by_start: std::collections::HashMap<u32, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    for r in &gate.macros {
+        macros_by_start
+            .entry(index.line_of(r.0))
+            .or_default()
+            .push(*r);
+    }
+    let macro_invocation_has_claimable = |start_line: u32| -> bool {
+        let Some(ranges) = macros_by_start.get(&start_line) else {
+            return false;
+        };
+        for (a, b) in ranges {
+            if *b <= *a {
+                continue;
+            }
+            let first = index.line_of(*a);
+            let last = index.line_of(b.saturating_sub(1));
+            for line in first..=last {
+                if !macro_ident_offsets(line).is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    };
     out.retain(|o| {
         if o.line < thresh_line {
             return false;
         }
         if o.reason == "macro-hidden" {
+            // Format-capture lines carry exact literal offsets: any
+            // in-block post-binder literal keeps the line (byte gate
+            // already passed at push; re-check here for lines that
+            // arrived via `collect_orphans` sharing the same line).
+            if let Some(offs) = capture_off_by_line.get(&o.line) {
+                if offs
+                    .iter()
+                    .any(|a| *a == usize::MAX || (*a >= thresh && in_enc(*a) && !in_nested(*a)))
+                {
+                    return true;
+                }
+            }
+            // Otherwise (opaque Ident case): keep when the reported
+            // line or any sibling line of the same macro invocation
+            // holds a post-binder in-block macro ident, so a
+            // multi-line macro starting in-block but naming `old`
+            // out-of-block (or vice versa) attributes by bytes
+            // without dropping a true orphan whose ident sits on a
+            // later line than the reported start line.
+            if !macro_ident_offsets(o.line).is_empty() {
+                return true;
+            }
+            if macro_invocation_has_claimable(o.line) {
+                return true;
+            }
+            // A macro starts on this line but holds no qualifying
+            // ident anywhere in its span: the start-line report names
+            // an out-of-scope use — drop it.
+            if macros_by_start.contains_key(&o.line) {
+                return false;
+            }
+            // No macro starts here (attribute/`qself`/unmappable-span
+            // opacity the byte scan cannot see): legacy line gate
+            // decides (safe direction, matches prior behaviour).
             return line_in_scope(o.line);
         }
         // `off-target`: keep only when a post-binder in-scope ident
