@@ -326,7 +326,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "11-method-to-function",
-        "t375: single m2f re-infers ordinary",
+        "WI-7 slice-3: single-site m2f re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "12-stmt-rewrite",
@@ -449,7 +449,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "78-method-to-function",
-        "t375: single-site m2f re-infers ordinary",
+        "WI-7 slice-3: single-site m2f re-infers as allow-one precision single (sweep-vs-single canonically distinct until WI-8 site-set equality)",
     ),
     (
         "79-general-expr-single",

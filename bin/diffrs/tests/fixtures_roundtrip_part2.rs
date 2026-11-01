@@ -24,11 +24,14 @@ fn native_to_semantic_to_native_round_trip_part2() {
 
 fn pins_late(name: &str, native_input: &str, semantic: &str) {
     if name == "45-single-m2f-stays-ordinary" {
-        // T483: single method-to-function site veto full-cycle miniature --
-        // one `a.old_method(1);` -> `new_function(a, 1);` line costs more
-        // as a semantic hunk than the one ordinary hunk it replaces, so
-        // no rule= hunks: pure ordinary passthrough. Veto side of
-        // fixture 14 (3-site calls_old_method_to_new_function fire).
+        // T483 + WI-7 slice-3: single method-to-function rename veto
+        // miniature -- one `a.old_method(1);` -> `new_function(a, 1);`
+        // line with an untouched `b.old_method(9);` twin stays ordinary
+        // via `method_holds` totality (2 sites vs 1 diff pair). Unique
+        // singles now fire as allow-one precision singles (see
+        // `methods::tests::wi7_m2f_*`); this fixture pins the twin veto,
+        // veto side of fixture 14 (3-site calls_old_method_to_new_function
+        // fire).
         assert!(
             !semantic.contains("rule="),
             "single m2f edit must stay ordinary, got: {semantic}"

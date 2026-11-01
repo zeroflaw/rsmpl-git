@@ -364,6 +364,55 @@ pub(crate) fn try_method_single(
     Some(hunk)
 }
 
+/// WI-7 slice-3: whole-line method-to-function single (N=1) under
+/// `PrecisionUnique`. Fires iff the pair parses whole-line as
+/// `recv.old(args)` -> `new_fn(recv, args)` with a receiver-prepend
+/// delta, a pre-image is present (`None` vetoes - uniqueness needs the
+/// whole file, D3), and `method_holds` proves exactly one
+/// `old_method/arity` site file-wide with zero opaque hits (conditions
+/// (a)+(b); (c) is structural: the template carries both the method
+/// ident and the function callee beyond the `Receiver`/`E` holes).
+/// Emission is the WI-19b allow-one spelling (tight range,
+/// directive-free, default `allow=one`).
+pub(crate) fn try_method_to_fn_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    file_old?;
+    let (old_method, new_func, arity) = parse_method_to_fn_pair(minuses[0], pluses[0])?;
+    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
+    let mut vars = Vec::with_capacity(arity);
+    for i in 0..arity {
+        vars.push(format!("E{i}"));
+    }
+    let args = vars.join(", ");
+    let tail = if args.is_empty() {
+        "Receiver".to_string()
+    } else {
+        format!("Receiver, {args}")
+    };
+    // Allow-one: directive-free ranged hunk (slices-1/2 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!(
+        "- Receiver.{old}({args})\n+ {new}({tail})\n",
+        old = super::shape::literal_callee(&old_method),
+        new = super::shape::literal_callee(&new_func),
+    ));
+    Some(hunk)
+}
+
 /// Shared emission for the whole-line and sub-line method→method paths
 /// (identical hunks).
 fn emit_method_to_method(
@@ -1486,5 +1535,111 @@ mod tests {
                 .expect("uppercase single must fire");
         assert!(out.contains("- Receiver.`Old`(E0)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.`New`(E0)\n"), "got: {out}");
+    }
+    #[test]
+    fn wi7_m2f_single_unique_fires_allow_one_and_round_trips() {
+        // WI-7 slice-3: unique single `a.old(1)` -> `new_fn(a, 1)`
+        // raises to an allow-one hunk and real-applies byte-identical.
+        let pre = "fn m() {\n    a.old(1);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    a.old(1);\n+    new_fn(a, 1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique m2f single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(!out.contains("# sweep"), "ranged single, no sweep: {out}");
+        assert!(out.contains("- Receiver.old(E0)\n"), "got: {out}");
+        assert!(out.contains("+ new_fn(Receiver, E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    new_fn(a, 1);\n}\n");
+    }
+
+    #[test]
+    fn wi7_m2f_single_twin_vetoes() {
+        // An untouched same-method twin anywhere vetoes (totality).
+        let pre = "fn m() {\n    a.old(1);\n    b.old(9);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    a.old(1);\n+    new_fn(a, 1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "twin must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_m2f_single_different_arity_twin_keeps_firing() {
+        // Totality keys on method+arity: a different-arity twin never
+        // matches the emitted pattern and never vetoes.
+        let pre = "fn m() {\n    a.old(1);\n    b.old(1, 2);\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    a.old(1);\n+    new_fn(a, 1);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("different-arity twin must not veto");
+        assert!(out.contains("- Receiver.old(E0)\n"), "got: {out}");
+        assert!(out.contains("+ new_fn(Receiver, E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi7_m2f_single_no_pre_image_vetoes() {
+        // No whole-file evidence -> no guessing (D3).
+        assert!(
+            super::try_method_to_fn_single(
+                &["    a.old(1);"],
+                &["    new_fn(a, 1);"],
+                "f.rs",
+                None,
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi7_m2f_single_zero_arity_fires() {
+        // Receiver-prepend with no args: the tail is the bare receiver.
+        let pre = "fn m() {\n    a.old();\n}\n";
+        let raw = section("f.rs", "@@ -2 +2 @@\n-    a.old();\n+    new_fn(a);\n");
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("zero-arity m2f single must fire");
+        assert!(out.contains("- Receiver.old()\n"), "got: {out}");
+        assert!(out.contains("+ new_fn(Receiver)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    new_fn(a);\n}\n");
+    }
+
+    #[test]
+    fn wi7_m2f_single_uppercase_fires_literal() {
+        // Uppercase method/fn idents ride backticks (literal), else the
+        // engine would infer them as `expr` holes. Detector-level: the
+        // precision guard prices bytes, the template proves the sites.
+        let out = super::try_method_to_fn_single(
+            &["    a.Old(first);"],
+            &["    New(a, first);"],
+            "f.rs",
+            Some("fn m() {\n    a.Old(first);\n}\n"),
+            &[2],
+            &mut Vec::new(),
+        )
+        .expect("uppercase m2f single must fire");
+        assert!(out.contains("- Receiver.`Old`(E0)\n"), "got: {out}");
+        assert!(out.contains("+ `New`(Receiver, E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
+        let mut files = pre_map(&[("f.rs", "fn m() {\n    a.Old(first);\n}\n")]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    New(a, first);\n}\n");
     }
 }
