@@ -391,6 +391,9 @@ mod tests {
     /// WI-18 follow-up slice 6 moved the 8-site item-joint-template
     /// family in `matcher_item_joint.rs` to site-specific
     /// `item-joint-*-template` repairs (ceiling 58 -> 50).
+    /// WI-18 follow-up slice 7 moved the 4-site macro-template family
+    /// in `matcher_macro.rs` to site-specific `macro-*-template`
+    /// repairs (ceiling 50 -> 46).
     /// (`Match`/`Range`/`Parse`/`GitHunk`/`Build` or an unclassified
     /// code) fails naming file + line + code, because the filler does
     /// not cover those codes and a bare site there is a prose-only
@@ -399,7 +402,7 @@ mod tests {
     /// The companion runtime enumeration lives in
     /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
     /// patch per patch-input class); this test is the source gate.
-    const PATTERN_TAIL_CEILING: usize = 50;
+    const PATTERN_TAIL_CEILING: usize = 46;
 
     #[test]
     fn wi18_source_scan_every_site_carries_repair_or_allow_list() {

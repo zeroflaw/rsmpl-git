@@ -467,7 +467,11 @@ pub fn apply_macro_hunk(
             ErrorCode::PatternConflict,
             "`# macro=expanded` requires build integration (macro expansion span mapping), unavailable in v0.1",
         )
-        .with_rule(&rule));
+        .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "macro-expanded-template",
+            "v1 never expands macros: drop `# macro=expanded` (or author `# macro=token_tree` with `- NAME!(...)`; SPEC 21.5)",
+        )));
     }
     let (minus_raw, plus_raw) = match &compiled.kind {
         PatternKind::Expr {
@@ -492,7 +496,12 @@ pub fn apply_macro_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected macro pattern".to_string(),
-            ))
+            )
+            .with_rule(&rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "macro-dispatch-template",
+                "route only macro patterns here: `- M!(TT)` / `+ N!(TT)` with `# macro M` + `# token_tree TT` (or `- NAME!(...)` invocation shape); non-macro shapes belong to the call/general paths (SPEC 21)",
+            )))
         }
     };
 
@@ -510,6 +519,10 @@ pub fn apply_macro_hunk(
                 format!("v0.1 macro patterns must have `NAME!(...)` shape, got `{minus_raw}`"),
             )
             .with_rule(&rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "macro-name-shape-template",
+                "write the minus side as `NAME!(...)` / `NAME![...]` / `NAME!{...}` (e.g. `- old!(E, E)`), Bang shape with balanced delimiters; non-`!` shapes are call/general patterns, not macro patterns",
+            ))
         })?;
     let minus_name_pat = rsmpl_pattern::unmask_literal_spans(&minus_name_pat, &minus_sentinels);
     // The plus side may be macro-shaped (`new_name!(...)`) or a plain
@@ -552,7 +565,11 @@ pub fn apply_macro_hunk(
                         ErrorCode::PatternConflict,
                         "v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body",
                     )
-                    .with_rule(&rule));
+                    .with_rule(&rule)
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "macro-token-tree-body-template",
+                        "write each token-tree arg whole: `...`, one bare hole (`- old!(E)`), or concrete soup — never a hole inside a larger arg (`old!(foo(E))`); use an ordinary hunk for token-soup interiors (SPEC 21, T133)",
+                    )));
                 }
             }
         }
@@ -1102,5 +1119,123 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert_eq!(out.matches("my_vec![1, 3];").count(), 2, "got: {out}");
         assert!(!out.contains("my_vec!("), "got: {out}");
+    }
+
+    fn wi18_macro_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("macro patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_macro_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 7: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice7_expanded_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# macro=expanded\n- m!(...)\n+ n!(...)\n";
+        let (hunk, compiled, parsed, index, src) =
+            wi18_macro_setup(patch, "fn a() {\n    m!(x);\n}\n");
+        let mut edits = Vec::new();
+        let err = super::apply_macro_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("expanded mode must fail");
+        assert_eq!(
+            err.message,
+            "`# macro=expanded` requires build integration (macro expansion span mapping), unavailable in v0.1"
+        );
+        let (code, w) = wi18_macro_repair(&err);
+        assert_eq!(code, "macro-expanded-template");
+        assert!(w.contains("SPEC 21.5"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice7_dispatch_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# macro M\n# token_tree TT\n- M!(TT)\n+ new_macro!(TT)\n";
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_macro_setup(patch, "fn a() {\n    old!(1, 2);\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_macro_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected macro pattern");
+        let (code, w) = wi18_macro_repair(&err);
+        assert_eq!(code, "macro-dispatch-template");
+        assert!(w.contains("`- M!(TT)`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice7_name_shape_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# allow=many\n# macro M\n# token_tree TT\n- M!(TT)\n+ new_macro!(TT)\n";
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_macro_setup(patch, "fn a() {\n    old!(1, 2);\n}\n");
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::Macro { minus_raw, .. } => {
+                *minus_raw = "foo(E)".to_string();
+            }
+            _ => panic!("want macro kind"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_macro_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("non-Bang minus must fail");
+        assert!(
+            err.message
+                .starts_with("v0.1 macro patterns must have `NAME!(...)` shape, got `foo(E)`"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_macro_repair(&err);
+        assert_eq!(code, "macro-name-shape-template");
+        assert!(w.contains("`NAME!(...)`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice7_token_tree_body_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 @@ rule=x\n# lang=rust\n# macro=token_tree\n# expr E\n- old!(foo(E))\n+ new!(foo(E))\n";
+        let (hunk, compiled, parsed, index, src) =
+            wi18_macro_setup(patch, "fn a() {\n    old!(foo(1));\n}\n");
+        let mut edits = Vec::new();
+        let err = super::apply_macro_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("embedded hole must fail");
+        assert_eq!(
+            err.message,
+            "v0.1 `# macro=token_tree` supports only `NAME!(...)` with verbatim body"
+        );
+        let (code, w) = wi18_macro_repair(&err);
+        assert_eq!(code, "macro-token-tree-body-template");
+        assert!(w.contains("ordinary hunk"), "got: {w}");
     }
 }
