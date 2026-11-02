@@ -1,24 +1,27 @@
 # gitrs
 
-> Built for the Meta Global AI Developer Hackathon — an experiment in agentic, token-efficient refactoring.
+> Built for the Meta Global AI Developer Hackathon — an experiment in upgrading Git for an agentic future.
 
-Instead of agents manually deleting and adding large sections of code, `gitrs`
-provides an understandable semantic patching language for human and machine:
-name the file and range once, describe the change as a Rust-shaped pattern,
-and let the engine lower it to a concrete Git diff.
+`git` is a 21 year old technology used across the world for software development. 
+Today, AI agents can now write and refactor code at unprecedented speed, producing 
+massive `git` diffs that the original tooling was never intended for. These diffs can 
+span thousands of lines, making them nearly impossible for humans to review and expensive 
+for agents to generate and process. Much of that complexity is simply noise: they 
+describe every line that changed, rather than the intent behind the change.
 
-Combine SmPL (Semantic Patch Language), Git and Rust language semantics into
-an agent-centric tool for token-efficient code refactoring.
+`gitrs` takes a different approach, instead of agents manually deleting and adding 
+large sections of code, `gitrs` introduces a semantic patching language that lets 
+humans and machines describe what should change, without having to spell out every line 
+of how it changes. These semantic patches are then translated into native `git` patches, 
+preserving compatibility with `git` and leveraging its mature tooling.
 
-`gitrs apply` takes an **RSmPL-Git patch** (Git-like hunks plus Rust
-semantic rewrite hunks) and applies it to a repository by first lowering
-it to an ordinary Git patch, then running `git apply` (via the `applyrs`
-binary). `gitrs diff` compresses pending git changes into a semantic
-patch (via the `diffrs` binary). See `SPEC.md` for the full
-patch format (v0.1 notes mark the implemented subset). Agent? Start with
-`AGENTS.md` (one-page authoring reference, ~140 lines); `SPEC.md` is the
-full contract; `skills/gitrs/SKILL.md` is the tool-driven patch-first
-loop (read → author → check → apply).
+The scope of this research is intentionally limited to Rust, but the underlying concepts 
+are not language specific and could be extended to other programming languages.
+
+The design of `gitrs` focuses on familiarity. By combining the `git` diff format, 
+SmPL (Semantic Patch Language), used by Coccinelle in Linux kernel development, and 
+Rust's language semantics, `gitrs` produces compact, readable semantic diffs that both 
+humans and agents can understand.
 
 ## Install
 
