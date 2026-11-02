@@ -365,7 +365,11 @@ fn probe_tiered(
 
 /// Whole-balanced pair-chain entry: homogeneous single-line attr replace
 /// sections (bench 38's shape). Every pair must share one uniform delta
-/// with per-pair owners in one family; hetero names ride `N`.
+/// with per-pair owners in one family; hetero names ride `N`. N = 1
+/// singles fire through the chain whole-block single-pair arm (WI-14
+/// slice 5) under the precision guard — the probe below (`matches == 1`
+/// plus the byte-compare) is the uniqueness proof,
+/// `guard_for("attr_sweep")` stays Strict for the N ≥ 2 sweep.
 pub(crate) fn try_attr_replace_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -374,7 +378,7 @@ pub(crate) fn try_attr_replace_sweep(
     changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<(String, &'static str)> {
-    if minuses.len() != pluses.len() || minuses.len() < 2 {
+    if minuses.len() != pluses.len() || minuses.is_empty() {
         return None;
     }
     if changed.len() != minuses.len() {
@@ -430,6 +434,12 @@ pub(crate) fn try_attr_replace_sweep(
     }
     let lines = probe_tiered(path, pre, &ordinary, &class, &names, pairs.len())?;
     let rule = unique_rule(used_rules, "attr_sweep");
+    // N = 1 keeps the sweep dummy (whole-file search): the pattern spans
+    // the attr line plus the owner header, so no single-line range can
+    // anchor it — the ranged allow-one diet (perm_single precedent)
+    // does not apply to this family. The whole-block single-pair arm
+    // prices the full section (prelude included), which is where the
+    // concrete header fits the precision guard.
     let mut out = crate::emission_header(path, &rule, &[]);
     out.push_str(&lines);
     Some((out, "attr_sweep"))
@@ -791,20 +801,125 @@ mod tests {
     }
 
     #[test]
-    fn pair_chain_entry_vetoes_matrix() {
-        let pre = "#[derive(Debug)]\nstruct A {}\n#[derive(Debug)]\nstruct B {}\n";
-        // Singleton: N=1 never compresses.
+    fn pair_chain_entry_single_item_fires_and_round_trips() {
+        // WI-14 slice 5: the whole-balanced N=1 replace fires at the
+        // detector (probe `matches == 1` + byte-compare); the lib.rs
+        // single-pair wiring prices bytes under the precision guard.
+        let pre = "#[derive(Debug)]\nstruct S { x: i32 }\n";
         let mut used = Vec::new();
-        assert!(try_attr_replace_sweep(
+        let (out, detector) = try_attr_replace_sweep(
             &["#[derive(Debug)]"],
-            &["#[derive(Debug, Clone)]"],
+            &["#[derive(Clone)]"],
             "f.rs",
             Some(pre),
             &[1],
             &mut used,
         )
-        .is_none());
+        .expect("N=1 item replace must fire");
+        assert_eq!(detector, "attr_sweep");
+        // Concrete owner name — hetero `N` is impossible with one site.
+        // Sweep dummy (whole-file search): the pattern spans the attr
+        // line plus the owner header, so no single-line range anchors it.
+        assert!(out.contains("@@ -1,1 @@ rule=r1\n"), "got:\n{out}");
+        assert!(out.contains("# sweep\n"), "got:\n{out}");
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        assert!(out.contains("- #[derive(Debug)]\n"), "got:\n{out}");
+        assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
+        assert!(!out.contains("struct N"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "#[derive(Clone)]\nstruct S { x: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn pair_chain_entry_single_twin_vetoes() {
+        // A same-name twin matches the concrete header and vetoes
+        // (`matches == 2 != 1`) — the N=1 uniqueness proof failing loud
+        // (the section-entry `section_singleton_nested_same_name_twin_vetoes`
+        // pin's pair-chain twin).
+        let twin_pre = "mod m {\n    #[derive(Debug)]\n    pub struct S { x: i32 }\n}\n#[derive(Debug)]\nstruct S { y: i32 }\n";
+        let mut used = Vec::new();
+        assert!(
+            try_attr_replace_sweep(
+                &["#[derive(Debug)]"],
+                &["#[derive(Clone)]"],
+                "f.rs",
+                Some(twin_pre),
+                &[2],
+                &mut used,
+            )
+            .is_none(),
+            "same-name twin must veto the singleton"
+        );
         assert!(used.is_empty());
+    }
+
+    #[test]
+    fn pair_chain_entry_single_distinct_twin_does_not_veto() {
+        // A different-name twin never matches the concrete header, so it
+        // neither vetoes nor rewrites (untouched in both post-trees) —
+        // the concrete name scopes the claim to exactly one site (unlike
+        // the N ≥ 2 hetero `N`-hole, which would match the twin).
+        let pre = "#[derive(Debug)]\nstruct S { x: i32 }\n#[derive(Debug)]\nstruct T { y: i32 }\n";
+        let mut used = Vec::new();
+        let (out, detector) = try_attr_replace_sweep(
+            &["#[derive(Debug)]"],
+            &["#[derive(Clone)]"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            &mut used,
+        )
+        .expect("distinct-name twin must not veto the singleton");
+        assert_eq!(detector, "attr_sweep");
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "#[derive(Clone)]\nstruct S { x: i32 }\n#[derive(Debug)]\nstruct T { y: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn pair_chain_entry_single_fn_fires_at_detector_level() {
+        // The detector probe passes for fn owners too (exactly one
+        // match, byte-identical post-tree); what keeps fn singles
+        // ordinary downstream is the byte guard — the fixed `...`/`}`
+        // scaffold never fits `ordinary + 16` — never the probe. Pin
+        // the layer split so a future guard change cannot silently
+        // start rewriting fn attr sites. (Paren-free attrs only:
+        // `#[inline(always)]` re-renders `#[inline (always)]` and vetoes
+        // in the probe — an engine round-trip quirk, pinned ordinary.)
+        let pre = "#[inline]\nfn solo() {}\n";
+        let mut used = Vec::new();
+        let (out, detector) = try_attr_replace_sweep(
+            &["#[inline]"],
+            &["#[must_use]"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            &mut used,
+        )
+        .expect("fn singleton must pass the detector probe");
+        assert_eq!(detector, "attr_sweep");
+        assert!(out.contains("- fn solo(...) {"), "got:\n{out}");
+        assert_eq!(used, vec!["r1".to_string()]);
+    }
+
+    #[test]
+    fn pair_chain_entry_vetoes_matrix() {
+        let pre = "#[derive(Debug)]\nstruct A {}\n#[derive(Debug)]\nstruct B {}\n";
         // Hetero deltas decline (no template).
         let mut used = Vec::new();
         assert!(try_attr_replace_sweep(

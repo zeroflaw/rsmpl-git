@@ -879,6 +879,55 @@ pub(crate) fn compress_section(
                 used_rules.truncate(impl_checkpoint);
             }
         }
+        // WI-14 slice 5: whole-balanced attr-replace single under the
+        // precision guard (same posture as the four shapes above; the
+        // scratch-apply probe at n=1 plus the T361 byte-compare is the
+        // uniqueness proof). No `guard_for` assert: `attr_sweep` stays
+        // Strict for the N ≥ 2 sweep — only this n=1 arm prices proof
+        // over bytes (the call-single precedent). The sweep dummy
+        // survives (the pattern spans attr + header, so no single-line
+        // range anchors it); the full-section accounting (prelude
+        // included) is what fits the concrete header inside the guard.
+        let attr_checkpoint = used_rules.len();
+        if let Some((attr, detector)) =
+            super::try_attr_replace_sweep(&minuses, &pluses, path, file_old, &changed, used_rules)
+        {
+            debug_assert_eq!(detector, "attr_sweep");
+            if let Some(prelude) = &rename_prelude {
+                if let Some(final_text) = reheader_rename(&attr, prelude) {
+                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
+                        push_section_prov(
+                            prov,
+                            &final_text,
+                            section,
+                            path,
+                            detector,
+                            &changed,
+                            file_old,
+                            attr_checkpoint,
+                            used_rules,
+                        );
+                        return Some(final_text);
+                    }
+                }
+                used_rules.truncate(attr_checkpoint);
+            } else if attr.len() <= section.len() + super::PRECISION_GUARD {
+                push_section_prov(
+                    prov,
+                    &attr,
+                    section,
+                    path,
+                    detector,
+                    &changed,
+                    file_old,
+                    attr_checkpoint,
+                    used_rules,
+                );
+                return Some(attr);
+            } else {
+                used_rules.truncate(attr_checkpoint);
+            }
+        }
         return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
     }
     if !whole {

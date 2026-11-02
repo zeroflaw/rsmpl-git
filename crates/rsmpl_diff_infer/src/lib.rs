@@ -1825,4 +1825,45 @@ mod tests {
         assert!(body.contains("- fn alpha(...) {"), "got:\n{body}");
         assert!(body.contains("+ pub fn alpha(...) {"), "got:\n{body}");
     }
+
+    #[test]
+    fn e2e_whole_balanced_attr_replace_single_compresses() {
+        // WI-14 slice 5: the whole-balanced single-pair section raises
+        // through the chain whole-block single-pair arm (per-hunk
+        // accounting never fits the concrete header, so there is no
+        // per-hunk arm by construction), concrete name, ranged
+        // allow-one diet, byte-identical post-tree. The `---`/`+++`
+        // lines are the faithful native shape — the whole-block guard
+        // prices the full section, prelude included.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-#[derive(Debug)]\n+#[derive(Clone)]\n".to_string();
+        let pre = pre_map(&[("f.rs", "#[derive(Debug)]\nstruct S { x: i32 }\n")]);
+        let out = semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("whole-balanced attr single must compress end to end");
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
+        assert!(!out.contains("struct N"), "got:\n{out}");
+        assert!(out.contains("# sweep\n"), "sweep dummy survives: {out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "#[derive(Clone)]\nstruct S { x: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn e2e_whole_balanced_attr_replace_fn_single_stays_ordinary() {
+        // Fn-family N=1 attr singles pass the detector probe but lose
+        // on bytes (fixed `...`/`}` scaffold over a 1-line hunk):
+        // honest ordinary end to end, no rule burned anywhere.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-#[inline]\n+#[must_use]\n".to_string();
+        let pre = pre_map(&[("f.rs", "#[inline]\nfn solo() {}\n")]);
+        assert!(
+            semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+            "fn attr single must stay ordinary end to end"
+        );
+    }
 }

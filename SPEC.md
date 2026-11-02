@@ -7951,11 +7951,15 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   emitted hunk must apply to the pre-image with `matches == class
   size` and reproduce byte-identically the result of applying the
   claimed ordinary hunks (count equality alone can coincide wrongly).
-   Per-class T375 (each body beats its covered hunks); N = 1 fires
-   under the precision posture (`body <= ordinary + 16` — the
-   definition-shape guard, WI-19b doctrine: the concrete owner header
-   anchors the single site and the probe demands `matches == 1`, so
-   proof replaces bytes; Fn-family singles stay ordinary on bytes).
+    Per-class T375 (each body beats its covered hunks); N = 1 fires
+    under the precision posture (`body <= ordinary + 16` — the
+    definition-shape guard, WI-19b doctrine: the concrete owner header
+    anchors the single site and the probe demands `matches == 1`, so
+    proof replaces bytes; Fn-family singles stay ordinary on bytes).
+    The whole-balanced single-pair replace rides the chain whole-block
+    single-pair arm (same guard over the full section, prelude
+    included); the sweep dummy survives there (the pattern spans attr
+    + header, so no single-line range anchors it).
    A losing class declines alone, never vetoing a winning one.
    Detector name `attr_sweep`.
 - Definition-value evolution (WI-12 slice 1): one balanced pair
