@@ -128,6 +128,7 @@ pub(crate) fn try_subhunk_partition(
             &sites[i..i + 1],
             pair_native.len(),
             &mut scratch,
+            &mut Vec::new(),
         )
         .map(|(_, detector)| detector);
         keys.push(key);
@@ -186,6 +187,7 @@ pub(crate) fn try_subhunk_partition(
             run_changed,
             run_native.len() + title_len,
             used_rules,
+            &mut Vec::new(),
         ) {
             outcomes.push(Some(Claimed::Whole((body, detector, run_start))));
             continue;
@@ -230,6 +232,7 @@ pub(crate) fn try_subhunk_partition(
                 &sites[i..i + 1],
                 pair_native.len(),
                 used_rules,
+                &mut Vec::new(),
             ) {
                 Some((body, detector)) => bodies.push((body, detector, single_start)),
                 None => {
@@ -428,6 +431,7 @@ fn try_split_none_run(
             &sites[start..mid],
             left_native.len() + split_title_len,
             used_rules,
+            &mut Vec::new(),
         );
         let Some((left_body, left_detector)) = left else {
             continue;
@@ -442,6 +446,7 @@ fn try_split_none_run(
             &sites[mid..end],
             right_native.len() + split_title_len,
             used_rules,
+            &mut Vec::new(),
         );
         let Some((right_body, right_detector)) = right else {
             continue;

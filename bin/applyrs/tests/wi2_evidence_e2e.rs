@@ -69,7 +69,9 @@ fn binding_digest_equality_is_assertable_without_full_bytes() {
                 .unwrap_or(0) as usize
         })
         .sum();
-    let budget = 200 + 150 * f + 175 * r + 90 * s + 110 * c;
+    // WI-15 budget: totals keys ride `240·R` (+65/rule: three count
+    // keys ≈ 60 B) and `origin` rides `115·S` (+25/site: ≈ 21 B).
+    let budget = 200 + 150 * f + 240 * r + 115 * s + 110 * c;
     assert!(
         overhead <= budget,
         "overhead {overhead} B exceeds budget {budget} B (F={f} R={r} S={s} C={c}): {v}"

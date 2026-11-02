@@ -873,11 +873,13 @@ fn json_diff_max_lines_zero_omits_diff_but_keeps_stats_and_check() {
     );
     // WI-2b/2c v2: per-site `sites` evidence + `checked` envelope
     // (first-site `bindings` and `verified` removed with `version: 2`).
+    // WI-15d: each site carries `origin` (`authored` here — the patch
+    // spelled both edits).
     assert_eq!(
         v["rules"][0]["sites"],
         serde_json::json!([
-            {"span": [2, 2], "bindings": {"E": "1"}},
-            {"span": [3, 3], "bindings": {"E": "2"}}
+            {"span": [2, 2], "bindings": {"E": "1"}, "origin": "authored"},
+            {"span": [3, 3], "bindings": {"E": "2"}, "origin": "authored"}
         ]),
         "got: {v}"
     );

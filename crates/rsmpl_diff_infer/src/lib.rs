@@ -26,8 +26,17 @@
 //! semantic candidate falls back to the ordinary passthrough —
 //! never an unparseable patch.
 
+pub(crate) mod diff_text;
 pub mod semantic;
 pub(crate) mod totality;
+
+/// Native text helpers, re-exported at the crate root (D5 split) so
+/// `crate::b_side_path` and friends keep resolving with no call-site
+/// changes.
+pub(crate) use diff_text::{
+    b_side_path, collapse_git_headers, emission_body, emission_header, git_header,
+    strip_hunk_titles, strip_index_lines, strip_unpatchable_sections,
+};
 
 use std::collections::HashMap;
 
@@ -37,7 +46,7 @@ pub enum InferError {
     Unparseable(String),
 }
 
-pub use semantic::HunkProvenance;
+pub use semantic::{HunkDeclined, HunkProvenance};
 
 /// The v1 inference result: the RSmPL patch plus which binary paths
 /// were stripped (the binary reports them as `warning:` lines).
@@ -123,9 +132,11 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
         .map_err(|e| InferError::Unparseable(describe_parse_error(&e)))?;
     // Semantic compression first; any validation failure falls back
     // to the (already validated) ordinary passthrough. WI-2: provenance
-    // is collected alongside; the fallback paths report no hunks (their
-    // reservations were released by truncation, so no rule exists to
-    // prove). A candidate that fails validation likewise reports none.
+    // is collected alongside; the fallback paths report no semantic
+    // hunks (their reservations were released by truncation, so no rule
+    // exists to prove). A candidate that fails validation likewise
+    // reports none. WI-15c: the fallbacks DO report ordinary entries
+    // (wholly-ordinary sections explain themselves via `declined`).
     let mut prov = Vec::new();
     let candidate =
         semantic::infer_semantic_with_provenance(&kept, pre, &mut prov).unwrap_or_default();
@@ -134,7 +145,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             rsmpl: passthrough,
             stripped_binary: stripped,
             stripped_gitlink,
-            hunks: Vec::new(),
+            hunks: prov,
         });
     }
     match rsmpl_patch::parse_patch(&candidate) {
@@ -148,7 +159,13 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             rsmpl: passthrough,
             stripped_binary: stripped,
             stripped_gitlink,
-            hunks: Vec::new(),
+            // The candidate is discarded, so semantic entries (which
+            // describe hunks absent from the output) must go; ordinary
+            // entries describe passthrough sections verbatim and stay.
+            hunks: prov
+                .into_iter()
+                .filter(|h| h.detector == "ordinary")
+                .collect(),
         }),
     }
 }
@@ -160,271 +177,6 @@ fn describe_parse_error(e: &rsmpl_patch::ParseError) -> String {
     }
 }
 
-/// Lines of `s` without stripping trailing `\r` (`str::lines`
-/// drops it, corrupting CRLF file content — T385). The trailing empty
-/// segment of a `\n`-terminated input is dropped so callers re-append
-/// `\n` per line and round-trip byte-exact.
-fn raw_lines(s: &str) -> Vec<&str> {
-    if s.is_empty() {
-        return Vec::new();
-    }
-    let mut v: Vec<&str> = s.split('\n').collect();
-    if s.ends_with('\n') {
-        v.pop();
-    }
-    v
-}
-
-/// Split `raw` into `diff --git` sections; drop sections holding a
-/// `Binary files … differ` line, binary-content `+`/`-` body lines
-/// (T395), or a mode-160000 (gitlink/submodule) declaration. Returns
-/// (kept sections, stripped `b/`-side binary paths, stripped `b/`-side
-/// gitlink paths).
-fn strip_unpatchable_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let mut kept = Vec::new();
-    let mut stripped = Vec::new();
-    let mut stripped_gitlink = Vec::new();
-    // `raw` always ends sections with `\n` (git output); a missing
-    // trailing section is still flushed below.
-    let mut current = String::new();
-    let mut current_path: Option<String> = None;
-    let mut current_binary = false;
-    let mut current_gitlink = false;
-    let mut seen_any = false;
-    for line in raw_lines(raw) {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            if seen_any {
-                flush(
-                    &mut kept,
-                    &mut stripped,
-                    &mut stripped_gitlink,
-                    &mut current,
-                    &current_path,
-                    current_binary,
-                    current_gitlink,
-                );
-            }
-            seen_any = true;
-            current_binary = false;
-            current_gitlink = false;
-            current_path = b_side_path(rest);
-        } else if line.starts_with("Binary files ") {
-            current_binary = true;
-        } else if is_binary_body_line(line) {
-            // NUL body line: git's own binary definition. (T396: the
-            // T395 U+FFFD arm is gone — invalid-UTF-8 sections never
-            // reach infer as text because the source swaps them for
-            // `Binary` markers at the byte level, while genuine U+FFFD
-            // chars in valid-UTF-8 text pass through.)
-            current_binary = true;
-        } else if is_gitlink_mode_line(line) {
-            current_gitlink = true;
-        }
-        if seen_any {
-            current.push_str(line);
-            current.push('\n');
-        }
-    }
-    if seen_any {
-        flush(
-            &mut kept,
-            &mut stripped,
-            &mut stripped_gitlink,
-            &mut current,
-            &current_path,
-            current_binary,
-            current_gitlink,
-        );
-    }
-    (kept, stripped, stripped_gitlink)
-}
-
-/// A hunk body `+`/`-` line carrying binary content: NUL, git's own
-/// binary definition (T396: U+FFFD is genuine text — the source
-/// detects invalid UTF-8 at the byte level and sends markers, so
-/// valid-UTF-8 sections keep their U+FFFD chars here). `+++`/`---`
-/// file markers are excluded (paths never carry these signals).
-fn is_binary_body_line(line: &str) -> bool {
-    (line.starts_with('+') || line.starts_with('-'))
-        && !(line.starts_with("+++") || line.starts_with("---"))
-        && line.contains('\0')
-}
-
-/// A mode line declaring a gitlink (mode 160000): submodule add
-/// (`new file mode`), delete (`deleted file mode`), or bump (`old /
-/// `new mode`, `index … 160000`). Restricted to metadata prefixes —
-/// a content line mentioning 160000 (e.g. `+const X = 160000;`) must
-/// never strip its section.
-fn is_gitlink_mode_line(line: &str) -> bool {
-    (line.starts_with("new file mode ")
-        || line.starts_with("deleted file mode ")
-        || line.starts_with("old mode ")
-        || line.starts_with("new mode ")
-        || line.starts_with("index "))
-        && line.split_whitespace().any(|w| w == "160000")
-}
-
-fn flush(
-    kept: &mut Vec<String>,
-    stripped: &mut Vec<String>,
-    stripped_gitlink: &mut Vec<String>,
-    current: &mut String,
-    path: &Option<String>,
-    binary: bool,
-    gitlink: bool,
-) {
-    if binary {
-        if let Some(p) = path {
-            stripped.push(p.clone());
-        }
-    } else if gitlink {
-        if let Some(p) = path {
-            stripped_gitlink.push(p.clone());
-        }
-    } else {
-        kept.push(std::mem::take(current));
-        return;
-    }
-    current.clear();
-}
-
-pub(crate) fn b_side_path(rest: &str) -> Option<String> {
-    // Unquoted spaces rejoined via the shared splitter (T379); a
-    // single-path header yields that path.
-    rsmpl_patch::split_git_paths(rest).map(|parts| {
-        let side = parts.last().cloned().unwrap_or_default();
-        // T399: no `trim_matches('"')` — the splitter already strips
-        // only the outer C-quote pair, so edge quotes that belong to
-        // the filename survive (trimming corrupted `"lead`/trail"`).
-        side.strip_prefix("b/").unwrap_or(&side).to_string()
-    })
-}
-
-/// `diff --git` header line for `path` (T399): C-quote `"`, `\` +
-/// control slots via `quote_git_path` (native quotepath shape; plain
-/// paths stay raw), then the T381 single-path collapse. Plain
-/// `a/{p} b/{p}` interpolation mis-splits quote/backslash names.
-pub(crate) fn git_header(path: &str) -> String {
-    let raw = format!(
-        "diff --git {} {}",
-        rsmpl_patch::quote_git_path(&format!("a/{path}")),
-        rsmpl_patch::quote_git_path(&format!("b/{path}"))
-    );
-    rsmpl_patch::collapse_git_header(&raw)
-}
-
-/// WI-1b ranged-vs-sweep emission (SPEC D.4/D.5): `sites` are the
-/// 1-based old-side minus lines a detector class covers (the existing
-/// `totality::changed_old_lines` output, already threaded as `changed`).
-/// Empty (unparseable header), any `0` (new-file `@@ -0,0`), or a span
-/// (`max - min + 1`) over 64 lines emits the canonical sweep dummy
-/// `@@ -1,1 @@` + `# sweep`; otherwise the tight original range
-/// `@@ -min,span @@` + `# allow=many` (no `# scope=file`).
-pub(crate) fn emission_header(path: &str, rule: &str, sites: &[usize]) -> String {
-    let header = git_header(path);
-    if sites.is_empty() || sites.contains(&0) {
-        return format!("{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n");
-    }
-    let min = sites.iter().min().copied().unwrap_or(0);
-    let max = sites.iter().max().copied().unwrap_or(0);
-    if min < 1 {
-        return format!("{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n");
-    }
-    let span = max.saturating_sub(min).saturating_add(1);
-    if span <= 64 {
-        format!("{header}\n@@ -{min},{span} @@ rule={rule}\n# allow=many\n")
-    } else {
-        format!("{header}\n@@ -1,1 @@ rule={rule}\n# sweep\n")
-    }
-}
-
-/// WI-1b body-only variant for section drivers (`try_call_peel_section`,
-/// `try_call_literal_section`, `verbatim::try_verbatim_sweep`): the file
-/// header lives in the section prelude, so only the hunk header is
-/// emitted. Same ≤64 rule; overlapping groups are resolved by callers
-/// (disjoint ranged, else sweep).
-pub(crate) fn emission_body(rule: &str, sites: &[usize]) -> String {
-    if sites.is_empty() || sites.contains(&0) {
-        return format!("@@ -1,1 @@ rule={rule}\n# sweep\n");
-    }
-    let min = sites.iter().min().copied().unwrap_or(0);
-    let max = sites.iter().max().copied().unwrap_or(0);
-    if min < 1 {
-        return format!("@@ -1,1 @@ rule={rule}\n# sweep\n");
-    }
-    let span = max.saturating_sub(min).saturating_add(1);
-    if span <= 64 {
-        format!("@@ -{min},{span} @@ rule={rule}\n# allow=many\n")
-    } else {
-        format!("@@ -1,1 @@ rule={rule}\n# sweep\n")
-    }
-}
-/// Drop git's trailing `@@ … @@ <title>` section titles on
-/// two-sided (native ordinary) hunk headers.
-fn strip_hunk_titles(section: &str) -> String {
-    let mut out = String::new();
-    for line in raw_lines(section) {
-        if let Some(rest) = line.strip_prefix("@@") {
-            if let Some(end) = rest.find("@@") {
-                let ranges = &rest[..end];
-                if ranges.contains('-') && ranges.contains('+') {
-                    out.push_str("@@");
-                    out.push_str(ranges);
-                    out.push_str("@@\n");
-                    continue;
-                }
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-/// Drop git's per-file `index <sha>..<sha> <mode>` lines (T374):
-/// optional file metadata for `applyrs` (parsed, never lowered), so
-/// ordinary passthrough stays valid without them. Only the `index `
-/// prefix matches — `new/deleted file mode` and `old/new mode` lines
-/// are load-bearing and never touched.
-fn strip_index_lines(section: &str) -> String {
-    let mut out = String::new();
-    for line in raw_lines(section) {
-        if line.starts_with("index ") {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-/// Collapse the section's `diff --git` header to single-path (T381).
-/// Only the header line is rewritten (`---`/`+++` markers stay);
-/// rename, `/dev/null`, and quoted headers pass through via
-/// `rsmpl_patch::collapse_git_header`. Headers-only sections (mode
-/// flips, empty creates: no `---`/`+++` markers) keep two-path — bare
-/// `git apply` resolves filenames from the markers and fails on a
-/// collapsed single path without them (T393).
-fn collapse_git_headers(section: &str) -> String {
-    // T393: gate the collapse on marker presence. A headers-only
-    // section has no body lines, so a `--- `/`+++ ` hit can only come
-    // from real file markers; sections that already collapse today
-    // (hunks always ship markers) are unaffected.
-    let collapsible = raw_lines(section)
-        .iter()
-        .any(|l| l.starts_with("--- ") || l.starts_with("+++ "));
-    let mut out = String::new();
-    for line in raw_lines(section) {
-        if collapsible && line.starts_with("diff --git ") {
-            out.push_str(&rsmpl_patch::collapse_git_header(line));
-        } else {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
-    out
-}
-
 /// One balanced hunk through the shared detector chain (the per-hunk
 /// fallback's core): item rename for singles, else slot / method /
 /// strip / use-prefix / call sweeps in order. Detectors return full
@@ -432,7 +184,11 @@ fn collapse_git_headers(section: &str) -> String {
 /// ordinary hunk (the T375 per-hunk guard, prelude shared either way).
 /// WI-2: the winning detector family travels with the body for per-hunk
 /// provenance. `None` on any failure — reserved rule names are released,
-/// so later hunks keep tight names.
+/// so later hunks keep tight names. WI-15c: `declined` collects
+/// chain-level decline evidence for wholly-ordinary sections (composite
+/// drivers attribute at their own level; inner subhunk/verbatim retries
+/// pass a throwaway).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compress_balanced_pair_body(
     minuses: &[&str],
     pluses: &[&str],
@@ -441,7 +197,9 @@ pub(crate) fn compress_balanced_pair_body(
     changed: &[usize],
     hunk_len: usize,
     used_rules: &mut Vec<String>,
+    declined: &mut Vec<semantic::HunkDeclined>,
 ) -> Option<(String, &'static str)> {
+    use semantic::{attempt, declined_guard};
     if minuses.len() != pluses.len() || minuses.is_empty() {
         return None;
     }
@@ -452,127 +210,163 @@ pub(crate) fn compress_balanced_pair_body(
     // singles stay ordinary (T375) except whole-arg permutation (WI-6
     // slice 2 posture).
     if minuses.len() == 1 {
-        if let Some((evo, detector)) = semantic::try_definition_evolution_sweep(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some((evo, detector)) = attempt(
+            declined,
+            "definition_evolution",
+            semantic::try_definition_evolution_sweep(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = evo.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), detector));
             }
+            declined_guard(declined, detector, "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-1: whole-line bare-call single under the precision
         // guard (`body <= hunk + 16`; uniqueness proved by `call_holds`
         // at n=1, `guard_for("call_sweep")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_call_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "call_sweep",
+            semantic::try_call_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_sweep"));
             }
+            declined_guard(declined, "call_sweep", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-2: whole-line method-to-method single under the
         // precision guard (uniqueness proved by `method_holds` at n=1,
         // `guard_for("method_to_method")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_method_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "method_to_method",
+            semantic::try_method_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_to_method"));
             }
+            declined_guard(declined, "method_to_method", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-3: whole-line method-to-function single under the
         // precision guard (uniqueness proved by `method_holds` at n=1,
         // `guard_for("method_to_fn")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_method_to_fn_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "method_to_fn",
+            semantic::try_method_to_fn_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_to_fn"));
             }
+            declined_guard(declined, "method_to_fn", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slices 4-5: whole-line (slice-4) and `let`-init
         // (slice-5) general-expression singles under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("general_expr")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_general_expr_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "general_expr",
+            semantic::try_general_expr_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "general_expr"));
             }
+            declined_guard(declined, "general_expr", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-6: bare-call arg-template wrap single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("call_arg_template")` stays Strict for multis).
-        if let Some(single) = semantic::try_call_arg_template_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "call_arg_template",
+            semantic::try_call_arg_template_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_arg_template"));
             }
+            declined_guard(declined, "call_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-7: method-arg-template wrap single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("method_arg_template")` stays Strict for multis).
-        if let Some(single) = semantic::try_method_arg_template_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_arg_template",
+            semantic::try_method_arg_template_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_arg_template"));
             }
+            declined_guard(declined, "method_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-10: whole-line bare-call perm single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("call_arg_template")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_call_perm_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "call_arg_template",
+            semantic::try_call_perm_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_arg_template"));
             }
+            declined_guard(declined, "call_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-11: whole-line method perm single (whole-line +
         // `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("method_arg_template")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_method_perm_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "method_arg_template",
+            semantic::try_method_perm_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_arg_template"));
             }
+            declined_guard(declined, "method_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-12: bare-call trailing-literal single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `call_literal_holds` at n=1,
         // `guard_for("call_literal")` stays Strict for multis).
-        if let Some(single) =
-            semantic::try_call_literal_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "call_literal",
+            semantic::try_call_literal_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_literal"));
             }
+            declined_guard(declined, "call_literal", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-13: method same-literal single (whole-line
@@ -580,13 +374,18 @@ pub(crate) fn compress_balanced_pair_body(
         // the precision guard (uniqueness proved by
         // `method_literal_holds` at n=1 over the exact old-args tuple,
         // `guard_for("method_same_literal")` stays Strict for multis).
-        if let Some(single) = semantic::try_method_same_literal_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_same_literal",
+            semantic::try_method_same_literal_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_same_literal"));
             }
+            declined_guard(declined, "method_same_literal", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-14: sub-line bare-call single under the precision
@@ -594,13 +393,16 @@ pub(crate) fn compress_balanced_pair_body(
         // uniqueness proved by `template_expr_holds` at n=1 plus the
         // T361 byte-compare, `guard_for("call_sweep")` stays Strict for
         // multis).
-        if let Some(single) =
-            semantic::try_subline_call_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "call_sweep",
+            semantic::try_subline_call_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_sweep"));
             }
+            declined_guard(declined, "call_sweep", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-15: sub-line method-to-method single under the
@@ -608,13 +410,18 @@ pub(crate) fn compress_balanced_pair_body(
         // them; uniqueness proved by `template_expr_holds` at n=1 plus
         // the T361 byte-compare, `guard_for("method_to_method")` stays
         // Strict for multis).
-        if let Some(single) = semantic::try_subline_method_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_to_method",
+            semantic::try_subline_method_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_to_method"));
             }
+            declined_guard(declined, "method_to_method", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-16: sub-line method-to-function single under the
@@ -622,13 +429,18 @@ pub(crate) fn compress_balanced_pair_body(
         // them; uniqueness proved by `template_expr_holds` at n=1 plus
         // the T361 byte-compare, `guard_for("method_to_fn")` stays
         // Strict for multis).
-        if let Some(single) = semantic::try_subline_method_fn_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_to_fn",
+            semantic::try_subline_method_fn_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_to_fn"));
             }
+            declined_guard(declined, "method_to_fn", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-17: sub-line bare perm single under the precision
@@ -636,13 +448,16 @@ pub(crate) fn compress_balanced_pair_body(
         // uniqueness proved by `template_pair_holds` at n=1 plus the
         // T361 byte-compare, `guard_for("call_arg_template")` stays
         // Strict for multis).
-        if let Some(single) =
-            semantic::try_subline_perm_single(minuses, pluses, path, file_old, changed, used_rules)
-        {
+        if let Some(single) = attempt(
+            declined,
+            "call_arg_template",
+            semantic::try_subline_perm_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_arg_template"));
             }
+            declined_guard(declined, "call_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-18: sub-line method perm single under the precision
@@ -650,13 +465,18 @@ pub(crate) fn compress_balanced_pair_body(
         // uniqueness proved by `template_pair_holds` at n=1 plus the
         // T361 byte-compare, `guard_for("method_arg_template")` stays
         // Strict for multis).
-        if let Some(single) = semantic::try_subline_method_perm_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_arg_template",
+            semantic::try_subline_method_perm_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_arg_template"));
             }
+            declined_guard(declined, "method_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-19: sub-line general-expression single under the
@@ -664,13 +484,18 @@ pub(crate) fn compress_balanced_pair_body(
         // here — slices 4-5 own them; uniqueness proved by
         // `template_pair_holds` at n=1 plus the T361 byte-compare,
         // `guard_for("general_expr")` stays Strict for multis).
-        if let Some(single) = semantic::try_subline_general_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "general_expr",
+            semantic::try_subline_general_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "general_expr"));
             }
+            declined_guard(declined, "general_expr", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-22: sub-line method-arg-template wrap single under
@@ -683,13 +508,18 @@ pub(crate) fn compress_balanced_pair_body(
         // general arm above declines wraps by construction (Call /
         // MethodCall subterms are never general sites), and the literal
         // arms keep every pair the wrap core declines.
-        if let Some(single) = semantic::try_subline_method_wrap_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_arg_template",
+            semantic::try_subline_method_wrap_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_arg_template"));
             }
+            declined_guard(declined, "method_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-23: sub-line bare-arg-template wrap single under
@@ -703,13 +533,18 @@ pub(crate) fn compress_balanced_pair_body(
         // wraps by construction (Call / MethodCall subterms are never
         // general sites), and the literal arms keep every pair the wrap
         // core declines.
-        if let Some(single) = semantic::try_subline_bare_wrap_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "call_arg_template",
+            semantic::try_subline_bare_wrap_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_arg_template"));
             }
+            declined_guard(declined, "call_arg_template", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-20: sub-line bare trailing-literal single under
@@ -717,13 +552,18 @@ pub(crate) fn compress_balanced_pair_body(
         // decline here — slice-12 owns them; uniqueness proved by
         // `call_literal_holds` at n=1 plus the T361 byte-compare,
         // `guard_for("call_literal")` stays Strict for multis).
-        if let Some(single) = semantic::try_subline_literal_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "call_literal",
+            semantic::try_subline_literal_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "call_literal"));
             }
+            declined_guard(declined, "call_literal", "precision-guard");
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-21: sub-line method same-literal single under
@@ -732,13 +572,18 @@ pub(crate) fn compress_balanced_pair_body(
         // `method_literal_holds` at n=1 over the exact old-args tuple
         // plus the T361 byte-compare,
         // `guard_for("method_same_literal")` stays Strict for multis).
-        if let Some(single) = semantic::try_subline_method_literal_single(
-            minuses, pluses, path, file_old, changed, used_rules,
+        if let Some(single) = attempt(
+            declined,
+            "method_same_literal",
+            semantic::try_subline_method_literal_single(
+                minuses, pluses, path, file_old, changed, used_rules,
+            ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if body.len() <= hunk_len + semantic::PRECISION_GUARD {
                 return Some((body.to_string(), "method_same_literal"));
             }
+            declined_guard(declined, "method_same_literal", "precision-guard");
             used_rules.truncate(checkpoint);
         }
     }
@@ -750,24 +595,42 @@ pub(crate) fn compress_balanced_pair_body(
         // precision family past item-rename/definition-evolution to
         // slot/sig/header + def-only member/macro/assoc singles; WI-19c
         // adds self-ty `impl` header singles (scratch-apply probe).
-        semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules)
-            .map(|f| (f, "item_rename"))
-            .or_else(|| {
+        attempt(
+            declined,
+            "item_rename",
+            semantic::try_item_rename(minuses[0], pluses[0], path, file_old, changed, used_rules),
+        )
+        .map(|f| (f, "item_rename"))
+        .or_else(|| {
+            attempt(
+                declined,
+                "precision_definition_single",
                 semantic::try_precision_definition_single(
                     minuses, pluses, path, file_old, changed, used_rules,
-                )
-            })
-            .or_else(|| {
+                ),
+            )
+        })
+        .or_else(|| {
+            attempt(
+                declined,
+                "impl_header_single",
                 semantic::try_impl_header_single(
                     minuses, pluses, path, file_old, changed, used_rules,
-                )
-            })
-            .or_else(|| {
-                semantic::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules)
-                    .map(|f| (f, "call_arg_template"))
-            })
+                ),
+            )
+        })
+        .or_else(|| {
+            attempt(
+                declined,
+                "call_arg_template",
+                semantic::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules),
+            )
+            .map(|f| (f, "call_arg_template"))
+        })
     } else {
-        semantic::chain::run_pair_chain(minuses, pluses, path, file_old, changed, used_rules)
+        semantic::chain::run_pair_chain(
+            minuses, pluses, path, file_old, changed, used_rules, declined,
+        )
     };
     match full {
         Some((f, detector)) => {
@@ -804,6 +667,16 @@ pub(crate) fn compress_balanced_pair_body(
             if wins {
                 Some((body.to_string(), detector))
             } else {
+                // WI-15c: the candidate fired but the hunk guard priced
+                // it out — the guard owns the veto, not the shape.
+                let reason = if minuses.len() == 1
+                    && matches!(semantic::guard_for(detector), semantic::Guard::Precision)
+                {
+                    "precision-guard"
+                } else {
+                    "byte-guard"
+                };
+                declined_guard(declined, detector, reason);
                 used_rules.truncate(checkpoint);
                 None
             }
@@ -1801,6 +1674,7 @@ mod tests {
             &[2],
             pair_native.len(),
             &mut Vec::new(),
+            &mut Vec::new(),
         )
         .expect("method single must fire per-hunk at the method budget");
         assert_eq!(detector, "sig_evolution");
@@ -1826,6 +1700,7 @@ mod tests {
             Some(&pre),
             &[2],
             pair_native.len(),
+            &mut Vec::new(),
             &mut Vec::new(),
         )
         .expect("long-header method single must fire per-hunk per emission");
@@ -1865,6 +1740,7 @@ mod tests {
             Some(pre),
             &[2],
             pair_native.len(),
+            &mut Vec::new(),
             &mut Vec::new(),
         )
         .expect("short-header single must keep firing");
@@ -1914,6 +1790,7 @@ mod tests {
             Some(pre),
             &[1],
             pair_native.len(),
+            &mut Vec::new(),
             &mut Vec::new(),
         )
         .expect("free single must keep firing");

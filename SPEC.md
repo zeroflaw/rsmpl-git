@@ -6884,9 +6884,13 @@ prints one JSON object to stdout:
   `matches` = its file's rewritten use-site count with `spans.len() ==
   matches` there and no `sites`.
   Each entry carries `sites` when any site binds: one
-  `{span: [s, e], bindings: {...}}` per emitted edit in span order (so
-  `sites.len()` equals the number of binding sites, and each `span`
-  repeats the corresponding `spans` entry). Renames, insertions,
+  `{span: [s, e], bindings: {...}, origin}` per emitted edit in span
+  order (so `sites.len()` equals the number of binding sites, and each
+  `span` repeats the corresponding `spans` entry). `origin` is carried
+  provenance, never inferred from `semantics` (WI-15d): `"authored"`
+  when the patch spelled the edit, `"inferred"` when the follow
+  machinery added it (the parallel `span_labels` entry is `follow`;
+  rules without labels read `"authored"`). Renames, insertions,
   deletions, and use-prefix renames bind nothing and omit the key
   (an empty map plus a zero count carries no evidence). A
   `# follow=uses` hunk with skipped sites carries hunk-level (no span)
@@ -6902,10 +6906,13 @@ prints one JSON object to stdout:
   sha256}}` (`len` = full chars, `sha256` = hex of the full bytes;
   absent when nothing was cut), so cross-site binding equality is
   assertable without re-reading the file; `applyrs --bindings full`
-  (also via `gitrs apply`) lifts the 80-char cut for that run only
-  (no truncation, no meta keys — the token-expensive path), and any
-  other `--bindings` value is an `RSMPL_IO_CONFLICT` usage error.
-  Multi-edit rules whose spans carry slot evidence gain `span_edits`
+  (also via `gitrs apply`) lifts every cap for that run only — all
+  orphan entries and full texts, all site binding entries and full
+  values (no truncation, no meta keys — the token-expensive path) —
+  and any other `--bindings` value is an `RSMPL_IO_CONFLICT` usage
+  error. Display never affects the verdict: `checked.semantics`
+  reads pre-truncation engine counts, so default and `full` runs
+  report identical `semantics` (WI-15b). Multi-edit rules whose spans
   (parallel to `spans`: one of `generics`/`params`/`return`/`rename`/
    `follow` per slot, `null` for unlabeled slots; omitted for
    single-edit rules, so identical spans like three `[1,1]`s stay
@@ -6918,14 +6925,16 @@ prints one JSON object to stdout:
   hunk still shows its extra span before apply. Budget (bytes beyond
   the reported `diff` string, `--diff-max-lines 0`): fixed envelope
   ≈90 B (`checked` + keys) + ≈80 B per `files[]` entry (64-hex
-  `post_sha` dominates) + ≈135 B per `rules[]` entry (single-span,
-  no bindings; includes the `semantics` word) + ≈90 B per span (`[s,e]` plus per-site `{span,
-  bindings}` evidence — that growth is evidence, not overhead) + at most
-  8×83 B per binding site (80 chars plus the 3-byte `…` marker when cut)
-  + ≈110 B per cut value (the `binding_meta` digest; measured ≈91 B,
-  pinned at 110). Operational pin:
-  overhead ≤ `200 + 150·F + 175·R + 90·S + 110·C` bytes (`F` = files,
-  `R` = rules, `S` = total spans, `C` = cut values). There is deliberately no relative
+  `post_sha` dominates) + ≈200 B per `rules[]` entry (single-span,
+   no bindings; includes the `semantics` word and the WI-15a totals) + ≈110 B per span (`[s,e]` plus per-site `{span,
+   bindings, origin}` evidence — that growth is evidence, not overhead) + at most
+   8×83 B per binding site (80 chars plus the 3-byte `…` marker when cut)
+   + ≈110 B per cut value (the `binding_meta` digest; measured ≈91 B,
+   pinned at 110). Operational pin:
+   overhead ≤ `200 + 150·F + 240·R + 115·S + 110·C` bytes (`F` = files,
+   `R` = rules, `S` = total spans, `C` = cut values). The `240·R`
+   prices the three WI-15a totals keys (≈60 B) and `115·S` the
+   per-site `origin` (≈21 B). There is deliberately no relative
   % bound: a sub-KB report can exceed any % while staying within
   bytes, and a multi-KB report is where the pin applies.
 - `files` lists per-file `{path, added, removed, post_sha}` computed from
@@ -6963,11 +6972,14 @@ prints one JSON object to stdout:
   vocabulary: `off-target` for uses left behind, `macro-hidden` for
   opaque interiors) plus `orphans_truncated`
   when more than 8 lines name the old ident (each `text` truncated to
-  80 chars with a trailing `…` when cut; `--bindings full` lifts the cut
-  here too) plus `orphans_truncated_chars`
+  80 chars with a trailing `…` when cut; `--bindings full` lifts the
+  entry cap and the cut here too) plus `orphans_truncated_chars`
   counting cut texts (absent when zero); absent when no use names the
-   old ident. Carried unchanged from `version: 3` into `version: 4` (like the other per-rule
-  evidence keys; `version: 2` added them within v2).
+  old ident. The always-present WI-15a `orphans_total` counts the
+  pre-truncation engine total (shown plus `orphans_truncated`, or all
+  shown under `full`). Carried unchanged from `version: 3` into
+  `version: 4` (like the other per-rule evidence keys; `version: 2`
+  added them within v2).
 - `version` is the JSON report schema version (`4` = this contract:
   `checked.semantics` word (`verified`|`partial`), per-rule `semantics`
   words; `v3` added the `semantics` words and evidence keys over the v2
@@ -6977,7 +6989,9 @@ prints one JSON object to stdout:
   pin parsing on it; any future breaking JSON change bumps it
   (additive keys like `history`, `post_sha`, `sites_truncated`,
   `bindings_truncated_chars`, `follow_files`, `follow_source`,
-  `orphans`, `orphans_truncated`, `orphans_truncated_chars`
+  `orphans`, `orphans_truncated`, `orphans_truncated_chars`,
+  `orphans_total`, `follow_skipped_total`, `sites_total`, per-site
+  `origin`
   do not bump). All three binaries (`applyrs`, `diffrs`, `gitrs`
   dispatcher errors) take the number from the single
   `rsmpl_patch::REPORT_VERSION` constant — never per-binary literals —
@@ -7500,16 +7514,20 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
 object as `applyrs` (`code/rule/file/range/reason/suggestion/repair`
 via `StructuredError`, stdout-only with `--format json`, exit 2).
 Each `hunks` entry carries per-hunk
-provenance for one emitted semantic hunk (empty when fully ordinary):
+provenance for one emitted semantic hunk, plus one entry per
+wholly-ordinary section (WI-15c — the list is never bare `"hunks":
+[]` while sections went unexplained):
 `{rule, file, detector, sites, sites_exact, totality, proven,
-saved_bytes, group}`. `detector` is
+saved_bytes, group}` plus `declined` on ordinary entries only.
+`detector` is
 the firing detector family (`item_rename`, `fn_slot_sweep`,
 `method_to_fn`, `method_to_method`, `method_same_literal`,
 `method_arg_template`, `call_arg_template`, `general_expr`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
     `call_literal`, `call_peel`, `call_peel_section`,
-    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `fn_joint`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`). `sites` are
+    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `fn_joint`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`)
+or `"ordinary"` for wholly-ordinary sections (empty `rule`, `saved_bytes: 0`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
 nothing to cover, so their `sites_exact` is true). `sites_exact` is
@@ -7541,15 +7559,38 @@ each grouped hunk from its positional `rN` to the shared
 ungrouped sections never move). Per-group T375 re-basis: the shared
 name must cost strictly less than the group's `saved_bytes` sum, else
 that group falls back to positional `rN` names while keeping the
-`group` label. `version` is `4` — unified with `applyrs` via the
+`group` label. An ordinary entry carries `declined: [{detector,
+reason}]` — one per attempted detector family that declined, in chain
+order (deduped): pair-chain families individually
+(`item_rename`, `fn_slot_sweep`, …, `literal_frame`, including the
+per-hunk singles arms `precision_definition_single`,
+`impl_header_single`, `attr_replace_single` for dynamic-detector
+arms); composite drivers by driver name (`partition`, `partial`,
+`subhunk`, `call_peel`, `call_literal`, `macro_interior`,
+`macro_rule_body`, `macro_enclosing`, `attr_sweep`, `verbatim`,
+`delete`, `definition_addition`, `definition_addition_follow`,
+`variant_addition_follow`, `use_regroup`); section gates by gate name
+(`section` with `crlf-content` or `stranded-joint`). `reason` is chain-level — `no-match` (shape
+decline), `byte-guard` (strict-T375 veto after a candidate),
+`precision-guard` (precision-allowance veto after a candidate) —
+never detector-inferred: a detector-internal guard veto surfaces as
+`no-match`. Whole-patch pre-pass declines (moves, item/member/mod
+intents, cross-file intents) are patch-global and never attributed
+per-section; partially-compressed sections (semantic plus ordinary
+remainder) carry no ordinary entry — the remainder's declined list
+is WI-4 residue. Sections nothing tried (headers-only, non-`.rs`)
+stay silent passthrough, as do pre-pass-emitted sections with no
+native hunk (already semantic). `version` is `4` — unified with `applyrs` via the
 single `rsmpl_patch::REPORT_VERSION` constant (WI-20; `v2`/`v3`
 carried the same success keys with their own number while sharing the
 error object, `v1` with a hand-built error payload).
 Budget (bytes beyond `patch`):
 ≈100 B fixed + ≈165 B per `hunks[]` entry + ≈5 B per covered site
-(`sites` arrays grow with matches — evidence, not overhead).
-Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
-`T` = total sites). No relative % bound, same rationale as D.2.
+(`sites` arrays grow with matches — evidence, not overhead) +
+≈75 B per `declined` entry (fixed detector/reason vocabulary —
+evidence, not overhead).
+Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
+`T` = total sites, `D` = total `declined` entries). No relative % bound, same rationale as D.2.
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain

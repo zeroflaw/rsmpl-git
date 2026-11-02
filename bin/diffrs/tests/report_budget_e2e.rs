@@ -1,8 +1,10 @@
 //! WI-2d: absolute `diffrs --format json` hunks-budget pin.
 //!
-//! SPEC D.4 budget: bytes beyond `patch` ≤ `150 + 190·H + 10·T`
-//! (`H` = hunks, `T` = total sites). Multi-file fixture so the pin
-//! applies on a realistic report, not a toy single hunk.
+//! SPEC D.4 budget: bytes beyond `patch` ≤ `150 + 190·H + 10·T + 75·D`
+//! (`H` = hunks, `T` = total sites, `D` = total `declined` entries;
+//! WI-15 prices each declined entry at 75 B — fixed detector/reason
+//! vocabulary, the longest family names covered). Multi-file fixture
+//! so the pin applies on a realistic report, not a toy single hunk.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -103,11 +105,23 @@ fn json_hunks_within_absolute_budget() {
         .iter()
         .map(|e| e["sites"].as_array().map(|a| a.len()).unwrap_or(0))
         .sum();
+    // WI-15: `declined` arrays ride the `75·D` term (zero here — the
+    // fixture fully compresses, so ordinary entries never appear and
+    // the term is inert on this pin).
+    let d: usize = hunks
+        .iter()
+        .map(|e| {
+            e.get("declined")
+                .and_then(|a| a.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
+        .sum();
     let overhead = stdout.len() - patch.len();
-    let budget = 150 + 190 * h + 10 * t;
+    let budget = 150 + 190 * h + 10 * t + 75 * d;
     assert!(
         overhead <= budget,
-        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t}): {v}"
+        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
     );
     for e in hunks {
         assert!(e.get("rule").is_some(), "got: {v}");
@@ -118,4 +132,69 @@ fn json_hunks_within_absolute_budget() {
         assert!(e.get("sites_exact").is_some(), "got: {v}");
         assert!(e.get("saved_bytes").is_some(), "got: {v}");
     }
+}
+
+#[test]
+fn wi15_ordinary_section_names_declined_detectors() {
+    // WI-15 acceptance: a comment-only diff (no detector claims comment
+    // lines) reports one entry per wholly-ordinary section with
+    // `detector: "ordinary"` and the chain-level `declined` list —
+    // never `"hunks": []`. Semantic entries never carry `declined`.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    // hello\n    let x = 1;\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    // hello world\n    let x = 1;\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "got: {v}");
+    let e = &hunks[0];
+    assert_eq!(e["detector"], serde_json::json!("ordinary"), "got: {v}");
+    assert_eq!(e["rule"], serde_json::json!(""), "got: {v}");
+    assert_eq!(e["saved_bytes"], serde_json::json!(0), "got: {v}");
+    let declined = e["declined"].as_array().unwrap();
+    assert!(!declined.is_empty(), "got: {v}");
+    // Pair-chain families tried in chain order; every reason is
+    // chain-level (`no-match` shape decline here). A 1-pair whole
+    // section routes through the singles arms + per-hunk fallback, so
+    // the list names those families (whole-section multi-pair drivers
+    // never run on it — the routing, not a gap).
+    let names: Vec<&str> = declined
+        .iter()
+        .map(|d| d["detector"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"item_rename"), "got: {names:?}");
+    assert!(names.contains(&"call_sweep"), "got: {names:?}");
+    assert!(names.contains(&"delete"), "got: {names:?}");
+    assert!(names.contains(&"subhunk"), "got: {names:?}");
+    for d in declined {
+        assert_eq!(d["reason"], serde_json::json!("no-match"), "got: {d}");
+    }
+    // The ordinary entry still carries the covering site + totality.
+    assert_eq!(e["sites"], serde_json::json!([2]), "got: {v}");
+    assert_eq!(e["totality"], serde_json::json!("pre-image"), "got: {v}");
+    // WI-15 budget: the ordinary entry prices under the `75·D` term.
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let patch = v["patch"].as_str().unwrap();
+    let overhead = stdout.len() - patch.len();
+    let d = declined.len();
+    let budget = 150 + 190 + 10 + 75 * d;
+    assert!(
+        overhead <= budget,
+        "overhead {overhead} B exceeds budget {budget} B (D={d}): {v}"
+    );
 }

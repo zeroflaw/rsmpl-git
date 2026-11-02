@@ -338,13 +338,14 @@ fn json_report_shows_extra_span_of_over_broad_patch() {
     );
     // WI-2b/2c v2 per-site evidence in span order: the extra site is
     // visible with its own bindings before apply (first-site `bindings`
-    // removed with `version: 2`).
+    // removed with `version: 2`). WI-15d: each site carries `origin`
+    // (`authored` — the patch spelled all three edits).
     assert_eq!(
         v["rules"][0]["sites"],
         serde_json::json!([
-            {"span": [2, 2], "bindings": {"E": "1"}},
-            {"span": [3, 3], "bindings": {"E": "2"}},
-            {"span": [6, 6], "bindings": {"E": "3"}}
+            {"span": [2, 2], "bindings": {"E": "1"}, "origin": "authored"},
+            {"span": [3, 3], "bindings": {"E": "2"}, "origin": "authored"},
+            {"span": [6, 6], "bindings": {"E": "3"}, "origin": "authored"}
         ]),
         "got: {v}"
     );

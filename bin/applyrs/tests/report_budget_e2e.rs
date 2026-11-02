@@ -3,9 +3,10 @@
 //! Replaces the old "≤15% growth" relative bound (unachievable on sub-KB
 //! reports, never normative) with the SPEC D.2 absolute budget:
 //! overhead (bytes beyond the reported `diff`) ≤
-//! `200 + 150·F + 175·R + 90·S + 110·C` (WI-2: 20 B per span + ~70 B per
+//! `200 + 150·F + 240·R + 115·S + 110·C` (WI-2: 20 B per span + ~70 B per
 //! site evidence + ~91 B measured per cut `binding_meta` digest, pinned
-//! at 110). The fixture is deliberately multi-KB (12 files × 10 call
+//! at 110; WI-15: +65 per rule for the three totals keys, +25 per site
+//! for `origin`). The fixture is deliberately multi-KB (12 files × 10 call
 //! sites) so the pin applies where it matters; it carries zero cuts
 //! (C = 0 — short bindings), so digests add nothing here.
 
@@ -73,7 +74,7 @@ fn json_report_overhead_within_absolute_budget() {
                 .unwrap_or(0) as usize
         })
         .sum();
-    let budget = 200 + 150 * f + 175 * r + 90 * s + 110 * c;
+    let budget = 200 + 150 * f + 240 * r + 115 * s + 110 * c;
     assert!(
         overhead <= budget,
         "overhead {overhead} B exceeds budget {budget} B (F={f} R={r} S={s} C={c}): {v}"
@@ -166,4 +167,61 @@ fn json_bindings_truncate_and_omit_empty() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
     assert!(v["rules"][0].get("sites").is_none(), "got: {v}");
     assert!(v["rules"][0].get("sites_truncated").is_none(), "got: {v}");
+}
+
+#[test]
+fn wi15_totals_and_full_lift_with_stable_verdict() {
+    // WI-15 acceptance: a 12-orphan patch reports `orphans_total: 12`
+    // at the default budget and all 12 entries under `--bindings full`,
+    // with identical `checked.semantics` in both runs
+    // (display-independence).
+    let dir = init_repo();
+    let mut text = String::from("fn old() -> i32 { 1 }\nfn m() {\n");
+    for i in 0..12 {
+        text.push_str(&format!("    let v{i} = old();\n"));
+    }
+    text.push_str("}\n");
+    write(dir.path(), "src/lib.rs", &text);
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- fn old\n+ fn new\n";
+    let run = |extra: &[&str]| {
+        let out = run_stdin(dir.path(), patch, extra);
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&out.stdout))
+            .expect("stdout is JSON")
+    };
+    let v = run(&["--format", "json", "--check"]);
+    let r = &v["rules"][0];
+    assert_eq!(r["orphans_total"], serde_json::json!(12), "got: {v}");
+    assert_eq!(r["follow_skipped_total"], serde_json::json!(0), "got: {v}");
+    assert_eq!(r["sites_total"], serde_json::json!(0), "got: {v}");
+    assert_eq!(r["orphans"].as_array().unwrap().len(), 8, "got: {v}");
+    assert_eq!(r["orphans_truncated"], serde_json::json!(4), "got: {v}");
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    let f = run(&["--format", "json", "--check", "--bindings", "full"]);
+    let fr = &f["rules"][0];
+    assert_eq!(fr["orphans_total"], serde_json::json!(12), "got: {f}");
+    assert_eq!(fr["orphans"].as_array().unwrap().len(), 12, "got: {f}");
+    assert!(fr.get("orphans_truncated").is_none(), "got: {f}");
+    assert_eq!(
+        f["checked"]["semantics"], v["checked"]["semantics"],
+        "got: {f}"
+    );
+    // Text mode is byte-stable across budgets (totals ride the
+    // `(+N more)` tail, never new lines).
+    let text_of = |extra: &[&str]| {
+        let out = run_stdin(dir.path(), patch, extra);
+        String::from_utf8_lossy(&out.stderr).to_string()
+    };
+    assert_eq!(
+        text_of(&["--check"]),
+        text_of(&["--check", "--bindings", "full"])
+    );
 }

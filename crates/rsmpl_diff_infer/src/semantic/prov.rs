@@ -23,7 +23,11 @@
 /// single-hunk firings and the measured per-hunk win (covered ordinary
 /// hunk bytes minus emitted block bytes, saturating; anchor-only
 /// pastes report `0`) for multi-hunk rewrites. `proven` is true exactly
-/// when `totality` is `"pre-image"`.
+/// when `totality` is `"pre-image"`. WI-15c: wholly-ordinary sections
+/// carry `detector: "ordinary"` with an empty rule name and the
+/// chain-level `declined` list (which detector families were tried and
+/// why they declined); semantic hunks never carry `declined` (a firing
+/// section explains itself).
 #[derive(Debug, Clone, Default)]
 pub struct HunkProvenance {
     pub rule: String,
@@ -39,6 +43,56 @@ pub struct HunkProvenance {
     /// single-delta intent across files. Provenance-only (patch bytes
     /// stay canonical `r1…`); WI-7b owns the shared-`rule=` re-emission.
     pub group: String,
+    /// WI-15c declined-detector evidence for wholly-ordinary sections:
+    /// one entry per attempted detector family that declined, in chain
+    /// order (deduped). Empty on every semantic hunk.
+    pub declined: Vec<HunkDeclined>,
+}
+
+/// WI-15c one declined detector attempt: the family name the chain
+/// observed (pair-chain families individually; composite drivers by
+/// driver name; section gates by gate name) plus the chain-level reason
+/// (`no-match` shape decline, `byte-guard` strict-T375 veto after a
+/// candidate, `precision-guard` precision-allowance veto after a
+/// candidate, or a section-gate reason like `crlf-content`,
+/// `unbalanced-hunks`, `stranded-joint`). Detector-internal guard
+/// vetoes surface as `no-match` — reasons are chain-level, never
+/// detector-inferred (SPEC D.2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HunkDeclined {
+    pub detector: String,
+    pub reason: String,
+}
+
+/// WI-15c chain attempt recorder: `Some` passes through untouched;
+/// `None` records `(detector, "no-match")` and passes the `None` on.
+/// The name lives at the call site, so the list cannot drift from the
+/// chain order (no separate registry to sync).
+pub(crate) fn attempt<T>(
+    declined: &mut Vec<HunkDeclined>,
+    detector: &'static str,
+    r: Option<T>,
+) -> Option<T> {
+    if r.is_none() {
+        declined.push(HunkDeclined {
+            detector: detector.to_string(),
+            reason: "no-match".to_string(),
+        });
+    }
+    r
+}
+
+/// WI-15c chain guard-veto recorder: the detector fired but the
+/// section/hunk guard priced it out. Call at the veto branch only.
+pub(crate) fn declined_guard(
+    declined: &mut Vec<HunkDeclined>,
+    detector: &str,
+    reason: &'static str,
+) {
+    declined.push(HunkDeclined {
+        detector: detector.to_string(),
+        reason: reason.to_string(),
+    });
 }
 
 /// WI-2 totality label (SPEC D.2): `"pre-image"` when the section had
@@ -266,6 +320,7 @@ pub(crate) fn commit_prov(
             proven,
             saved_bytes,
             group: String::new(),
+            declined: Vec::new(),
         });
     }
 }
@@ -361,6 +416,112 @@ pub(crate) fn push_section_prov(
         changed,
         file_old,
     );
+}
+
+/// WI-15c: one provenance entry for a wholly-ordinary section. The
+/// caller passes the chain-attempt `declined` list (empty means nothing
+/// was tried — headers-only or non-`.rs` — so no entry is pushed).
+/// `changed` are the section's changed old-side lines (exact,
+/// header-derived, hence `sites_exact: true` either way); `saved_bytes`
+/// is `0` (nothing won); `totality`/`proven` follow the pre-image rule.
+/// Entries dedupe preserving first-seen chain order (one hunk's singles
+/// declining the same family five times reports it once). Sections with
+/// no native (`rule=`-free) hunk get no entry: pre-pass emissions (move
+/// / joint intents) are already semantic, and attributing chain declines
+/// to them would mislabel a compressed section as ordinary.
+pub(crate) fn push_ordinary_prov(
+    prov: &mut Vec<HunkProvenance>,
+    path: &str,
+    declined: &[HunkDeclined],
+    changed: &[usize],
+    file_old: Option<&str>,
+    section: &str,
+) {
+    if declined.is_empty() {
+        return;
+    }
+    if !has_native_hunk(section) {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for d in declined {
+        if seen.insert((d.detector.clone(), d.reason.clone())) {
+            deduped.push(d.clone());
+        }
+    }
+    prov.push(HunkProvenance {
+        rule: String::new(),
+        file: path.to_string(),
+        detector: "ordinary",
+        sites: changed.to_vec(),
+        sites_exact: true,
+        totality: totality_label(file_old),
+        proven: file_old.is_some(),
+        saved_bytes: 0,
+        group: String::new(),
+        declined: deduped,
+    });
+}
+
+/// WI-15c: true when `section` holds at least one native hunk (an `@@`
+/// header without `rule=`). Pre-pass emissions carry only `rule=` hunks;
+/// they never re-enter the chain, so chain declines misattribute them.
+pub(crate) fn has_native_hunk(section: &str) -> bool {
+    section
+        .lines()
+        .any(|l| l.starts_with("@@") && !l.contains("rule="))
+}
+
+/// WI-15c: per-section ordinary-entry driver for the `mod.rs` loop.
+/// Extracts the b-side path, skips headers that do not parse, and
+/// delegates to [`push_ordinary_prov`] (which owns the empty-list and
+/// no-native-hunk silences). Keeps the `mod.rs` loop delta to the call.
+pub(crate) fn push_ordinary_for_section(
+    prov: &mut Vec<HunkProvenance>,
+    section: &str,
+    declined: &[HunkDeclined],
+    pre: &std::collections::HashMap<String, String>,
+) {
+    if declined.is_empty() {
+        return;
+    }
+    let header = match section.lines().next() {
+        Some(h) => h,
+        None => return,
+    };
+    let rest = match header.strip_prefix("diff --git ") {
+        Some(r) => r,
+        None => return,
+    };
+    let path = match crate::b_side_path(rest) {
+        Some(p) => p,
+        None => return,
+    };
+    push_ordinary_prov(
+        prov,
+        &path,
+        declined,
+        &crate::totality::changed_old_lines(section),
+        pre.get(&path).map(String::as_str),
+        section,
+    );
+}
+
+/// WI-7a: swap a whole-section detector's collapsed `diff --git` header
+/// for the original rename prelude (byte-exact: `similarity index`,
+/// `rename from/to`, modes, `---`/`+++`). The detector body (from the
+/// first `@@`) is kept verbatim; `None` when the emission holds no
+/// hunk (defensive — detectors always emit one). Moved from `chain.rs`
+/// under the 2000-line gate (D5): pure move, no behavior change.
+pub(crate) fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
+    let at = semantic.find("@@")?;
+    let mut out = prelude.to_string();
+    out.push_str(&semantic[at..]);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
 }
 
 /// WI-3: shared whole-patch pre-pass epilogue for the single-def-shape
@@ -484,5 +645,97 @@ mod tests {
             (Some("r3".to_string()), 2, 7)
         );
         assert_eq!(parse_hunk_header("@@ -2,7 +1,0 @@\n"), (None, 2, 7));
+    }
+
+    fn declined(names: &[(&str, &str)]) -> Vec<HunkDeclined> {
+        names
+            .iter()
+            .map(|(d, r)| HunkDeclined {
+                detector: d.to_string(),
+                reason: r.to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn attempt_records_only_on_none() {
+        // WI-15c: the name lives at the call site — `Some` passes
+        // through untouched, `None` records `(detector, "no-match")`.
+        let mut v = Vec::new();
+        assert_eq!(attempt(&mut v, "call_sweep", Some(1)), Some(1));
+        assert!(v.is_empty());
+        assert_eq!(attempt(&mut v, "call_sweep", None::<i32>), None);
+        assert_eq!(v, declined(&[("call_sweep", "no-match")]), "got: {v:?}");
+    }
+
+    #[test]
+    fn ordinary_entry_dedupes_preserving_chain_order() {
+        // WI-15c: one hunk's singles declining the same family five
+        // times reports it once, first-seen order kept.
+        let mut prov = Vec::new();
+        push_ordinary_prov(
+            &mut prov,
+            "f.rs",
+            &declined(&[
+                ("call_sweep", "no-match"),
+                ("verbatim", "no-match"),
+                ("call_sweep", "no-match"),
+                ("call_sweep", "byte-guard"),
+            ]),
+            &[2],
+            Some("pre"),
+            "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@\n-    // hi\n+    // bye\n",
+        );
+        assert_eq!(prov.len(), 1, "got: {prov:?}");
+        let e = &prov[0];
+        assert_eq!(e.detector, "ordinary");
+        assert_eq!(e.rule, "");
+        assert_eq!(e.sites, vec![2]);
+        assert!(e.sites_exact);
+        assert!(e.proven);
+        assert_eq!(e.saved_bytes, 0);
+        assert_eq!(
+            e.declined,
+            declined(&[
+                ("call_sweep", "no-match"),
+                ("verbatim", "no-match"),
+                ("call_sweep", "byte-guard"),
+            ]),
+            "got: {:?}",
+            e.declined
+        );
+    }
+
+    #[test]
+    fn ordinary_entry_silences_untried_and_rule_only_sections() {
+        // WI-15c: empty declined (nothing tried — headers-only,
+        // non-`.rs`) and rule-only sections (pre-pass emissions,
+        // already semantic) both stay silent.
+        let mut prov = Vec::new();
+        push_ordinary_prov(
+            &mut prov,
+            "f.rs",
+            &[],
+            &[2],
+            Some("pre"),
+            "diff --git f.rs\n",
+        );
+        assert!(prov.is_empty());
+        push_ordinary_prov(
+            &mut prov,
+            "a.rs",
+            &declined(&[("delete", "no-match")]),
+            &[2, 3],
+            Some("pre"),
+            "diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,2 +2,2 @@ rule=r1\n-    old(E);\n+    new(E);\n",
+        );
+        assert!(prov.is_empty(), "got: {prov:?}");
+        // `has_native_hunk` gates mixed sections back in.
+        assert!(has_native_hunk(
+            "diff --git f.rs\n@@ -1,1 @@ rule=r1\n-x\n@@ -2,1 @@\n-y\n+z\n"
+        ));
+        assert!(!has_native_hunk(
+            "diff --git f.rs\nold mode 100644\nnew mode 100755\n"
+        ));
     }
 }

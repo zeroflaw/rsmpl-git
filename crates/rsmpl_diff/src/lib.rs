@@ -12,7 +12,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::process::Command;
 
-pub use rsmpl_diff_infer::{HunkProvenance, InferError, InferredPatch};
+pub use rsmpl_diff_infer::{HunkDeclined, HunkProvenance, InferError, InferredPatch};
 pub use rsmpl_diff_source::{CollectedDiff, GitSource, SourceError};
 
 #[derive(Debug, thiserror::Error)]

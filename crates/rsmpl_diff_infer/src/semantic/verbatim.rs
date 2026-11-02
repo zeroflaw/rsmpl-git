@@ -490,6 +490,7 @@ pub(crate) fn try_verbatim_sweep(
             &hunk_changed[i],
             hunk.len(),
             used_rules,
+            &mut Vec::new(),
         ) {
             if let Some(rule) = used_rules.last().cloned() {
                 fired.push((rule, detector));

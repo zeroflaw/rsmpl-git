@@ -8,23 +8,11 @@
 //! fallback. `mod.rs` keeps the facade (`infer_semantic*`), the item
 //! helpers, and the unit tests.
 
-use super::prov::{commit_prov, push_section_prov};
-use super::HunkProvenance;
-
-/// WI-7a: swap a whole-section detector's collapsed `diff --git` header
-/// for the original rename prelude (byte-exact: `similarity index`,
-/// `rename from/to`, modes, `---`/`+++`). The detector body (from the
-/// first `@@`) is kept verbatim; `None` when the emission holds no
-/// hunk (defensive — detectors always emit one).
-fn reheader_rename(semantic: &str, prelude: &str) -> Option<String> {
-    let at = semantic.find("@@")?;
-    let mut out = prelude.to_string();
-    out.push_str(&semantic[at..]);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    Some(out)
-}
+/// WI-8 pair partition driver, split to `partition.rs` under the
+/// 2000-line gate (D5): pure move, call sites unchanged.
+pub(crate) use super::partition::try_partition_section;
+use super::prov::{attempt, commit_prov, declined_guard, push_section_prov, reheader_rename};
+use super::{HunkDeclined, HunkProvenance};
 
 /// Ordered pair-sweep chain, tightest first (existing order,
 /// unchanged; WI-4a appends one shape at the end, WI-4b one more, WI-4c one more, WI-5 one more, WI-9 one more): slot → sig-evolution → header-evolution → trait-method → method-to-fn → method-to-method →
@@ -43,18 +31,23 @@ pub(crate) fn run_pair_chain(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
+    declined: &mut Vec<HunkDeclined>,
 ) -> Option<(String, &'static str)> {
     // WI-7b: `macro_rules!` definition + invocation rename (one def plus
     // N uses, hetero by construction) — before the slot sweep, which owns
     // homogeneous header classes and never claims a `macro_rules!` line.
-    if let Some(combined) =
-        super::try_macro_rules_rename(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(combined) = attempt(
+        declined,
+        "macro_rules_rename",
+        super::try_macro_rules_rename(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((combined, "macro_rules_rename"));
     }
-    if let Some(slot) =
-        super::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(slot) = attempt(
+        declined,
+        "fn_slot_sweep",
+        super::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((slot, "fn_slot_sweep"));
     }
     // WI-4c: signature evolution (name plus any vis/qual/generics/
@@ -62,9 +55,11 @@ pub(crate) fn run_pair_chain(
     // the rename-only slot sweep whose zero-delta classes it
     // generalizes (disjoint by construction: slot keeps rename-only,
     // this requires an evolving non-name slot).
-    if let Some(evo) =
-        super::try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(evo) = attempt(
+        declined,
+        "sig_evolution",
+        super::try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((evo, "sig_evolution"));
     }
     // WI-9: header slot-only evolution (hetero preserved names, one
@@ -72,9 +67,11 @@ pub(crate) fn run_pair_chain(
     // shared-name sibling (disjoint by construction: that one owns
     // uniform names, this one requires hetero preserved names),
     // before the trait-method detector (those own `;` decls).
-    if let Some(header) =
-        super::try_header_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(header) = attempt(
+        declined,
+        "header_evolution",
+        super::try_header_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((header, "header_evolution"));
     }
     // N≥2 bare-item vis sweep (uniform closed-set vis step over
@@ -83,18 +80,22 @@ pub(crate) fn run_pair_chain(
     // `{`-terminated fn headers and declines bare items; this one
     // declines `fn`), before the trait-method detector (those own
     // `;` decls, never bare vis pairs).
-    if let Some(vis) =
-        super::try_item_vis_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(vis) = attempt(
+        declined,
+        "item_rename",
+        super::try_item_vis_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((vis, "item_rename"));
     }
     // WI-10b: attribute-delta sweep (uniform attr-line add/remove/replace
     // over hetero items, N-hole emission) — immediately after its slot
     // sibling (those own header shapes; this owns pure-attr lines, which
     // no earlier detector parses).
-    if let Some(attr) =
-        super::try_attr_replace_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(attr) = attempt(
+        declined,
+        "attr_sweep",
+        super::try_attr_replace_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some(attr);
     }
     // WI-4b: trait+impl method rename (mixed `;` decl / `{` def
@@ -102,18 +103,22 @@ pub(crate) fn run_pair_chain(
     // construction) — immediately after sig-evolution, before the
     // method sweeps (those own same-name call shapes, never header
     // pairs).
-    if let Some(tm) =
-        super::try_trait_method_rename(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(tm) = attempt(
+        declined,
+        "trait_method_rename",
+        super::try_trait_method_rename(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((tm, "trait_method_rename"));
     }
     // WI-6: inherent-method rename + anchored calls (def-only classes
     // stay with the slot sweep above; unproven call sets stay
     // ordinary). Disjoint from the trait half (that one requires a
     // trait side; this one requires none).
-    if let Some(im) =
-        super::try_inherent_method_rename(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(im) = attempt(
+        declined,
+        "inherent_method_rename",
+        super::try_inherent_method_rename(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((im, "inherent_method_rename"));
     }
     // WI-9b: field/variant member rename (one definition pair plus
@@ -121,9 +126,11 @@ pub(crate) fn run_pair_chain(
     // scratch-apply line-equality probe). Disjoint from the trait
     // detector (those own `;`/`{` fn headers; this owns `:`/bare-ident
     // pairs) — immediately after it, before the method sweeps.
-    if let Some(member) =
-        super::try_member_rename(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(member) = attempt(
+        declined,
+        "member_rename",
+        super::try_member_rename(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((member, "member_rename"));
     }
     // WI-13 remainder 3: associated-item rename (trait/impl `type`/
@@ -133,9 +140,11 @@ pub(crate) fn run_pair_chain(
     // blocks or without a `type`/`const` head; this requires both)
     // and from definition evolution (those own same-name RHS
     // deltas; this requires a name delta).
-    if let Some(assoc) =
-        super::try_assoc_rename(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(assoc) = attempt(
+        declined,
+        "assoc_rename",
+        super::try_assoc_rename(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((assoc, "assoc_rename"));
     }
     // WI-12 slice 1: definition-value evolution (alias/const/field/
@@ -143,58 +152,79 @@ pub(crate) fn run_pair_chain(
     // member rename (those own ident deltas; this owns same-identity
     // RHS deltas), before the method sweeps (those own call shapes,
     // never `:`/payload/alias lines).
-    if let Some((evo, _)) =
-        super::try_definition_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some((evo, _)) = attempt(
+        declined,
+        "definition_evolution",
+        super::try_definition_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((evo, "definition_evolution"));
     }
-    if let Some(m2f) =
-        super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(m2f) = attempt(
+        declined,
+        "method_to_fn",
+        super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((m2f, "method_to_fn"));
     }
-    if let Some(m2m) =
-        super::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(m2m) = attempt(
+        declined,
+        "method_to_method",
+        super::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((m2m, "method_to_method"));
     }
-    if let Some(same) =
-        super::try_method_same_literal_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(same) = attempt(
+        declined,
+        "method_same_literal",
+        super::try_method_same_literal_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((same, "method_same_literal"));
     }
-    if let Some(strip) =
-        super::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(strip) = attempt(
+        declined,
+        "ref_strip",
+        super::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((strip, "ref_strip"));
     }
     // WI-3: qualified-path, turbofish, and macro-rename sweeps — after
     // the method sweeps, before the bare-call sweep (tightest first).
-    if let Some(qual) =
-        super::try_qualified_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(qual) = attempt(
+        declined,
+        "qualified_call",
+        super::try_qualified_call_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((qual, "qualified_call"));
     }
-    if let Some(turbo) =
-        super::try_turbofish_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(turbo) = attempt(
+        declined,
+        "turbofish",
+        super::try_turbofish_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((turbo, "turbofish"));
     }
-    if let Some(mac) =
-        super::try_macro_rename_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(mac) = attempt(
+        declined,
+        "macro_rename",
+        super::try_macro_rename_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((mac, "macro_rename"));
     }
-    if let Some(uses) =
-        super::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(uses) = attempt(
+        declined,
+        "use_prefix",
+        super::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((uses, "use_prefix"));
     }
     // N >= 2 bare-call rewrites (callee-only delta), use-path prefix
     // renames above included; fall through to the trailing-arg sweeps
     // otherwise.
-    if let Some(sweep) = super::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(sweep) = attempt(
+        declined,
+        "call_sweep",
+        super::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((sweep, "call_sweep"));
     }
     // WI-6 slice 2: whole-arg permutation sub-line sweep (same-callee
@@ -204,48 +234,60 @@ pub(crate) fn run_pair_chain(
     // this owns permuted-args classes), before the trailing-arg
     // sweeps. Pure whole-line classes decline here (they belong to
     // `call_arg_template` below).
-    if let Some(perm) =
-        super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(perm) = attempt(
+        declined,
+        "call_arg_template",
+        super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((perm, "call_arg_template"));
     }
     // T447: same-callee trailing-arg addition (homo concrete tails
     // compress; hetero tails like 09d3446's `symlink` vs `false`
     // veto via minus-arity totality).
-    if let Some(add) =
-        super::try_call_arg_add_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(add) = attempt(
+        declined,
+        "call_arg_add",
+        super::try_call_arg_add_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((add, "call_arg_add"));
     }
     // T448: same-callee same-arity trailing-literal delta (homo concrete
     // trailing pair, hetero leading bound as E-vars; different-trailing
     // same-arity sites never veto via tuple-keyed totality).
-    if let Some(lit) =
-        super::try_call_literal_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(lit) = attempt(
+        declined,
+        "call_literal",
+        super::try_call_literal_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((lit, "call_literal"));
     }
     // WI-5: hetero call/method arg templates (wrap/transform migrations
     // the engine applies but no detector raised) — after the concrete
     // literal sweeps (those own uniform-concrete classes; this owns
     // hole/wrapper classes), before the peel sweep.
-    if let Some(arg) =
-        super::try_call_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(arg) = attempt(
+        declined,
+        "call_arg_template",
+        super::try_call_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((arg, "call_arg_template"));
     }
-    if let Some(marg) =
-        super::try_method_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(marg) = attempt(
+        declined,
+        "method_arg_template",
+        super::try_method_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((marg, "method_arg_template"));
     }
     // WI-6: general-expression sweep (bare-expression anti-unification
     // with at most one hole) — after the call/method arg templates
     // (those own call shapes; this declines them), before the peel
     // sweep (which owns array-head shapes, never bare expressions).
-    if let Some(general) =
-        super::try_general_expr_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(general) = attempt(
+        declined,
+        "general_expr",
+        super::try_general_expr_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((general, "general_expr"));
     }
     // WI-8b: control-position sweep (guard/arm-body/closure/condition/
@@ -253,35 +295,43 @@ pub(crate) fn run_pair_chain(
     // emission + whole-file totality) — after the whole-line general
     // sweep (those own whole-line expressions; this owns control
     // fragments no earlier detector parses), before the peel sweep.
-    if let Some(control) =
-        super::try_control_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(control) = attempt(
+        declined,
+        "control_template",
+        super::try_control_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((control, "control_template"));
     }
     // T441: hetero-arg array-head-peel call migration
     // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);
     // all-identical classes stay for the tighter verbatim sweep below.
-    if let Some(peel) =
-        super::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(peel) = attempt(
+        declined,
+        "call_peel",
+        super::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((peel, "call_peel"));
     }
     // WI-4a: let type-addition (`let P = E` → `let P: T = E`, P/E
     // hetero across sites, uniform concrete T) — after the call-shape
     // chain (those ignore the `let` wrapper and cannot express an
     // ascription delta), before the verbatim stage in the caller.
-    if let Some(let_sweep) =
-        super::try_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(let_sweep) = attempt(
+        declined,
+        "let_sweep",
+        super::try_let_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((let_sweep, "let_type_add"));
     }
     // WI-4b: type rewrite (`Vec<T>` → `Box<[T]>`, T hetero across
     // sites) — after the let-shape chain (those own whole-statement
     // templates with init/pattern holes; this owns sub-line type
     // templates), before the verbatim stage in the caller.
-    if let Some(type_sweep) =
-        super::try_type_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(type_sweep) = attempt(
+        declined,
+        "type_sweep",
+        super::try_type_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((type_sweep, "type_sweep"));
     }
     // WI-5 slice 1: joint let template (typed→typed `let` pairs with
@@ -289,9 +339,11 @@ pub(crate) fn run_pair_chain(
     // the type sweep (that owns per-site-preserved-init classes; this
     // owns per-site init deltas), before the verbatim stage. Disjoint
     // from both let slices by construction.
-    if let Some(joint) =
-        super::try_let_template_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(joint) = attempt(
+        declined,
+        "let_template",
+        super::try_let_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((joint, "let_template"));
     }
     // WI-8 slice 1: untyped joint let template (same as above without
@@ -301,14 +353,18 @@ pub(crate) fn run_pair_chain(
     // `let (P1, P0) = E0;`). After the typed template (those own
     // ascribed classes; this declines any ascribed side), before the
     // sequence sweep (which owns multi-line windows, never singles).
-    if let Some(untyped) =
-        super::try_untyped_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(untyped) = attempt(
+        declined,
+        "let_template",
+        super::try_untyped_let_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((untyped, "let_template"));
     }
-    if let Some(swap) =
-        super::try_pat_swap_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(swap) = attempt(
+        declined,
+        "let_template",
+        super::try_pat_swap_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((swap, "let_template"));
     }
     // WI-5c: repeated-block `let` sequences (N ≥ 2 blocks × 2–4 stmts,
@@ -316,18 +372,22 @@ pub(crate) fn run_pair_chain(
     // sweeps (those own whole-class templates; this owns multi-line
     // windows the singles cannot express), before the fold (which owns
     // call-spine strips, never statement windows).
-    if let Some(seq) =
-        super::try_sequence_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(seq) = attempt(
+        declined,
+        "sequence",
+        super::try_sequence_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((seq, "sequence"));
     }
     // WI-1c: nested same-callee full-strip fold (`Box::new(Box::new(x))`
     // → `x`, `# repeat`) — after the type sweep (those own whole-statement
     // templates; this owns call-spine strips), before the verbatim stage
     // in the caller. No earlier detector claims a call→non-call pair.
-    if let Some(fold) =
-        super::try_repeat_fold_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(fold) = attempt(
+        declined,
+        "repeat_fold",
+        super::try_repeat_fold_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((fold, "repeat_fold"));
     }
     // WI-1d: uniform one-layer partial strip (`C(C(x))` → `C(x)`,
@@ -335,17 +395,21 @@ pub(crate) fn run_pair_chain(
     // the kept layers). After the fold (full strips stay folded;
     // disjoint by construction: the fold declines partial pairs and
     // the strip declines full strips), before the verbatim stage.
-    if let Some(strip) =
-        super::try_partial_strip_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(strip) = attempt(
+        declined,
+        "partial_strip",
+        super::try_partial_strip_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((strip, "partial_strip"));
     }
     // WI-5d: single-block hetero `let` run (one contiguous K = 2–4
     // window, within-pair abstraction) — every earlier detector keeps
     // its classes (this owns only runs declined by all of them).
-    if let Some(single) =
-        super::try_single_block_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(single) = attempt(
+        declined,
+        "single_block",
+        super::try_single_block_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((single, "single_block"));
     }
     // WI-7: lone-literal sweep (`"old"` → `"new"`, `10` → `20`,
@@ -354,159 +418,14 @@ pub(crate) fn run_pair_chain(
     // detectors (calls, lets, windows) keep their classes first; the
     // verbatim stage in the caller owns all-identical lines (T422,
     // declined inside the detector).
-    if let Some(frame) =
-        super::try_literal_frame_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
+    if let Some(frame) = attempt(
+        declined,
+        "literal_frame",
+        super::try_literal_frame_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
         return Some((frame, "literal_frame"));
     }
     None
-}
-
-/// WI-8 pair partition: a whole balanced section with N ≥ 2 pairs whose
-/// pair chain declined compresses pair by pair when every pair is a
-/// single-pair item rename (including the plain-`fn` arm, whose
-/// `{`/no-return/no-`where` gate applies per pair). All-or-nothing:
-/// one unclaimable pair vetoes the whole section (a mixed hunk stays
-/// ordinary whole, never half-semantic). Duplicate minus lines veto
-/// (identical pairs belong to the verbatim sweep); duplicate emitted
-/// minus patterns veto too (terse `fn` shapes drop params, so distinct
-/// raw lines can share one pattern and would overlap-match). Each pair
-/// also clears pre-image totality (`template_pair_holds` at n = 1, the
-/// `slot_holds` posture lifted to single pairs): an untouched twin
-/// anywhere in the file vetoes, `None` pre-image keeps the
-/// section-visible legacy allow. Emission is one file
-/// section with one hunk per pair (per-pair covering ranges from that
-/// pair's changed line, positional `rN` rules — the shared counter is
-/// already positional per WI-1e diet; distinct deltas never group so
-/// `group` stays `""`). Section-level T375 lives with the caller (same
-/// shape as the `run_pair_chain` block, rename prelude included).
-/// Detector `"item_rename"` so cross-file same-delta grouping keeps
-/// working with no `group.rs` change.
-pub(crate) fn try_partition_section(
-    minuses: &[&str],
-    pluses: &[&str],
-    path: &str,
-    file_old: Option<&str>,
-    changed: &[usize],
-    used_rules: &mut Vec<String>,
-) -> Option<(String, &'static str)> {
-    if minuses.len() < 2 || minuses.len() != pluses.len() {
-        return None;
-    }
-    // Pair-to-site mapping for the per-pair covering ranges below.
-    if changed.len() != minuses.len() {
-        return None;
-    }
-    // Identical pairs belong to the verbatim sweep (and their patterns
-    // would overlap-match under `# allow=many`).
-    let mut ordered: Vec<&&str> = minuses.iter().collect();
-    ordered.sort();
-    ordered.dedup();
-    if ordered.len() != minuses.len() {
-        return None;
-    }
-    let checkpoint = used_rules.len();
-    let mut bodies: Vec<String> = Vec::new();
-    // WI-19c: per-pair gate — `try_item_rename` (now indent-tolerant)
-    // first, then the self-ty `impl` single. Impl pairs carry their own
-    // scratch-apply totality (a same-name self-ty elsewhere is orphan
-    // evidence, never a veto), so they skip the sweep-count check below
-    // that item pairs keep.
-    let mut sweep_check: Vec<bool> = Vec::new();
-    for i in 0..minuses.len() {
-        let probe_before = used_rules.len();
-        if let Some(full) = super::try_item_rename(
-            minuses[i],
-            pluses[i],
-            path,
-            file_old,
-            &changed[i..i + 1],
-            used_rules,
-        ) {
-            let Some((_, body)) = full.split_once('\n') else {
-                used_rules.truncate(checkpoint);
-                return None;
-            };
-            bodies.push(body.to_string());
-            sweep_check.push(true);
-            continue;
-        }
-        used_rules.truncate(probe_before);
-        match super::try_impl_header_single(
-            &minuses[i..i + 1],
-            &pluses[i..i + 1],
-            path,
-            file_old,
-            &changed[i..i + 1],
-            used_rules,
-        ) {
-            Some((full, _)) => {
-                let Some((_, body)) = full.split_once('\n') else {
-                    used_rules.truncate(checkpoint);
-                    return None;
-                };
-                bodies.push(body.to_string());
-                sweep_check.push(false);
-            }
-            None => {
-                used_rules.truncate(checkpoint);
-                return None;
-            }
-        }
-    }
-    // One minus pattern per pair; identical emitted patterns would
-    // overlap-match under `# allow=many` (terse `fn` shapes drop params,
-    // so distinct raw lines can share one pattern — those classes stay
-    // with the slot/verbatim sweeps).
-    let mut pats: Vec<(&str, &str)> = Vec::new();
-    for body in &bodies {
-        let mut minus = None;
-        let mut plus = None;
-        for line in body.lines() {
-            if let Some(pat) = line.strip_prefix("- ") {
-                if minus.is_none() {
-                    minus = Some(pat);
-                }
-            } else if let Some(pat) = line.strip_prefix("+ ") {
-                if plus.is_none() {
-                    plus = Some(pat);
-                }
-            }
-        }
-        let (Some(minus), Some(plus)) = (minus, plus) else {
-            used_rules.truncate(checkpoint);
-            return None;
-        };
-        pats.push((minus, plus));
-    }
-    let mut by_pat: Vec<&&str> = pats.iter().map(|(m, _)| m).collect();
-    by_pat.sort();
-    by_pat.dedup();
-    if by_pat.len() != pats.len() {
-        used_rules.truncate(checkpoint);
-        return None;
-    }
-    // Pre-image totality per item pair (the `slot_holds` posture lifted to
-    // single pairs): each minus pattern must match exactly its own site.
-    // An untouched twin anywhere in the file vetoes; `None` pre-image
-    // keeps the section-visible legacy allow (provenance marks it).
-    // WI-19c impl pairs skip this: their scratch-apply probe already
-    // passed, and a same-name self-ty elsewhere is orphan evidence.
-    for (idx, &(minus, plus)) in pats.iter().enumerate() {
-        if !sweep_check[idx] {
-            continue;
-        }
-        if !crate::totality::template_pair_holds(path, file_old, minus, plus, 1) {
-            used_rules.truncate(checkpoint);
-            return None;
-        }
-    }
-    let mut out = crate::git_header(path);
-    out.push('\n');
-    for body in &bodies {
-        out.push_str(body);
-    }
-    Some((out, "item_rename"))
 }
 
 pub(crate) fn compress_section(
@@ -515,12 +434,18 @@ pub(crate) fn compress_section(
     pre: &std::collections::HashMap<String, String>,
     prov: &mut Vec<HunkProvenance>,
     suppressed: &std::collections::HashSet<(String, String)>,
+    declined: &mut Vec<HunkDeclined>,
 ) -> Option<String> {
     let header = section.lines().next()?;
     // T385: CRLF content stays ordinary passthrough — detectors strip
     // `\r` via `str::lines` and would emit hunks that cannot match
     // the worktree file.
-    if !header.starts_with("diff --git ") || section.contains('\r') {
+    if !header.starts_with("diff --git ") {
+        return None;
+    }
+    if section.contains('\r') {
+        // WI-15c: the gate itself is the explanation.
+        declined_guard(declined, "section", "crlf-content");
         return None;
     }
     // WI-7a: rename sections compress their content hunks instead of
@@ -581,7 +506,11 @@ pub(crate) fn compress_section(
     // skip it on the rename path.
     let delete_before = used_rules.len();
     if rename_new.is_none() {
-        if let Some(deleted) = super::deletes::try_delete_sweep(section, used_rules) {
+        if let Some(deleted) = attempt(
+            declined,
+            "delete",
+            super::deletes::try_delete_sweep(section, used_rules),
+        ) {
             push_section_prov(
                 prov,
                 &deleted,
@@ -607,7 +536,9 @@ pub(crate) fn compress_section(
     // of a joint emission as a second rule; per-hunk leftovers (e.g. a
     // delete sweep in a move section) still compress.
     if super::is_semantic_section(section) {
-        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
+        return compress_section_per_hunk(
+            section, path, file_old, used_rules, prov, suppressed, declined,
+        );
     }
     // is only sound when every hunk is a pure modification.
     let mut minuses: Vec<&str> = Vec::new();
@@ -660,6 +591,8 @@ pub(crate) fn compress_section(
     // co-resident suppresses the bare rename single (WI-4a posture for
     // items) — the section stays wholly ordinary.
     if super::partial::section_has_stranded_item_joint(section, path, file_old) {
+        // WI-15c: the gate itself is the explanation.
+        declined_guard(declined, "section", "stranded-joint");
         return None;
     }
     // WI-4c: a vetoed fn joint suppresses its old callee name
@@ -680,7 +613,9 @@ pub(crate) fn compress_section(
                 .any(|(p, o)| p == path && super::fn_joint::is_call_callee_of(m, o))
         })
     {
-        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
+        return compress_section_per_hunk(
+            section, path, file_old, used_rules, prov, suppressed, declined,
+        );
     }
     if whole && minuses.len() == 1 {
         // Single pair: fn/item rename under the precision guard
@@ -689,9 +624,11 @@ pub(crate) fn compress_section(
         // prices the proof, not the win). A lone call rewrite stays
         // strict T375 below; a lone heterogeneous fn header likewise
         // (slot sweep covers the multi-site case).
-        if let Some(rename) =
-            super::try_item_rename(minuses[0], pluses[0], path, file_old, &changed, used_rules)
-        {
+        if let Some(rename) = attempt(
+            declined,
+            "item_rename",
+            super::try_item_rename(minuses[0], pluses[0], path, file_old, &changed, used_rules),
+        ) {
             debug_assert_eq!(super::guard_for("item_rename"), super::Guard::Precision);
             // WI-7a: rename sections re-emit under the preserved
             // prelude; the precision guard compares the final bytes.
@@ -729,6 +666,7 @@ pub(crate) fn compress_section(
                 );
                 return Some(rename);
             } else {
+                declined_guard(declined, "item_rename", "precision-guard");
                 used_rules.truncate(checkpoint);
             }
         }
@@ -737,8 +675,12 @@ pub(crate) fn compress_section(
         // single above. Strict T375 would price every lone RHS edit
         // above its ordinary hunk; the guard prices the proof instead.
         let evo_checkpoint = used_rules.len();
-        if let Some((evo, detector)) = super::try_definition_evolution_sweep(
-            &minuses, &pluses, path, file_old, &changed, used_rules,
+        if let Some((evo, detector)) = attempt(
+            declined,
+            "definition_evolution",
+            super::try_definition_evolution_sweep(
+                &minuses, &pluses, path, file_old, &changed, used_rules,
+            ),
         ) {
             debug_assert_eq!(detector, "definition_evolution");
             if let Some(prelude) = &rename_prelude {
@@ -758,6 +700,7 @@ pub(crate) fn compress_section(
                         return Some(final_text);
                     }
                 }
+                declined_guard(declined, "definition_evolution", "precision-guard");
                 used_rules.truncate(evo_checkpoint);
             } else if evo.len() <= section.len() + super::PRECISION_GUARD {
                 push_section_prov(
@@ -773,6 +716,7 @@ pub(crate) fn compress_section(
                 );
                 return Some(evo);
             } else {
+                declined_guard(declined, "definition_evolution", "precision-guard");
                 used_rules.truncate(evo_checkpoint);
             }
         }
@@ -794,8 +738,12 @@ pub(crate) fn compress_section(
         // per-hunk fallback (four-guard method-run price + per-emission
         // header excess); single mixed hunks ride the subhunk partition.
         let prec_checkpoint = used_rules.len();
-        if let Some((prec, detector)) = super::try_precision_definition_single(
-            &minuses, &pluses, path, file_old, &changed, used_rules,
+        if let Some((prec, detector)) = attempt(
+            declined,
+            "precision_definition_single",
+            super::try_precision_definition_single(
+                &minuses, &pluses, path, file_old, &changed, used_rules,
+            ),
         ) {
             debug_assert_eq!(super::guard_for(detector), super::Guard::Precision);
             let allow = if detector == "sig_evolution"
@@ -823,6 +771,7 @@ pub(crate) fn compress_section(
                         return Some(final_text);
                     }
                 }
+                declined_guard(declined, detector, "precision-guard");
                 used_rules.truncate(prec_checkpoint);
             } else if prec.len() <= section.len() + allow {
                 push_section_prov(
@@ -838,6 +787,7 @@ pub(crate) fn compress_section(
                 );
                 return Some(prec);
             } else {
+                declined_guard(declined, detector, "precision-guard");
                 used_rules.truncate(prec_checkpoint);
             }
         }
@@ -845,9 +795,11 @@ pub(crate) fn compress_section(
         // (same posture as the three shapes above; the scratch-apply
         // probe inside is the totality, orphans at apply are evidence).
         let impl_checkpoint = used_rules.len();
-        if let Some((imp, detector)) =
-            super::try_impl_header_single(&minuses, &pluses, path, file_old, &changed, used_rules)
-        {
+        if let Some((imp, detector)) = attempt(
+            declined,
+            "impl_header_single",
+            super::try_impl_header_single(&minuses, &pluses, path, file_old, &changed, used_rules),
+        ) {
             debug_assert_eq!(super::guard_for(detector), super::Guard::Precision);
             if let Some(prelude) = &rename_prelude {
                 if let Some(final_text) = reheader_rename(&imp, prelude) {
@@ -866,6 +818,7 @@ pub(crate) fn compress_section(
                         return Some(final_text);
                     }
                 }
+                declined_guard(declined, detector, "precision-guard");
                 used_rules.truncate(impl_checkpoint);
             } else if imp.len() <= section.len() + super::PRECISION_GUARD {
                 push_section_prov(
@@ -881,6 +834,7 @@ pub(crate) fn compress_section(
                 );
                 return Some(imp);
             } else {
+                declined_guard(declined, detector, "precision-guard");
                 used_rules.truncate(impl_checkpoint);
             }
         }
@@ -894,9 +848,11 @@ pub(crate) fn compress_section(
         // range anchors it); the full-section accounting (prelude
         // included) is what fits the concrete header inside the guard.
         let attr_checkpoint = used_rules.len();
-        if let Some((attr, detector)) =
-            super::try_attr_replace_sweep(&minuses, &pluses, path, file_old, &changed, used_rules)
-        {
+        if let Some((attr, detector)) = attempt(
+            declined,
+            "attr_replace_single",
+            super::try_attr_replace_sweep(&minuses, &pluses, path, file_old, &changed, used_rules),
+        ) {
             debug_assert_eq!(detector, "attr_sweep");
             if let Some(prelude) = &rename_prelude {
                 if let Some(final_text) = reheader_rename(&attr, prelude) {
@@ -915,6 +871,7 @@ pub(crate) fn compress_section(
                         return Some(final_text);
                     }
                 }
+                declined_guard(declined, detector, "precision-guard");
                 used_rules.truncate(attr_checkpoint);
             } else if attr.len() <= section.len() + super::PRECISION_GUARD {
                 push_section_prov(
@@ -930,10 +887,13 @@ pub(crate) fn compress_section(
                 );
                 return Some(attr);
             } else {
+                declined_guard(declined, detector, "precision-guard");
                 used_rules.truncate(attr_checkpoint);
             }
         }
-        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
+        return compress_section_per_hunk(
+            section, path, file_old, used_rules, prov, suppressed, declined,
+        );
     }
     if !whole {
         // T441: hetero-arg peel cross-hunk sweep before verbatim
@@ -954,14 +914,20 @@ pub(crate) fn compress_section(
         // leftover-retry rules with theirs); commit keeps only the rules
         // present in the final composed text.
         let mut fired: Vec<(String, &'static str)> = Vec::new();
-        if let Some(peeled) =
-            super::peel::try_call_peel_section(section, path, used_rules, file_old, &mut fired)
-        {
+        if let Some(peeled) = attempt(
+            declined,
+            "call_peel",
+            super::peel::try_call_peel_section(section, path, used_rules, file_old, &mut fired),
+        ) {
             rewritten = Some(peeled);
         }
         let after_peel = rewritten.as_deref().unwrap_or(section);
-        if let Some(lit) = super::literal::try_call_literal_section(
-            after_peel, path, used_rules, file_old, &mut fired,
+        if let Some(lit) = attempt(
+            declined,
+            "call_literal",
+            super::literal::try_call_literal_section(
+                after_peel, path, used_rules, file_old, &mut fired,
+            ),
         ) {
             rewritten = Some(lit);
         }
@@ -969,23 +935,28 @@ pub(crate) fn compress_section(
         // WI-9a: same-name concrete macro interiors (whole-line pairs and
         // stranded joins) before verbatim (which vetoes every macro, so no
         // double-claim); emitted single-pattern hunks group at n=1 below.
-        if let Some(interior) =
-            super::try_macro_interior_section(after_lit, path, used_rules, file_old, &mut fired)
-        {
+        if let Some(interior) = attempt(
+            declined,
+            "macro_interior",
+            super::try_macro_interior_section(after_lit, path, used_rules, file_old, &mut fired),
+        ) {
             rewritten = Some(interior);
         }
         // WI-17b: rule-body interiors (inner delta inside
         // `macro_rules!` arms) over the interior output: already
         // semantic (`rule=`) hunks are never re-harvested, so claimed
         // pairs cannot double-fire.
-        let after_rule_body = if let Some(rule_body) =
+        let after_rule_body = if let Some(rule_body) = attempt(
+            declined,
+            "macro_rule_body",
             super::macro_rule_body::try_macro_rule_body_section(
                 rewritten.as_deref().unwrap_or(section),
                 path,
                 used_rules,
                 file_old,
                 &mut fired,
-            ) {
+            ),
+        ) {
             rewritten = Some(rule_body);
             rewritten.as_deref().unwrap_or(section)
         } else {
@@ -996,12 +967,16 @@ pub(crate) fn compress_section(
         // semantic (`rule=`) hunks are never re-harvested, so claimed
         // pairs cannot double-fire.
         let after_interior = after_rule_body;
-        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
-            after_interior,
-            path,
-            used_rules,
-            file_old,
-            &mut fired,
+        if let Some(enclosing) = attempt(
+            declined,
+            "macro_enclosing",
+            super::macro_enclosing::try_macro_enclosing_section(
+                after_interior,
+                path,
+                used_rules,
+                file_old,
+                &mut fired,
+            ),
         ) {
             rewritten = Some(enclosing);
         }
@@ -1010,15 +985,19 @@ pub(crate) fn compress_section(
         // attr hunks) before verbatim (which vetoes bare attr lines, so no
         // double-claim); claimed hunks rewrite in place, the rest passes
         // through byte-identical for verbatim + per-hunk below.
-        if let Some(attr) =
-            super::try_attr_sweep_section(after_mac, path, used_rules, file_old, &mut fired)
-        {
+        if let Some(attr) = attempt(
+            declined,
+            "attr_sweep",
+            super::try_attr_sweep_section(after_mac, path, used_rules, file_old, &mut fired),
+        ) {
             rewritten = Some(attr);
         }
         let after_attr = rewritten.as_deref().unwrap_or(section);
-        if let Some(verbatim) =
-            super::verbatim::try_verbatim_sweep(after_attr, path, used_rules, file_old, &mut fired)
-        {
+        if let Some(verbatim) = attempt(
+            declined,
+            "verbatim",
+            super::verbatim::try_verbatim_sweep(after_attr, path, used_rules, file_old, &mut fired),
+        ) {
             commit_prov(prov, &verbatim, section, path, &fired, &changed, file_old);
             return Some(verbatim);
         }
@@ -1029,14 +1008,16 @@ pub(crate) fn compress_section(
         // T403: non-whole sections try the cross-hunk verbatim sweep
         // before per-hunk (whole-section detectors need balance) —
         // already attempted above on the unmodified section.
-        return compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed);
+        return compress_section_per_hunk(
+            section, path, file_old, used_rules, prov, suppressed, declined,
+        );
     }
     // N >= 2 whole-section pair sweeps in chain order; a losing shape
     // truncates its reserved rule and falls through to verbatim, so
     // one losing shape never vetoes the rest.
-    if let Some((sweep, detector)) =
-        run_pair_chain(&minuses, &pluses, path, file_old, &changed, used_rules)
-    {
+    if let Some((sweep, detector)) = run_pair_chain(
+        &minuses, &pluses, path, file_old, &changed, used_rules, declined,
+    ) {
         // WI-7a: rename sections re-emit under the preserved prelude;
         // the T375 guard compares the final bytes.
         if let Some(prelude) = &rename_prelude {
@@ -1056,6 +1037,7 @@ pub(crate) fn compress_section(
                     return Some(final_text);
                 }
             }
+            declined_guard(declined, detector, "byte-guard");
             used_rules.truncate(checkpoint);
         } else if sweep.len() < section.len() {
             push_section_prov(
@@ -1063,6 +1045,7 @@ pub(crate) fn compress_section(
             );
             return Some(sweep);
         } else {
+            declined_guard(declined, detector, "byte-guard");
             used_rules.truncate(checkpoint);
         }
     }
@@ -1074,9 +1057,11 @@ pub(crate) fn compress_section(
     // the two fires; the per-hunk fallback below keeps every other
     // class. Same T375 + provenance shape as the chain block.
     let part_checkpoint = used_rules.len();
-    if let Some((part, part_detector)) =
-        try_partition_section(&minuses, &pluses, path, file_old, &changed, used_rules)
-    {
+    if let Some((part, part_detector)) = attempt(
+        declined,
+        "partition",
+        try_partition_section(&minuses, &pluses, path, file_old, &changed, used_rules),
+    ) {
         // WI-7a: rename sections re-emit under the preserved prelude;
         // the T375 guard compares the final bytes.
         if let Some(prelude) = &rename_prelude {
@@ -1096,6 +1081,7 @@ pub(crate) fn compress_section(
                     return Some(final_text);
                 }
             }
+            declined_guard(declined, part_detector, "byte-guard");
             used_rules.truncate(part_checkpoint);
         } else if part.len() < section.len() {
             push_section_prov(
@@ -1111,6 +1097,7 @@ pub(crate) fn compress_section(
             );
             return Some(part);
         } else {
+            declined_guard(declined, part_detector, "byte-guard");
             used_rules.truncate(part_checkpoint);
         }
     }
@@ -1124,9 +1111,11 @@ pub(crate) fn compress_section(
     // claimed`, `guard_for` Precision for `item_rename`); provenance
     // shape as above.
     let partial_checkpoint = used_rules.len();
-    if let Some((partial, n_claimed)) =
-        super::partial::try_partial_partition_section(section, path, file_old, used_rules)
-    {
+    if let Some((partial, n_claimed)) = attempt(
+        declined,
+        "partial",
+        super::partial::try_partial_partition_section(section, path, file_old, used_rules),
+    ) {
         let allow = super::PRECISION_GUARD.saturating_mul(n_claimed.max(1));
         if let Some(prelude) = &rename_prelude {
             if let Some(final_text) = reheader_rename(&partial, prelude) {
@@ -1145,6 +1134,7 @@ pub(crate) fn compress_section(
                     return Some(final_text);
                 }
             }
+            declined_guard(declined, "partial", "precision-guard");
             used_rules.truncate(partial_checkpoint);
         } else if partial.len() <= section.len() + allow {
             push_section_prov(
@@ -1160,32 +1150,43 @@ pub(crate) fn compress_section(
             );
             return Some(partial);
         } else {
+            declined_guard(declined, "partial", "precision-guard");
             used_rules.truncate(partial_checkpoint);
         }
     }
     let mut verb_fired: Vec<(String, &'static str)> = Vec::new();
     // WI-9a: same-name concrete macro interiors before verbatim (which
     // vetoes every macro, so no double-claim).
-    if let Some(interior) =
-        super::try_macro_interior_section(section, path, used_rules, file_old, &mut verb_fired)
-    {
+    if let Some(interior) = attempt(
+        declined,
+        "macro_interior",
+        super::try_macro_interior_section(section, path, used_rules, file_old, &mut verb_fired),
+    ) {
         // WI-17b: rule-body interiors over the interior output, then
         // WI-7a enclosing over the rule-body output (already-semantic
         // hunks are never re-harvested).
-        let after_rule = super::macro_rule_body::try_macro_rule_body_section(
-            &interior,
-            path,
-            used_rules,
-            file_old,
-            &mut verb_fired,
+        let after_rule = attempt(
+            declined,
+            "macro_rule_body",
+            super::macro_rule_body::try_macro_rule_body_section(
+                &interior,
+                path,
+                used_rules,
+                file_old,
+                &mut verb_fired,
+            ),
         )
         .unwrap_or_else(|| interior.clone());
-        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
-            &after_rule,
-            path,
-            used_rules,
-            file_old,
-            &mut verb_fired,
+        if let Some(enclosing) = attempt(
+            declined,
+            "macro_enclosing",
+            super::macro_enclosing::try_macro_enclosing_section(
+                &after_rule,
+                path,
+                used_rules,
+                file_old,
+                &mut verb_fired,
+            ),
         ) {
             commit_prov(
                 prov,
@@ -1211,20 +1212,28 @@ pub(crate) fn compress_section(
     }
     // WI-17b: the interior sweep declined the section whole — the
     // rule-body sweep still sees the original ordinary hunks.
-    if let Some(rule_body) = super::macro_rule_body::try_macro_rule_body_section(
-        section,
-        path,
-        used_rules,
-        file_old,
-        &mut verb_fired,
-    ) {
-        // WI-7a enclosing over the rule-body output.
-        if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
-            &rule_body,
+    if let Some(rule_body) = attempt(
+        declined,
+        "macro_rule_body",
+        super::macro_rule_body::try_macro_rule_body_section(
+            section,
             path,
             used_rules,
             file_old,
             &mut verb_fired,
+        ),
+    ) {
+        // WI-7a enclosing over the rule-body output.
+        if let Some(enclosing) = attempt(
+            declined,
+            "macro_enclosing",
+            super::macro_enclosing::try_macro_enclosing_section(
+                &rule_body,
+                path,
+                used_rules,
+                file_old,
+                &mut verb_fired,
+            ),
         ) {
             commit_prov(
                 prov,
@@ -1250,12 +1259,16 @@ pub(crate) fn compress_section(
     }
     // WI-7a: the interior sweep declined the section whole — the
     // enclosing sweep still sees the original ordinary hunks.
-    if let Some(enclosing) = super::macro_enclosing::try_macro_enclosing_section(
-        section,
-        path,
-        used_rules,
-        file_old,
-        &mut verb_fired,
+    if let Some(enclosing) = attempt(
+        declined,
+        "macro_enclosing",
+        super::macro_enclosing::try_macro_enclosing_section(
+            section,
+            path,
+            used_rules,
+            file_old,
+            &mut verb_fired,
+        ),
     ) {
         commit_prov(
             prov,
@@ -1268,9 +1281,11 @@ pub(crate) fn compress_section(
         );
         return Some(enclosing);
     }
-    if let Some(verbatim) =
-        super::verbatim::try_verbatim_sweep(section, path, used_rules, file_old, &mut verb_fired)
-    {
+    if let Some(verbatim) = attempt(
+        declined,
+        "verbatim",
+        super::verbatim::try_verbatim_sweep(section, path, used_rules, file_old, &mut verb_fired),
+    ) {
         commit_prov(
             prov,
             &verbatim,
@@ -1285,7 +1300,9 @@ pub(crate) fn compress_section(
     // T403: verbatim sweep after the whole-section detectors fail.
     // Per-hunk fallback (T349): pairwise-disjoint hunks merge by
     // construction (SPEC 10.6 option-1).
-    compress_section_per_hunk(section, path, file_old, used_rules, prov, suppressed)
+    compress_section_per_hunk(
+        section, path, file_old, used_rules, prov, suppressed, declined,
+    )
 }
 
 /// Per-hunk fallback for `compress_section`: compress each balanced
@@ -1299,6 +1316,7 @@ fn compress_section_per_hunk(
     used_rules: &mut Vec<String>,
     prov: &mut Vec<HunkProvenance>,
     suppressed: &std::collections::HashSet<(String, String)>,
+    declined: &mut Vec<HunkDeclined>,
 ) -> Option<String> {
     // Split the prelude (`diff --git`/`index`/`---`/`+++`) from the
     // native hunks; a section without hunks has nothing to compress.
@@ -1333,8 +1351,11 @@ fn compress_section_per_hunk(
     // follow-through (all-or-nothing group over the section's hunks).
     // `None` falls through to the per-hunk path below, where the
     // definition insertion still fires alone.
-    if let Some(group) = super::try_definition_addition_follow(section, path, file_old, used_rules)
-    {
+    if let Some(group) = attempt(
+        declined,
+        "definition_addition_follow",
+        super::try_definition_addition_follow(section, path, file_old, used_rules),
+    ) {
         let mut out = prelude;
         for h in &group {
             commit_prov(
@@ -1353,7 +1374,11 @@ fn compress_section_per_hunk(
     // WI-12d: variant-addition + match-arm follow-through (disjoint
     // from the field group above, which declines variant defs).
     // `None` falls through byte-identically below.
-    if let Some(group) = super::try_variant_addition_follow(section, path, file_old, used_rules) {
+    if let Some(group) = attempt(
+        declined,
+        "variant_addition_follow",
+        super::try_variant_addition_follow(section, path, file_old, used_rules),
+    ) {
         let mut out = prelude;
         for h in &group {
             commit_prov(
@@ -1408,7 +1433,11 @@ fn compress_section_per_hunk(
         }
         // T465: partial item-deletion (whole-item minus-heavy hunks only).
         let partial_before = used_rules.len();
-        if let Some(d) = super::deletes::try_partial_delete_hunk(hunk, file_old, used_rules) {
+        if let Some(d) = attempt(
+            declined,
+            "delete",
+            super::deletes::try_partial_delete_hunk(hunk, file_old, used_rules),
+        ) {
             push_section_prov(
                 prov,
                 &d,
@@ -1429,9 +1458,11 @@ fn compress_section_per_hunk(
         // precision guard. Balanced hunks keep the shared chain below.
         if minuses.is_empty() && pluses.len() == 1 {
             let add_before = used_rules.len();
-            if let Some((add, detector)) =
-                super::try_definition_addition(&minuses, &pluses, path, file_old, hunk, used_rules)
-            {
+            if let Some((add, detector)) = attempt(
+                declined,
+                "definition_addition",
+                super::try_definition_addition(&minuses, &pluses, path, file_old, hunk, used_rules),
+            ) {
                 let body = add.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
                 if body.len() <= hunk.len() + super::PRECISION_GUARD {
                     push_section_prov(
@@ -1463,9 +1494,11 @@ fn compress_section_per_hunk(
         // strict T375 since the `rule=` tag costs bytes).
         if minuses.len() >= 2 && pluses.len() == 1 {
             let regroup_before = used_rules.len();
-            if let Some((body, detector)) =
-                super::try_use_regroup_hunk(&minuses, &pluses, path, file_old, hunk, used_rules)
-            {
+            if let Some((body, detector)) = attempt(
+                declined,
+                "use_regroup",
+                super::try_use_regroup_hunk(&minuses, &pluses, path, file_old, hunk, used_rules),
+            ) {
                 push_section_prov(
                     prov,
                     &body,
@@ -1497,6 +1530,7 @@ fn compress_section_per_hunk(
             &changed,
             hunk.len(),
             used_rules,
+            declined,
         ) {
             Some((body, detector)) => {
                 push_section_prov(
@@ -1518,8 +1552,12 @@ fn compress_section_per_hunk(
             // rest staying ordinary verbatim in place (hunk atomicity is
             // kept per run, never per line reordered).
             None => {
-                if let Some(frag) = super::subhunk::try_subhunk_partition(
-                    hunk, path, file_old, used_rules, prov, suppressed,
+                if let Some(frag) = attempt(
+                    declined,
+                    "subhunk",
+                    super::subhunk::try_subhunk_partition(
+                        hunk, path, file_old, used_rules, prov, suppressed,
+                    ),
                 ) {
                     compressed_any = true;
                     out.push_str(&frag);
@@ -1687,6 +1725,7 @@ mod tests {
             &pre,
             &mut prov,
             &std::collections::HashSet::new(),
+            &mut Vec::new(),
         )
         .expect("partition must fire");
         assert_eq!(out.matches("rule=").count(), 4, "got:\n{out}");
@@ -1718,6 +1757,7 @@ mod tests {
             &pre,
             &mut prov,
             &std::collections::HashSet::new(),
+            &mut Vec::new(),
         )
         .expect("precision guard must fire");
         assert_eq!(out.matches("rule=").count(), 3, "got:\n{out}");
@@ -1756,7 +1796,8 @@ mod tests {
             &mut used,
             &files,
             &mut prov,
-            &std::collections::HashSet::new()
+            &std::collections::HashSet::new(),
+            &mut Vec::new()
         )
         .is_none());
         assert!(used.is_empty());
@@ -1786,7 +1827,15 @@ mod tests {
             std::collections::HashSet::from([("f.rs".to_string(), "foo".to_string())]);
         let mut used = Vec::new();
         let mut prov = Vec::new();
-        assert!(compress_section(section, &mut used, &files, &mut prov, &suppressed).is_none());
+        assert!(compress_section(
+            section,
+            &mut used,
+            &files,
+            &mut prov,
+            &suppressed,
+            &mut Vec::new()
+        )
+        .is_none());
         assert!(used.is_empty());
         assert!(prov.is_empty());
         // Without the suppression the same call hunk still sweeps (the
@@ -1799,6 +1848,7 @@ mod tests {
             &files,
             &mut prov,
             &std::collections::HashSet::new(),
+            &mut Vec::new(),
         )
         .expect("unsuppressed call hunk must sweep");
         assert!(out.contains("- foo(E0)"), "got:\n{out}");

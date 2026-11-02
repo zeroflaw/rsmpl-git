@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 
+mod report;
 mod verify_build;
 
 use clap::{Parser, ValueEnum};
@@ -762,7 +763,7 @@ fn run() -> Result<(), CliError> {
                 // insertions, deletes, use-prefix carry no evidence).
                 if !r.sites.is_empty() {
                     let (sites_val, sites_trunc, bindings_cut) =
-                        sites_json(&r.sites, bindings_full);
+                        report::sites_json(&r.sites, &r.span_labels, bindings_full);
                     entry["sites"] = sites_val;
                     if sites_trunc > 0 {
                         entry["sites_truncated"] = serde_json::json!(sites_trunc);
@@ -774,6 +775,14 @@ fn run() -> Result<(), CliError> {
                             serde_json::json!(bindings_cut);
                     }
                 }
+                // WI-15a: full pre-truncation counts always (additive,
+                // display-independent — the verdict reads the same engine
+                // counts via `is_truncated_rule`, never these keys).
+                entry["orphans_total"] = serde_json::json!(r.orphans.len());
+                entry["follow_skipped_total"] =
+                    serde_json::json!(r.follow_skipped_details.len());
+                entry["sites_total"] =
+                    serde_json::json!(report::sites_binding_total(&r.sites));
                 // WI-2 span edit labels: parallel to `spans`, emitted only
                 // for multi-edit rules with something to say (single-edit
                 // rules omit the key; `null` = unlabeled slot).
@@ -802,7 +811,7 @@ fn run() -> Result<(), CliError> {
                 // WI-7c: report-only orphan evidence, capped like bindings.
                 if !r.orphans.is_empty() {
                     let (orphans_val, orphans_trunc, orphans_cut) =
-                        orphans_json(&r.orphans, bindings_full);
+                        report::orphans_json(&r.orphans, bindings_full);
                     entry["orphans"] = orphans_val;
                     if orphans_trunc > 0 {
                         entry["orphans_truncated"] = serde_json::json!(orphans_trunc);
@@ -1182,64 +1191,6 @@ fn incomplete_text_lines(report: &rsmpl_engine::ApplyReport) -> Vec<String> {
     out
 }
 
-/// WI-2 digest of one full binding value (SPEC D.2 `binding_meta`).
-fn binding_sha256_hex(full: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(full.as_bytes()))
-}
-
-/// WI-2b/2c + WI-1a: token-bounded per-site evidence (SPEC D.2). One entry
-/// per emitted edit in span order —
-/// `[{span: [s, e], bindings: {...}, binding_meta?: {name: {len, sha256}}}]`
-/// — with 8-entry / 80-char per-site truncation. A value cut at 80 chars
-/// carries a trailing `…` (U+2026) plus a `binding_meta` digest entry
-/// (`len` = full chars, `sha256` = hex of the full bytes) so cross-site
-/// equality is assertable without re-reading the file. `full` lifts the
-/// cut (`--bindings full`): no truncation, no meta keys. Returns the JSON
-/// array plus the summed omitted-entry count (`sites_truncated`) plus the
-/// number of cut values (`bindings_truncated_chars`).
-fn sites_json(sites: &[rsmpl_engine::SiteReport], full: bool) -> (serde_json::Value, usize, usize) {
-    const MAX_ENTRIES: usize = 8;
-    const MAX_CHARS: usize = 80;
-    let mut arr = Vec::with_capacity(sites.len());
-    let mut omitted_total = 0usize;
-    let mut cut_total = 0usize;
-    for site in sites {
-        let mut map = serde_json::Map::new();
-        let mut meta = serde_json::Map::new();
-        for (k, v) in site.bindings.iter().take(MAX_ENTRIES) {
-            let cut = !full && v.chars().count() > MAX_CHARS;
-            let mut shown: String = if full {
-                v.clone()
-            } else {
-                v.chars().take(MAX_CHARS).collect()
-            };
-            if cut {
-                shown.push('…');
-                cut_total += 1;
-                meta.insert(
-                    k.clone(),
-                    serde_json::json!({
-                        "len": v.chars().count(),
-                        "sha256": binding_sha256_hex(v),
-                    }),
-                );
-            }
-            map.insert(k.clone(), serde_json::Value::String(shown));
-        }
-        omitted_total += site.bindings.len().saturating_sub(map.len());
-        let mut entry = serde_json::json!({
-            "span": [site.span.0, site.span.1],
-            "bindings": serde_json::Value::Object(map),
-        });
-        if !meta.is_empty() {
-            entry["binding_meta"] = serde_json::Value::Object(meta);
-        }
-        arr.push(entry);
-    }
-    (serde_json::Value::Array(arr), omitted_total, cut_total)
-}
-
 /// WI-2 + WI-7c `--verify build`: `cargo check --quiet` in `repo`
 /// after a successful apply, with orphan context — the first diagnostic
 /// names the `file:line` breakage the report already lists. A real
@@ -1301,39 +1252,6 @@ fn verify_build_error(
             )
         }
     }
-}
-
-/// WI-7c + WI-1a: token-bounded orphan evidence (SPEC D.2). Max 8 entries
-/// per rule, each `text` truncated to 80 chars with a trailing `…` when
-/// cut (`full` lifts the cut). Every entry carries the WI-2 `reason`.
-/// Returns the JSON array plus the omitted-entry count
-/// (`orphans_truncated`) plus the number of cut texts
-/// (`orphans_truncated_chars`).
-fn orphans_json(
-    orphans: &[rsmpl_engine::OrphanReport],
-    full: bool,
-) -> (serde_json::Value, usize, usize) {
-    const MAX_ORPHANS: usize = 8;
-    const MAX_CHARS: usize = 80;
-    let mut arr = Vec::with_capacity(orphans.len().min(MAX_ORPHANS));
-    let mut cut_total = 0usize;
-    for o in orphans.iter().take(MAX_ORPHANS) {
-        let cut = !full && o.text.chars().count() > MAX_CHARS;
-        let mut text: String = if full {
-            o.text.clone()
-        } else {
-            o.text.chars().take(MAX_CHARS).collect()
-        };
-        if cut {
-            text.push('…');
-            cut_total += 1;
-        }
-        arr.push(
-            serde_json::json!({"file": o.file, "line": o.line, "reason": o.reason, "text": text}),
-        );
-    }
-    let omitted = orphans.len().saturating_sub(arr.len());
-    (serde_json::Value::Array(arr), omitted, cut_total)
 }
 
 /// WI-7c: short `file:line` hint (first 3 orphans) for `--verify build`
@@ -1740,6 +1658,8 @@ fn parse_err(e: rsmpl_patch::ParseError) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // WI-15: builder pins call the moved `report::` helpers.
+    use super::report::{orphans_json, sites_binding_total, sites_json};
 
     fn test_report(
         semantics: rsmpl_engine::RuleSemantics,
@@ -1848,5 +1768,111 @@ mod tests {
             "got: {:?}",
             incomplete_text_lines(&rep)
         );
+    }
+
+    fn many_orphans(n: usize) -> Vec<rsmpl_engine::OrphanReport> {
+        (0..n)
+            .map(|i| rsmpl_engine::OrphanReport {
+                file: "src/lib.rs".to_string(),
+                line: i as u32 + 2,
+                text: format!("old({i})"),
+                reason: "off-target".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wi15a_totals_count_pre_truncation() {
+        // WI-15a: every rule entry carries pre-truncation counts —
+        // `orphans_total` (engine len), `follow_skipped_total`
+        // (engine len), `sites_total` (binding entries across sites).
+        let rep = test_report(
+            rsmpl_engine::RuleSemantics::Postcondition,
+            many_orphans(12),
+            vec![rsmpl_engine::FollowSkipReport {
+                file: "src/lib.rs".to_string(),
+                line: 3,
+                reason: "shadowed".to_string(),
+            }],
+            vec![rsmpl_engine::SiteReport {
+                span: (1, 1),
+                bindings: vec![
+                    ("E".to_string(), "a".to_string()),
+                    ("F".to_string(), "b".to_string()),
+                ],
+            }],
+        );
+        let r = &rep.rules[0];
+        assert_eq!(r.orphans.len(), 12);
+        assert_eq!(r.follow_skipped_details.len(), 1);
+        assert_eq!(sites_binding_total(&r.sites), 2);
+        // Display-independence: the verdict reads engine counts, so a
+        // 12-orphan rule blocks identically under either budget.
+        assert_eq!(global_semantics(&rep), "partial");
+        assert!(is_truncated_rule(r));
+    }
+
+    #[test]
+    fn wi15b_full_lifts_entry_caps() {
+        // WI-15b: `--bindings full` lifts the 8-entry caps (orphan
+        // entries and per-site binding entries), not just the char cut.
+        let orphans = many_orphans(12);
+        let (val, trunc, _) = orphans_json(&orphans, false);
+        assert_eq!(val.as_array().unwrap().len(), 8);
+        assert_eq!(trunc, 4);
+        let (val, trunc, _) = orphans_json(&orphans, true);
+        assert_eq!(val.as_array().unwrap().len(), 12);
+        assert_eq!(trunc, 0);
+        let sites = vec![rsmpl_engine::SiteReport {
+            span: (1, 1),
+            bindings: (0..10)
+                .map(|i| (format!("B{i}"), "v".to_string()))
+                .collect(),
+        }];
+        let (val, trunc, _) = sites_json(&sites, &[None], false);
+        assert_eq!(
+            val.as_array().unwrap()[0]["bindings"]
+                .as_object()
+                .unwrap()
+                .len(),
+            8
+        );
+        assert_eq!(trunc, 2);
+        let (val, trunc, _) = sites_json(&sites, &[None], true);
+        assert_eq!(
+            val.as_array().unwrap()[0]["bindings"]
+                .as_object()
+                .unwrap()
+                .len(),
+            10
+        );
+        assert_eq!(trunc, 0);
+    }
+
+    #[test]
+    fn wi15d_origin_marks_follow_spans() {
+        // WI-15d: carried provenance — `follow`-labelled spans read
+        // `inferred`, everything else `authored` (never inferred from
+        // `semantics`).
+        let sites = vec![
+            rsmpl_engine::SiteReport {
+                span: (1, 1),
+                bindings: vec![],
+            },
+            rsmpl_engine::SiteReport {
+                span: (2, 2),
+                bindings: vec![],
+            },
+        ];
+        let labels = vec![Some("rename".to_string()), Some("follow".to_string())];
+        let (val, _, _) = sites_json(&sites, &labels, false);
+        let arr = val.as_array().unwrap();
+        assert_eq!(arr[0]["origin"], serde_json::json!("authored"));
+        assert_eq!(arr[1]["origin"], serde_json::json!("inferred"));
+        // Labelless rules (single-edit) read `authored`.
+        let (val, _, _) = sites_json(&sites, &[], true);
+        let arr = val.as_array().unwrap();
+        assert_eq!(arr[0]["origin"], serde_json::json!("authored"));
+        assert_eq!(arr[1]["origin"], serde_json::json!("authored"));
     }
 }

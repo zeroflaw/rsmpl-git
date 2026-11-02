@@ -56,6 +56,7 @@ mod move_parts;
 mod move_scan;
 mod moves;
 pub(crate) mod partial;
+pub(crate) mod partition;
 mod pat_template;
 mod paths;
 mod peel;
@@ -360,12 +361,26 @@ pub fn infer_semantic_with_provenance(
     let cross_owned = cross_fired.unwrap_or_else(|| sections.to_vec());
     let sections: &[String] = &cross_owned;
     for section in sections {
-        match chain::compress_section(section, &mut used_rules, pre, prov, &joint_suppressed) {
+        let mut declined = Vec::new();
+        match chain::compress_section(
+            section,
+            &mut used_rules,
+            pre,
+            prov,
+            &joint_suppressed,
+            &mut declined,
+        ) {
             Some(semantic) => {
                 compressed_any = true;
                 out.push_str(&semantic);
             }
-            None => out.push_str(section),
+            // WI-15c: wholly-ordinary sections explain themselves via
+            // `push_ordinary_for_section` (silences: nothing tried, bad
+            // header, no native hunk).
+            None => {
+                prov::push_ordinary_for_section(prov, section, &declined, pre);
+                out.push_str(section);
+            }
         }
     }
     if compressed_any {
@@ -676,7 +691,9 @@ pub(crate) fn unique_rule(used: &mut Vec<String>, _base: &str) -> String {
     candidate
 }
 
+pub use prov::HunkDeclined;
 pub use prov::HunkProvenance;
+pub(crate) use prov::{attempt, declined_guard};
 
 use prov::push_move_prov;
 

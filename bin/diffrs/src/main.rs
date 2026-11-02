@@ -158,12 +158,24 @@ fn run() -> Result<(), CliError> {
             "version": rsmpl_patch::REPORT_VERSION,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
-            "hunks": patch.hunks.iter().map(|h| serde_json::json!({
-                "rule": h.rule, "file": h.file, "detector": h.detector,
-                "sites": h.sites, "sites_exact": h.sites_exact,
-                "totality": h.totality, "proven": h.proven,
-                "saved_bytes": h.saved_bytes, "group": h.group
-            })).collect::<Vec<_>>(),
+            // WI-15c: wholly-ordinary sections carry one entry with
+            // `detector: "ordinary"` and the chain-level `declined`
+            // list (which families were tried and why); semantic hunks
+            // never carry `declined` (a firing section explains itself).
+            "hunks": patch.hunks.iter().map(|h| {
+                let mut entry = serde_json::json!({
+                    "rule": h.rule, "file": h.file, "detector": h.detector,
+                    "sites": h.sites, "sites_exact": h.sites_exact,
+                    "totality": h.totality, "proven": h.proven,
+                    "saved_bytes": h.saved_bytes, "group": h.group
+                });
+                if h.detector == "ordinary" {
+                    entry["declined"] = serde_json::json!(h.declined.iter().map(|d| serde_json::json!({
+                        "detector": d.detector, "reason": d.reason,
+                    })).collect::<Vec<_>>());
+                }
+                entry
+            }).collect::<Vec<_>>(),
         });
         println!(
             "{}",
