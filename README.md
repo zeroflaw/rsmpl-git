@@ -291,3 +291,5 @@ test-fixtures/        binary-driven e2e fixtures: applyrs/ + diffrs/ (see bin te
 ```
 
 No single `.rs` file exceeds 2000 lines (enforced by test).
+
+Agent authoring: see `AGENTS.md` (one-page reference) and `skills/gitrs/SKILL.md` (patch-first loop); full contract: `SPEC.md`.

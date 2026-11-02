@@ -93,6 +93,40 @@ pub fn canonicalize_with_tree(
     Ok(canonicalize_with_spans_parsed(patch, &spans))
 }
 
+/// WI-1s0 instantiation-proof key (IMPROVE.md D17 premise).
+///
+/// Applies `patch_text` to a clone of `pre` and returns a deterministic
+/// key of the full post-tree (sorted `path + NUL + text` joined), so key
+/// equality means byte-identical post-trees. Returns `None` when the
+/// patch fails to parse or apply — never panics, mirroring the fallback
+/// posture of [`canonicalize_with_tree`]. Comparison-only scaffolding:
+/// no caller changes canonical output in this slice; WI-1s1 wires the
+/// exactly-one-hit guard plus this key into equality.
+#[allow(dead_code)] // WI-1s1 wires this into equality; tests own it until then.
+pub(crate) fn single_site_post_key(
+    pre: &HashMap<String, String>,
+    patch_text: &str,
+) -> Option<String> {
+    let patch = parse_patch(patch_text).ok()?;
+    let mut files: HashMap<String, String> = pre.clone();
+    for sec in &patch.files {
+        if !files.contains_key(&sec.target_path) {
+            files.insert(sec.target_path.clone(), String::new());
+        }
+    }
+    crate::apply_patch_to_tree(&mut files, &patch).ok()?;
+    let mut keys: Vec<(&String, &String)> = files.iter().collect();
+    keys.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = String::new();
+    for (path, text) in keys {
+        out.push_str(path);
+        out.push('\0');
+        out.push_str(text);
+        out.push('\0');
+    }
+    Some(out)
+}
+
 /// WI-1b spelling unification (SPEC D.5, SPEC 19.3): rewrite each
 /// `# symbol Name=path` call hunk with `# fallback=syntax` to the
 /// concrete-path diet form the inferrer emits, dropping the `# symbol`
@@ -1527,5 +1561,41 @@ mod tests {
         let p = pre(&[("src/lib.rs", FN_PRE)]);
         let got = canonicalize_with_tree(text, &p).unwrap();
         assert!(got.contains("# expr E"), "fn-header decl stays:\n{got}");
+    }
+
+    #[test]
+    fn wi1s0_instantiation_premise_holds() {
+        // WI-1s0: authored templated spelling vs inferred literal/holed
+        // diet over the same pre-image rebuild byte-identical post-trees.
+        // This pins the D17 premise; WI-1s1 wires it into equality.
+        // 95-style: verbatim concrete arg vs holed diet.
+        let pre95 = "fn make_text(s: &str) -> String {\n    s.to_string()\n}\nfn make_text_new(s: &str) -> String {\n    s.to_string()\n}\nfn m(sub: &str) -> i32 {\n    let x = make_text(sub);\n    x.len() as i32\n}\n";
+        let authored95 = "diff --git src/lib.rs\n@@ -1,1 @@ rule=verbatim\n# sweep\n- make_text(sub)\n+ make_text_new(sub)\n";
+        let inferred95 =
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- make_text(E0)\n+ make_text_new(E0)\n";
+        let p95 = pre(&[("src/lib.rs", pre95)]);
+        let a95 = single_site_post_key(&p95, authored95).expect("authored applies");
+        let b95 = single_site_post_key(&p95, inferred95).expect("inferred applies");
+        assert_eq!(a95, b95, "95-style pair shares one post-tree");
+        // 83-style: infer-wildcard sweep vs literal single.
+        let pre83 = "fn f() {\n    let v = 1 + 2;\n    let _ = v;\n}\n";
+        let authored83 = "diff --git src/lib.rs\n@@ -1,1 @@ rule=infer_wild\n# sweep\n- let v = _;\n+ let v = 0;\n";
+        let inferred83 =
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- let v = 1 + 2;\n+ let v = 0;\n";
+        let p83 = pre(&[("src/lib.rs", pre83)]);
+        let a83 = single_site_post_key(&p83, authored83).expect("authored applies");
+        let b83 = single_site_post_key(&p83, inferred83).expect("inferred applies");
+        assert_eq!(a83, b83, "83-style pair shares one post-tree");
+        // Negative control: same pre, different post discriminates.
+        let other83 =
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- let v = 1 + 2;\n+ let v = 9;\n";
+        let c83 = single_site_post_key(&p83, other83).expect("control applies");
+        assert_ne!(b83, c83, "different post-trees key differently");
+        // Unapplicable patch yields None, never a panic.
+        assert!(single_site_post_key(
+            &p83,
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=nope\n# sweep\n- missing_fn(E0)\n+ missing_fn(E1)\n"
+        )
+        .is_none());
     }
 }
