@@ -7576,7 +7576,13 @@ decline), `byte-guard` (strict-T375 veto after a candidate),
 never detector-inferred: a detector-internal guard veto surfaces as
 `no-match`. Whole-patch pre-pass declines (moves, item/member/mod
 intents, cross-file intents) are patch-global and never attributed
-per-section; partially-compressed sections (semantic plus ordinary
+per-section: the pre-pass-only detectors (`move`, `item_intent`,
+`item_joint_impl`, `fn_joint`, `mod_rename`) never appear in a
+section's `declined` list (`member_rename`, `assoc_rename`, and
+`trait_method_rename` also fire as per-section chain detectors and keep
+appearing there under their chain meaning). There is deliberately no
+patch-level `declined` key — a pre-pass decline is the absence of a
+semantic entry, by design; partially-compressed sections (semantic plus ordinary
 remainder) carry no ordinary entry — the remainder's declined list
 is WI-4 residue. Sections nothing tried (headers-only, non-`.rs`)
 stay silent passthrough, as do pre-pass-emitted sections with no

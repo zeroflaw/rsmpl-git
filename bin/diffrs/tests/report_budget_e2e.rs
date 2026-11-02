@@ -184,6 +184,26 @@ fn wi15_ordinary_section_names_declined_detectors() {
     for d in declined {
         assert_eq!(d["reason"], serde_json::json!("no-match"), "got: {d}");
     }
+    // WI-15 review (pre-pass silence): whole-patch pre-pass declines are
+    // patch-global and never attributed per-section — the pre-pass-only
+    // detectors never appear in a section's `declined` list. The shared
+    // names (`member_rename`, `assoc_rename`, `trait_method_rename`) also
+    // fire as per-section chain detectors, so only the five pre-pass-only
+    // names are pinned absent here. There is deliberately no patch-level
+    // `declined` key.
+    for prepass in [
+        "move",
+        "item_intent",
+        "item_joint_impl",
+        "fn_joint",
+        "mod_rename",
+    ] {
+        assert!(
+            !names.contains(&prepass),
+            "pre-pass {prepass} leaked into section declined: {names:?}"
+        );
+    }
+    assert!(v.get("declined").is_none(), "got: {v}");
     // The ordinary entry still carries the covering site + totality.
     assert_eq!(e["sites"], serde_json::json!([2]), "got: {v}");
     assert_eq!(e["totality"], serde_json::json!("pre-image"), "got: {v}");
