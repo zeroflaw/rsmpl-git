@@ -518,17 +518,37 @@ mod tests {
 
     #[test]
     fn wi15_subline_method_single_twin_vetoes() {
-        // An untouched same-method same-arity twin anywhere vetoes.
+        // An untouched same-method same-arity twin anywhere vetoes the
+        // HOLED sub-line template; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    val.old_method(alpha_argument) + 1;\n    other.old_method(different_value);\n}\n";
+        assert!(
+            super::try_subline_method_single(
+                &["    val.old_method(alpha_argument) + 1;"],
+                &["    val.new_method(alpha_argument) + 1;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    val.old_method(alpha_argument) + 1;\n+    val.new_method(alpha_argument) + 1;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
+                .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- val.old_method(alpha_argument) + 1\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ val.new_method(alpha_argument) + 1\n"),
+            "got: {out}"
         );
     }
 
@@ -677,17 +697,37 @@ mod tests {
 
     #[test]
     fn wi16_subline_method_fn_single_twin_vetoes() {
-        // An untouched same-method same-arity twin anywhere vetoes.
+        // An untouched same-method same-arity twin anywhere vetoes the
+        // HOLED sub-line template; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    val.old_method(alpha_argument) + 1;\n    other.old_method(different_value);\n}\n";
+        assert!(
+            super::try_subline_method_fn_single(
+                &["    val.old_method(alpha_argument) + 1;"],
+                &["    new_func(val, alpha_argument) + 1;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    val.old_method(alpha_argument) + 1;\n+    new_func(val, alpha_argument) + 1;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
+                .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- val.old_method(alpha_argument) + 1\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ new_func(val, alpha_argument) + 1\n"),
+            "got: {out}"
         );
     }
 
@@ -874,17 +914,37 @@ mod tests {
 
     #[test]
     fn wi21_subline_method_literal_single_twin_vetoes() {
-        // An untouched same-method same-args twin anywhere vetoes.
+        // An untouched same-method same-args twin anywhere vetoes the
+        // HOLED sub-line template; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(svc.configure(alpha_arg, 1));\n    svc.configure(alpha_arg, 1);\n}\n";
+        assert!(
+            super::try_subline_method_literal_single(
+                &["    foo(svc.configure(alpha_arg, 1));"],
+                &["    foo(svc.configure(alpha_arg, 2));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(svc.configure(alpha_arg, 1));\n+    foo(svc.configure(alpha_arg, 2));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
+                .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- foo(svc.configure(alpha_arg, 1))\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ foo(svc.configure(alpha_arg, 2))\n"),
+            "got: {out}"
         );
     }
 
@@ -1167,18 +1227,38 @@ mod tests {
     #[test]
     fn wi22_subline_method_wrap_single_twin_vetoes() {
         // Totality keys on method + arity (slice-7 precedent): an
-        // untouched same-method same-arity twin vetoes even when its
-        // args differ from the changed site.
+        // untouched same-method same-arity twin vetoes the HOLED
+        // template even when its args differ from the changed site;
+        // the unique whole line raises as a WI-6-slice-1 literal
+        // verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(svc.process(alpha_arg));\n    svc.process(other_arg);\n}\n";
+        assert!(
+            super::try_subline_method_wrap_single(
+                &["    foo(svc.process(alpha_arg));"],
+                &["    foo(svc.process(alpha_arg.clone()));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(svc.process(alpha_arg));\n+    foo(svc.process(alpha_arg.clone()));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
+                .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- foo(svc.process(alpha_arg))\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ foo(svc.process(alpha_arg.clone()))\n"),
+            "got: {out}"
         );
     }
 

@@ -1230,6 +1230,9 @@ mod tests {
         // N=1 never pays the second hunk (the unique-single detector
         // would re-harvest the call template and fragment the intent)
         // — the vetoed shape stays wholly ordinary, pinned.
+        // (WI-6 slice 1 changes nothing here: the suppressed-callee
+        // call hunk never reaches the single core — the WI-4a
+        // suppression gate in the per-hunk path owns it first.)
         let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n}\n";
         let sections = vec![section(
             "src.rs",
@@ -1900,9 +1903,27 @@ mod tests {
         assert!(suppressed.contains(&("a.rs".to_string(), "foo".to_string())));
         assert!(suppressed.contains(&("b.rs".to_string(), "foo".to_string())));
         let full = infer_semantic_with_pre_images(&sections, &pre);
+        // The joint stays suppressed (def/call hunks ordinary, no
+        // `# follow=uses` — the suppression's purpose); the unrelated
+        // `let x` line raises as its own WI-6-slice-1 literal verbatim
+        // single (unique site, byte-probe verified), partitioning
+        // beside the ordinary remainder instead of stranding it.
+        let out = full.expect("partition must emit");
         assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "veto must stay wholly ordinary, got: {full:?}"
+            !out.contains("# follow=uses"),
+            "joint must stay suppressed, got: {out}"
+        );
+        assert!(
+            out.contains("-    foo(2);"),
+            "call lines must stay ordinary, got: {out}"
+        );
+        assert!(
+            out.contains("- let x = 1;"),
+            "unrelated line raises literally, got: {out}"
+        );
+        assert!(
+            out.contains("+ let x = 2;"),
+            "unrelated line raises literally, got: {out}"
         );
     }
 

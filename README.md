@@ -182,7 +182,7 @@ context would be larger, so these are lower bounds.)
 | 06-literal-cross-hunk (1 mixed hunk → 2 per-pair singles, WI-4) | 679 B / 19 ln | 380 B / 18 ln | 44% |
 | 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 90 B / 5 ln | 58% |
 | 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 146 B / 7 ln | 73% |
-| 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 295 B / 13 ln | 40% |
+| 09-arg-add (3-site arg-add sweep + 2 verbatim singles) | 489 B / 18 ln | 301 B / 14 ln | 38% |
 | 10-same-literal (3 sites, same-literal sweep) | 386 B / 10 ln | 148 B / 5 ln | 62% |
 | 11-let-sweep (2 let sites, verbatim sweep) | 319 B / 9 ln | 185 B / 7 ln | 42% |
 | 12-verbatim (2 sites, verbatim sweep) | 199 B / 9 ln | 123 B / 7 ln | 38% |

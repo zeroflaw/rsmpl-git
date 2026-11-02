@@ -1173,9 +1173,16 @@ mod tests {
         // (hybrid-section precedent, same as single-file B1).
         assert!(out.contains("diff --git a.rs"), "got:\n{out}");
         assert!(out.contains("a/b.rs"), "got:\n{out}");
+        // WI-6 slice 1: the leftover raises as its own literal verbatim
+        // single (unique site, byte-probe verified) — the call section
+        // is fully semantic, so there is no ordinary remainder view.
         assert!(
-            out.contains("let q = 2;"),
-            "leftover stays verbatim, got:\n{out}"
+            out.contains("- let q = 1;"),
+            "leftover raises literally, got:\n{out}"
+        );
+        assert!(
+            out.contains("+ let q = 2;"),
+            "leftover raises literally, got:\n{out}"
         );
         validated_live(&out, &pre);
         let files = apply_to_tree(&out, &pre);
@@ -1194,13 +1201,14 @@ mod tests {
             "got: {}",
             files["b.rs"]
         );
-        // Leftover survival is in-place: the call section keeps its
-        // native hunk text beside the semantic hunks.
+        // Leftover survival is in-place: with the WI-6-slice-1 single
+        // the call section is fully semantic (no ordinary remainder),
+        // so there is no native view beside the semantic hunks.
         let (_, _, native_view) =
             split_semantic_native(&out[out.find("a/b.rs").expect("call section")..]);
         assert!(
-            native_view.is_some(),
-            "call section keeps native view, got:\n{out}"
+            native_view.is_none(),
+            "fully semantic call section keeps no native view, got:\n{out}"
         );
     }
 }

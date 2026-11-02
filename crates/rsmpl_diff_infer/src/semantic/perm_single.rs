@@ -894,16 +894,37 @@ mod tests {
 
     #[test]
     fn wi17_subline_perm_single_twin_vetoes() {
+        // An untouched same-shape twin vetoes the HOLED sub-line perm;
+        // the unique whole line raises as a WI-6-slice-1 literal
+        // verbatim single (byte-probe verified).
         let pre = "fn m() {\n    swap(alpha_arg, beta_arg) + 1;\n    swap(first_value, second_value);\n}\n";
+        assert!(
+            super::try_subline_perm_single(
+                &["    swap(alpha_arg, beta_arg) + 1;"],
+                &["    swap(beta_arg, alpha_arg) + 1;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    swap(alpha_arg, beta_arg) + 1;\n+    swap(beta_arg, alpha_arg) + 1;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
+                .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- swap(alpha_arg, beta_arg) + 1\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ swap(beta_arg, alpha_arg) + 1\n"),
+            "got: {out}"
         );
     }
 
@@ -1053,16 +1074,37 @@ mod tests {
 
     #[test]
     fn wi18_subline_method_perm_single_twin_vetoes() {
+        // An untouched same-shape twin vetoes the HOLED sub-line perm;
+        // the unique whole line raises as a WI-6-slice-1 literal
+        // verbatim single (byte-probe verified).
         let pre = "fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n    svc.configure(first_value, second_value);\n}\n";
+        assert!(
+            super::try_subline_method_perm_single(
+                &["    svc.configure(alpha_arg, beta_arg) + 1;"],
+                &["    svc.configure(beta_arg, alpha_arg) + 1;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    svc.configure(alpha_arg, beta_arg) + 1;\n+    svc.configure(beta_arg, alpha_arg) + 1;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
+                .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- svc.configure(alpha_arg, beta_arg) + 1\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ svc.configure(beta_arg, alpha_arg) + 1\n"),
+            "got: {out}"
         );
     }
 

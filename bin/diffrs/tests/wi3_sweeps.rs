@@ -222,25 +222,32 @@ fn wi3_qualified_call_fires() {
 #[test]
 fn wi3_qualified_call_divergent_prefix_stays_ordinary() {
     // Fixture 62: `crate::old` -> `crate::new` plus `other::old` ->
-    // `other::new` share no prefix class — veto side of fixture 61.
+    // `other::new` share no prefix class — veto side of fixture 61
+    // for the sweep shape. Each unique line now raises as its own
+    // WI-6-slice-1 literal verbatim single (subhunk partition,
+    // byte-probe verified).
     let (native_input, semantic) = convert_fixture("62-qualified-call-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "divergent-prefix edit must stay ordinary, got: {semantic}"
+        semantic.contains("- crate::old_handler_name(first_argument)"),
+        "site 1 must raise literally, got: {semantic}"
     );
     assert!(
-        semantic.contains("-    crate::old_handler_name(first_argument);"),
-        "minus lines must be preserved, got: {semantic}"
+        semantic.contains("+ crate::new_handler_name(first_argument)"),
+        "site 1 must raise literally, got: {semantic}"
     );
     assert!(
-        semantic.contains("+    other::new_handler_name(second_argument);"),
-        "plus lines must be preserved, got: {semantic}"
+        semantic.contains("- other::old_handler_name(second_argument)"),
+        "site 2 must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ other::new_handler_name(second_argument)"),
+        "site 2 must raise literally, got: {semantic}"
     );
     let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
     assert!(context.is_empty(), "zero-context, got: {context:?}");
     assert!(
-        semantic == normalize_native(&native_input),
-        "ordinary passthrough must equal normalized native, got: {semantic}"
+        semantic.len() < native_input.len() + 2 * 16,
+        "precision guard, got: {semantic}"
     );
 }
 
@@ -281,21 +288,31 @@ fn wi3_turbofish_fires() {
 #[test]
 fn wi3_turbofish_arity_divergent_stays_ordinary() {
     // Fixture 64: `::<u8>` vs `::<u8, u16>` share no turbo class (arity
-    // is match-exact) — veto side of fixture 63.
+    // is match-exact) — veto side of fixture 63 for the sweep shape.
+    // Each unique line now raises as its own WI-6-slice-1 literal
+    // verbatim single (subhunk partition, byte-probe verified).
     let (native_input, semantic) = convert_fixture("64-turbofish-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "turbo-arity-divergent edit must stay ordinary, got: {semantic}"
+        semantic.contains("- old_deserializer_name::<u8>(first_argument)"),
+        "site 1 must raise literally, got: {semantic}"
     );
     assert!(
-        semantic.contains("-    old_deserializer_name::<u8>(first_argument);"),
-        "minus lines must be preserved, got: {semantic}"
+        semantic.contains("+ new_deserializer_name::<u8>(first_argument)"),
+        "site 1 must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- old_deserializer_name::<u8, u16>(second_argument)"),
+        "site 2 must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ new_deserializer_name::<u8, u16>(second_argument)"),
+        "site 2 must raise literally, got: {semantic}"
     );
     let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
     assert!(context.is_empty(), "zero-context, got: {context:?}");
     assert!(
-        semantic == normalize_native(&native_input),
-        "ordinary passthrough must equal normalized native, got: {semantic}"
+        semantic.len() < native_input.len() + 2 * 16,
+        "precision guard, got: {semantic}"
     );
 }
 

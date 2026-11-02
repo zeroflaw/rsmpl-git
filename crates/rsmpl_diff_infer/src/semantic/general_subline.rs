@@ -212,18 +212,32 @@ mod tests {
 
     #[test]
     fn wi19_subline_general_single_twin_vetoes() {
-        // An untouched same-template twin anywhere vetoes.
+        // An untouched same-template twin anywhere vetoes the HOLED
+        // sub-line template; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(alpha + 1);\n    bar(alpha + 1);\n}\n";
+        assert!(
+            super::try_subline_general_single(
+                &["    foo(alpha + 1);"],
+                &["    foo(alpha + 2);"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed sub-line twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(alpha + 1);\n+    foo(alpha + 2);\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(alpha + 1)\n"), "got: {out}");
+        assert!(out.contains("+ foo(alpha + 2)\n"), "got: {out}");
     }
 
     #[test]

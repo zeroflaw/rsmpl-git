@@ -485,10 +485,12 @@ mod tests {
     #[test]
     fn peel_mixed_hunk_atomicity_drops_class() {
         // WI-9e: H1 holds a peel pair plus a singleton; H2..H5 hold the
-        // same hetero peel class. The class must drop (its first member
+        // same hetero peel class. The class drops (its first member
         // sits in uncovered H1, so the body could never emit there and
-        // covered hunks would silently drop) — inference declines and
-        // the section falls through to ordinary.
+        // covered hunks would silently drop) — while every proved pair
+        // raises as its own WI-6-slice-1 literal verbatim single
+        // (byte-probe verified). No sweep hunk emits; the pure-deletion
+        // `drop();` remainder stays ordinary.
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@ pub fn a() {\n-    let r = load(ctx, &[\"h\", m1, t1]);\n-    ping(1);\n+    let r = fetch(ctx, m1, &[t1]);\n+    ping(2);\n@@ -6 +6 @@ pub fn b() {\n-    let r = load(ctx, &[\"h\", m2, t1]);\n+    let r = fetch(ctx, m2, &[t1]);\n@@ -9 +9 @@ pub fn c() {\n-    let r = load(ctx, &[\"h\", m3, t1]);\n+    let r = fetch(ctx, m3, &[t1]);\n@@ -12 +12 @@ pub fn d() {\n-    let r = load(ctx, &[\"h\", m4, t1]);\n+    let r = fetch(ctx, m4, &[t1]);\n@@ -15 +15 @@ pub fn e() {\n-    let r = load(ctx, &[\"h\", m5, t1]);\n+    let r = fetch(ctx, m5, &[t1]);\n@@ -21 +20,0 @@ pub fn gone() {\n-    drop();\n",
@@ -497,10 +499,21 @@ mod tests {
             "f.rs",
             "pub fn a() {\n    let r = load(ctx, &[\"h\", m1, t1]);\n    ping(1);\n}\npub fn b() {\n    let r = load(ctx, &[\"h\", m2, t1]);\n}\npub fn c() {\n    let r = load(ctx, &[\"h\", m3, t1]);\n}\npub fn d() {\n    let r = load(ctx, &[\"h\", m4, t1]);\n}\npub fn e() {\n    let r = load(ctx, &[\"h\", m5, t1]);\n}\npub fn filler() {\n    keep();\n}\npub fn gone() {\n    drop();\n}\n",
         )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("partition must emit");
+        validated_live(&out, &pre);
+        assert!(!out.contains("# allow=many"), "no sweep, got: {out}");
         assert!(
-            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none()
+            out.contains("- let r = load(ctx, &[\"h\", m1, t1]);\n"),
+            "got: {out}"
         );
+        assert!(
+            out.contains("+ let r = fetch(ctx, m1, &[t1]);\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- ping(1)\n"), "got: {out}");
+        assert!(out.contains("+ ping(2)\n"), "got: {out}");
+        assert!(out.contains("-    drop();\n"), "got: {out}");
     }
 
     #[test]

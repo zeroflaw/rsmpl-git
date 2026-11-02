@@ -155,6 +155,7 @@ pub(crate) use perm_single::{
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
 pub(crate) use sig_evolution::try_sig_evolution_sweep;
 pub(crate) use single_block::try_single_block_sweep;
+pub(crate) use verbatim::try_verbatim_single;
 
 pub(crate) use guard::{guard_for, Guard};
 pub(crate) use precision_single::try_precision_definition_single;

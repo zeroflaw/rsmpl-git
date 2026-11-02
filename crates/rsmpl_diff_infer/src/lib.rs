@@ -632,6 +632,27 @@ pub(crate) fn compress_balanced_pair_body(
             minuses, pluses, path, file_old, changed, used_rules, declined,
         )
     };
+    // WI-6 slice 1: last-resort literal verbatim single under the
+    // precision guard. Runs only when every holed arm above AND the
+    // single-pair definition/perm shapes in `full` decline, so tighter
+    // spellings always win (including the single-pair perm sweep, which
+    // owns multi-subterm lines like `swap(x, y) + swap(y, x)`).
+    // Uniqueness proved at n=1 plus the T361 byte-compare inside;
+    // `guard_for("verbatim")` stays Strict for multis.
+    if full.is_none() && minuses.len() == 1 {
+        if let Some(single) = attempt(
+            declined,
+            "verbatim",
+            semantic::try_verbatim_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "verbatim"));
+            }
+            declined_guard(declined, "verbatim", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
+    }
     match full {
         Some((f, detector)) => {
             let body = f.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
@@ -1624,15 +1645,23 @@ mod tests {
     }
 
     #[test]
-    fn single_sweep_stays_strict_t375() {
-        // WI-19: a lone sweep-shaped edit keeps strict T375 even when it
-        // would clear the precision bound — bytes proxy over-match risk.
+    fn single_literal_floor_fires_while_holed_stays_strict() {
+        // WI-19: a lone sweep-shaped edit keeps strict T375 for HOLED
+        // shapes even when they would clear the precision bound — bytes
+        // proxy over-match risk. WI-6 slice 1 retires the cost veto
+        // only for the hole-free literal floor: the unique line raises
+        // as a verbatim single (byte-probe verified) while no holed
+        // template emits.
         let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(a);\n+    foo(a, 1);\n");
         let pre = pre_map(&[("f.rs", "fn m() {\n    foo(a);\n}\n")]);
+        let out = semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim single must fire");
         assert!(
-            semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
-            "lone call-wrap must stay ordinary"
+            !out.contains("(E0)"),
+            "no holed template may emit, got: {out}"
         );
+        assert!(out.contains("- foo(a)\n"), "got: {out}");
+        assert!(out.contains("+ foo(a, 1)\n"), "got: {out}");
     }
 
     #[test]

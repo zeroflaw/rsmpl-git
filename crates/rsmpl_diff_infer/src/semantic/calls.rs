@@ -590,14 +590,28 @@ mod tests {
 
     #[test]
     fn wi7_call_single_twin_vetoes() {
-        // An untouched same-callee twin anywhere vetoes (totality).
+        // An untouched same-callee twin anywhere vetoes the HOLED
+        // template (totality); the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(1);\n    foo(9);\n}\n";
+        assert!(
+            super::try_call_single(
+                &["    foo(1);"],
+                &["    bar(1);"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(1);\n+    bar(1);\n");
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "twin must veto"
-        );
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(1)\n"), "got: {out}");
+        assert!(out.contains("+ bar(1)\n"), "got: {out}");
     }
 
     #[test]
@@ -714,17 +728,31 @@ mod tests {
 
     #[test]
     fn wi14_subline_call_single_twin_vetoes() {
-        // An untouched same-callee same-arity twin anywhere vetoes.
+        // An untouched same-callee same-arity twin anywhere vetoes the
+        // HOLED sub-line template; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(alpha_argument) + 1;\n    foo(other_value);\n}\n";
+        assert!(
+            super::try_subline_call_single(
+                &["    foo(alpha_argument) + 1;"],
+                &["    bar(alpha_argument) + 1;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(alpha_argument) + 1;\n+    bar(alpha_argument) + 1;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "twin must veto"
-        );
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(alpha_argument) + 1\n"), "got: {out}");
+        assert!(out.contains("+ bar(alpha_argument) + 1\n"), "got: {out}");
     }
 
     #[test]
@@ -954,17 +982,33 @@ mod tests {
 
     #[test]
     fn wi23_subline_bare_wrap_twin_vetoes() {
-        // An untouched same-callee same-arity twin anywhere vetoes, even
-        // with different args (slice-6 totality precedent).
+        // An untouched same-callee same-arity twin anywhere vetoes the
+        // HOLED wrap (slice-6 totality precedent); the unique whole line
+        // raises as a WI-6-slice-1 literal verbatim single.
         let pre = "fn m() {\n    foo(bar(alpha_argument));\n    bar(different_value);\n}\n";
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(bar(alpha_argument));"],
+                &["    foo(bar(alpha_argument.clone()));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(alpha_argument.clone()));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(bar(alpha_argument))\n"), "got: {out}");
         assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "twin must veto"
+            out.contains("+ foo(bar(alpha_argument.clone()))\n"),
+            "got: {out}"
         );
     }
 
@@ -1017,48 +1061,101 @@ mod tests {
 
     #[test]
     fn wi23_subline_bare_wrap_callee_delta_declines() {
-        // Callee deltas are slice-14 territory, never partially claimed.
+        // Callee deltas are slice-14 territory, never partially
+        // claimed by the wrap core; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(bar(alpha_argument)) + 1;\n}\n";
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(bar(alpha_argument)) + 1;"],
+                &["    foo(qux(alpha_argument)) + 1;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "wrap core must decline callee deltas"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(bar(alpha_argument)) + 1;\n+    foo(qux(alpha_argument)) + 1;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
         assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "callee delta must decline"
+            out.contains("- foo(bar(alpha_argument)) + 1\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ foo(qux(alpha_argument)) + 1\n"),
+            "got: {out}"
         );
     }
 
     #[test]
     fn wi23_subline_bare_wrap_pure_concrete_declines() {
         // Pure-concrete deltas are literal territory (slice-20 owns the
-        // spelling where it fires; here it vetoes as zero-hole).
+        // spelling where it fires; here it vetoes as zero-hole); the
+        // unique whole line raises as a WI-6-slice-1 literal verbatim
+        // single (byte-probe verified).
         let pre = "fn m() {\n    foo(bar(alpha_argument));\n}\n";
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(bar(alpha_argument));"],
+                &["    foo(bar(beta_value));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "wrap core must decline pure-concrete deltas"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(bar(alpha_argument));\n+    foo(bar(beta_value));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "pure-concrete delta must decline"
-        );
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(bar(alpha_argument))\n"), "got: {out}");
+        assert!(out.contains("+ foo(bar(beta_value))\n"), "got: {out}");
     }
 
     #[test]
     fn wi23_subline_bare_wrap_perm_declines() {
         // Permuted holes are perm territory (slice-17), never claimed
-        // here.
+        // by the wrap core; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(bar(alpha_argument, beta_value));\n}\n";
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(bar(alpha_argument, beta_value));"],
+                &["    foo(bar(beta_value, alpha_argument));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "wrap core must decline permuted holes"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(bar(alpha_argument, beta_value));\n+    foo(bar(beta_value, alpha_argument));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
         assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "perm delta must decline"
+            out.contains("- foo(bar(alpha_argument, beta_value))\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ foo(bar(beta_value, alpha_argument))\n"),
+            "got: {out}"
         );
     }
 
@@ -1097,34 +1194,73 @@ mod tests {
 
     #[test]
     fn wi23_subline_bare_wrap_two_site_line_declines() {
-        // Uniform two-site lines are multi territory by site count, even
-        // at one pair (the multi needs N>=2 pairs).
+        // Uniform two-site lines are multi territory by site count for
+        // the WRAP core, even at one pair (the multi needs N>=2 pairs);
+        // the unique whole line raises as a WI-6-slice-1 literal
+        // verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(bar(alpha_value)) + foo(bar(beta_value));\n}\n";
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(bar(alpha_value)) + foo(bar(beta_value));"],
+                &["    foo(bar(alpha_value.clone())) + foo(bar(beta_value.clone()));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "wrap core must decline two-site lines"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(bar(alpha_value)) + foo(bar(beta_value));\n+    foo(bar(alpha_value.clone())) + foo(bar(beta_value.clone()));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
         assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "two-site line must decline"
+            out.contains("- foo(bar(alpha_value)) + foo(bar(beta_value))\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ foo(bar(alpha_value.clone())) + foo(bar(beta_value.clone()))\n"),
+            "got: {out}"
         );
     }
 
     #[test]
     fn wi23_subline_bare_wrap_hetero_outer_inner_stays_ordinary() {
         // A same-level wrap plus a deep-inner wrap on one line: the
-        // frame check vetoes the partial claim (never partially
-        // claimed).
+        // frame check vetoes the partial sub-site claim (never
+        // partially claimed); the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(alpha_argument) + foo(bar(beta_value));\n}\n";
+        assert!(
+            super::try_subline_bare_wrap_single(
+                &["    foo(alpha_argument) + foo(bar(beta_value));"],
+                &["    foo(bar(alpha_argument)) + foo(bar(beta_value.clone()));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "wrap core must decline hetero partial claims"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(alpha_argument) + foo(bar(beta_value));\n+    foo(bar(alpha_argument)) + foo(bar(beta_value.clone()));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim single must fire");
         assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "hetero line must stay ordinary"
+            out.contains("- foo(alpha_argument) + foo(bar(beta_value))\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ foo(bar(alpha_argument)) + foo(bar(beta_value.clone()))\n"),
+            "got: {out}"
         );
     }
 

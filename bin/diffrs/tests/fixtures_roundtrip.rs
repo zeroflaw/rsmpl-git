@@ -709,7 +709,9 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
         );
     } else if name == "24-call-arg-add" {
         // T447: homo trailing addition compresses (a.rs), hetero
-        // trailing (b.rs, 09d3446 miniature) stays ordinary.
+        // trailing (b.rs, 09d3446 miniature) partitions: the two hetero
+        // pairs raise as WI-6-slice-1 verbatim singles (each unique,
+        // byte-verified) instead of staying ordinary.
         assert!(
             semantic.contains("rule=r1"),
             "arg-add sweep must fire, got: {semantic}"
@@ -731,12 +733,12 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
             "rewritten lines must be consumed, got: {semantic}"
         );
         assert!(
-            semantic.contains("-    make_widget(theta, 4);"),
-            "hetero-trailing minus lines must stay ordinary, got: {semantic}"
+            semantic.contains("- make_widget(theta, 4)"),
+            "hetero-trailing theta raises as verbatim single, got: {semantic}"
         );
         assert!(
-            semantic.contains("+    make_widget(theta, 4, symlink);"),
-            "hetero-trailing plus lines must stay ordinary, got: {semantic}"
+            semantic.contains("+ make_widget(theta, 4, symlink)"),
+            "hetero-trailing theta raises as verbatim single, got: {semantic}"
         );
         assert!(
             semantic.len() < native_input.len(),

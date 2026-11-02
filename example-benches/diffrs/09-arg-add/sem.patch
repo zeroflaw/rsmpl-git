@@ -6,8 +6,9 @@ diff --git src/a.rs
 diff --git src/b.rs
 --- a/src/b.rs
 +++ b/src/b.rs
-@@ -2,2 +2,2 @@
--    make_widget(theta, 4);
--    make_widget(iota, 5);
-+    make_widget(theta, 4, symlink);
-+    make_widget(iota, 5, false);
+@@ -2,1 @@ rule=r2
+- make_widget(theta, 4)
++ make_widget(theta, 4, symlink)
+@@ -3,1 @@ rule=r3
+- make_widget(iota, 5)
++ make_widget(iota, 5, false)

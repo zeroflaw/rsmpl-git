@@ -356,14 +356,27 @@ mod tests {
 
     #[test]
     fn single_block_header_member_vetoes() {
-        // Mixed runs decline: the fn-header pair cannot join a let
-        // window (v1 does no sub-hunk split).
+        // Mixed runs decline as a fused window (the fn-header pair
+        // cannot join a let window — WI-4 subhunk splits at detector
+        // boundaries instead). The `bumped` line raises as its own
+        // WI-6-slice-1 literal verbatim single; the header and the
+        // `count` line stay ordinary — renaming the `count` binder
+        // literally would drag its live use on the next line along
+        // (binder capture), so the byte probe vetoes it. Each line
+        // lands exactly where soundness allows.
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-fn scale(values: Vec<u32>) -> u32 {\n-    let count = values.len() as u32;\n-    let bumped = count + 1;\n+fn scale(values: Box<[u32]>) -> u32 {\n+    let n = values.len() as u32;\n+    let bumped = n + 1;\n",
         );
         let pre = pre_map(&[("f.rs", PRE_TWO)]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("partition must emit");
+        assert!(
+            out.contains("-    let count = values.len() as u32;\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- let bumped = count + 1;\n"), "got: {out}");
+        assert!(out.contains("+ let bumped = n + 1;\n"), "got: {out}");
     }
 
     #[test]
@@ -384,7 +397,9 @@ mod tests {
     #[test]
     fn single_block_one_sided_ascription_vetoes() {
         // A type-add inside the run is another detector's class (whole
-        // singles own it), never one fused position.
+        // singles own it), never one fused position; each unique line
+        // raises as its own WI-6-slice-1 literal verbatim single
+        // (byte-probe verified).
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@\n-    let alpha = compute_first(input);\n-    let beta = wrap(alpha);\n+    let alpha: u32 = compute_first(input);\n+    let beta = wrap(bbb);\n",
@@ -393,7 +408,18 @@ mod tests {
             "f.rs",
             "fn f() {\n    let alpha = compute_first(input);\n    let beta = wrap(alpha);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim singles must fire");
+        assert!(
+            out.contains("- let alpha = compute_first(input);\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ let alpha: u32 = compute_first(input);\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- let beta = wrap(alpha);\n"), "got: {out}");
+        assert!(out.contains("+ let beta = wrap(bbb);\n"), "got: {out}");
     }
 
     #[test]
@@ -414,16 +440,17 @@ mod tests {
 
     #[test]
     fn single_block_k_bounds_decline() {
-        // K = 1 is a true single (WI-4 N = 1 rule: stays ordinary).
+        // K = 1 is a true single (WI-4 N = 1 rule: stays ordinary
+        // without a pre-image — uniqueness needs the whole file).
         let one = section(
             "f.rs",
             "@@ -2,1 +2,1 @@\n-    let count = values.len() as u32;\n+    let n = values.len() as u32;\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&one)).is_none());
-        // K = 5 exceeds the Sequence engine arm's exact-K bound (hetero
-        // class no earlier detector owns, so the K gate is what
-        // declines — a uniform f→g class would rightly belong to the
-        // call sweep instead).
+        // K = 5 exceeds the Sequence engine arm's exact-K bound; each
+        // unique line raises as its own WI-6-slice-1 literal verbatim
+        // single instead (hetero class no earlier detector owns, so
+        // the K gate still declines the window — only the floor moved).
         let five = section(
             "f.rs",
             "@@ -2,5 +2,5 @@\n-    let a1 = f1(x1);\n-    let a2 = f2(x2);\n-    let a3 = f3(x3);\n-    let a4 = f4(x4);\n-    let a5 = f5(x5);\n+    let b1 = f1(x1);\n+    let b2 = f2(x2);\n+    let b3 = f3(x3);\n+    let b4 = f4(x4);\n+    let b5 = f5(x5);\n",
@@ -432,7 +459,18 @@ mod tests {
             "f.rs",
             "fn f() {\n    let a1 = f1(x1);\n    let a2 = f2(x2);\n    let a3 = f3(x3);\n    let a4 = f4(x4);\n    let a5 = f5(x5);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&five), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&five), &pre)
+            .expect("literal verbatim singles must fire");
+        for i in 1..=5 {
+            assert!(
+                out.contains(&format!("- let a{i} = f{i}(x{i});\n")),
+                "got: {out}"
+            );
+            assert!(
+                out.contains(&format!("+ let b{i} = f{i}(x{i});\n")),
+                "got: {out}"
+            );
+        }
     }
 
     #[test]
@@ -460,10 +498,9 @@ mod tests {
     #[test]
     fn single_block_family_uniform_run_declines() {
         // Same init family (two bare calls, however hetero the
-        // callees — call-sweep territory, verdict stands even when it
-        // vetoes) never fuses here; only kind-hetero runs do. Pat
-        // renames with preserved inits are the shape; the shared
-        // `Call` kind is the gate.
+        // callees) never fuses into a window here; each unique line
+        // raises as its own WI-6-slice-1 literal verbatim single
+        // (byte-probe verified).
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@\n-    let alpha = compute_first(input);\n-    let beta = wrap(delta);\n+    let aaa = compute_first(input);\n+    let bbb = wrap(delta);\n",
@@ -472,13 +509,27 @@ mod tests {
             "f.rs",
             "fn f() {\n    let alpha = compute_first(input);\n    let beta = wrap(delta);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim singles must fire");
+        assert!(
+            out.contains("- let alpha = compute_first(input);\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ let aaa = compute_first(input);\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- let beta = wrap(delta);\n"), "got: {out}");
+        assert!(out.contains("+ let bbb = wrap(delta);\n"), "got: {out}");
     }
 
     #[test]
     fn single_block_whitespace_only_delta_vetoes() {
-        // A spacing-only delta equalizes under token comparison: the
-        // templates would be identical (a no-op hunk) — decline.
+        // A spacing-only delta equalizes under token comparison, so no
+        // HOLED template emits (a no-op hunk); the unique raw line
+        // raises as a WI-6-slice-1 literal verbatim single (the literal
+        // spelling distinguishes what tokens equalize, byte-probe
+        // verified).
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@\n-    let alpha=compute_first(input);\n-    let beta = wrap(alpha);\n+    let alpha = compute_first(input);\n+    let beta = wrap(alpha);\n",
@@ -487,7 +538,16 @@ mod tests {
             "f.rs",
             "fn f() {\n    let alpha=compute_first(input);\n    let beta = wrap(alpha);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim single must fire");
+        assert!(
+            out.contains("- let alpha=compute_first(input);\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ let alpha = compute_first(input);\n"),
+            "got: {out}"
+        );
     }
 
     #[test]

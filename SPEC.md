@@ -9485,6 +9485,19 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   uncovered pair drops (releasing its stranded-join claims) to a fixed
   point, and uncovered leftovers stay ordinary; rules reserve only for
   survivors.
+  N=1 literal single (WI-6 slice 1): a whole-line single no holed
+  single owns raises as one directive-free allow-one hunk with literal
+  `-`/`+` lines (the fragment is the whole matched unit), under the
+  precision guard (`body <= hunk + 16`). Same gates as the sweep
+  (shape, novelty, backtick emission), uniqueness proved at n=1 over
+  the pre-image file, plus the T361 real-apply byte-compare
+  pre-reservation; the rule is reserved only for emissions that
+  reproduce. The single runs last in the per-hunk chain (after every
+  holed single and the single-pair definition/perm shapes), so tighter
+  spellings always win; `guard_for("verbatim")` stays Strict for
+  multis. In subhunk runs a declined whole still tries the bounded
+  split-search before per-pair singles, so literal keys never shadow
+  the hetero multis their pairs belong to (bench 48).
   All seven metavar sweeps carry the same pre-image subterm totality
   (T409): matchable-unit count (calls/methods by callee+arity, same-method
   literals by method+old-args, strips by method+args, slots by fn ident

@@ -1543,18 +1543,32 @@ mod tests {
 
     #[test]
     fn wi7_method_single_twin_vetoes() {
-        // An untouched same-method twin anywhere vetoes (totality).
+        // An untouched same-method twin anywhere vetoes the HOLED
+        // template (totality); the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    a.old_method(1);\n    b.old_method(9);\n}\n";
+        assert!(
+            super::try_method_single(
+                &["    a.old_method(1);"],
+                &["    a.new_method(1);"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    a.old_method(1);\n+    a.new_method(1);\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(out.contains("- a.old_method(1)\n"), "got: {out}");
+        assert!(out.contains("+ a.new_method(1)\n"), "got: {out}");
     }
 
     #[test]
@@ -1632,15 +1646,29 @@ mod tests {
 
     #[test]
     fn wi7_m2f_single_twin_vetoes() {
-        // An untouched same-method twin anywhere vetoes (totality).
+        // An untouched same-method twin anywhere vetoes the HOLED
+        // template (totality); the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    a.old(1);\n    b.old(9);\n}\n";
+        assert!(
+            super::try_method_to_fn_single(
+                &["    a.old(1);"],
+                &["    new_fn(a, 1);"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section("f.rs", "@@ -2 +2 @@\n-    a.old(1);\n+    new_fn(a, 1);\n");
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(out.contains("- a.old(1)\n"), "got: {out}");
+        assert!(out.contains("+ new_fn(a, 1)\n"), "got: {out}");
     }
 
     #[test]

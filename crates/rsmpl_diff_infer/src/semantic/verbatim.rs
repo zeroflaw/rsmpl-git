@@ -1037,6 +1037,140 @@ impl<'ast> syn::visit::Visit<'ast> for TotalityScan {
     }
 }
 
+/// N=1 last-resort literal single (WI-6 slice 1) under the precision
+/// guard. Fires iff the pair is a whole-line single no holed single
+/// owns (the caller runs this arm last, so tighter spellings always
+/// win), resolving to the same literal emission the N ≥ 2 sweep gives
+/// a group: expression pairs strip one terminator and parse as
+/// `syn::Expr` (struct-literal label-strip fallback shared, T416);
+/// complete single-line `let` statements take the `Stmt::Local` path
+/// on the full `;`-terminated lines. Same gates as the sweep
+/// (`verbatim_shape_ok`, the WI-5b novelty gate, WI-7-upper backtick
+/// emission), uniqueness proved at n=1 over the pre-image file
+/// (`totality_holds` for expressions, `totality_holds_local` for
+/// `let`s — a `None` pre-image vetoes, D3), and the T361
+/// byte-compare pre-reservation (`single_reproduces`) vetoes any
+/// TokenStream spacing drift (the rule is reserved only for emissions
+/// that reproduce). Emission is the WI-19b allow-one spelling (tight
+/// range, directive-free, default `allow=one`). Detector name
+/// `verbatim` (same family, provenance unchanged).
+pub(crate) fn try_verbatim_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    let m = minuses[0].trim();
+    let p = pluses[0].trim();
+    if m == p {
+        return None;
+    }
+    // Resolve the emission pair per shape (sweep precedent): expression
+    // pairs emit the terminator-stripped lines; complete single-line
+    // `let` statements emit the full `;`-terminated lines.
+    let (Some(stripped_m), Some(stripped_p)) = (strip_one_terminator(m), strip_one_terminator(p))
+    else {
+        return None;
+    };
+    let parsed = (
+        syn::parse_str::<syn::Expr>(stripped_m),
+        syn::parse_str::<syn::Expr>(stripped_p),
+    );
+    let resolved: Option<(String, String, String, bool)> = match parsed {
+        (Ok(ref a), Ok(ref b))
+            if !matches!(a, syn::Expr::Let(_)) && !matches!(b, syn::Expr::Let(_)) =>
+        {
+            Some((
+                stripped_m.to_string(),
+                stripped_p.to_string(),
+                flat_ws(stripped_m),
+                false,
+            ))
+        }
+        _ => match (strip_field_label(stripped_m), strip_field_label(stripped_p)) {
+            (Some((ml, mi)), Some((pl, pi))) if ml == pl => {
+                Some((mi.to_string(), pi.to_string(), flat_ws(mi), false))
+            }
+            _ => {
+                verbatim_let_shape(m, p).map(|()| (m.to_string(), p.to_string(), flat_ws(m), true))
+            }
+        },
+    };
+    let (emit_minus, emit_plus, needle, is_let) = resolved?;
+    // Same gates as the sweep: the engine shape check first (fail
+    // loud shapes never reach the counters), then the WI-5b novelty
+    // gate (a plus-side uppercase ident absent from the minus side
+    // would infer as an unbound hole on apply).
+    if !is_let {
+        let (minus_expr, plus_expr) = match (
+            syn::parse_str::<syn::Expr>(&emit_minus),
+            syn::parse_str::<syn::Expr>(&emit_plus),
+        ) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => return None,
+        };
+        if !verbatim_shape_ok(&minus_expr, &plus_expr) {
+            return None;
+        }
+    }
+    if plus_introduces_unbound_name(&emit_minus, &emit_plus) {
+        return None;
+    }
+    // WI-7-upper: backtick an uppercase call head so it stays literal.
+    let (mut lit_minus, mut lit_plus) = (emit_minus.clone(), emit_plus.clone());
+    if !is_let {
+        let (minus_expr, plus_expr) = match (
+            syn::parse_str::<syn::Expr>(&emit_minus),
+            syn::parse_str::<syn::Expr>(&emit_plus),
+        ) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => return None,
+        };
+        lit_minus = literal_call_emit(&minus_expr, &emit_minus);
+        lit_plus = literal_call_emit(&plus_expr, &emit_plus);
+    }
+    // Uniqueness at n=1 over the pre-image file (sweep soundness at
+    // group size 1: exactly one subterm/statement site, zero opaque
+    // hits covering the changed line).
+    let Ok(old) = syn::parse_str::<syn::File>(pre) else {
+        return None;
+    };
+    if is_let {
+        if !totality_holds_local(&old, &needle, 1) {
+            return None;
+        }
+    } else {
+        let Ok(minus_expr) = syn::parse_str::<syn::Expr>(&emit_minus) else {
+            return None;
+        };
+        if !totality_holds(&old, &minus_expr, 1, changed) {
+            return None;
+        }
+    }
+    // T361 byte-compare pre-reservation (WI-7 posture): the ranged
+    // allow-one emission must real-apply to the pre-image byte-identical
+    // to the native single-line swap. The reserve happens only for
+    // emissions that reproduce.
+    if !super::general_expr::single_reproduces(
+        path, pre, changed[0], minuses[0], pluses[0], &lit_minus, &lit_plus,
+    ) {
+        return None;
+    }
+    let rule = unique_rule(used_rules, "verbatim");
+    // Allow-one: directive-free ranged hunk (WI-7 singles precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {lit_minus}\n+ {lit_plus}\n"));
+    Some(hunk)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1086,11 +1220,13 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_mixed_hunk_atomicity_drops_group() {
+    fn verbatim_mixed_hunk_atomicity_drops_group_singleton_fires() {
         // WI-9e: H1 holds a repeated pair (foo, 3 sites) plus a
         // singleton (bar); the foo group must drop — emitting it would
-        // overlap the H1 ordinary leftover — so inference declines and
-        // the section falls through to ordinary.
+        // overlap the H1 ordinary leftover — while the bar singleton
+        // now raises as a WI-6-slice-1 verbatim single (unique site,
+        // byte-probe). The section partitions (semantic bar hunk +
+        // ordinary foo remainder) instead of falling through whole.
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@ pub fn a() {\n-    foo(x);\n-    bar(1);\n+    foo(y);\n+    bar(2);\n@@ -6 +6 @@ pub fn b() {\n-    foo(x);\n+    foo(y);\n@@ -9 +9 @@ pub fn c() {\n-    foo(x);\n+    foo(y);\n",
@@ -1099,10 +1235,22 @@ mod tests {
             "f.rs",
             "pub fn a() {\n    foo(x);\n    bar(1);\n}\npub fn b() {\n    foo(x);\n}\npub fn c() {\n    foo(x);\n}\n",
         )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("bar singleton must partition");
+        validated_live(&out, &pre);
+        // Atomicity core (WI-9e): no foo group may emit — every foo
+        // line stays ordinary.
         assert!(
-            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none()
+            !out.contains("- foo(x)\n"),
+            "foo group must drop, got: {out}"
         );
+        assert!(
+            out.contains("-    foo(x);"),
+            "foo lines stay ordinary, got: {out}"
+        );
+        // Slice-1 floor: the unique bar singleton raises literally.
+        assert!(out.contains("- bar(1)\n"), "got: {out}");
+        assert!(out.contains("+ bar(2)\n"), "got: {out}");
     }
 
     #[test]
@@ -1126,5 +1274,242 @@ mod tests {
             !out.contains("-    foo(x);"),
             "covered lines must be consumed, got: {out}"
         );
+    }
+
+    fn vsingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+        super::try_verbatim_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
+    }
+
+    #[test]
+    fn wi6_verbatim_single_unique_callee_change_fires_allow_one() {
+        // WI-6 slice 1: the 93 shape — a callee+args change no holed
+        // single owns — raises as a literal allow-one hunk and
+        // real-applies byte-identical (fixed point: re-diff is itself).
+        let pre = "fn m() {\n    let out = run(dir.path(), &[\"--patch\", patch]);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let out = run(dir.path(), &[\"--patch\", patch]);\n+    let out = run_stdin(dir.path(), patch, &[]);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique verbatim single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        assert!(!out.contains("# sweep"), "ranged single: {out}");
+        assert!(
+            out.contains("- let out = run(dir.path(), &[\"--patch\", patch]);\n"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ let out = run_stdin(dir.path(), patch, &[]);\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+        let out2 =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("must fire");
+        assert_eq!(out, out2, "fixed point");
+    }
+
+    #[test]
+    fn wi6_verbatim_single_expression_pair_fires() {
+        // Non-`let` expression pairs take the terminator-stripped
+        // literal path (the 47 shape: two sub-sites, one line, one
+        // intent — no holed single owns the whole-line pair).
+        let pre = "fn m() {\n    use_it(a) + use_it(b);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    use_it(a) + use_it(b);\n+    use_it(a.clone()) + use_it(b.clone());\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique expression single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        assert!(out.contains("- use_it(a) + use_it(b)\n"), "got: {out}");
+        assert!(
+            out.contains("+ use_it(a.clone()) + use_it(b.clone())\n"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi6_verbatim_single_control_line_fires_literally() {
+        // WI-6 slice 1 floor for the control family (65/66/67): the
+        // whole line raises literally today; the later control slice
+        // upgrades these to templated forms and re-pins (the ordering
+        // tests make the upgrade visible, never silent).
+        let pre = "fn m(o: Option<i32>) -> i32 {\n    let v = match o { Some(v) => 1, _ => 2 };\n    v\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let v = match o { Some(v) => 1, _ => 2 };\n+    let v = match o { Some(v) => 9, _ => 2 };\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique control-line single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi6_verbatim_single_twin_vetoes() {
+        // Uniqueness at n=1: an unchanged twin of the minus site
+        // over-counts (2 != 1) and the single stays ordinary.
+        assert!(
+            vsingle(
+                "    run(a, 1);",
+                "    run_z(a, 2);",
+                Some("fn m() {\n    run(a, 1);\n    run(a, 1);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "same-minus twin must veto"
+        );
+        // A changed-line twin (same minus, different plus) is the same
+        // over-count from the other side.
+        let pre = "fn m() {\n    run(a, 1);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n fn m() {\n-    run(a, 1);\n-    run(a, 1);\n+    run_z(a, 2);\n+    run_z(a, 3);\n }\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none()
+                || !crate::semantic::infer_semantic_with_pre_images(
+                    std::slice::from_ref(&raw),
+                    &pre_map
+                )
+                .is_some_and(|out| out.contains("rule=") && out.contains("- run(a, 1)")),
+            "hetero twins never raise as one verbatim single"
+        );
+    }
+
+    #[test]
+    fn wi6_verbatim_single_shape_gates_decline() {
+        let pre = "fn m() {\n    run(a, 1);\n}\n";
+        // Bare-ident minus would match every mention.
+        assert!(
+            vsingle("    wide;", "    wider;", Some(pre), &[2]).is_none(),
+            "bare-ident minus must decline"
+        );
+        // Literal minus sides never raise.
+        assert!(
+            vsingle("    1;", "    2;", Some(pre), &[2]).is_none(),
+            "literal minus must decline"
+        );
+        // Macro invocations never enter plain patterns (SPEC 21).
+        assert!(
+            vsingle(
+                "    old_mac!(1);",
+                "    old_mac!(2);",
+                Some("fn m() {\n    old_mac!(1);\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "macro pair must decline"
+        );
+        // Plus-side uppercase ident absent from minus would infer as
+        // an unbound hole on apply (WI-5b novelty gate).
+        assert!(
+            vsingle("    run(a, 1);", "    New(a, 1);", Some(pre), &[2]).is_none(),
+            "plus-introduced uppercase must decline"
+        );
+        // Identity is not a delta.
+        assert!(
+            vsingle("    run(a, 1);", "    run(a, 1);", Some(pre), &[2]).is_none(),
+            "identity must decline"
+        );
+        // Uniqueness needs the whole file (D3): no guessing without a
+        // pre-image.
+        assert!(
+            vsingle("    run(a, 1);", "    run_z(a, 2);", None, &[2]).is_none(),
+            "None pre-image must veto"
+        );
+    }
+
+    #[test]
+    fn wi6_verbatim_single_raw_addr_stays_ordinary() {
+        // Probed: `&raw const/mut` pairs stay ordinary — the engine
+        // cannot match the raw-addr shape, so the byte probe vetoes.
+        // This pins the WI-6 unary-family residue for a later slice
+        // (it must arrive with an engine shape, not a raiser widening).
+        let pre = "fn m() {\n    let p = &raw const x;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let p = &raw const x;\n+    let p = &raw mut x;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            vsingle(
+                "    let p = &raw const x;",
+                "    let p = &raw mut x;",
+                Some(pre),
+                &[2]
+            )
+            .is_none(),
+            "raw-addr single must decline at HEAD"
+        );
+        assert!(
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .is_none(),
+            "raw-addr section stays ordinary end-to-end"
+        );
+    }
+
+    #[test]
+    fn wi6_verbatim_single_does_not_steal_holed_shapes() {
+        // Ordering pin (last-resort posture): pairs a holed single
+        // owns keep their holed winners — verbatim never narrows them
+        // to literals.
+        for (minus, plus, pre, hole, at) in [
+            (
+                "    let x = make_text(sub);",
+                "    let x = make_text_new(sub);",
+                "fn make_text(s: &str) -> String {\n    s.to_string()\n}\nfn make_text_new(s: &str) -> String {\n    s.to_string()\n}\nfn m(sub: &str) -> i32 {\n    let x = make_text(sub);\n    x.len() as i32\n}\n",
+                "- make_text(E0)",
+                8,
+            ),
+            (
+                "    !ready(flag);",
+                "    !ready_done(flag);",
+                "fn ready(flag: i32) -> bool {\n    true\n}\nfn ready_done(flag: i32) -> bool {\n    true\n}\nfn m(flag: i32) {\n    !ready(flag);\n}\n",
+                "- ready(E0)",
+                8,
+            ),
+            (
+                "    let v = const { 1 + 2 };",
+                "    let v = const { 1 + 3 };",
+                "fn m() {\n    let v = const { 1 + 2 };\n}\n",
+                "- E0 + 2",
+                2,
+            ),
+            (
+                "    swap(x, y) + swap(y, x);",
+                "    swap(y, x) + swap(x, y);",
+                "fn swap(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn f(x: i32, y: i32) -> i32 {\n    swap(x, y) + swap(y, x)\n}\n",
+                "- swap(E0, E1)",
+                5,
+            ),
+        ] {
+            let pre_map = pre_map(&[("f.rs", pre)]);
+            let raw = section("f.rs", &format!("@@ -{at} +{at} @@\n-{minus}\n+{plus}\n"));
+            let out =
+                crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                    .expect("holed single must still fire");
+            assert!(
+                out.contains(hole),
+                "holed winner must survive verbatim last-resort, got: {out}"
+            );
+            assert!(
+                !out.contains(&format!("- {minus}\n")),
+                "verbatim must not emit the literal line, got: {out}"
+            );
+        }
     }
 }

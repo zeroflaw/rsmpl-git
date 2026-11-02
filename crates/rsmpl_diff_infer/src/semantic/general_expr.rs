@@ -1159,18 +1159,25 @@ mod tests {
 
     #[test]
     fn wi5_anchorless_bare_ident_stays_ordinary() {
-        // Anchorless single-hole shapes never jump the literal queue:
-        // bare-ident inits have no variant, so neither path claims.
+        // Anchorless HOLED shapes never jump the literal queue:
+        // bare-ident inits have no variant, so no holed path claims.
+        // Each unique whole `let` now raises as a WI-6-slice-1 literal
+        // verbatim single (byte-probe verified) — the sweep's own
+        // N≥2 posture already fires these literally, so N=1 is the
+        // consistent floor, not a new abstraction.
         let pre = "fn m() {\n    let a = x;\n    let b = y;\n}\n";
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@\n-    let a = x;\n-    let b = y;\n+    let a = p;\n+    let b = q;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none(),
-            "anchorless inits must stay ordinary"
-        );
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("literal verbatim singles must fire");
+        assert!(!out.contains("= E0"), "no holed template, got: {out}");
+        assert!(out.contains("- let a = x;\n"), "got: {out}");
+        assert!(out.contains("+ let a = p;\n"), "got: {out}");
+        assert!(out.contains("- let b = y;\n"), "got: {out}");
+        assert!(out.contains("+ let b = q;\n"), "got: {out}");
     }
 
     #[test]
@@ -1330,15 +1337,29 @@ mod tests {
 
     #[test]
     fn wi7_general_single_twin_vetoes() {
-        // An untouched same-shape twin anywhere vetoes (totality).
+        // An untouched same-shape twin anywhere vetoes the HOLED
+        // template (totality); the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    x + 1;\n    y + 1;\n}\n";
+        assert!(
+            super::try_general_expr_single(
+                &["    x + 1;"],
+                &["    x + 2;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section("f.rs", "@@ -2 +2 @@\n-    x + 1;\n+    x + 2;\n");
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(out.contains("- x + 1\n"), "got: {out}");
+        assert!(out.contains("+ x + 2\n"), "got: {out}");
     }
 
     #[test]
@@ -1441,18 +1462,32 @@ mod tests {
 
     #[test]
     fn wi7_general_single_let_init_twin_vetoes() {
-        // An untouched same-init twin anywhere vetoes (totality).
+        // An untouched same-init twin anywhere vetoes the HOLED init
+        // template (totality); the unique complete `let` raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 1;\n}\n";
+        assert!(
+            super::try_general_expr_single(
+                &["    let a = x + 1;"],
+                &["    let a = x + 2;"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed let-init twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    let a = x + 1;\n+    let a = x + 2;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "let-init twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(out.contains("- let a = x + 1;\n"), "got: {out}");
+        assert!(out.contains("+ let a = x + 2;\n"), "got: {out}");
     }
 
     #[test]

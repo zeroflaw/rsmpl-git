@@ -168,17 +168,28 @@ fn wi4a_let_type_add_fires() {
 #[test]
 fn wi4a_let_type_add_extra_site_stays_ordinary() {
     // Fixture 70: a fourth untouched untyped `let` in the pre-image
-    // breaks totality (4 != 3) — the sweep would silently rewrite it,
-    // so the section stays ordinary.
+    // breaks totality (4 != 3) — the holed sweep would silently
+    // rewrite it, so the `let P0 = E0` sweep stays vetoed. Each proved
+    // line now raises as its own WI-6-slice-1 literal verbatim single
+    // (unique whole statements, byte-probe verified); the untouched
+    // fourth `let` is never claimed.
     let (_native_input, semantic) = convert_fixture("70-let-type-add-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "extra untyped let must veto, got: {semantic}"
+        !semantic.contains("let P0 = E0"),
+        "holed sweep must stay vetoed by the extra site, got: {semantic}"
     );
-    assert!(
-        semantic.contains("-    let alpha_value = compute_first(input);"),
-        "native minus must survive, got: {semantic}"
-    );
+    for v in ["alpha_value", "beta_value", "gamma_value"] {
+        assert!(
+            semantic.contains(&format!("- let {v} = ")),
+            "verbatim single for {v} must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains(&format!("+ let {v}: u32 = ")),
+            "verbatim single for {v} must fire, got: {semantic}"
+        );
+    }
+    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+    assert!(context.is_empty(), "zero-context, got: {context:?}");
 }
 
 #[test]

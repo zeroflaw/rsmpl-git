@@ -1190,13 +1190,38 @@ mod tests {
     #[test]
     fn sequence_extra_twin_vetoes() {
         // Totality: an untouched twin window in the pre-image would be
-        // silently rewritten — the sweep vetoes.
+        // silently rewritten — the WINDOW sweep vetoes. Each proved
+        // line raises as its own WI-6-slice-1 literal verbatim single
+        // (unique whole statements, byte-probe verified).
         let raw = section("f.rs", &seq_body());
         let pre = pre_map(&[(
             "f.rs",
             "fn first() {\n    let alpha = compute_first(input);\n    let beta: u32 = wrap(alpha);\n}\n\nfn second() {\n    let delta = compute_second(other);\n    let epsilon: u64 = wrap(delta);\n}\n\nfn third() {\n    let guard = compute_third(more);\n    let guard2: u64 = wrap(guard);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim singles must fire");
+        assert!(!out.contains("P0"), "no window template, got: {out}");
+        for (m, p) in [
+            (
+                "- let alpha = compute_first(input);",
+                "+ let alpha: u32 = compute_first(input);",
+            ),
+            (
+                "- let beta: u32 = wrap(alpha);",
+                "+ let beta: u32 = wrap(alpha).wrapping_add(1);",
+            ),
+            (
+                "- let delta = compute_second(other);",
+                "+ let delta: u32 = compute_second(other);",
+            ),
+            (
+                "- let epsilon: u64 = wrap(delta);",
+                "+ let epsilon: u64 = wrap(delta).wrapping_add(1);",
+            ),
+        ] {
+            assert!(out.contains(m), "got: {out}");
+            assert!(out.contains(p), "got: {out}");
+        }
     }
 
     #[test]
@@ -1288,13 +1313,27 @@ mod tests {
     #[test]
     fn untyped_let_extra_twin_vetoes() {
         // Totality: an untouched third `Some` let in the pre-image
-        // would be silently rewritten — the sweep vetoes.
+        // would be silently rewritten — the HOLED sweep vetoes. Each
+        // proved line raises as its own WI-6-slice-1 literal verbatim
+        // single (unique whole statements, byte-probe verified).
         let raw = section("f.rs", &some_body());
         let pre = pre_map(&[(
             "f.rs",
             "fn a(o: Option<i32>, p: Option<i32>, q: Option<i32>) {\n    let Some(v) = o;\n    let Some(w) = p;\n    let Some(z) = q;\n    let _ = (v, w, z);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim singles must fire");
+        assert!(!out.contains("Some(P0)"), "holed veto, got: {out}");
+        assert!(out.contains("- let Some(v) = o;\n"), "got: {out}");
+        assert!(
+            out.contains("+ let Some(v) = o.unwrap_or(0);\n"),
+            "got: {out}"
+        );
+        assert!(out.contains("- let Some(w) = p;\n"), "got: {out}");
+        assert!(
+            out.contains("+ let Some(w) = p.unwrap_or(0);\n"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1398,13 +1437,21 @@ mod tests {
     #[test]
     fn pat_swap_extra_twin_vetoes() {
         // An untouched same-shape tuple let would be silently
-        // rewritten — the sweep vetoes.
+        // rewritten — the HOLED sweep vetoes. Each proved line raises
+        // as its own WI-6-slice-1 literal verbatim single (unique
+        // whole statements, byte-probe verified).
         let raw = section("f.rs", &swap_body());
         let pre = pre_map(&[(
             "f.rs",
             "fn a(t: (i32, i32), u: (i32, i32), v: (i32, i32)) {\n    let (x, y) = t;\n    let (m, n) = u;\n    let (p, q) = v;\n    let _ = (x, y, m, n, p, q);\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim singles must fire");
+        assert!(!out.contains("(P0, P1)"), "holed veto, got: {out}");
+        assert!(out.contains("- let (x, y) = t;\n"), "got: {out}");
+        assert!(out.contains("+ let (y, x) = t;\n"), "got: {out}");
+        assert!(out.contains("- let (m, n) = u;\n"), "got: {out}");
+        assert!(out.contains("+ let (n, m) = u;\n"), "got: {out}");
     }
 
     // WI-14 slice 3: N=1 vis/qual-evolution singles (same name).

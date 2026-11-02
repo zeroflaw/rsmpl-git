@@ -311,6 +311,7 @@ const CYCLE_OK: &[&str] = &[
     "79-general-expr-single",
     "46-fn-follow",
     "89-fn-follow-single",
+    "93-verbatim-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -380,7 +381,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "47-call-arg-wrap",
-        "t375: single-line arg-wrap re-infers ordinary",
+        "verbatim-single (WI-6s1): single-line arg-wrap re-infers as a literal verbatim single; the authored wrap template and the literal single diverge canonically (wrap N=1 is later WI-6 work)",
     ),
     (
         "49-struct-pat-let",
@@ -396,7 +397,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "54-raw-addr",
-        "t375: single-site raw-addr rewrite re-infers ordinary",
+        "engine-shape (WI-6s1): single-site raw-addr rewrite stays ordinary — the engine cannot match the raw-addr shape, so the N=1 byte probe vetoes (unary-family residue for a later WI-6 slice with an engine shape, not a raiser widening)",
     ),
     (
         "55-infer-wildcard",
@@ -421,15 +422,15 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "65-match-arm",
-        "t375: single-site match-arm rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): match-arm line re-infers literally; the authored control template and the literal single diverge canonically (control N=1 is a later WI-6 slice)",
     ),
     (
         "66-for-continue",
-        "t375: single-site for-continue rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): for-continue line re-infers literally; the authored control template and the literal single diverge canonically (control N=1 is a later WI-6 slice)",
     ),
     (
         "67-closure-bump",
-        "t375: single-site closure-bump re-infers ordinary",
+        "verbatim-single (WI-6s1): closure-bump line re-infers literally; the authored control template and the literal single diverge canonically (control N=1 is a later WI-6 slice)",
     ),
     (
         "69-typehole-path",
@@ -454,7 +455,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "80-raw-addr-flip",
-        "t375: single-site raw-addr rewrite re-infers ordinary",
+        "engine-shape (WI-6s1): single-site raw-addr rewrite stays ordinary — the engine cannot match the raw-addr shape, so the N=1 byte probe vetoes (unary-family residue for a later WI-6 slice with an engine shape, not a raiser widening)",
     ),
     (
         "82-const-block-single",
@@ -474,20 +475,16 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "93-verbatim-single",
-        "t375: single-site verbatim rewrite re-infers ordinary",
-    ),
-    (
         "94-return-single",
-        "t375: single-site return rewrite re-infers ordinary",
+        "t375: single-site return rewrite re-infers as a holed single; the authored verbatim sweep spelling and the holed diet single diverge canonically (canonicalization territory, not a detector gap)",
     ),
     (
         "95-verbatim-call-single",
-        "t375: single-site verbatim-call rewrite re-infers ordinary",
+        "holed-single (WI-6s1): re-infers as the holed call_sweep single (unchanged this slice — ordering pin); the authored verbatim sweep spelling and the holed diet single diverge canonically (canonicalization territory, not a detector gap)",
     ),
     (
         "96-verbatim-unary-single",
-        "t375: single-site verbatim-unary rewrite re-infers ordinary",
+        "holed-single (WI-6s1): re-infers as the holed method single (unchanged this slice — ordering pin); the authored verbatim sweep spelling and the holed diet single diverge canonically (canonicalization territory, not a detector gap)",
     ),
     (
         "97-macro-sweep-single",

@@ -524,80 +524,114 @@ fn wi9_macro_nested_multi_fires() {
 fn wi9e_verbatim_atomicity_stays_ordinary() {
     // Fixture 90 (WI-9e): H1 holds a repeated pair (foo, 3 sites) plus
     // a singleton (bar) — the foo group drops under hunk atomicity
-    // (emitting it would overlap the H1 ordinary leftover), so the
-    // section stays ordinary passthrough.
+    // (emitting it would overlap the H1 ordinary leftover), while the
+    // unique bar singleton raises as a WI-6-slice-1 literal verbatim
+    // single (byte-probe verified). The section partitions instead of
+    // staying wholly ordinary.
     let (native_input, semantic) = convert_fixture("90-verbatim-atomicity-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "atomicity drop must stay ordinary, got: {semantic}"
+        !semantic.contains("- foo(x)\n"),
+        "foo group must drop, got: {semantic}"
     );
     assert!(
         semantic.contains("-    foo(x);"),
-        "minus lines must be preserved, got: {semantic}"
+        "foo lines must stay ordinary, got: {semantic}"
     );
     assert!(
-        semantic.contains("+    foo(y);"),
-        "plus lines must be preserved, got: {semantic}"
+        semantic.contains("- bar(1)"),
+        "bar singleton must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ bar(2)"),
+        "bar singleton must raise literally, got: {semantic}"
     );
     let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
     assert!(context.is_empty(), "zero-context, got: {context:?}");
     assert!(
-        semantic == normalize_native(&native_input),
-        "ordinary passthrough must equal normalized native, got: {semantic}"
+        semantic.len() < native_input.len() + 16,
+        "precision guard, got: {semantic}"
     );
 }
 
 #[test]
 fn wi9e_peel_atomicity_stays_ordinary() {
     // Fixture 91 (WI-9e): H1 holds a peel pair plus a singleton;
-    // H2..H5 hold the same hetero peel class. The class drops under
-    // hunk atomicity (its first member sits in uncovered H1, so the
-    // body could never emit and covered hunks would silently drop) —
-    // ordinary passthrough, every line preserved.
+    // H2..H5 hold the same hetero peel class. The class still drops as
+    // a sweep (its first member sits in uncovered H1, so the body
+    // could never emit there), but every proved pair now raises as its
+    // own WI-6-slice-1 literal verbatim single — no line stays ordinary
+    // that a proved single can claim, and no line is claimed twice
+    // (atomicity). The pure-deletion `drop();` remainder stays ordinary.
     let (native_input, semantic) = convert_fixture("91-peel-atomicity-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "atomicity drop must stay ordinary, got: {semantic}"
+        !semantic.contains("# allow=many"),
+        "no sweep may emit, got: {semantic}"
     );
     assert!(
-        semantic.contains("-    let r = load(ctx, &[\"h\", m2, t1]);"),
-        "covered minus lines must be preserved, got: {semantic}"
+        semantic.contains("- let r = load(ctx, &[\"h\", m1, t1]);"),
+        "H1 peel pair must raise literally, got: {semantic}"
     );
     assert!(
-        semantic.contains("+    let r = fetch(ctx, m2, &[t1]);"),
-        "covered plus lines must be preserved, got: {semantic}"
+        semantic.contains("+ let r = fetch(ctx, m1, &[t1]);"),
+        "H1 peel pair must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- ping(1)"),
+        "H1 singleton must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ ping(2)"),
+        "H1 singleton must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    drop();"),
+        "pure-deletion remainder must stay ordinary, got: {semantic}"
     );
     let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
     assert!(context.is_empty(), "zero-context, got: {context:?}");
     assert!(
-        semantic == normalize_native(&native_input),
-        "ordinary passthrough must equal normalized native, got: {semantic}"
+        semantic.len() < native_input.len() + 6 * 16,
+        "scaled precision guard, got: {semantic}"
     );
 }
 
 #[test]
 fn wi9e_literal_atomicity_stays_ordinary() {
     // Fixture 92 (WI-9e): H1 holds a literal-delta pair plus a
-    // singleton; H2..H5 hold the same hetero literal class. Same
-    // first-member-in-uncovered-hunk drop as the peel driver —
-    // ordinary passthrough, every line preserved.
+    // singleton; H2..H5 hold the same hetero literal class. The class
+    // still drops as a sweep (first member in uncovered H1), but every
+    // proved pair now raises as its own WI-6-slice-1 literal verbatim
+    // single — same partition posture as the peel twin above. The
+    // pure-deletion `drop();` remainder stays ordinary.
     let (native_input, semantic) = convert_fixture("92-literal-atomicity-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "atomicity drop must stay ordinary, got: {semantic}"
+        !semantic.contains("# allow=many"),
+        "no sweep may emit, got: {semantic}"
     );
     assert!(
-        semantic.contains("-    check(c2, \"a\");"),
-        "covered minus lines must be preserved, got: {semantic}"
+        semantic.contains("- check(c1, \"a\")"),
+        "H1 literal pair must raise literally, got: {semantic}"
     );
     assert!(
-        semantic.contains("+    check(c2, \"b\");"),
-        "covered plus lines must be preserved, got: {semantic}"
+        semantic.contains("+ check(c1, \"b\")"),
+        "H1 literal pair must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- ping(1)"),
+        "H1 singleton must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ ping(2)"),
+        "H1 singleton must raise literally, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    drop();"),
+        "pure-deletion remainder must stay ordinary, got: {semantic}"
     );
     let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
     assert!(context.is_empty(), "zero-context, got: {context:?}");
     assert!(
-        semantic == normalize_native(&native_input),
-        "ordinary passthrough must equal normalized native, got: {semantic}"
+        semantic.len() < native_input.len() + 6 * 16,
+        "scaled precision guard, got: {semantic}"
     );
 }

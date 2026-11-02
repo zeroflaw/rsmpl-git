@@ -1316,16 +1316,19 @@ mod tests {
     #[test]
     fn bare_two_per_line_extra_twin_vetoes() {
         // Occurrence totality: an untouched `foo` twin outside the diff
-        // counts (6 sites vs 4 diff sites) and vetoes.
+        // counts (6 sites vs 4 diff sites) and vetoes the multi-site
+        // reading; the unique whole line raises as a WI-6-slice-1
+        // literal verbatim single (byte-probe verified).
         let raw = section(
             "f.rs",
             "@@ -1,2 +1,2 @@\n fn m() {\n-    foo(1) + foo(2);\n+    bar(1) + bar(2);\n }\n",
         );
         let pre = pre_map(&[("f.rs", "fn m() {\n    foo(1) + foo(2);\n    foo(9);\n}\n")]);
-        assert!(
-            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none()
-        );
+        let out = super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(1) + foo(2)\n"), "got: {out}");
+        assert!(out.contains("+ bar(1) + bar(2)\n"), "got: {out}");
+        validated_live(&out, &pre);
     }
 
     #[test]

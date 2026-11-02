@@ -1030,18 +1030,22 @@ mod tests {
     #[test]
     fn wi7_arg_template_single_twin_vetoes() {
         // An untouched same-callee same-arity twin matches the minus
-        // pattern (2 != 1) and vetoes.
+        // pattern (2 != 1) and vetoes the HOLED template; the unique
+        // whole line raises as a WI-6-slice-1 literal verbatim single
+        // (byte-probe verified).
         let pre = "fn m() {\n    use_it(x);\n    use_it(y);\n}\n";
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(x.clone());\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(!out.contains("use_it(E0)"), "holed veto, got: {out}");
+        assert!(out.contains("- use_it(x)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(x.clone())\n"), "got: {out}");
+        validated_live(&out, &pre_map);
     }
 
     #[test]
@@ -1289,15 +1293,19 @@ mod tests {
     #[test]
     fn wi8_bare_wrap_single_twin_vetoes() {
         // An untouched same-callee same-arity twin matches the minus
-        // pattern (2 != 1) and vetoes.
+        // pattern (2 != 1) and vetoes the HOLED template; the unique
+        // whole line raises as a WI-6-slice-1 literal verbatim single
+        // (byte-probe verified).
         let pre = "fn m() {\n    use_it(x);\n    use_it(y);\n}\n";
         let raw = section("f.rs", "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(f(x));\n");
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(!out.contains("use_it(E0)"), "holed veto, got: {out}");
+        assert!(out.contains("- use_it(x)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(f(x))\n"), "got: {out}");
+        validated_live(&out, &pre_map);
     }
 
     #[test]
@@ -1532,18 +1540,22 @@ mod tests {
     #[test]
     fn wi7_method_arg_template_single_twin_vetoes() {
         // An untouched same-method same-arity twin matches the minus
-        // pattern (2 != 1) and vetoes.
+        // pattern (2 != 1) and vetoes the HOLED template; the unique
+        // whole line raises as a WI-6-slice-1 literal verbatim single
+        // (byte-probe verified).
         let pre = "fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n";
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    r.use_it(x);\n+    r.use_it(x.clone());\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(!out.contains("use_it(E0)"), "holed veto, got: {out}");
+        assert!(out.contains("- r.use_it(x)\n"), "got: {out}");
+        assert!(out.contains("+ r.use_it(x.clone())\n"), "got: {out}");
+        validated_live(&out, &pre_map);
     }
 
     #[test]
@@ -1766,17 +1778,22 @@ mod tests {
 
     #[test]
     fn wi9_method_inner_wrap_single_twin_vetoes() {
+        // Same posture as the bare-wrap twin: the HOLED template stays
+        // vetoed (2 != 1); the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    use_it(x);\n    use_it(y);\n}\n";
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    use_it(x);\n+    use_it(r.foo(x));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(!out.contains("use_it(E0)"), "holed veto, got: {out}");
+        assert!(out.contains("- use_it(x)\n"), "got: {out}");
+        assert!(out.contains("+ use_it(r.foo(x))\n"), "got: {out}");
+        validated_live(&out, &pre_map);
     }
 
     #[test]

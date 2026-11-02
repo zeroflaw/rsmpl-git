@@ -62,7 +62,10 @@ const CASES: &[Case] = &[
         // costlier than its ordinary hunk) now clear the precision
         // guard — definition shapes fire at a bounded cost, strict
         // T375 no longer demotes them to zero semantic.
-        expect_sem: 5,
+        // WI-6 slice 1: +3 literal verbatim singles (unique
+        // single-line edits elsewhere in the commit, byte-probe
+        // verified).
+        expect_sem: 8,
     },
     Case {
         commit: "b57d0f2c3a77a18326dc2612b0eb8c2e28f229bb",
@@ -86,7 +89,10 @@ const CASES: &[Case] = &[
         root: false,
         // WI-19: four single-site test-fn renames now clear the precision
         // guard (were zero semantic under strict T375).
-        expect_sem: 4,
+        // WI-6 slice 1: +2 literal verbatim singles (unique
+        // single-line edits elsewhere in the commit, byte-probe
+        // verified).
+        expect_sem: 6,
     },
     // T359 `&`-receiver strip: 5 files of `&R.join("")` -> `R` sites
     // (bare arg-position lines + `write(...)`-nested) compress to 5 hunks.
@@ -140,7 +146,10 @@ const CASES: &[Case] = &[
         // WI-9b2b: `env!("CARGO_BIN_EXE_rsmpl-git")` /
         // `env!("CARGO_BIN_EXE_gitrs")` nested-macro hunk (N=2 in that
         // file, verified exact; sweep 43->44 attribution).
-        expect_sem: 1,
+        // WI-6 slice 1: +4 literal verbatim singles (unique
+        // single-line renames in the moved test files, byte-probe
+        // verified).
+        expect_sem: 5,
     },
     // T403 verbatim sweep pins: 50d4a49 (`&state.parsed,` x11 -> `parsed,`)
     // and 3e0b9bc (`cur.push(c)` x2 -> `push_str_byte(&mut cur, c)`) compress
@@ -159,7 +168,9 @@ const CASES: &[Case] = &[
         commit: "3e0b9bcccc2eabdb66f2fc4bf4d9fc8930dd4084",
         rev: None,
         root: false,
-        expect_sem: 1,
+        // WI-6 slice 1: +2 literal verbatim singles (unique single-line
+        // edits beside the verbatim sweep hunk, byte-probe verified).
+        expect_sem: 3,
     },
     Case {
         commit: "c48a6e60e286137a092b1ffb10084396440da6ee",
@@ -170,7 +181,10 @@ const CASES: &[Case] = &[
         // WI-5d: +1 single-block fusion (3-let hetero run in
         // expr_pattern.rs — mask/sentinels rename with within-pair
         // P1/P2 holes, allow-one, pre-image totality n = 1).
-        expect_sem: 2,
+        // WI-6 slice 1: +1 literal verbatim single (unique
+        // single-line edit elsewhere in the commit, byte-probe
+        // verified).
+        expect_sem: 3,
     },
     Case {
         commit: "b9c00d537adf49568b957837307208821ab4ccd0",
@@ -178,7 +192,10 @@ const CASES: &[Case] = &[
         root: false,
         // T418 return-shape sweep: two identical `return f(...)` lines
         // thread a param (engine `Expr::Return` arm; T412 gate lifted).
-        expect_sem: 1,
+        // WI-6 slice 1: +3 literal verbatim singles (unique
+        // single-line edits elsewhere in the commit, byte-probe
+        // verified).
+        expect_sem: 4,
     },
     Case {
         commit: "b20884733ba61b1e6630adfb8920cede2cd751b7",
@@ -192,7 +209,10 @@ const CASES: &[Case] = &[
         // WI-19b: +1 vis-only sig single (`fn b_side_path` →
         // `pub(crate)`, concrete-name emission, count==1 probe,
         // T361 round-trip byte-identical).
-        expect_sem: 3,
+        // WI-6 slice 1: +7 literal verbatim singles (unique
+        // single-line doc/probe edits in lib.rs + semantic.rs,
+        // byte-probe verified).
+        expect_sem: 10,
     },
     Case {
         commit: "1b8993a08b6b8c9175403230c8daaff9e3dd3f5b",
@@ -217,7 +237,10 @@ const CASES: &[Case] = &[
         // subterm would be rewritten by a sweep — stays ordinary.
         // T465: +1 partial-file item deletion (10-line whole-item
         // removal; --check green + byte-identical).
-        expect_sem: 1,
+        // WI-6 slice 1: +3 literal verbatim singles (unique
+        // single-line edits in the matcher files, byte-probe
+        // verified).
+        expect_sem: 4,
     },
     Case {
         commit: "33a8cbbe7d3936411f96895437b5eac5e1478918",
@@ -320,7 +343,10 @@ const CASES: &[Case] = &[
         root: false,
         // T465: +1 partial-file item deletion (60-line whole-item
         // removal beside the verbatim hunk; --check green + byte-identical).
-        expect_sem: 2,
+        // WI-6 slice 1: +2 literal verbatim singles (unique
+        // single-line edits elsewhere in the commit, byte-probe
+        // verified).
+        expect_sem: 4,
     },
     // f09edcd (T170): two byte-identical test fns move cli_e2e.rs ->
     // ellipsis_e2e.rs — 2 cuts + 2 pastes.
@@ -373,19 +399,25 @@ const CASES: &[Case] = &[
     },
     // 3cbc2d8 (T465): one partial-file item deletion (whole-item
     // removal; --check green + byte-identical round-trip).
+    // WI-6 slice 1: +4 literal verbatim singles (unique
+    // single-line edits in the engine/pattern files, byte-probe
+    // verified).
     Case {
         commit: "3cbc2d8adacf2062bbf028663d2aaeb062ebba32",
         rev: None,
         root: false,
-        expect_sem: 1,
+        expect_sem: 5,
     },
     // 4cfe716 (T465): one partial-file item deletion (whole-item
     // removal; --check green + byte-identical round-trip).
+    // WI-6 slice 1: +4 literal verbatim singles (unique
+    // single-line edits in the engine/test files, byte-probe
+    // verified).
     Case {
         commit: "4cfe7160f934cd5724d23168329de8d052d269d2",
         rev: None,
         root: false,
-        expect_sem: 1,
+        expect_sem: 5,
     },
     // 813e192 (T465): one partial-file item deletion inside the
     // vis-evolution commit (the pure-deletion remainder).
@@ -408,11 +440,13 @@ const CASES: &[Case] = &[
     // b0da138 (T466): one partial-file nested deletion — the 69-line
     // `mod tests` 6-test-fn purge as one shrunk-range delete hunk
     // (leading blank rides ordinary).
+    // WI-6 slice 1: +1 literal verbatim single (unique single-line
+    // edit elsewhere in the commit, byte-probe verified).
     Case {
         commit: "b0da1388f0e524b38a6b657254c49316223ad63c",
         rev: None,
         root: false,
-        expect_sem: 1,
+        expect_sem: 2,
     },
     // d426215 (T466): one partial-file nested deletion — `impl
     // MetavarTable::lowercase_warnings` dead-code drop (leading blank

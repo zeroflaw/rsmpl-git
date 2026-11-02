@@ -198,23 +198,26 @@ pub(crate) fn try_subhunk_partition(
             continue;
         }
         used_rules.truncate(run_start);
-        // No single in this run proves alone: when every key is `None`
-        // the run may still hold two firing multi sides (e.g. two call
-        // pairs beside two expression pairs — each homogeneous side
-        // proves as a sweep while no single pair proves at n=1). Bounded
-        // split-search: every internal split with both halves ≥ 2 pairs,
-        // both halves offered whole; the first fully-firing split wins.
-        // Sides that are themselves hetero decline whole and fail the
-        // split — no recursion, so interleaved multis stay ordinary.
+        // Runs that decline whole may still hold two firing multi
+        // sides — including runs keyed by last-resort literal singles
+        // (WI-6 slice 1: a literal key must never shadow the hetero
+        // multis its pairs belong to, bench 48). The bounded
+        // split-search therefore runs before per-pair singles for
+        // every run; for all-`None` runs this is the established path
+        // (each homogeneous side proves as a sweep while no single
+        // pair proves at n=1).
+        if let Some((split, mid)) = try_split_none_run(
+            header, &minuses, &pluses, &sites, new_start, *start, *end, path, pre, used_rules,
+        ) {
+            outcomes.push(Some(Claimed::Split(split, mid)));
+            continue;
+        }
+        used_rules.truncate(run_start);
+        // No split claims the run. All-`None` runs stay ordinary whole
+        // here (a lone pair's single already declined by construction
+        // of the `None` keys, so per-pair retry is vacuous).
         if keys[*start..*end].iter().all(|k| k.is_none()) {
-            if let Some((split, mid)) = try_split_none_run(
-                header, &minuses, &pluses, &sites, new_start, *start, *end, path, pre, used_rules,
-            ) {
-                outcomes.push(Some(Claimed::Split(split, mid)));
-            } else {
-                used_rules.truncate(run_start);
-                outcomes.push(None);
-            }
+            outcomes.push(None);
             continue;
         }
         let mut bodies = Vec::new();
@@ -397,14 +400,15 @@ pub(crate) fn try_subhunk_partition(
     Some(fragment)
 }
 
-/// Bounded split-search for an all-`None` run (no single pair proves
-/// alone): try every internal split with both halves ≥ 2 pairs, each half
-/// offered whole (multi shapes ride here — the per-pair singles already
-/// declined by construction of the `None` keys). The first split whose
-/// halves both fire wins, in document order; halves that are themselves
-/// hetero decline whole and fail the split (no recursion, so interleaved
-/// multis stay ordinary). Returns the two bodies with their rule
-/// checkpoints. `used_rules` is rolled back to entry on failure.
+/// Bounded split-search for a run that declined whole (no single shape
+/// owns the run together): try every internal split with both halves
+/// ≥ 2 pairs, each half offered whole (multi shapes ride here — the
+/// per-pair singles run only when no split claims the run). The first
+/// split whose halves both fire wins, in document order; halves that
+/// are themselves hetero decline whole and fail the split (no
+/// recursion, so interleaved multis stay ordinary). Returns the two
+/// bodies with their rule checkpoints. `used_rules` is rolled back to
+/// entry on failure.
 #[allow(clippy::too_many_arguments)]
 fn try_split_none_run(
     header: &str,

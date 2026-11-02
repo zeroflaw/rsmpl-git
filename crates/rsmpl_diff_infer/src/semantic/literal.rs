@@ -990,19 +990,38 @@ mod tests {
     #[test]
     fn call_literal_cross_hunk_extra_same_literal_vetoes() {
         // T449 tuple totality across hunks: an unchanged third
-        // same-trailing call in the pre-image over-counts (3 != 2).
+        // same-trailing call in the pre-image over-counts (3 != 2) —
+        // the HOLED sweep vetoes. Each proved `let` line raises as its
+        // own WI-6-slice-1 literal verbatim single (unique whole
+        // statements, byte-probe verified).
         let raw = section(
             "f.rs",
-            "@@ -2 +2 @@\n-    let a = make_widget(alpha, 1, false);\n+    let a = make_widget(alpha, 1, \"100644\");\n@@ -9 +9 @@\n-    let b = make_widget(beta, 2, false);\n+    let b = make_widget(beta, 2, \"100644\");\n",
+            "@@ -2 +2 @@\n-    let a = make_widget(alpha, 1, false);\n+    let a = make_widget(alpha, 1, \"100644\");\n@@ -3 +3 @@\n-    let b = make_widget(beta, 2, false);\n+    let b = make_widget(beta, 2, \"100644\");\n",
         );
         let pre = pre_map(&[(
             "f.rs",
             "fn m() {\n    let a = make_widget(alpha, 1, false);\n    let b = make_widget(beta, 2, false);\n    let c = make_widget(gamma, 3, false);\n}\n",
         )]);
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("literal verbatim singles must fire");
+        assert!(!out.contains("E0, E1"), "holed veto, got: {out}");
         assert!(
-            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none()
+            out.contains("- let a = make_widget(alpha, 1, false);"),
+            "got: {out}"
         );
+        assert!(
+            out.contains("+ let a = make_widget(alpha, 1, \"100644\");"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("- let b = make_widget(beta, 2, false);"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("+ let b = make_widget(beta, 2, \"100644\");"),
+            "got: {out}"
+        );
+        validated_live(&out, &pre);
     }
 
     #[test]
@@ -1019,10 +1038,12 @@ mod tests {
     #[test]
     fn literal_mixed_hunk_atomicity_drops_class() {
         // WI-9e: H1 holds a literal-delta pair plus a singleton; H2..H5
-        // hold the same hetero literal class. The class must drop (its
+        // hold the same hetero literal class. The class drops (its
         // first member sits in uncovered H1, so the body could never
-        // emit there and covered hunks would silently drop) — inference
-        // declines and the section falls through to ordinary.
+        // emit there and covered hunks would silently drop) — while
+        // every proved pair raises as its own WI-6-slice-1 literal
+        // verbatim single (byte-probe verified). No sweep hunk emits;
+        // the pure-deletion `drop();` remainder stays ordinary.
         let raw = section(
             "f.rs",
             "@@ -2,2 +2,2 @@ pub fn a() {\n-    check(c1, \"a\");\n-    ping(1);\n+    check(c1, \"b\");\n+    ping(2);\n@@ -6 +6 @@ pub fn b() {\n-    check(c2, \"a\");\n+    check(c2, \"b\");\n@@ -9 +9 @@ pub fn c() {\n-    check(c3, \"a\");\n+    check(c3, \"b\");\n@@ -12 +12 @@ pub fn d() {\n-    check(c4, \"a\");\n+    check(c4, \"b\");\n@@ -15 +15 @@ pub fn e() {\n-    check(c5, \"a\");\n+    check(c5, \"b\");\n@@ -21 +20,0 @@ pub fn gone() {\n-    drop();\n",
@@ -1031,10 +1052,15 @@ mod tests {
             "f.rs",
             "pub fn a() {\n    check(c1, \"a\");\n    ping(1);\n}\npub fn b() {\n    check(c2, \"a\");\n}\npub fn c() {\n    check(c3, \"a\");\n}\npub fn d() {\n    check(c4, \"a\");\n}\npub fn e() {\n    check(c5, \"a\");\n}\npub fn filler() {\n    keep();\n}\npub fn gone() {\n    drop();\n}\n",
         )]);
-        assert!(
-            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-                .is_none()
-        );
+        let out = crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("partition must emit");
+        validated_live(&out, &pre);
+        assert!(!out.contains("# allow=many"), "no sweep, got: {out}");
+        assert!(out.contains("- check(c1, \"a\")\n"), "got: {out}");
+        assert!(out.contains("+ check(c1, \"b\")\n"), "got: {out}");
+        assert!(out.contains("- ping(1)\n"), "got: {out}");
+        assert!(out.contains("+ ping(2)\n"), "got: {out}");
+        assert!(out.contains("-    drop();\n"), "got: {out}");
     }
 
     fn lsingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
@@ -1349,18 +1375,33 @@ mod tests {
 
     #[test]
     fn wi20_subline_literal_single_twin_vetoes() {
-        // An untouched same-trailing twin anywhere vetoes.
+        // An untouched same-trailing twin anywhere vetoes the HOLED
+        // sub-line template; the unique whole line raises as a
+        // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(bar(alpha, 1));\n    bar(alpha, 1);\n}\n";
+        assert!(
+            super::try_subline_literal_single(
+                &["    foo(bar(alpha, 1));"],
+                &["    foo(bar(alpha, 2));"],
+                "f.rs",
+                Some(pre),
+                &[2],
+                &mut Vec::new()
+            )
+            .is_none(),
+            "holed twin must veto at the core"
+        );
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    foo(bar(alpha, 1));\n+    foo(bar(alpha, 2));\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
+        let out =
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "twin must veto"
-        );
+                .expect("literal verbatim single must fire");
+        assert!(out.contains("- foo(bar(alpha, 1))\n"), "got: {out}");
+        assert!(out.contains("+ foo(bar(alpha, 2))\n"), "got: {out}");
+        validated_live(&out, &pre_map);
     }
 
     #[test]

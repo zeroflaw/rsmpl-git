@@ -190,14 +190,16 @@ fn callee_delta_with_wrapper_compresses() {
     assert!(patch.contains("+ new_api(E0.clone())\n"), "got: {patch}");
 }
 
-// WI-5: an untouched twin vetoes (totality counts N+1).
+// WI-5: an untouched twin vetoes the holed wrap (totality counts
+// N+1); each proved line raises as a WI-6-slice-1 literal verbatim
+// single (byte-probe verified), the twin never claimed.
 #[test]
 fn untouched_twin_stays_ordinary() {
     let dir = init_repo();
     let before = "fn m() {\n    use_it(alpha);\n    use_it(beta);\n    use_it(spare);\n}\n";
     write(dir.path(), "src/lib.rs", before);
     commit_all(dir.path());
-    // Only two of three sites migrate; the twin must veto the sweep.
+    // Only two of three sites migrate; the twin must veto the holed sweep.
     let after =
         "fn m() {\n    use_it(alpha.clone());\n    use_it(beta.clone());\n    use_it(spare);\n}\n";
     write(dir.path(), "src/lib.rs", after);
@@ -205,7 +207,26 @@ fn untouched_twin_stays_ordinary() {
     let out = run(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(!patch.contains("rule="), "twin must veto, got: {patch}");
+    assert!(
+        !patch.contains("use_it(E0)"),
+        "holed wrap must stay vetoed by the twin, got: {patch}"
+    );
+    assert!(
+        patch.contains("- use_it(alpha)"),
+        "verbatim single for alpha must fire, got: {patch}"
+    );
+    assert!(
+        patch.contains("+ use_it(alpha.clone())"),
+        "verbatim single for alpha must fire, got: {patch}"
+    );
+    assert!(
+        patch.contains("- use_it(beta)"),
+        "verbatim single for beta must fire, got: {patch}"
+    );
+    assert!(
+        patch.contains("+ use_it(beta.clone())"),
+        "verbatim single for beta must fire, got: {patch}"
+    );
 }
 
 // WI-5: hetero wrappers (different wrap per site) stay ordinary.
