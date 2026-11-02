@@ -412,6 +412,20 @@ pub(crate) fn run_pair_chain(
     ) {
         return Some((single, "single_block"));
     }
+    // WI-7 slice-2: hetero pair window (exactly two consecutive plain
+    // lets: a pure type-add plus a typed method-wrap, fixture 107) as
+    // one allow-one window intent. A narrow arm, not a single_block
+    // gate widening — the one-sided decline pin above stands; any
+    // other delta combination declines and the section falls through
+    // to the partition literals. Strict T375 downstream owns the byte
+    // guard, like every chain arm.
+    if let Some(window) = attempt(
+        declined,
+        "single_block",
+        super::try_hetero_pair_window_single(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
+        return Some((window, "single_block"));
+    }
     // WI-7: lone-literal sweep (`"old"` → `"new"`, `10` → `20`,
     // `false` → `true` inside hetero frames) — last: the bare-literal
     // template is the broadest still-semantic sweep, so tighter

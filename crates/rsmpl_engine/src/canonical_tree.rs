@@ -270,6 +270,49 @@ fn normalize_let_diet_spelling(patch: &mut rsmpl_patch::Patch) {
                     }
                 }
             }
+            // WI-7 slice 2: undeclared diet-short holes. An authored let
+            // template may spell holes bare (`Some(P)`, `E`) with no
+            // declarations at all — the pattern compiler still infers
+            // them (SPEC 15.8) and the engine applies them as holes, but
+            // the buckets above stay empty and the hunk stays pinned.
+            // Synthesize buckets from bare single-letter hole tokens by
+            // conventional kind (`P`/`Q` → pat, `T` → type, `E` → expr)
+            // so the undeclared spelling shares the declared/inferred
+            // canonical form. Only single letters synthesize (a
+            // multi-letter undeclared name needs kind inference the
+            // comparison must not guess), and never a name already in
+            // any bucket (SPEC 9.4: one name under two kinds never
+            // compiles). The inferrer leg stays a no-op: its tokens
+            // are already positional (`P0`, `E0`, …), which never
+            // contain a single letter as a bare token under the
+            // ident-boundary matcher below. Bare `T` synthesizes here
+            // even though it is diet vocabulary for call shapes
+            // (turbofish emitter): this pass only processes all-`let`
+            // line sets, where the inferred type hole is `T0`, never
+            // bare `T`. (A bare single-uppercase letter the author
+            // meant literally is still a hole under engine semantics
+            // — SPEC 15.8 inference — so the rename is
+            // meaning-preserving.) The all-or-nothing
+            // collision/leftover posture below owns correctness
+            // exactly as for declared names.
+            for name in ["P", "Q", "T", "E"] {
+                if pats.contains(&name.to_string())
+                    || tys.contains(&name.to_string())
+                    || exprs.contains(&name.to_string())
+                {
+                    continue;
+                }
+                if r.lines
+                    .iter()
+                    .any(|l| (l.is_removal() || l.is_addition()) && has_bare_token(&l.text, name))
+                {
+                    match name {
+                        "P" | "Q" => pats.push(name.to_string()),
+                        "T" => tys.push(name.to_string()),
+                        _ => exprs.push(name.to_string()),
+                    }
+                }
+            }
             if pats.is_empty() && tys.is_empty() && exprs.is_empty() {
                 continue;
             }
@@ -1173,6 +1216,60 @@ mod tests {
         assert!(!a.contains("# pat"), "decl dropped:\n{a}");
         assert!(!a.contains("# type"), "decl dropped:\n{a}");
         assert!(!a.contains("# expr"), "decl dropped:\n{a}");
+    }
+
+    #[test]
+    fn let_diet_undeclared_short_holes_unify() {
+        // WI-7 slice 2: the undeclared diet-short spelling (`Some(P)`,
+        // `E`, no declarations — fixture 84) shares the canonical form
+        // with the declared long spelling (fixture 73) and the inferred
+        // diet (`Some(P0)`, `E0`). The engine applies all three as the
+        // same holes (SPEC 15.8 inference), so the rename is
+        // meaning-preserving.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn a(o: Option<i32>) {\n    let Some(v) = o;\n    let _ = v;\n}\n",
+        )]);
+        let undeclared = "diff --git src/lib.rs\n@@ -1,1 @@ rule=diet_some\n# sweep\n- let Some(P) = E;\n+ let Some(P) = E.unwrap_or(0);\n";
+        let declared = "diff --git src/lib.rs\n@@ -1,1 @@ rule=some_unwrap\n# sweep\n# pat P\n# expr E\n- let Some(P) = E;\n+ let Some(P) = E.unwrap_or(0);\n";
+        let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- let Some(P0) = E0;\n+ let Some(P0) = E0.unwrap_or(0);\n";
+        let a = canonicalize_with_tree(undeclared, &p).unwrap();
+        let b = canonicalize_with_tree(declared, &p).unwrap();
+        let c = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "undeclared:\n{a}\ndeclared:\n{b}");
+        assert_eq!(a, c, "undeclared:\n{a}\ninferred:\n{c}");
+        assert!(
+            a.contains("- let Some(P0) = E0;\n+ let Some(P0) = E0.unwrap_or(0);\n"),
+            "diet form:\n{a}"
+        );
+    }
+
+    #[test]
+    fn let_diet_undeclared_synthesis_vetoes() {
+        // Three veto pins, one test: multi-letter undeclared names need
+        // kind inference the comparison must not guess; an already-diet
+        // inferrer leg stays a no-op (no bare single letter under the
+        // ident-boundary matcher); a collision between the synthesized
+        // target and an unrelated bare token keeps the hunk pinned.
+        let p = pre(&[("src/lib.rs", LET_PRE)]);
+        let multi = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- let Some(Val) = X;\n+ let Some(Val) = X.unwrap_or(0);\n";
+        let got = canonicalize_with_tree(multi, &p).unwrap();
+        assert!(
+            got.contains("- let Some(Val) = X;"),
+            "multi-letter untouched:\n{got}"
+        );
+        let inferred = inferred_let_patch();
+        let diet = canonicalize_with_tree(&inferred, &p).unwrap();
+        assert!(
+            diet.contains("- let P0: T0 = E0;"),
+            "inferrer leg already diet:\n{diet}"
+        );
+        let collision = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- let Some(P) = E;\n+ let Some(P) = P0;\n";
+        let pinned = canonicalize_with_tree(collision, &p).unwrap();
+        assert!(
+            pinned.contains("- let Some(P) = E;"),
+            "P→P0 target collides with bare P0 on the plus side, pinned:\n{pinned}"
+        );
     }
 
     #[test]

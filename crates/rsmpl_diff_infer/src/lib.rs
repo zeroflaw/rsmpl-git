@@ -602,6 +602,50 @@ pub(crate) fn compress_balanced_pair_body(
             declined_guard(declined, "repeat_fold", "precision-guard");
             used_rules.truncate(checkpoint);
         }
+        // WI-7 slice-2 (let-template family): single-pair method
+        // wrap-adds (typed, untyped) and the tuple-position swap under
+        // the precision guard (uniqueness proved by
+        // `template_pair_holds` at n=1 plus the T361 byte-compare;
+        // `guard_for("let_template")` stays Strict for multis). Sits
+        // last in the singles block: holed templates beat the literal
+        // verbatim floor where both prove the same site set (D10), and
+        // every tighter holed winner above keeps priority.
+        if let Some(single) = attempt(
+            declined,
+            "let_template",
+            semantic::try_typed_wrap_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "let_template"));
+            }
+            declined_guard(declined, "let_template", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
+        if let Some(single) = attempt(
+            declined,
+            "let_template",
+            semantic::try_untyped_wrap_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "let_template"));
+            }
+            declined_guard(declined, "let_template", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
+        if let Some(single) = attempt(
+            declined,
+            "let_template",
+            semantic::try_pat_swap_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "let_template"));
+            }
+            declined_guard(declined, "let_template", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
     }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         // Single pairs: definition shapes under the precision guard

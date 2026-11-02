@@ -8860,10 +8860,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   by construction); no attributes, no `let-else`, no unbound/dropped
   holes (T442 posture); all-identical classes stay for the tighter
   verbatim sweep (T422 precedent). Pre-image totality is the real-pair
-  engine-count check (`template_pair_holds`): the emitted minus must
-  match exactly N typed lets in the pre-image — an untouched twin
-  vetoes. Detector name `let_template`.
-- Untyped joint let-template sweep (WI-8 slice 1): the joint template
+   engine-count check (`template_pair_holds`): the emitted minus must
+   match exactly N typed lets in the pre-image — an untouched twin
+   vetoes. Detector name `let_template` (same family). At N = 1 a
+   method-wrap single fires as the allow-one holed template
+   (`- let P0: T0 = E0;` / `+ let P0: T0 = E0.wrapping_add(1);`) under
+   the precision guard (uniqueness = `template_pair_holds` at n = 1
+   plus the T361 byte-compare; the preserved pattern hoists only a
+   bare ident to `P0` or a single-argument tuple struct over a bare
+   ident to `Path(P0)` — never a bare `P0`, which would also match
+   unrelated lets; nested/multi-arg/`mut` patterns and bare-call or
+   binary plus-shapes stay with the literal floor).
+ - Untyped joint let-template sweep (WI-8 slice 1): the joint template
   without ascriptions — N ≥ 2 untyped→untyped `let PAT = INIT;` →
   `let PAT = INIT′;` pairs with per-site preserved patterns plus one
   uniform initializer delta (uniform concrete rewrite, e.g.
@@ -8878,8 +8886,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   (nested-macro classes belong to the macro-interior sweep — the
   engine never binds inside macro bodies); all-identical classes stay
   for verbatim (T422). Totality is the same real-pair engine-count
-  check. Detector name `let_template` (same family).
-- Tuple-position swap sweep (WI-8 slice 1): N ≥ 2 untyped→untyped
+   check. Detector name `let_template` (same family). At N = 1 the
+   same method-wrap gate fires allow-one (`- let Some(P0) = E0;` /
+   `+ let Some(P0) = E0.unwrap_or(0);`) under the precision guard
+   with the same totality and byte-compare; the `Some(P0)` anchor is
+   what keeps the exactly-one-hit proof biting.
+ - Tuple-position swap sweep (WI-8 slice 1): N ≥ 2 untyped→untyped
   `let (P, Q) = E;` → `let (Q, P) = E;` pairs — each minus/plus
   pattern an arity-2 tuple with the same two elements in swapped order
   (real swap per site, no `let (x, x)` self-swap), the initializer
@@ -8890,8 +8902,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   hetero inits ride `E0`, uniform inits stay concrete. Macro/
   unsupported inits veto, same posture as above. Totality is the same
   real-pair engine-count check. The typed twin
-  (`let (P, Q): T = E;`) stays ordinary. Detector name `let_template`
-  (same family).
+   (`let (P, Q): T = E;`) stays ordinary. Detector name `let_template`
+   (same family). At N = 1 the swap fires allow-one
+   (`- let (P0, P1) = E0;` / `+ let (P1, P0) = E0;`) under the
+   precision guard with the same totality and byte-compare; a per-site
+   init delta is still an untyped-wrap shape, never guessed here.
 - Statement-sequence sweep (WI-5c, fourth anti-unification shape): N
   flat `-`/`+` pairs splitting block-major into ≥ 2 blocks × K = 2–4
   `let` statements (each block's changed old lines consecutive — the
@@ -8940,7 +8955,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   totality is the same real-pair engine-count check
   (`template_sequence_holds` with n = 1): the K-line minus must match
   exactly one window — an untouched twin vetoes. Detector name
-  `single_block`.
+  `single_block`. A narrow K = 2 hetero window (one pure type-add
+  plus one typed method-wrap, WI-7 slice 2) fires as one allow-one
+  window intent under the same totality and byte-compare; any other
+  delta combination is not a window and falls through to the
+  partition literals — the one-sided decline above stands.
 - Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
   1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
   qself, and generic args decline here; narrower than the qualified
@@ -9643,6 +9662,16 @@ form). Only single-pair bare-symbol call hunks normalize this way;
  second-position names onto `P1`/`T1`/`E1`, …) and drops those
  declarations, matching inferrer emission; count-mismatched sides,
  non-`let` lines, and any token collision keep the authored spelling.
+ Undeclared diet-short holes normalize the same way: a `let` pair or
+ K = 2–4 `let` sequence carrying no declarations at all but spelling
+ bare single-letter holes (`Some(P)`, `E`) renames them positionally
+ by conventional kind (`P`/`Q` → `P0`/`P1`…, `T` → `T0`, `E` → `E0`)
+ — the pattern compiler infers them as holes (Section 15.8) and the
+ engine applies them as such, so the undeclared spelling (fixture 84)
+ shares the canonical form of the declared (fixture 73) and inferred
+ diets. Multi-letter undeclared names never synthesize (kind
+ inference the comparison must not guess); the inferrer leg, already
+ positional, is a no-op under the ident-boundary matcher.
  The template diet unifies the same-site spellings the raiser never
  emits: an explicit default-valued `# lang=rust` line drops (the
  inferrer never writes it; kept beside an explicit `# mode`

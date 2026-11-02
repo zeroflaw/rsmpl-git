@@ -38,6 +38,7 @@ pub(crate) mod guard;
 pub(crate) mod header_evolution;
 pub(crate) mod impl_single;
 mod let_framed;
+mod let_single;
 mod literal;
 mod literal_frame;
 mod macro_enclosing;
@@ -99,6 +100,10 @@ mod pre_pass;
 mod precision_single;
 
 pub(crate) use item_span::item_emission_header;
+pub(crate) use let_single::{
+    try_hetero_pair_window_single, try_pat_swap_single, try_typed_wrap_single,
+    try_untyped_wrap_single,
+};
 pub(crate) use prefix::try_use_prefix_sweep;
 pub(crate) use slot::try_fn_slot_sweep;
 pub(crate) use trait_methods::try_inherent_method_rename;

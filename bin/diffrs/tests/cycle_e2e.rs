@@ -317,6 +317,11 @@ const CYCLE_OK: &[&str] = &[
     "106-repeat-fold-single",
     "54-raw-addr",
     "80-raw-addr-flip",
+    "72-tuple-pat-single",
+    "73-some-unwrap-single",
+    "84-diet-some-single",
+    "98-pat-sweep-single",
+    "107-sequence-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -430,14 +435,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site type-hole path rewrite re-infers ordinary",
     ),
     (
-        "72-tuple-pat-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let (x, y) = t;` → `let (y, x) = t;`); the authored holed tuple-pat swap and the literal single diverge canonically (holed pat-swap template is WI-7 slice 2 work)",
-    ),
-    (
-        "73-some-unwrap-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let Some(v) = o;` → `let Some(v) = o.unwrap_or(0);`, same native leg as 84); the authored holed some-unwrap sweep and the literal single diverge canonically (holed unwrap template is WI-7 slice 2 work)",
-    ),
-    (
         "75-macro-verbatim-single",
         "t375: single-site macro-verbatim rewrite re-infers ordinary",
     ),
@@ -453,10 +450,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "83-infer-single",
         "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = 1 + 2;` → `let v = 0;`); the authored infer-wildcard sweep (`let v = _;` → `let v = 0;`) and the literal single diverge canonically (holed infer template is WI-7 slice 2 work)",
-    ),
-    (
-        "84-diet-some-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let Some(v) = o;` → `let Some(v) = o.unwrap_or(0);`, same native leg as 73); the authored diet some-unwrap sweep and the literal single diverge canonically (holed unwrap template is WI-7 slice 2 work)",
     ),
     (
         "86-token-tree-single",
@@ -480,22 +473,12 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site macro-sweep rewrite re-infers ordinary",
     ),
     (
-        "98-pat-sweep-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let a: i32 = 0;` → `let a: i32 = 0.wrapping_add(1);`); the authored holed pat-sweep (`P: T = E` → `P: T = E.wrapping_add(1)`) and the literal single diverge canonically (holed wrap-add template is WI-7 slice 2 work)",
-    ),
-
-    (
         "102-use-rename-single",
         "t375: single-site use-rename rewrite re-infers ordinary",
     ),
     (
         "104-symbol-single",
         "t375: single-site symbol rewrite re-infers ordinary",
-    ),
-
-    (
-        "107-sequence-single",
-        "verbatim-single (WI-6s1): hetero pair re-infers as two literal verbatim singles (`rule=r1` type-add + `rule=r2` wrap-add, WI-4 hetero-fusion partition); the authored single hetero holed sequence and the two literal singles diverge canonically in shape (holed sequence template is WI-7 slice 2 work)",
     ),
 
     (
