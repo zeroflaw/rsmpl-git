@@ -55,7 +55,7 @@ pub struct HunkProvenance {
 /// (`no-match` shape decline, `byte-guard` strict-T375 veto after a
 /// candidate, `precision-guard` precision-allowance veto after a
 /// candidate, or a section-gate reason like `crlf-content`,
-/// `unbalanced-hunks`, `stranded-joint`). Detector-internal guard
+/// `unbalanced-hunks`, `stranded-joint`, `cross-kind-member`). Detector-internal guard
 /// vetoes surface as `no-match` — reasons are chain-level, never
 /// detector-inferred (SPEC D.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

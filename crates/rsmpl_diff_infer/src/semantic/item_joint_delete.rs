@@ -162,6 +162,74 @@ pub(crate) fn probe_pre_pass(
     }
 }
 
+/// WI-21 slice 4: cross-kind suppression probe for the item-intent
+/// pre-pass (D5: lives here so `item_intent.rs` stays under the
+/// 2000-line gate). True when the def section holds a field-shaped
+/// deletion under an `enum` rename or a variant-shaped deletion under
+/// a `struct` rename — the joint already declines by kind-gated
+/// parsers, and the pre-pass must also decline the bare rename single
+/// (no lying single; the chain gate owns the declined provenance).
+/// No carrier check (another container strands the same way); shape-A
+/// pure deletions and shape-B records both count. `joints_clear` is
+/// the caller's `del_joint.is_none() && variant_del_joint.is_none()`
+/// (a firing joint never suppresses itself).
+pub(crate) fn has_cross_kind_deletion_in_def_section(
+    pairs: &[super::item_intent::Pair],
+    def_idx: usize,
+    def_kind: &str,
+    unbals: &[super::item_joint_field_add::Unbal],
+    del_shape_bs: &[DelShapeB],
+    joints_clear: bool,
+) -> bool {
+    if !joints_clear {
+        return false;
+    }
+    let def_sec = pairs[def_idx].sec;
+    let def_path = &pairs[def_idx].path;
+    if def_kind == "struct" {
+        for u in unbals.iter() {
+            if u.sec != def_sec || u.path != *def_path {
+                continue;
+            }
+            if u.minuses.len() == 1
+                && u.pluses.is_empty()
+                && super::item_joint_field_add::parse_variant_add(&u.minuses[0]).is_some()
+            {
+                return true;
+            }
+        }
+        for b in del_shape_bs.iter() {
+            if b.sec != def_sec || b.path != *def_path {
+                continue;
+            }
+            if super::item_joint_field_add::parse_variant_add(&b.del_minus).is_some() {
+                return true;
+            }
+        }
+    } else if def_kind == "enum" {
+        for u in unbals.iter() {
+            if u.sec != def_sec || u.path != *def_path {
+                continue;
+            }
+            if u.minuses.len() == 1
+                && u.pluses.is_empty()
+                && super::item_joint_field_add::parse_field_add(&u.minuses[0]).is_some()
+            {
+                return true;
+            }
+        }
+        for b in del_shape_bs.iter() {
+            if b.sec != def_sec || b.path != *def_path {
+                continue;
+            }
+            if super::item_joint_field_add::parse_field_add(&b.del_minus).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// A decomposed shape-B deletion hunk: (2 minus, 1 plus) with the def
 /// rename at [0] and the field line at minus[1]. `hi` is the hunk-entry
 /// index (== the virtual def pair's hunk, already claimed as the def
@@ -757,21 +825,19 @@ mod tests {
 
     #[test]
     fn variant_deletion_declines_joint() {
-        // An enum-variant deletion alongside a *struct* rename is
-        // cross-kind: no deletion joint (the rename may still partition
-        // alone; the deletion stays an ordinary leftover).
+        // WI-21 slice 4: an enum-variant deletion alongside a *struct*
+        // rename is cross-kind — the joint vetoes AND the bare rename
+        // single suppresses (no lying single). The section stays wholly
+        // ordinary with the stranded delta in declined provenance.
         let pre =
             "struct Old {\n    x: u32,\n}\nenum E {\n    A,\n    B,\n}\nfn f(s: Old, e: E) {\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -5 +4,0 @@\n-    B,\n@@ -7,1 +6,1 @@\n-fn f(s: Old, e: E) {\n+fn f(s: New, e: E) {\n";
         let out = infer(section, pre);
-        if let Some(o) = out {
-            assert_eq!(
-                o.matches("rule=r1").count(),
-                1,
-                "cross-kind deletion never joints; the rename may still partition alone, got:\n{o}"
-            );
-            assert!(!o.contains("field deletion"), "got:\n{o}");
-        }
+        assert!(
+            out.is_none(),
+            "cross-kind deletion suppresses the bare rename too, got:\n{}",
+            out.unwrap_or_default()
+        );
     }
 
     #[test]
@@ -942,19 +1008,33 @@ mod tests {
 
     #[test]
     fn field_deletion_under_enum_rename_declines() {
-        // A field-line deletion alongside an *enum* rename is
-        // cross-kind: no deletion joint.
+        // WI-21 slice 4: a field-line deletion alongside an *enum*
+        // rename is cross-kind — joint vetoes AND bare rename
+        // suppresses (no lying single). Wholly ordinary.
         let pre = "enum Old {\n    A,\n    B,\n}\nstruct S {\n    y: u32,\n}\nfn f(v: Old) {\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -5 +4,0 @@\n-    y: u32,\n@@ -7,1 +6,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
         let out = infer(section, pre);
-        if let Some(o) = out {
-            assert_eq!(
-                o.matches("rule=r1").count(),
-                1,
-                "cross-kind deletion never joints, got:\n{o}"
-            );
-            assert!(!o.contains("- y: u32,"), "got:\n{o}");
-        }
+        assert!(
+            out.is_none(),
+            "cross-kind deletion suppresses the bare rename too, got:\n{}",
+            out.unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn cross_kind_shape_b_suppresses() {
+        // WI-21 slice 4: adjacent shape-B cross-kind (def + variant
+        // deletion in one unbalanced hunk under a struct rename) stays
+        // wholly ordinary — the shape-B trap already declines the
+        // pre-pass, the chain gate owns the suppression.
+        let pre = "struct Old {\n    x: u32,\n}\nenum E {\n    A,\n    B,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,1 @@\n-struct Old {\n-    B,\n+struct New {\n@@ -6,1 +5,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let out = infer(section, pre);
+        assert!(
+            out.is_none(),
+            "shape-B cross-kind stays wholly ordinary, got:\n{}",
+            out.unwrap_or_default()
+        );
     }
 
     #[test]

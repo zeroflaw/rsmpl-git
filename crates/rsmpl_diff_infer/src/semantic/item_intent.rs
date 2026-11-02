@@ -285,7 +285,9 @@ pub(crate) fn try_item_intent_sweep(
         if pair.minus.trim() == pair.plus.trim() {
             return false;
         }
-        if !contains_ident(&pair.minus, &old_ident) || !contains_ident(&pair.plus, &new_ident) {
+        if !super::fn_joint::contains_ident(&pair.minus, &old_ident)
+            || !super::fn_joint::contains_ident(&pair.plus, &new_ident)
+        {
             return false;
         }
         if is_fn_intent {
@@ -419,6 +421,18 @@ pub(crate) fn try_item_intent_sweep(
     );
     let del_joint = deletion_joints.field;
     let variant_del_joint = deletion_joints.variant;
+    // WI-21 slice 4: cross-kind suppression (D5: helper lives in
+    // `item_joint_delete` so this file stays under the 2000-line gate).
+    if super::item_joint_delete::has_cross_kind_deletion_in_def_section(
+        &pairs,
+        def_idx,
+        &def_kind,
+        &unbals,
+        &del_shape_bs,
+        del_joint.is_none() && variant_del_joint.is_none(),
+    ) {
+        return None;
+    }
     if attr_joint.is_none()
         && field_joint.is_none()
         && variant_joint.is_none()
@@ -575,7 +589,7 @@ pub(crate) fn try_item_intent_sweep(
         }
         // Self-referential vis (`pub(in foo)` renaming `foo`) is an
         // evolution, never a pure rename (WI-4's domain).
-        if contains_ident(&def_prefix, &old_ident) {
+        if super::fn_joint::contains_ident(&def_prefix, &old_ident) {
             return None;
         }
     } else if !is_fn_intent {
@@ -824,25 +838,6 @@ fn is_fn_vis_prefix(prefix: &str) -> bool {
         first = false;
     }
     !first
-}
-
-/// Ident-boundary containment (never substring).
-fn contains_ident(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
-    let mut token = String::new();
-    for c in haystack.chars().chain(std::iter::once(' ')) {
-        if c == '_' || c.is_ascii_alphanumeric() {
-            token.push(c);
-        } else {
-            if token == needle {
-                return true;
-            }
-            token.clear();
-        }
-    }
-    false
 }
 
 /// Count `split_item` definitions of (`kind`, `ident`) across the
@@ -1631,7 +1626,10 @@ mod tests {
         // The gate itself fires on the parsed prefix shape.
         assert!(!is_fn_vis_prefix("pub(in foo-bar) "));
         assert!(is_fn_vis_prefix("pub(in crate::foo) "));
-        assert!(contains_ident("pub(in crate::foo) ", "foo"));
+        assert!(super::super::fn_joint::contains_ident(
+            "pub(in crate::foo) ",
+            "foo"
+        ));
     }
 
     #[test]

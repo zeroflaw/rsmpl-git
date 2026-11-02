@@ -382,6 +382,89 @@ pub(crate) fn section_has_stranded_item_joint(
     false
 }
 
+/// WI-21 slice 4: cross-kind member suppression (the deletion analogue
+/// of the slice-2a stranded-use veto). A section holding a `struct`
+/// rename plus a variant-shaped deletion, or an `enum` rename plus a
+/// field-shaped deletion, in unbalanced (pure-deletion or adjacent
+/// shape-B-like) hunks would otherwise raise the bare rename single
+/// over the def hunk while an ordinary hunk silently strands the
+/// deletion (same forbidden middle as slice 2a: fires partially and
+/// strands silently). The section stays wholly ordinary: `true` asks
+/// the caller to decline.
+///
+/// Scope: unbalanced deletion hunks only (balanced evolution pairs
+/// belong to slice 2a, already handled); `fn`/`mod`/`macro_rules!`
+/// defs never count (same gate as `split_rename_delta`); same-kind
+/// deletions never trigger (field/variant parses are disjoint, so a
+/// struct+field or enum+variant section answers `false`); no carrier
+/// proof — another container's cross-kind member strands the same way,
+/// so it suppresses the same way.
+pub(crate) fn section_has_cross_kind_deletion(section: &str) -> bool {
+    // Split native hunks; `rule=` hunks never count (already semantic).
+    let mut hunks: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+    for line in section.lines().skip(1) {
+        if line.starts_with("@@") {
+            if line.contains("rule=") {
+                return false;
+            }
+            hunks.push((Vec::new(), Vec::new()));
+        }
+        if let Some((ms, ps)) = hunks.last_mut() {
+            if line.starts_with('-') && !line.starts_with("---") {
+                ms.push(line[1..].to_string());
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                ps.push(line[1..].to_string());
+            }
+        }
+    }
+    if hunks.is_empty() {
+        return false;
+    }
+    // Def rename kinds present (balanced single-delta pairs only).
+    let mut has_struct_rename = false;
+    let mut has_enum_rename = false;
+    for (ms, ps) in &hunks {
+        if ms.len() != ps.len() || ms.is_empty() {
+            continue;
+        }
+        for (m, p) in ms.iter().zip(ps.iter()) {
+            if let Some((_, kind, _, _)) = split_rename_delta(m, p) {
+                if kind == "struct" {
+                    has_struct_rename = true;
+                } else if kind == "enum" {
+                    has_enum_rename = true;
+                }
+            }
+        }
+    }
+    if !has_struct_rename && !has_enum_rename {
+        return false;
+    }
+    // Deletion member kinds present (unbalanced hunks only).
+    let mut has_field_deletion = false;
+    let mut has_variant_deletion = false;
+    for (ms, ps) in &hunks {
+        if ms.len() == 1 && ps.is_empty() {
+            if super::item_joint_field_add::parse_field_add(&ms[0]).is_some() {
+                has_field_deletion = true;
+            }
+            if super::item_joint_field_add::parse_variant_add(&ms[0]).is_some() {
+                has_variant_deletion = true;
+            }
+        } else if ms.len() == 2 && ps.len() == 1 {
+            for m in ms {
+                if super::item_joint_field_add::parse_field_add(m).is_some() {
+                    has_field_deletion = true;
+                }
+                if super::item_joint_field_add::parse_variant_add(m).is_some() {
+                    has_variant_deletion = true;
+                }
+            }
+        }
+    }
+    (has_struct_rename && has_variant_deletion) || (has_enum_rename && has_field_deletion)
+}
+
 /// An item definition name delta, or `None` for use/evolution lines.
 /// Mirrors the `item_intent` gate: `fn` belongs to WI-4, `mod` and
 /// `macro_rules!` decline with it.
@@ -541,6 +624,66 @@ mod tests {
         assert_eq!(
             files["f.rs"],
             "struct New {\n    x: u64,\n}\nfn f(s: New) {\n}\n"
+        );
+    }
+
+    #[test]
+    fn cross_kind_deletion_matrix() {
+        // WI-21 slice 4: struct+variant and enum+field suppress; same-kind
+        // and balanced-evo shapes do not.
+        let struct_variant = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -5 +4,0 @@\n-    B,\n@@ -7,1 +6,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        assert!(section_has_cross_kind_deletion(struct_variant));
+        let enum_field = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -5 +4,0 @@\n-    y: u32,\n@@ -7,1 +6,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
+        assert!(section_has_cross_kind_deletion(enum_field));
+        // Same-kind never suppresses.
+        let struct_field = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        assert!(!section_has_cross_kind_deletion(struct_field));
+        let enum_variant = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -5,1 +4,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
+        assert!(!section_has_cross_kind_deletion(enum_variant));
+        // Balanced evolution (no unbalanced deletion) never counts.
+        let balanced = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-struct Old {\n+struct New {\n@@ -4 +4 @@\n-type A = Vec<u8>;\n+type A = Box<[u8]>;\n";
+        assert!(!section_has_cross_kind_deletion(balanced));
+        // Lone def hunk (no deletion) never suppresses.
+        let lone = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-struct Old {\n+struct New {\n";
+        assert!(!section_has_cross_kind_deletion(lone));
+    }
+
+    #[test]
+    fn cross_kind_deletion_suppresses_end_to_end() {
+        // WI-21 slice 4 headline: the chain gate turns the section wholly
+        // ordinary with the stranded delta named in declined provenance.
+        let pre =
+            "struct Old {\n    x: u32,\n}\nenum E {\n    A,\n    B,\n}\nfn f(s: Old, e: E) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -5 +4,0 @@\n-    B,\n@@ -7,1 +6,1 @@\n-fn f(s: Old, e: E) {\n+fn f(s: New, e: E) {\n";
+        assert!(section_has_cross_kind_deletion(section));
+        let out = infer_section(section, pre);
+        assert!(
+            out.is_none(),
+            "cross-kind stays wholly ordinary, got:\n{}",
+            out.unwrap_or_default()
+        );
+        // Provenance names the gate with the deletion line in sites.
+        let mut prov = Vec::new();
+        let opt = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&section.to_string()),
+            &HashMap::from([("f.rs".to_string(), pre.to_string())]),
+            &mut prov,
+        );
+        assert!(opt.is_none(), "must stay ordinary");
+        assert_eq!(prov.len(), 1, "one ordinary entry, got: {prov:?}");
+        assert_eq!(prov[0].detector, "ordinary");
+        assert!(
+            prov[0]
+                .declined
+                .iter()
+                .any(|d| d.detector == "section" && d.reason == "cross-kind-member"),
+            "gate named, got: {:?}",
+            prov[0].declined
+        );
+        assert!(
+            prov[0].sites.contains(&5),
+            "stranded delta line named, got: {:?}",
+            prov[0].sites
         );
     }
 }

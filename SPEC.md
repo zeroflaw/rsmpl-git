@@ -2466,9 +2466,12 @@ lowered diff is the observable truth as always (Section D.2).
     probe and the joint declines. Unrelated same-named idents are not
     anchored uses and fire `verified`. Two evolutions,
     two additions, an addition of another container, bare renames,
-    cross-kind members, and alias/const shapes never joint-fire (only
+    and alias/const shapes never joint-fire (only
     multi-addition and cross-file-member joints stay out: a member in
     another file than its container cannot joint by the container law).
+    Cross-kind members (WI-21 slice 4) veto the joint AND suppress the bare
+    rename single — wholly ordinary with the stranded delta in declined
+    provenance.
     Enum rename + variant-deletion joint (WI-21 slice 2): the enum half
     of the same ladder — an `enum` rename plus exactly one
     variant-deletion line (`- B,`, `- B(u32),`, `- B { x: u32 },`,
@@ -7704,7 +7707,7 @@ arms); composite drivers by driver name (`partition`, `partial`,
 `macro_rule_body`, `macro_enclosing`, `attr_sweep`, `verbatim`,
 `delete`, `definition_addition`, `definition_addition_follow`,
 `variant_addition_follow`, `use_regroup`); section gates by gate name
-(`section` with `crlf-content` or `stranded-joint`). `reason` is chain-level — `no-match` (shape
+(`section` with `crlf-content`, `stranded-joint`, or `cross-kind-member`). `reason` is chain-level — `no-match` (shape
 decline), `byte-guard` (strict-T375 veto after a candidate),
 `precision-guard` (precision-allowance veto after a candidate) —
 never detector-inferred: a detector-internal guard veto surfaces as
@@ -8005,8 +8008,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     `off-target`/`shadowed`/`second-hop`/`macro-hidden` orphans of the
     deletion hunk (capping at `partial`); uses the native
     deletes/rewrites fail the probe and the joint declines. Two
-    deletions, cross-kind members, and attr+deletion combos stay
-    ordinary (later slices).
+    deletions, and attr+deletion combos stay
+    ordinary (slice 5). Cross-kind members (WI-21 slice 4): a field-shaped
+    deletion under an `enum` rename, or a variant-shaped deletion under a
+    `struct` rename, vetoes the joint AND suppresses the bare rename single —
+    the section stays wholly ordinary with the stranded delta named in declined
+    provenance (`section` / `cross-kind-member`, sites carry the deletion line).
     Enum rename + variant-deletion joint (WI-21 slices 2 + 3): a def
     hunk holding the `enum` rename plus exactly one attached
     variant-deletion line (same file/section — either a distant
@@ -8018,8 +8025,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     T375; diffrs fixture `143-enum-rename-variant-delete-fires`. Same
     orphan law as the struct half (a rewritten `Old::B` → `New::B`
     pair rides as a claimable rename use; the dangling `New::B`
-    orphans). Two deletions, cross-kind members, and attr+deletion
-    combos stay ordinary (later slices).
+    orphans). Two deletions and attr+deletion
+    combos stay ordinary (slice 5; cross-kind suppression above).
     Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
     the enum half of the same law — a def hunk holding the `enum`
     rename plus exactly one attached variant-evolution pair (tuple
