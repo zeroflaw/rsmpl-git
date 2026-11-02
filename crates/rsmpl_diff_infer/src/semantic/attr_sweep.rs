@@ -369,7 +369,11 @@ fn probe_tiered(
 /// singles fire through the chain whole-block single-pair arm (WI-14
 /// slice 5) under the precision guard — the probe below (`matches == 1`
 /// plus the byte-compare) is the uniqueness proof,
-/// `guard_for("attr_sweep")` stays Strict for the N ≥ 2 sweep.
+/// `guard_for("attr_sweep")` stays Strict for the N ≥ 2 sweep. N = 1
+/// emits the ranged owner-span diet (no directive: default `one` over
+/// the `syn` owner span, which always contains both pattern lines —
+/// the changed attr and the owner header — so the sweep dummy's 8
+/// bytes are unneeded); N ≥ 2 keeps the sweep dummy.
 pub(crate) fn try_attr_replace_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -405,9 +409,11 @@ pub(crate) fn try_attr_replace_sweep(
     if pairs.iter().any(|(m, p)| m != &m0 || p != &p0) {
         return None;
     }
-    // One owner per pair, one family for the class.
+    // One owner per pair, one family for the class. The N = 1 arm
+    // below needs the owner's span for its ranged diet header.
     let mut family: Option<OwnerFamily> = None;
     let mut names: Vec<String> = Vec::with_capacity(pairs.len());
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(pairs.len());
     for line in changed.iter().copied() {
         let owner = owner_at(&owners, line)?;
         if family.as_ref().is_some_and(|f| *f != owner.family) {
@@ -415,6 +421,7 @@ pub(crate) fn try_attr_replace_sweep(
         }
         family = Some(owner.family.clone());
         names.push(owner.name.clone());
+        spans.push((owner.start, owner.end));
     }
     let class = AttrClass {
         mode: AttrMode::Replace,
@@ -434,13 +441,29 @@ pub(crate) fn try_attr_replace_sweep(
     }
     let lines = probe_tiered(path, pre, &ordinary, &class, &names, pairs.len())?;
     let rule = unique_rule(used_rules, "attr_sweep");
-    // N = 1 keeps the sweep dummy (whole-file search): the pattern spans
-    // the attr line plus the owner header, so no single-line range can
-    // anchor it — the ranged allow-one diet (perm_single precedent)
-    // does not apply to this family. The whole-block single-pair arm
-    // prices the full section (prelude included), which is where the
-    // concrete header fits the precision guard.
-    let mut out = crate::emission_header(path, &rule, &[]);
+    // N = 1 emits the ranged diet: the `syn` owner span always contains
+    // both pattern lines (changed attr + owner header, stacked attrs
+    // included), so the sweep dummy buys nothing — the default `one`
+    // over this range is a restriction of the probed sweep body to its
+    // proven site (file-wide exactly-one-match implies exactly-one in
+    // range). The probe above stays sweep-based and conservative: a
+    // same-name twin still vetoes here even though a range could name
+    // the site (safe direction). N ≥ 2 keeps the sweep dummy.
+    // The whole-block single-pair arm prices the full section (prelude
+    // included), which is where the concrete header fits the precision
+    // guard live (native short-hunk `@@ -1 +1 @@` sections are 13 bytes
+    // shorter than the hand-written long-hunk shape — the WI-14 slice-5
+    // fidelity gap the diet closes).
+    let mut out = if pairs.len() == 1 {
+        let (s, e) = spans[0];
+        format!(
+            "{}\n@@ -{s},{} @@ rule={rule}\n",
+            crate::git_header(path),
+            e.saturating_sub(s).saturating_add(1).max(1),
+        )
+    } else {
+        crate::emission_header(path, &rule, &[])
+    };
     out.push_str(&lines);
     Some((out, "attr_sweep"))
 }
@@ -802,9 +825,12 @@ mod tests {
 
     #[test]
     fn pair_chain_entry_single_item_fires_and_round_trips() {
-        // WI-14 slice 5: the whole-balanced N=1 replace fires at the
-        // detector (probe `matches == 1` + byte-compare); the lib.rs
-        // single-pair wiring prices bytes under the precision guard.
+        // WI-14 slice 5 (fidelity fix): the whole-balanced N=1 replace
+        // fires at the detector (probe `matches == 1` + byte-compare)
+        // with the ranged owner-span diet — `@@ -1,2 @@`, no directive
+        // (default `one` over the `syn` owner span, which contains both
+        // the attr and the header); the sweep dummy's 8 bytes are what
+        // kept the live short-hunk section 1 byte over the guard.
         let pre = "#[derive(Debug)]\nstruct S { x: i32 }\n";
         let mut used = Vec::new();
         let (out, detector) = try_attr_replace_sweep(
@@ -818,10 +844,10 @@ mod tests {
         .expect("N=1 item replace must fire");
         assert_eq!(detector, "attr_sweep");
         // Concrete owner name — hetero `N` is impossible with one site.
-        // Sweep dummy (whole-file search): the pattern spans the attr
-        // line plus the owner header, so no single-line range anchors it.
-        assert!(out.contains("@@ -1,1 @@ rule=r1\n"), "got:\n{out}");
-        assert!(out.contains("# sweep\n"), "got:\n{out}");
+        // Ranged diet (fidelity fix): owner span 1-2, no `# sweep`.
+        assert!(out.contains("@@ -1,2 @@ rule=r1\n"), "got:\n{out}");
+        assert!(!out.contains("# sweep"), "got:\n{out}");
+        assert!(!out.contains("# allow=many"), "got:\n{out}");
         assert!(out.contains("- struct S\n"), "got:\n{out}");
         assert!(out.contains("- #[derive(Debug)]\n"), "got:\n{out}");
         assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
@@ -832,6 +858,41 @@ mod tests {
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
         assert_eq!(
             files["f.rs"], "#[derive(Clone)]\nstruct S { x: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn pair_chain_entry_single_stacked_attr_uses_owner_span() {
+        // Stacked attrs: the owner span (1-3) contains both the changed
+        // attr (line 1) and the header (line 3), so the ranged diet
+        // anchors the site regardless of stacking; the sweep probe
+        // stays authoritative (whatever it proves, the range covers).
+        let pre = "#[derive(Debug)]\n#[allow(dead_code)]\nstruct S { x: i32 }\n";
+        let mut used = Vec::new();
+        let Some((out, detector)) = try_attr_replace_sweep(
+            &["#[derive(Debug)]"],
+            &["#[derive(Clone)]"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            &mut used,
+        ) else {
+            // Probe cannot match across the middle attr: honest ordinary
+            // downstream, no rule burned — pin the decline, not a fire.
+            assert!(used.is_empty());
+            return;
+        };
+        assert_eq!(detector, "attr_sweep");
+        assert!(out.contains("@@ -1,3 @@ rule=r1\n"), "got:\n{out}");
+        assert!(!out.contains("# sweep"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "#[derive(Clone)]\n#[allow(dead_code)]\nstruct S { x: i32 }\n",
             "got:\n{}",
             files["f.rs"]
         );
@@ -865,7 +926,8 @@ mod tests {
         // A different-name twin never matches the concrete header, so it
         // neither vetoes nor rewrites (untouched in both post-trees) —
         // the concrete name scopes the claim to exactly one site (unlike
-        // the N ≥ 2 hetero `N`-hole, which would match the twin).
+        // the N ≥ 2 hetero `N`-hole, which would match the twin). Range
+        // is the S owner span (1-2); T sits outside it.
         let pre = "#[derive(Debug)]\nstruct S { x: i32 }\n#[derive(Debug)]\nstruct T { y: i32 }\n";
         let mut used = Vec::new();
         let (out, detector) = try_attr_replace_sweep(
@@ -878,6 +940,7 @@ mod tests {
         )
         .expect("distinct-name twin must not veto the singleton");
         assert_eq!(detector, "attr_sweep");
+        assert!(out.contains("@@ -1,2 @@ rule=r1\n"), "got:\n{out}");
         assert!(out.contains("- struct S\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
         let mut files = HashMap::new();
@@ -915,6 +978,9 @@ mod tests {
         )
         .expect("fn singleton must pass the detector probe");
         assert_eq!(detector, "attr_sweep");
+        // Ranged owner-span diet (fn span 1-2), same as items: what keeps
+        // fn singles ordinary downstream is the byte guard alone.
+        assert!(out.contains("@@ -1,2 @@ rule=r1\n"), "got:\n{out}");
         assert!(out.contains("- fn solo(...) {"), "got:\n{out}");
         assert_eq!(used, vec!["r1".to_string()]);
     }

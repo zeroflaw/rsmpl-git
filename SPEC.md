@@ -8039,8 +8039,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     proof replaces bytes; Fn-family singles stay ordinary on bytes).
     The whole-balanced single-pair replace rides the chain whole-block
     single-pair arm (same guard over the full section, prelude
-    included); the sweep dummy survives there (the pattern spans attr
-    + header, so no single-line range anchors it).
+    included); N = 1 emits the ranged owner-span diet (`@@ -s,len @@`
+    with no directive — default `one` over the `syn` owner span, which
+    always contains both the changed attr and the owner header), never
+    the sweep dummy (whose 8 bytes kept the live short-hunk section 1
+    byte over the guard); the sweep-based probe (`matches == 1`) still
+    proves it, conservatively vetoing same-name twins.
    A losing class declines alone, never vetoing a winning one.
    Detector name `attr_sweep`.
 - Definition-value evolution (WI-12 slice 1): one balanced pair

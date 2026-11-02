@@ -1801,23 +1801,29 @@ mod tests {
 
     #[test]
     fn e2e_whole_balanced_attr_replace_single_compresses() {
-        // WI-14 slice 5: the whole-balanced single-pair section raises
-        // through the chain whole-block single-pair arm (per-hunk
-        // accounting never fits the concrete header, so there is no
-        // per-hunk arm by construction), concrete name, ranged
-        // allow-one diet, byte-identical post-tree. The `---`/`+++`
-        // lines are the faithful native shape — the whole-block guard
-        // prices the full section, prelude included.
-        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-#[derive(Debug)]\n+#[derive(Clone)]\n".to_string();
+        // WI-14 slice 5 (fidelity fix): the whole-balanced single-pair
+        // section raises through the chain whole-block single-pair arm
+        // (per-hunk accounting never fits the concrete header, so there
+        // is no per-hunk arm by construction), concrete name, ranged
+        // owner-span diet (`@@ -1,2 @@`, no directive — default `one`
+        // over the `syn` owner span), byte-identical post-tree. The raw
+        // is TRUE `git diff -U0` bytes (two-path header, `index` line,
+        // native short hunk `@@ -1 +1 @@` — git omits `,1`): the
+        // previous hand-written long-hunk shape priced a 99-byte section
+        // and passed by 12, while live prices 86 and failed by 1. The
+        // top-level API exercises the collapse/strip normalization, so
+        // this pin stays faithful by construction.
+        let raw = "diff --git a/f.rs b/f.rs\nindex 9fcab2f..af9d6a1 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-#[derive(Debug)]\n+#[derive(Clone)]\n";
         let pre = pre_map(&[("f.rs", "#[derive(Debug)]\nstruct S { x: i32 }\n")]);
-        let out = semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
-            .expect("whole-balanced attr single must compress end to end");
+        let out = infer_rsmpl_with_pre_images(raw, &pre).unwrap();
+        let out = out.rsmpl.as_str();
         assert!(out.contains("- struct S\n"), "got:\n{out}");
         assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
         assert!(!out.contains("struct N"), "got:\n{out}");
-        assert!(out.contains("# sweep\n"), "sweep dummy survives: {out}");
-        validated_live(&out, &pre);
-        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        assert!(out.contains("@@ -1,2 @@ rule="), "got:\n{out}");
+        assert!(!out.contains("# sweep"), "got:\n{out}");
+        validated_live(out, &pre);
+        let parsed = rsmpl_patch::parse_patch(out).expect("emission must parse");
         let mut files = pre.clone();
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
         assert_eq!(
@@ -1830,13 +1836,17 @@ mod tests {
     #[test]
     fn e2e_whole_balanced_attr_replace_fn_single_stays_ordinary() {
         // Fn-family N=1 attr singles pass the detector probe but lose
-        // on bytes (fixed `...`/`}` scaffold over a 1-line hunk):
-        // honest ordinary end to end, no rule burned anywhere.
-        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-#[inline]\n+#[must_use]\n".to_string();
+        // on bytes (fixed `...`/`}` scaffold over a 1-line hunk: 109 vs
+        // live section 74 + 16 = 90): honest ordinary end to end, no rule
+        // burned anywhere. True `git diff -U0` bytes, top-level API —
+        // same fidelity posture as the firing item twin above.
+        let raw = "diff --git a/f.rs b/f.rs\nindex 030bc73..8fb7c07 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-#[inline]\n+#[must_use]\n";
         let pre = pre_map(&[("f.rs", "#[inline]\nfn solo() {}\n")]);
+        let out = infer_rsmpl_with_pre_images(raw, &pre).unwrap();
         assert!(
-            semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
-            "fn attr single must stay ordinary end to end"
+            !out.rsmpl.contains("rule="),
+            "fn attr single must stay ordinary end to end, got:\n{}",
+            out.rsmpl
         );
     }
 }

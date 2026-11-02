@@ -843,10 +843,14 @@ pub(crate) fn compress_section(
         // scratch-apply probe at n=1 plus the T361 byte-compare is the
         // uniqueness proof). No `guard_for` assert: `attr_sweep` stays
         // Strict for the N ≥ 2 sweep — only this n=1 arm prices proof
-        // over bytes (the call-single precedent). The sweep dummy
-        // survives (the pattern spans attr + header, so no single-line
-        // range anchors it); the full-section accounting (prelude
-        // included) is what fits the concrete header inside the guard.
+        // over bytes (the call-single precedent). The N=1 emission is
+        // the ranged owner-span diet (no directive: default `one` over
+        // the `syn` owner span, which contains both the attr and the
+        // header) — the sweep dummy's 8 bytes are what kept the live
+        // short-hunk section 1 byte over the guard (fidelity fix); the
+        // sweep-based probe still proves it. The full-section accounting
+        // (prelude included) is what fits the concrete header inside
+        // the guard.
         let attr_checkpoint = used_rules.len();
         if let Some((attr, detector)) = attempt(
             declined,
