@@ -64,7 +64,7 @@ pub fn parse_evolution_template(text: &str) -> Option<(String, String)> {
 /// WI-6 slice 3b: true when `tail` (text after the `fn <ident>`) opens a
 /// word-bounded `as <ident>` rename (`fn fact as factorial(...)`).
 /// Single-word helper shared by the abstract-form guard above.
-fn follows_as_rename(tail: &str) -> bool {
+pub(crate) fn follows_as_rename(tail: &str) -> bool {
     let bytes = tail.as_bytes();
     let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let mut i = 0;
@@ -502,7 +502,7 @@ pub fn body_evolution_veto(minus_text: &str, old: &str) -> Option<BodyVeto> {
 }
 
 /// Word-bounded substring check for attribute token strings.
-fn word_bounded_contains(hay: &str, needle: &str) -> bool {
+pub(crate) fn word_bounded_contains(hay: &str, needle: &str) -> bool {
     if needle.is_empty() || !hay.contains(needle) {
         return false;
     }
@@ -781,13 +781,19 @@ pub fn parse_struct_evolution_template(text: &str) -> Option<(String, String)> {
     if !tail.contains("...") {
         return None;
     }
+    // WI-19 slice 4: the `struct <old> as <new> { ... }` body-evolving
+    // form belongs to `parse_struct_body_evolution_template`, never here —
+    // without this guard the abstract parser would mis-name it `old`.
+    if follows_as_rename(tail) {
+        return None;
+    }
     Some((prefix.to_string(), rest[..ident_len].to_string()))
 }
 /// The verbatim text before `struct` in a struct evolution-paste
 /// template: a Rust visibility (`pub`, `pub(crate)`, `pub(in path)`,
 /// or empty for a private struct). Validated by parsing, not by
 /// character vetoes.
-fn valid_struct_evolution_prefix(prefix: &str) -> bool {
+pub(crate) fn valid_struct_evolution_prefix(prefix: &str) -> bool {
     let pre = prefix.trim();
     if pre.is_empty() {
         return true;
@@ -846,13 +852,18 @@ pub fn parse_enum_evolution_template(text: &str) -> Option<(String, String)> {
     if !tail.contains("...") {
         return None;
     }
+    // WI-19 slice 4: the `enum <old> as <new> { ... }` body-evolving
+    // form belongs to `parse_enum_body_evolution_template`, never here.
+    if follows_as_rename(tail) {
+        return None;
+    }
     Some((prefix.to_string(), rest[..ident_len].to_string()))
 }
 /// The verbatim text before `enum` in an enum evolution-paste
 /// template: a Rust visibility (`pub`, `pub(crate)`, `pub(in path)`,
 /// or empty for a private enum). Validated by parsing, not by
 /// character vetoes.
-fn valid_enum_evolution_prefix(prefix: &str) -> bool {
+pub(crate) fn valid_enum_evolution_prefix(prefix: &str) -> bool {
     let pre = prefix.trim();
     if pre.is_empty() {
         return true;
@@ -911,13 +922,18 @@ pub fn parse_union_evolution_template(text: &str) -> Option<(String, String)> {
     if !tail.contains("...") {
         return None;
     }
+    // WI-19 slice 4: the `union <old> as <new> { ... }` body-evolving
+    // form belongs to `parse_union_body_evolution_template`, never here.
+    if follows_as_rename(tail) {
+        return None;
+    }
     Some((prefix.to_string(), rest[..ident_len].to_string()))
 }
 /// The verbatim text before `union` in a union evolution-paste
 /// template: a Rust visibility (`pub`, `pub(crate)`, `pub(in path)`,
 /// or empty for a private union). Validated by parsing, not by
 /// character vetoes.
-fn valid_union_evolution_prefix(prefix: &str) -> bool {
+pub(crate) fn valid_union_evolution_prefix(prefix: &str) -> bool {
     let pre = prefix.trim();
     if pre.is_empty() {
         return true;
@@ -1289,6 +1305,9 @@ pub fn is_evolution_template(text: &str) -> bool {
         || parse_fn_body_evolution_template(t).is_some()
         || parse_fn_sig_body_template(t).is_some()
         || parse_fn_full_header_template(t).is_some()
+        || crate::pattern_evolution_container::parse_struct_body_evolution_template(t).is_some()
+        || crate::pattern_evolution_container::parse_enum_body_evolution_template(t).is_some()
+        || crate::pattern_evolution_container::parse_union_body_evolution_template(t).is_some()
         || parse_struct_evolution_template(t).is_some()
         || parse_enum_evolution_template(t).is_some()
         || parse_union_evolution_template(t).is_some()

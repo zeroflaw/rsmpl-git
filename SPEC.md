@@ -4366,6 +4366,26 @@ a macro name, or an attribute interior never rewrites — the paste
 fails loud with `RSMPL_PATTERN_CONFLICT` naming the kind and the
 captured line instead of guessing.
 
+A container body-evolving paste (WI-19 slice 4) generalises the `as`
+spelling per kind when a `struct`/`enum`/`union` move renames the item
+and its body delta is exactly the container rename (a self-referential
+field type or variant payload):
+
+```diff
+diff --git src/new.rs
+@@ -5,0 @@ rule=paste_config
+# use=Config
++ pub struct OldName as NewName { ... }
+```
+
+(`enum OldName as NewName { ... }` and `union OldName as NewName { ... }`
+likewise.) The engine splices the header to the new name and renames
+the captured suffix/body's type-path self-references under the same
+occurrence law, generalised per kind: field idents, variant idents,
+macro names, and attribute interiors never rewrite (loud veto naming
+kind and line); vis, generics, and attrs must already be token-equal
+(name-only scope — vis or signature deltas stay ordinary).
+
 A signature+body joint `fn` paste (WI-19 slice 3) composes the
 concrete-signature and `as` forms when a move renames the item, evolves
 its signature in exactly one slot, and renames its self-references:
@@ -9244,16 +9264,30 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     equality after the rename, so pairing and splice agree by
     construction; zero-slot pairs belong to the `as` arm and two-slot
     pairs stay ordinary.
+    WI-19 slice 4 pairs container body-evolving `struct`/`enum`/`union`
+    moves (a rename whose field types / variant payloads name the
+    container): the paste carries the per-kind `as` template
+    (`+ <vis>struct <Old> as <New> { ... }`, likewise `enum`/`union`)
+    and the engine splices the header while renaming the captured
+    suffix/body's type-path self-references under the `as` occurrence
+    law generalised per kind (field/variant ident, macro name, and
+    attribute-interior vetoes). The pairing proves the same veto plus
+    the renamed-minus == plus-run agreement, so pairing and splice
+    agree by construction; vis/generics/attr deltas belong to the
+    abstract path or stay ordinary, never here.
        Everything else (other item kinds, attr deltas, vis+body combos
        without a signature delta, two-slot signature+body combos,
-       non-`fn` self-references, shadowed-body
+       `impl`-block moves (`impl` is not a moveable item — pairing has
+       no cut ident to anchor on), shadowed-body
        renames the pairing scanner disagrees with, single-line items)
        stays ordinary: abstract, body-evolving, and concrete-signature
        multi-line headers fire, as do single- and multi-line
        signature+body joints (diffrs fixtures
        `137-multiline-abstract-move-fires`,
        `138-multiline-sig-evolve-fires`, and
-       `139-sig-body-joint-fires`).
+       `139-sig-body-joint-fires`) and single-line container
+       body-evolving `as` pastes (diffrs fixture
+       `140-container-body-evolve-fires`).
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -9584,7 +9618,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(140), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(141), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

@@ -19,6 +19,7 @@ mod pattern_classify;
 mod pattern_def_evo;
 mod pattern_ellipsis;
 mod pattern_evolution;
+mod pattern_evolution_container;
 mod pattern_general;
 mod pattern_item_joint;
 mod pattern_member_evo;
@@ -41,6 +42,11 @@ pub use pattern::{
     parse_struct_evolution_template, parse_trait_evolution_template, parse_type_evolution_template,
     parse_union_evolution_template, rename_ident_in_code, split_leading_attrs, trait_header_ident,
     BodyVeto, CompiledPattern, GeneralShape, ImplHeaderFilter, PatternKind, VariantPayload,
+};
+pub use pattern_evolution_container::{
+    container_body_evolution_template, item_body_evolution_veto,
+    parse_enum_body_evolution_template, parse_struct_body_evolution_template,
+    parse_union_body_evolution_template,
 };
 pub use pattern_member_evo::norm_arm_expr;
 pub use quote_utils::{

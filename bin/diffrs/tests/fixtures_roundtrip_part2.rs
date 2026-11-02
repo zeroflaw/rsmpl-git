@@ -1452,6 +1452,37 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "140-container-body-evolve-fires" {
+        // WI-19 slice 4: a struct move whose body delta is exactly the
+        // container rename (a self-referential field type) raises as
+        // cut + `as`-template paste (`struct <old> as <new> { ... }`).
+        // The harness checks the tree legs (`--check` + lowered
+        // `git apply`); enum/union twins are pinned inline
+        // (finder/splice/pair tests).
+        assert!(
+            semantic.contains("# bind="),
+            "container cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "container paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ struct Old as New { ... }"),
+            "paste must carry the container `as` template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-struct Old {"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "container body-evolve must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on

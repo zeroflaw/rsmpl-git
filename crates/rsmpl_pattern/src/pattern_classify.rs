@@ -324,7 +324,7 @@ pub(crate) fn classify(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "evolution paste template must be a single-line `struct` header with `...` (got `{}`); write `+ <vis>struct <New> {{ ... }}` or paste the bare capture name for a verbatim move",
+                    "evolution paste template must be a single-line `struct` header with `...` (got `{}`); write `+ <vis>struct <New> {{ ... }}`, `+ <vis>struct <Old> as <New> {{ ... }}` for a self-reference body rename, or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));
@@ -332,7 +332,7 @@ pub(crate) fn classify(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "evolution paste template must be a single-line `enum` header with `...` (got `{}`); write `+ <vis>enum <New> {{ ... }}` or paste the bare capture name for a verbatim move",
+                    "evolution paste template must be a single-line `enum` header with `...` (got `{}`); write `+ <vis>enum <New> {{ ... }}`, `+ <vis>enum <Old> as <New> {{ ... }}` for a self-reference body rename, or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));
@@ -340,7 +340,7 @@ pub(crate) fn classify(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "evolution paste template must be a single-line `union` header with `...` (got `{}`); write `+ <vis>union <New> {{ ... }}` or paste the bare capture name for a verbatim move",
+                    "evolution paste template must be a single-line `union` header with `...` (got `{}`); write `+ <vis>union <New> {{ ... }}`, `+ <vis>union <Old> as <New> {{ ... }}` for a self-reference body rename, or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));
