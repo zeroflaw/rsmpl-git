@@ -16,8 +16,9 @@ use super::{item_emission_header, unique_rule};
 /// N-site trait+impl method rename with a callee-only delta: every
 /// pair is a single-line fn header differing in exactly the fn ident
 /// (vis/qual/generics/params/return/where byte-equal per site,
-/// heterogeneous across sites), `;`-terminated (trait declarations)
-/// or `{`-terminated (definitions and trait defaults). Uniformly
+/// heterogeneous across sites), `;`-terminated (trait declarations),
+/// `{`-terminated (definitions and trait defaults), or `}`-terminated
+/// single-line definitions (normalized to the `{` emission). Uniformly
 /// indented sites emit one hunk per enclosing trait/`impl` block with
 /// its verbatim header line (WI-4a: the engine header filter matches
 /// only the named block); all share the rule name (one intent, K
@@ -327,7 +328,9 @@ pub(crate) fn try_inherent_method_rename(
     let _domain = domain?;
     // Inherent definitions are bodies (`{`); a `;` pair in an inherent
     // block is unparseable Rust (the file would not parse above), and a
-    // mixed class is never one intent.
+    // mixed class is never one intent. Single-line `}` defs arrive
+    // already normalized to `{` by `trait_rename_pair`, so they pass
+    // this gate on the proven emission form.
     let mut term_of: std::collections::HashMap<usize, char> = std::collections::HashMap::new();
     for (i, &site) in changed.iter().enumerate() {
         if let Some(t) = terms[i] {
@@ -481,20 +484,26 @@ fn scratch_single_reproduces(
 }
 
 /// A `-`/`+` line pair as a method-rename header: both trimmed lines
-/// end with `{` (definitions, trait defaults) or `;` (trait
-/// declarations), both parse as fn-shaped, and they differ in exactly
-/// the fn ident. Returns (old, new, terminator).
+/// end with `{` (definitions, trait defaults), `;` (trait
+/// declarations), or `}` (single-line definitions such as
+/// `fn run(&self) {}`), both parse as fn-shaped, and they differ in
+/// exactly the fn ident. Returns (old, new, terminator), with `}`
+/// inputs normalized to the `{` terminator: the `{`-form follow
+/// emission already reproduces single-line bodies byte-identically
+/// (engine-proven), so no `}` emission spelling exists.
 pub(crate) fn trait_rename_pair(old_line: &str, new_line: &str) -> Option<(String, String, char)> {
     let o = old_line.trim();
     let p = new_line.trim();
     if o.is_empty() || p.is_empty() {
         return None;
     }
-    let term = match (o.chars().last(), p.chars().last()) {
-        (Some(a), Some(b)) if a == b && (a == '{' || a == ';') => a,
+    let raw = match (o.chars().last(), p.chars().last()) {
+        (Some(a), Some(b)) if a == b && (a == '{' || a == ';' || a == '}') => a,
         _ => return None,
     };
-    if !is_method_shaped(o, term) || !is_method_shaped(p, term) {
+    // Single-line `}` bodies ride the proven `{` emission/probe form.
+    let term = if raw == '}' { '{' } else { raw };
+    if !is_method_shaped(o, raw) || !is_method_shaped(p, raw) {
         return None;
     }
     let (o_pre, o_ident, o_suf) = super::slot::split_fn_ident(o)?;
@@ -518,6 +527,11 @@ pub(crate) fn trait_rename_pair(old_line: &str, new_line: &str) -> Option<(Strin
 fn is_method_shaped(trimmed: &str, term: char) -> bool {
     if term == ';' {
         syn::parse_str::<syn::TraitItemFn>(trimmed).is_ok()
+    } else if term == '}' {
+        // Complete single-line definition (`fn run(&self) {}`): parse
+        // the line itself, no `" }}"` suffix (that trick is `{`-only).
+        syn::parse_str::<syn::ItemFn>(trimmed).is_ok()
+            || syn::parse_str::<syn::ImplItemFn>(trimmed).is_ok()
     } else {
         let probe = format!("{trimmed} }}");
         syn::parse_str::<syn::ItemFn>(&probe).is_ok()
@@ -882,6 +896,119 @@ mod tests {
     }
 
     #[test]
+    fn single_line_pair_normalizes_to_brace_term() {
+        // WI-12 review: `}`-terminated single-line definitions classify
+        // as def pairs on the proven `{` emission form.
+        assert_eq!(
+            trait_rename_pair("    fn old(&self) {}", "    fn new(&self) {}"),
+            Some(("old".to_string(), "new".to_string(), '{'))
+        );
+        assert_eq!(
+            trait_rename_pair(
+                "    fn old(&self) { println!(\"hi\"); }",
+                "    fn new(&self) { println!(\"hi\"); }"
+            ),
+            Some(("old".to_string(), "new".to_string(), '{'))
+        );
+        // `{` and `;` spellings are byte-unchanged by the widening.
+        assert_eq!(
+            trait_rename_pair("    fn old(&self) {", "    fn new(&self) {"),
+            Some(("old".to_string(), "new".to_string(), '{'))
+        );
+        assert_eq!(
+            trait_rename_pair("    fn old(&self);", "    fn new(&self);"),
+            Some(("old".to_string(), "new".to_string(), ';'))
+        );
+    }
+
+    #[test]
+    fn single_line_pair_vetoes() {
+        // Mixed termini never pair; divergent suffixes never pair.
+        assert!(
+            trait_rename_pair("    fn old(&self) {}", "    fn new(&self);").is_none(),
+            "`}}`/`;` mix must not pair"
+        );
+        assert!(
+            trait_rename_pair("    fn old(&self) {}", "    fn new(&self) {").is_none(),
+            "brace-terminus mix must not pair (body-shape delta is WI-20 territory)"
+        );
+        assert!(
+            trait_rename_pair("    fn old(&self) {}", "    fn new(&self, x: i32) {}").is_none(),
+            "divergent single-line suffixes must veto"
+        );
+        assert!(
+            trait_rename_pair("    let old = 1;", "    let new = 1;").is_none(),
+            "non-fn brace lines never pair"
+        );
+    }
+
+    #[test]
+    fn single_line_impl_def_fires_with_trait_decl() {
+        // The WI-12 review repro: trait decl + single-line impl def.
+        let pre =
+            "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {}\n}\n";
+        let out = run(
+            &["    fn old(&self);", "    fn old(&self) {}"],
+            &["    fn new(&self);", "    fn new(&self) {}"],
+            pre,
+            &[2, 6],
+        )
+        .expect("single-line impl def must compress");
+        assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        assert!(out.contains("trait T {"), "out:\n{out}");
+        assert!(!out.contains("impl T for S {"), "out:\n{out}");
+        assert!(out.contains("-     V Q fn old G (...) W ;"), "out:\n{out}");
+        roundtrip(
+            pre,
+            &out,
+            &["fn new(&self);", "fn new(&self) {}"],
+            &["fn old"],
+        );
+    }
+
+    #[test]
+    fn single_line_nonempty_body_fires() {
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) { println!(\"hi\"); }\n}\n";
+        let out = run(
+            &[
+                "    fn old(&self);",
+                "    fn old(&self) { println!(\"hi\"); }",
+            ],
+            &[
+                "    fn new(&self);",
+                "    fn new(&self) { println!(\"hi\"); }",
+            ],
+            pre,
+            &[2, 6],
+        )
+        .expect("non-empty single-line body must compress");
+        roundtrip(
+            pre,
+            &out,
+            &["fn new(&self);", "fn new(&self) { println!(\"hi\"); }"],
+            &["fn old"],
+        );
+    }
+
+    #[test]
+    fn single_line_untouched_twin_vetoes() {
+        // Same twin posture as the multi-line arm: an unchanged
+        // same-name method in the same block vetoes via the probe.
+        let twins = "trait T {\n    fn old(&self);\n}\ntrait T {\n    fn old(&self);\n}\nstruct S;\nimpl S {\n    fn old(&self) {}\n}\n";
+        assert!(
+            run(
+                &["    fn old(&self);", "    fn old(&self) {}"],
+                &["    fn new(&self);", "    fn new(&self) {}"],
+                twins,
+                &[2, 9],
+            )
+            .is_none(),
+            "untouched twin vetoes via the per-hunk probe"
+        );
+    }
+
+    #[test]
     fn single_declines_by_design() {
         // WI-19b: N=1 needs both a trait and an impl side to share one
         // intent; a lone line is never this detector's shape (slot or
@@ -1100,6 +1227,28 @@ mod tests {
             I_PRE,
             &out,
             &["fn new(&self) {", "s.new();"],
+            &["fn old", "s.old()"],
+        );
+    }
+
+    #[test]
+    fn inherent_single_line_def_and_call_compress() {
+        // `}` defs arrive normalized to `{`, so the inherent gate passes
+        // on the proven form.
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {}\n}\nfn f(s: S) {\n    s.old();\n}\n";
+        let out = run_inherent(
+            &["    fn old(&self) {}", "    s.old();"],
+            &["    fn new(&self) {}", "    s.new();"],
+            pre,
+            &[3, 6],
+        )
+        .expect("single-line inherent def+call must compress");
+        assert!(out.contains("# follow=uses"), "out:\n{out}");
+        assert!(out.contains("impl S {"), "out:\n{out}");
+        roundtrip(
+            pre,
+            &out,
+            &["fn new(&self) {}", "s.new();"],
             &["fn old", "s.old()"],
         );
     }

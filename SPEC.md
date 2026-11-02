@@ -8201,7 +8201,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   (arm hunks).
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
-  definitions and trait defaults, `syn`-validated) differing in
+  definitions and trait defaults, `syn`-validated; `}`-terminated
+  single-line definitions such as `fn run(&self) {}` classify on the
+  same `{` emission, which reproduces them byte-identically) differing in
   exactly the fn ident (per-site vis/qual/generics/params/return/
   where byte-equal, heterogeneous across sites, one shared
   `Old`→`New` delta). Every changed line must sit in a `trait` block
