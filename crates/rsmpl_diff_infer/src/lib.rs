@@ -775,10 +775,23 @@ pub(crate) fn compress_balanced_pair_body(
             // WI-19: singles consult `guard_for` (precision for
             // definition shapes, strict for sweeps); multi-pair
             // sections keep strict T375 exactly as before.
+            // Method (indented) `sig_evolution` N=1 singles carry the
+            // mandatory WI-4a filter block. Measured ~41 over the native
+            // pair hunk (filter + rule tag; no `---`/`+++` prelude to drop
+            // per-hunk, unlike the whole-section arm), so the per-hunk
+            // budget is four guards (64) — the same method-run price the
+            // whole-section arm (32 + ~37 dropped prelude) and the subhunk
+            // scaled guard pay.
             let wins = if minuses.len() == 1 {
                 match semantic::guard_for(detector) {
                     semantic::Guard::Precision => {
-                        body.len() <= hunk_len + semantic::PRECISION_GUARD
+                        let allow =
+                            if detector == "sig_evolution" && minuses[0].starts_with([' ', '\t']) {
+                                semantic::PRECISION_GUARD * 4
+                            } else {
+                                semantic::PRECISION_GUARD
+                            };
+                        body.len() <= hunk_len + allow
                     }
                     semantic::Guard::Strict => body.len() < hunk_len,
                 }
@@ -1764,5 +1777,52 @@ mod tests {
             .expect("long-name single must fire like the short one");
         assert!(out.contains(&format!("- struct {old}")), "got:\n{out}");
         validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn per_hunk_method_vis_single_fires_at_method_budget() {
+        // WI-14 slice-3 residue: the method-vis single costs ~41 over its
+        // bare pair hunk (mandatory WI-4a filter block + rule tag), so the
+        // flat +16 precision guard vetoes it per-hunk while the
+        // whole-section arm (32 + dropped `---`/`+++` prelude) fires. The
+        // per-hunk indented-`sig_evolution` budget is four guards (64):
+        // 116 <= 64 + 64 — and 116 > 64 + 32, so this pins the widening
+        // (it fails under the old doubling).
+        let pre = "impl Svc {\n    fn alpha(x: i32) {\n        x\n    }\n}\n";
+        let pair_native = "@@ -2 +2 @@\n-    fn alpha(x: i32) {\n+    pub fn alpha(x: i32) {\n";
+        let (body, detector) = compress_balanced_pair_body(
+            &["    fn alpha(x: i32) {"],
+            &["    pub fn alpha(x: i32) {"],
+            "f.rs",
+            Some(pre),
+            &[2],
+            pair_native.len(),
+            &mut Vec::new(),
+        )
+        .expect("method single must fire per-hunk at the method budget");
+        assert_eq!(detector, "sig_evolution");
+        assert!(body.contains("-     fn alpha(...) {"), "got:\n{body}");
+        assert!(body.contains("+     pub fn alpha(...) {"), "got:\n{body}");
+    }
+
+    #[test]
+    fn per_hunk_free_vis_single_still_fires_within_flat_guard() {
+        // Column-0 (free-fn) singles carry no filter block: the flat +16
+        // path is unchanged — pinned against the method-only widening.
+        let pre = "fn alpha(first_argument: FirstLongTypeArgument) {\n    1\n}\n";
+        let pair_native = "@@ -1 +1 @@\n-fn alpha(first_argument: FirstLongTypeArgument) {\n+pub fn alpha(first_argument: FirstLongTypeArgument) {\n";
+        let (body, detector) = compress_balanced_pair_body(
+            &["fn alpha(first_argument: FirstLongTypeArgument) {"],
+            &["pub fn alpha(first_argument: FirstLongTypeArgument) {"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            pair_native.len(),
+            &mut Vec::new(),
+        )
+        .expect("free single must keep firing");
+        assert_eq!(detector, "sig_evolution");
+        assert!(body.contains("- fn alpha(...) {"), "got:\n{body}");
+        assert!(body.contains("+ pub fn alpha(...) {"), "got:\n{body}");
     }
 }

@@ -7888,10 +7888,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     type-sweep family (strict N ≥ 2) instead. An N = 1 sig single
     requires a pre-image (same wide-minus doctrine as the slot sweep).
     Method (indented) N = 1 vis/qual singles emit the canonical
-    verbatim-header block hunk and ride a doubled precision allowance
-    (32, not 16): the WI-4a filter block is a mandatory proof anchor,
-    not bloat. Per-hunk stays 16, so mixed-section method singles stay
-    ordinary.     Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
+    verbatim-header block hunk and pay a 64-byte method-run price (four
+    guards) for the mandatory WI-4a filter block (a proof anchor, D10,
+    not bloat): the whole-section arm allows 32 over its
+    prelude-carrying section, the per-hunk fallback allows 64 over the
+    bare pair hunk (measured ~41: filter + rule tag), and the subhunk
+    scaled guard prices three extra guards per method run beyond its
+    base (extra header + filter + tag, ~53 measured). Totality is the
+    engine-count check plus the scratch-apply byte-compare in every
+    path, so mixed-section method singles fire beside ordinary or
+    other-class pairs; in-scope twins, two-slot evolutions, and
+    trait-context vis deltas still decline.
+    Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
     same kind/name/suffix, closed-set vis step; `fn` rides the sig sweep,
     `mod` stays ordinary, `impl`/`macro_rules!` take no visibility) raise
     as the concrete directive-free terse pair (`- struct S` /

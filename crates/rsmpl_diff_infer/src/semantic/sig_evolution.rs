@@ -5,9 +5,14 @@
 //! sweeps; this module owns `try_sig_evolution_sweep` plus its slot
 //! vocabulary (`SlotClass`/`Emit`/`SigSlots` and helpers).
 //
-//! Method (indented) N = 1 vis/qual singles ride a doubled whole-section
-//! precision allowance (32, not 16) in `chain.rs` — the WI-4a verbatim
-//! filter block is a mandatory proof anchor (D10), not bloat.
+//! Method (indented) N = 1 vis/qual singles pay a 64-byte method-run
+//! price (four guards) for the mandatory WI-4a filter block (a proof
+//! anchor, D10, not bloat): the whole-section arm allows 32 over its
+//! prelude-carrying section (`chain.rs`), the per-hunk fallback
+//! (`lib.rs`) allows 64 over the bare pair hunk, and the subhunk scaled
+//! guard prices three extra guards per method run beyond its base.
+//! Totality is the engine-count check plus the scratch-apply
+//! byte-compare in every path.
 
 use super::unique_rule;
 use quote::ToTokens;

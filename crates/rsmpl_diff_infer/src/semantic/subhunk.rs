@@ -101,15 +101,22 @@ pub(crate) fn try_subhunk_partition(
         }
     }
     let (new_start, _) = parse_hunk_ranges(header)?;
+    // Budget coherence: synthetic per-pair/run headers are budgeted with
+    // the native hunk title the real per-hunk path sees (`compress_balanced
+    // `_pair_body` prices `hunk_len` title-included). Titles stay stripped
+    // from emitted text (T343) — only budgets grow, never output.
+    let title: &str = header.split("@@").nth(2).unwrap_or("");
+    let title_len = title.len();
     // Classify each pair without reserving rules (scratch counter): the
     // key is the detector the shared chain picks for the pair alone.
     let mut keys: Vec<Option<&'static str>> = Vec::with_capacity(minuses.len());
     for i in 0..minuses.len() {
         let mut scratch = used_rules.clone();
         let pair_native = format!(
-            "@@ -{} +{} @@\n-{}\n+{}\n",
+            "@@ -{} +{} @@{}\n-{}\n+{}\n",
             sites[i],
             new_start + i,
+            title,
             minuses[i],
             pluses[i]
         );
@@ -177,7 +184,7 @@ pub(crate) fn try_subhunk_partition(
             path,
             Some(pre),
             run_changed,
-            run_native.len(),
+            run_native.len() + title_len,
             used_rules,
         ) {
             outcomes.push(Some(Claimed::Whole((body, detector, run_start))));
@@ -208,9 +215,10 @@ pub(crate) fn try_subhunk_partition(
         for i in *start..*end {
             let single_start = used_rules.len();
             let pair_native = format!(
-                "@@ -{} +{} @@\n-{}\n+{}\n",
+                "@@ -{} +{} @@{}\n-{}\n+{}\n",
                 sites[i],
                 new_start + i,
+                title,
                 minuses[i],
                 pluses[i]
             );
@@ -333,7 +341,27 @@ pub(crate) fn try_subhunk_partition(
     }
     // Scaled precision guard + D13 composed scratch-apply: the emission
     // applied to a `pre` clone must reproduce the native post tree.
-    if fragment.len() > hunk.len() + PRECISION_GUARD * n_claimed_pairs.max(1) {
+    // Method `sig_evolution` runs carry the mandatory WI-4a filter
+    // block plus the run's own header (~53 measured over the native
+    // slice: filter + rule tag + extra header). Each method run therefore
+    // costs three extra guards beyond its base (total 64/run — the same
+    // method-run price the per-hunk `* 4` budget pays).
+    let n_method_runs = groups
+        .iter()
+        .filter(|(_, native, detector, _, _)| {
+            *detector == "sig_evolution"
+                && native
+                    .lines()
+                    .skip(1)
+                    .find(|l| l.starts_with('-'))
+                    .is_some_and(|l| l[1..].starts_with([' ', '\t']))
+        })
+        .count();
+    if fragment.len()
+        > hunk.len()
+            + PRECISION_GUARD * n_claimed_pairs.max(1)
+            + 3 * PRECISION_GUARD * n_method_runs
+    {
         used_rules.truncate(checkpoint);
         return None;
     }
@@ -383,6 +411,7 @@ fn try_split_none_run(
     if end - start < 4 {
         return None;
     }
+    let split_title_len = header.split("@@").nth(2).map(str::len).unwrap_or(0);
     for mid in (start + 2)..=(end - 2) {
         used_rules.truncate(entry);
         let left_start = used_rules.len();
@@ -393,7 +422,7 @@ fn try_split_none_run(
             path,
             Some(pre),
             &sites[start..mid],
-            left_native.len(),
+            left_native.len() + split_title_len,
             used_rules,
         );
         let Some((left_body, left_detector)) = left else {
@@ -407,7 +436,7 @@ fn try_split_none_run(
             path,
             Some(pre),
             &sites[mid..end],
-            right_native.len(),
+            right_native.len() + split_title_len,
             used_rules,
         );
         let Some((right_body, right_detector)) = right else {
@@ -878,5 +907,39 @@ mod tests {
         .is_none());
         assert!(used.is_empty());
         assert!(prov.is_empty());
+    }
+
+    #[test]
+    fn mixed_method_vis_and_literal_splits() {
+        // Per-hunk method singles (WI-14 slice-3 residue): a method-vis
+        // pair beside a body-literal pair in one hunk raises the method
+        // run as a `sig_evolution` single (four-guard method-run price);
+        // the literal pair (no N=1 shape) stays ordinary verbatim in
+        // place. D13 holds (byte-identical round-trip).
+        let pre = "impl Svc {\n    fn alpha(x: i32) {\n        1\n    }\n}\n";
+        let hunk = "@@ -2,2 +2,2 @@ impl Svc {\n-    fn alpha(x: i32) {\n-        1\n+    pub fn alpha(x: i32) {\n+        2\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = try_subhunk_partition(
+            hunk,
+            "f.rs",
+            Some(pre),
+            &mut used,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("method run must claim with ordinary remainder");
+        assert_eq!(out.matches("rule=").count(), 1, "got:\n{out}");
+        assert!(out.contains("-     fn alpha(...) {"), "got:\n{out}");
+        assert!(out.contains("+     pub fn alpha(...) {"), "got:\n{out}");
+        assert!(
+            out.contains("-        1\n+        2\n"),
+            "literal remainder verbatim, got:\n{out}"
+        );
+        assert!(
+            prov.iter().any(|p| p.detector == "sig_evolution"),
+            "prov: {prov:?}"
+        );
+        assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
     }
 }

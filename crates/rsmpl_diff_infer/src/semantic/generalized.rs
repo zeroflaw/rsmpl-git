@@ -1472,4 +1472,60 @@ mod tests {
             "type-level evolution must stay ordinary, got:\n{out}"
         );
     }
+
+    #[test]
+    fn method_vis_single_fires_beside_ordinary_hunk() {
+        // WI-14 slice-3 residue (a): two-hunk section — the method-vis
+        // hunk raises as a `sig_evolution` single via the per-hunk
+        // fallback (four-guard method-run price) while the unclaimable
+        // literal hunk stays ordinary. Real-apply byte-identical.
+        let raw = "diff --git a/f.rs b/f.rs\nindex 1111111..2222222 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@ impl Svc {\n-    fn alpha(x: i32) {\n+    pub fn alpha(x: i32) {\n@@ -7 +7 @@\n-    1\n+    2\n";
+        let pre = pre_map(&[(
+            "f.rs",
+            "impl Svc {\n    fn alpha(x: i32) {\n        x\n    }\n}\nfn helper() {\n    1\n}\n",
+        )]);
+        let out = method_vis_rsmpl(raw, &pre);
+        assert_eq!(out.matches("rule=").count(), 1, "got:\n{out}");
+        assert!(out.contains("-     fn alpha(...) {"), "got:\n{out}");
+        assert!(out.contains("+     pub fn alpha(...) {"), "got:\n{out}");
+        assert!(
+            out.contains("-    1\n+    2\n"),
+            "literal hunk stays ordinary, got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "impl Svc {\n    pub fn alpha(x: i32) {\n        x\n    }\n}\nfn helper() {\n    2\n}\n"
+        );
+    }
+
+    #[test]
+    fn method_vis_single_splits_mixed_hunk_with_literal() {
+        // WI-14 slice-3 residue (b): one mixed hunk — the method-vis run
+        // raises via the subhunk partition (scaled guard prices the
+        // method run's filter block + extra header) while the literal
+        // pair stays ordinary remainder. Real-apply byte-identical.
+        let raw = "diff --git a/f.rs b/f.rs\nindex 1111111..2222222 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -2,2 +2,2 @@ impl Svc {\n-    fn alpha(x: i32) {\n-        1\n+    pub fn alpha(x: i32) {\n+        2\n";
+        let pre = pre_map(&[(
+            "f.rs",
+            "impl Svc {\n    fn alpha(x: i32) {\n        1\n    }\n}\n",
+        )]);
+        let out = method_vis_rsmpl(raw, &pre);
+        assert_eq!(out.matches("rule=").count(), 1, "got:\n{out}");
+        assert!(out.contains("-     fn alpha(...) {"), "got:\n{out}");
+        assert!(out.contains("+     pub fn alpha(...) {"), "got:\n{out}");
+        assert!(
+            out.contains("-        1\n+        2\n"),
+            "literal remainder stays ordinary, got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "impl Svc {\n    pub fn alpha(x: i32) {\n        2\n    }\n}\n"
+        );
+    }
 }
