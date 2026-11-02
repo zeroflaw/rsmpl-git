@@ -443,16 +443,37 @@ pub(crate) fn try_sig_evolution_sweep(
             }
         }
     }
-    // WI-19b: at N=1 every preserved long slot (generics/params/where)
-    // rides the wildcard even when uniform — the concrete text buys no
-    // totality the engine-count probe (count must equal 1) does not
-    // already prove, and the wildcarded form is the diet spelling the
-    // cycle canonicalizes to (`...`/`G`/`W`).
-    let (generics, params, where_) = if minuses.len() == 1 {
-        wildcard_preserved_long_1(generics, params, where_)
+    // WI-14 slice 3: at N=1 non-empty preserved long slots keep the
+    // WI-19b wildcard (concrete pretty-printing would re-render types
+    // like `&str`/`Option<String>` and fail the D13 byte-compare, as
+    // probed on `b_side_path`); empty preserved slots stay concrete
+    // (`()`/omission instead of `G (...) W`), which is what loses the
+    // precision guard on short headers. N≥2 keeps the full wildcard
+    // diet.
+    let (generics, params, mut where_) = if minuses.len() == 1 {
+        wildcard_preserved_nonempty_1(generics, params, where_)
     } else {
         (generics, params, where_)
     };
+    // WI-14 slice 3 (fixup restore): the `-> T W` pair below needs a
+    // `W` on any side with a concrete return, or the minus side carries
+    // the full pretty return and loses the guard (probed: `b_side_path`
+    // `-> Option<String>`). At N=1 `ret` is always preserved (evolving
+    // returns decline above), so a non-empty preserved return forces a
+    // wildcard `where` (matching the pre-fixup WI-19b shape: minus
+    // omits the return and keeps `W`, plus sets it).
+    if minuses.len() == 1
+        && matches!(
+            &ret,
+            SlotClass::Preserved { uniform: Some(t) } if !t.is_empty()
+        )
+        && matches!(
+            &where_,
+            SlotClass::Preserved { uniform: Some(t) } if t.is_empty()
+        )
+    {
+        where_ = SlotClass::Preserved { uniform: None };
+    }
     // The rename-only zero-delta class belongs to the slot sweep (which
     // runs first and keeps those classes); this detector owns classes
     // with ≥ 1 evolving non-name slot, including pure evolutions whose
@@ -514,6 +535,10 @@ pub(crate) fn try_sig_evolution_sweep(
         where_p.text("W").as_deref(),
     );
     let rule = unique_rule(used_rules, "sig_evolution");
+    // WI-14 slice 3: N=1 singles ride default `one` (exactly-one-set
+    // proof via the count probe below) — `# allow=many` would waste 13
+    // bytes and lose the precision guard on short headers.
+    let single = minuses.len() == 1;
     if all_indented {
         // WI-4a: the engine header filter matches only the named block,
         // so the old single advisory `impl Svc` hunk could no longer
@@ -534,9 +559,13 @@ pub(crate) fn try_sig_evolution_sweep(
             ) {
                 return None;
             }
-            out.push_str(&crate::semantic::item_emission_header(
-                path, &rule, file_old, &g.sites,
-            ));
+            let header = crate::semantic::item_emission_header(path, &rule, file_old, &g.sites);
+            let header = if single {
+                header.replace("# allow=many\n", "")
+            } else {
+                header
+            };
+            out.push_str(&header);
             out.push_str(&super::block_headers::block_hunk_body(
                 &g.header_line,
                 &minus_header,
@@ -552,6 +581,9 @@ pub(crate) fn try_sig_evolution_sweep(
     // multi-line items, so the range must cover every changed item —
     // a header-line range could never match under Contained scope.
     let mut hunk = crate::semantic::item_emission_header(path, &rule, file_old, changed);
+    if single {
+        hunk = hunk.replace("# allow=many\n", "");
+    }
     hunk.push_str(&format!(
         "- {minus_header}\n+ {plus_header}\n      ...\n  }}\n"
     ));
@@ -652,23 +684,6 @@ impl SlotClass {
     }
 }
 
-/// WI-19b helper: wildcard the preserved long slots of a single-site
-/// evolution (see the call site for the doctrine). Evolving slots pass
-/// through untouched.
-pub(crate) fn wildcard_preserved_long_1(
-    generics: SlotClass,
-    params: SlotClass,
-    where_: SlotClass,
-) -> (SlotClass, SlotClass, SlotClass) {
-    fn wild(c: SlotClass) -> SlotClass {
-        match c {
-            SlotClass::Preserved { .. } => SlotClass::Preserved { uniform: None },
-            e => e,
-        }
-    }
-    (wild(generics), wild(params), wild(where_))
-}
-
 /// One side of one plain slot in a header under construction.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Emit {
@@ -685,6 +700,29 @@ impl Emit {
             Emit::Wild => Some(wildcard.to_string()),
         }
     }
+}
+
+/// WI-14 slice 3 helper: wildcard the non-empty preserved long slots
+/// of a single-site evolution (WI-19b posture for types: concrete
+/// pretty-printing would re-render `&str`/`Option<String>` and fail the
+/// D13 byte-compare). Empty slots stay concrete (`()`/omission — the
+/// diet fix for short headers). Evolving slots pass through untouched.
+pub(crate) fn wildcard_preserved_nonempty_1(
+    generics: SlotClass,
+    params: SlotClass,
+    where_: SlotClass,
+) -> (SlotClass, SlotClass, SlotClass) {
+    fn wild(c: SlotClass) -> SlotClass {
+        match c {
+            SlotClass::Preserved { uniform } => match uniform {
+                Some(t) if t.is_empty() => SlotClass::Preserved { uniform: Some(t) },
+                Some(_) => SlotClass::Preserved { uniform: None },
+                None => SlotClass::Preserved { uniform: None },
+            },
+            e => e,
+        }
+    }
+    (wild(generics), wild(params), wild(where_))
 }
 
 /// One side's vis/qual pair under the `V Q` pairing rule: any side
@@ -775,16 +813,40 @@ fn pretty<T: ToTokens>(node: &T) -> String {
 
 /// Parse one single-line `{`-terminated fn header into signature
 /// slots. `;`-terminated trait decls never reach here (the `{` gate
-/// excludes them, same as the slot sweep).
+/// excludes them, same as the slot sweep). WI-14 slice 3: single-line
+/// `}`-terminated items (`fn foo() {}`, `fn foo() { 1 }`) parse via
+/// their header prefix (text up to the first `{`); the body after the
+/// header never enters the slots and the scaffold emission rewrites
+/// the header only (engine preserves the body verbatim, probed).
 pub(crate) fn parse_sig_slots(line: &str) -> Option<SigSlots> {
     let t = line.trim();
-    if t.is_empty() || !t.ends_with('{') {
+    if t.is_empty() {
         return None;
     }
-    let probe = format!("{t} }}");
-    let (sig, vis) = if let Ok(f) = syn::parse_str::<syn::ItemFn>(&probe) {
+    // Multi-line header form: trailing `{` (unchanged fast path).
+    if t.ends_with('{') {
+        let probe = format!("{t} }}");
+        return parse_sig_probe(&probe);
+    }
+    // Single-line item form: header prefix up to the first `{` plus a
+    // synthetic close. No `{` at all (or a `;` decl) still declines.
+    if t.ends_with('}') {
+        let brace = t.find('{')?;
+        let prefix = t[..=brace].trim_end();
+        if !prefix.ends_with('{') {
+            return None;
+        }
+        let probe = format!("{prefix} }}");
+        return parse_sig_probe(&probe);
+    }
+    None
+}
+
+/// Shared `syn` header parse for one `{`-terminated header probe.
+fn parse_sig_probe(probe: &str) -> Option<SigSlots> {
+    let (sig, vis) = if let Ok(f) = syn::parse_str::<syn::ItemFn>(probe) {
         (f.sig, f.vis)
-    } else if let Ok(m) = syn::parse_str::<syn::ImplItemFn>(&probe) {
+    } else if let Ok(m) = syn::parse_str::<syn::ImplItemFn>(probe) {
         (m.sig, m.vis)
     } else {
         return None;
@@ -1779,5 +1841,155 @@ mod tests {
             "fn a(t: (i32, i32), u: (i32, i32), v: (i32, i32)) {\n    let (x, y) = t;\n    let (m, n) = u;\n    let (p, q) = v;\n    let _ = (x, y, m, n, p, q);\n}\n",
         )]);
         assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    // WI-14 slice 3: N=1 vis/qual-evolution singles (same name).
+    fn vis_single_body(minus: &str, plus: &str) -> String {
+        format!("@@ -1,1 +1,1 @@\n-{minus}\n+{plus}\n")
+    }
+
+    #[test]
+    fn vis_single_short_add_fires_concrete() {
+        // Short headers lost the precision guard to the wild + allow
+        // form; the N=1 concrete diet (no `G`/`W`, no `# allow=many`)
+        // passes with `body - section ≈ +1`.
+        let raw = section("f.rs", &vis_single_body("fn foo() {", "pub fn foo() {"));
+        let pre = pre_map(&[("f.rs", "fn foo() {\n    1\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("short N=1 vis single must fire");
+        assert!(out.contains("- fn foo() {\n"), "got:\n{out}");
+        assert!(out.contains("+ pub fn foo() {\n"), "got:\n{out}");
+        assert!(!out.contains('G'), "concrete, no wildcards, got:\n{out}");
+        assert!(!out.contains("# allow=many"), "allow-one, got:\n{out}");
+        let files = applied_post(&out, &pre);
+        assert_eq!(files["f.rs"], "pub fn foo() {\n    1\n}\n");
+    }
+
+    #[test]
+    fn vis_single_medium_add_fires_concrete() {
+        let raw = section(
+            "f.rs",
+            &vis_single_body("fn foo(x: i32) {", "pub fn foo(x: i32) {"),
+        );
+        let pre = pre_map(&[("f.rs", "fn foo(x: i32) {\n    x\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("medium N=1 vis single must fire");
+        assert!(out.contains("pub fn foo"), "got:\n{out}");
+        assert!(!out.contains("# allow=many"), "allow-one, got:\n{out}");
+        let files = applied_post(&out, &pre);
+        assert_eq!(files["f.rs"], "pub fn foo(x: i32) {\n    x\n}\n");
+    }
+
+    #[test]
+    fn vis_single_removal_and_qual_fire() {
+        let raw = section("f.rs", &vis_single_body("pub fn foo() {", "fn foo() {"));
+        let pre = pre_map(&[("f.rs", "pub fn foo() {\n    1\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("vis removal single must fire");
+        assert!(out.contains("- pub fn foo() {\n"), "got:\n{out}");
+        assert!(out.contains("+ fn foo() {\n"), "got:\n{out}");
+        assert_eq!(applied_post(&out, &pre)["f.rs"], "fn foo() {\n    1\n}\n");
+
+        let raw = section("f.rs", &vis_single_body("fn foo() {", "async fn foo() {"));
+        let pre = pre_map(&[("f.rs", "fn foo() {\n    1\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("qual single must fire");
+        assert!(out.contains("+ async fn foo() {\n"), "got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "async fn foo() {\n    1\n}\n"
+        );
+    }
+
+    #[test]
+    fn vis_single_line_body_fires_byte_identical() {
+        // Single-line items never parsed as headers before this slice
+        // (`parse_sig_slots` needed a trailing `{`).
+        for (pre, post, minus, plus) in [
+            (
+                "fn foo() {}\n",
+                "pub fn foo() {}\n",
+                "fn foo() {}",
+                "pub fn foo() {}",
+            ),
+            (
+                "fn foo() { 1 }\n",
+                "pub fn foo() { 1 }\n",
+                "fn foo() { 1 }",
+                "pub fn foo() { 1 }",
+            ),
+        ] {
+            let raw = section("f.rs", &vis_single_body(minus, plus));
+            let pre_map = pre_map(&[("f.rs", pre)]);
+            let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("single-line vis single must fire");
+            assert!(out.contains("+ pub fn foo() {\n"), "got:\n{out}");
+            assert_eq!(applied_post(&out, &pre_map)["f.rs"], post);
+        }
+        // Multi-line header parse is unchanged (regression pin).
+        assert!(super::parse_sig_slots("fn foo() {").is_some());
+        assert!(super::parse_sig_slots("fn foo() {}").is_some());
+        assert!(super::parse_sig_slots("pub fn foo() { 1 }").is_some());
+        assert!(super::parse_sig_slots("fn foo();").is_none());
+        assert!(super::parse_sig_slots("struct S;").is_none());
+    }
+
+    #[test]
+    fn vis_single_twin_vetoes() {
+        // An untouched same-header twin matches the concrete minus too —
+        // the engine-count probe (2 != 1) vetoes.
+        let raw = section("f.rs", &vis_single_body("fn foo() {", "pub fn foo() {"));
+        let pre = pre_map(&[("f.rs", "fn foo() {\n    1\n}\nfn foo() {\n    2\n}\n")]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn vis_single_two_slot_vetoes() {
+        // vis+return and type-level evolutions stay ordinary — the WI-7
+        // type/signature domain, never this single. (vis+qual together
+        // fires: both are single-token, formatting-stable — pinned by
+        // `sig_evo_single_fires_with_pre_image`.)
+        for (minus, plus, body) in [
+            (
+                "fn foo() {",
+                "pub fn foo() -> i32 {",
+                "fn foo() {\n    1\n}\n",
+            ),
+            (
+                "fn sum(values: Vec<i32>) -> i32 {",
+                "fn sum(values: Box<[i32]>) -> i32 {",
+                "fn sum(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
+            ),
+        ] {
+            let raw = section("f.rs", &vis_single_body(minus, plus));
+            let pre = pre_map(&[("f.rs", body)]);
+            assert!(
+                infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+                "{minus} → {plus} must stay ordinary"
+            );
+        }
+        // vis+qual together fires (both single-token slots).
+        let raw = section(
+            "f.rs",
+            &vis_single_body("fn foo() {", "pub async fn foo() {"),
+        );
+        let pre = pre_map(&[("f.rs", "fn foo() {\n    1\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("vis+qual single must fire");
+        assert!(out.contains("pub async fn foo"), "got:\n{out}");
+    }
+
+    #[test]
+    fn vis_multi_hetero_unchanged() {
+        // Hetero N≥2 vis sweep keeps the wild diet (regression pin).
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn alpha() {\n+pub fn alpha() {\n@@ -4,1 +4,1 @@\n-fn beta() {\n+pub fn beta() {\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn alpha() {\n    1\n}\nfn beta() {\n    2\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("hetero N=2 must keep firing");
+        assert!(out.contains("fn N"), "wild diet, got:\n{out}");
+        assert!(out.contains("# allow=many"), "got:\n{out}");
     }
 }

@@ -7870,16 +7870,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    uniform name delta plus slot deltas); hetero-name slot-only
    classes belong to the header-evolution sweep below — the two are
    disjoint by construction (uniform names vs hetero preserved names).
-   Vis/qual-only evolution singles (WI-19b, N = 1): a lone
-   vis/qual-evolving header pair compresses as a precision single
-   (uniform-by-construction; preserved long slots ride the wildcard
-   even when uniform, so the emission matches the diet
-   `...`/`G`/`W` spelling). A lone params/generics/return/where
-   evolution stays ordinary — the sig rewrite would re-render the
-   type with pretty spacing (`Box<[i32]>` to `Box <[ i32 ]>`, 117
-   precedent), so those shapes belong to the type-sweep family
-   (strict N ≥ 2) instead. An N = 1 sig single requires a pre-image
-   (same wide-minus doctrine as the slot sweep).
+    Vis/qual-only evolution singles (WI-19b, N = 1, WI-14 slice 3):
+    a lone vis/qual-evolving header pair compresses as a precision
+    single (uniform-by-construction) under default `one` (no
+    `# allow=many`: exactly-one-set proof via the engine-count probe).
+    Empty preserved long slots stay concrete (`()`/omission, never
+    `G (...) W` — the diet fix for short headers); non-empty preserved
+    longs keep the wildcard (concrete pretty-printing would re-render
+    types like `&str`/`Option<String>` and fail the byte-compare) with
+    the `-> T W` law unchanged (a preserved return keeps the minus
+    omission plus `W`). Single-line `}`-terminated items parse via
+    their header prefix (text up to the first `{`); the scaffold
+    emission rewrites the header only (engine preserves the body
+    verbatim, including single-line bodies). A lone
+    params/generics/return/where evolution stays ordinary — the sig
+    rewrite would re-render the type with pretty spacing (`Box<[i32]>`
+    to `Box <[ i32 ]>`, 117 precedent), so those shapes belong to the
+    type-sweep family (strict N ≥ 2) instead. An N = 1 sig single
+    requires a pre-image (same wide-minus doctrine as the slot sweep).
 - Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
    `{`-terminated fn header, where every name is preserved per site
    (`minus name == plus name`) but names differ across sites (≥ 2

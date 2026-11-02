@@ -204,7 +204,10 @@ const CASES: &[Case] = &[
         // WI-19b: +2 vis-only sig singles (`attrs_equal`,
         // `extract_fn_block` pub(crate)-adds, concrete-name emissions,
         // count==1 probes, T361 round-trips byte-identical).
-        expect_sem: 4,
+        // WI-14 slice 3: +1 short vis single (`norm_slot` pub(crate)-add
+        // fires under the N=1 concrete diet + allow-one; was ordinary
+        // under the wild + allow-many guard).
+        expect_sem: 5,
     },
     Case {
         commit: "712ad9d27c0fbc0a2ca92f483594c635e2fa49a9",
