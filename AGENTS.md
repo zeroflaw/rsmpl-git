@@ -134,9 +134,9 @@ gitrs apply --file change.rsmpl --format json --diff-max-lines 0 --check
 gitrs apply --file change.rsmpl --output full.patch
 ```
 
-Inverse: `gitrs diff` prints pending changes as an RSmPL patch (v1 renames/slot-sweeps/call-sweeps
-compressed, rest ordinary; see README diff section, SPEC D.4; binaries stripped, `.history/` skipped).
-Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
+Inverse: `gitrs diff` prints pending changes as RSmPL (v1 renames/slot-sweeps/call-sweeps compressed,
+rest ordinary; binaries stripped, `.history/` skipped; SPEC D.4); `--patch TEXT`/`--file PATH` raise from
+native text (never mutate the repo); `--check` verifies in one command (T361 byte-compare; `verified:` verdict / JSON `check`; exit 2 naming file + line). Piped patches avoid temp files — no input flags means stdin (SPEC D.1).
 `--file` names a patch file (avoids quoting for large patches); `--patch`
 passes it inline (archived to `<repo>/.history/{id}.rsmpl`, last 128 kept,
 path on stderr + JSON `history`). JSON prints `{version, rules, files, diff,`

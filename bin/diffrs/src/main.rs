@@ -49,6 +49,29 @@ struct Cli {
     #[arg(long)]
     staged: bool,
 
+    /// Raise from native patch text instead of collecting `git diff`
+    /// (e.g. `git diff` output, a saved PR patch) against `--repo`'s
+    /// pre-image. `--staged`/`[rev]` still select the pre-image base.
+    /// Conflicts with `--file`.
+    #[arg(long, value_name = "TEXT", conflicts_with = "file")]
+    patch: Option<String>,
+
+    /// Raise from a file holding native patch text (same semantics as
+    /// `--patch`; prefer for large patches). Conflicts with `--patch`.
+    #[arg(long, value_name = "PATH", conflicts_with = "patch")]
+    file: Option<PathBuf>,
+
+    /// Verify the raise in-process (T361 loop): scratch-apply the raised
+    /// patch to an in-memory copy of the pre-image and byte-compare
+    /// against the true post-tree. JSON gains a `check` object
+    /// (`verified`, `files_compared`, `first_divergence`); text prints a
+    /// one-line verdict on stderr. Failure exits 2 naming the diverging
+    /// file + line — never a bare `false`. Never trusts lowering
+    /// validation alone: `--check`-style checks cannot see sweep
+    /// over-match.
+    #[arg(long)]
+    check: bool,
+
     /// Report format: text (the patch) or json (default text).
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
@@ -60,6 +83,10 @@ struct Cli {
 
 enum CliError {
     Structured(StructuredError),
+    /// `--check` found a divergence: the report is already printed, so
+    /// exit 2 silently (never a bare `false` — the divergence is named
+    /// in the report / on stderr).
+    CheckFailed,
 }
 
 impl CliError {
@@ -85,6 +112,7 @@ fn main() {
                     eprintln!("{}", s.render());
                 }
             }
+            CliError::CheckFailed => {}
         }
         std::process::exit(2);
     }
@@ -126,12 +154,56 @@ fn run() -> Result<(), CliError> {
         }
     };
 
-    let patch = rsmpl_diff::compress(&cli.repo, cli.staged, cli.rev.as_deref()).map_err(|e| {
-        CliError::msg(match e {
-            rsmpl_diff::DiffError::Source(s) => s.to_string(),
-            rsmpl_diff::DiffError::Infer(i) => i.to_string(),
-        })
-    })?;
+    // WI-16: patch-text input raises from `--patch`/`--file` text
+    // against the same pre-image bases (`--staged`/`[rev]` select the
+    // base either way); the git path collects as before. The `--check`
+    // loop needs the native text, so the git path re-collects it read-
+    // only (no repo mutation between the two reads).
+    let (patch, raw_for_check) = match (&cli.patch, &cli.file) {
+        (Some(text), None) => (
+            rsmpl_diff::compress_raw(&cli.repo, text, cli.staged, cli.rev.as_deref())
+                .map_err(map_diff_err)?,
+            cli.check.then(|| text.clone()),
+        ),
+        (None, Some(path)) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                let p = path.to_string_lossy().to_string();
+                CliError::Structured(
+                    StructuredError::new(
+                        ErrorCode::IoConflict,
+                        format!("cannot read patch file {}: {e}", path.display()),
+                    )
+                    .with_file(&p)
+                    .with_suggestion(format!(
+                        "check that `{p}` exists and is readable, then retry"
+                    )),
+                )
+            })?;
+            (
+                rsmpl_diff::compress_raw(&cli.repo, &text, cli.staged, cli.rev.as_deref())
+                    .map_err(map_diff_err)?,
+                cli.check.then_some(text),
+            )
+        }
+        (None, None) => {
+            let patch = rsmpl_diff::compress(&cli.repo, cli.staged, cli.rev.as_deref())
+                .map_err(map_diff_err)?;
+            let raw = if cli.check {
+                Some(
+                    rsmpl_diff::collect_native(&cli.repo, cli.staged, cli.rev.as_deref())
+                        .map_err(map_diff_err)?
+                        .raw,
+                )
+            } else {
+                None
+            };
+            (patch, raw)
+        }
+        (Some(_), Some(_)) => {
+            // Unreachable: clap `conflicts_with` rejects this pair.
+            return Err(CliError::msg("`--patch` conflicts with `--file`"));
+        }
+    };
     for stripped in &patch.stripped_binary {
         eprintln!("warning: {stripped}: binary file stripped from semantic patch");
     }
@@ -153,8 +225,25 @@ fn run() -> Result<(), CliError> {
         );
     }
 
+    // WI-16 `--check`: the T361 loop over the same native text that was
+    // raised. Runs before the empty-raise early return so an empty raise
+    // still reports its (vacuous) verdict.
+    let check = match raw_for_check {
+        Some(raw) => Some(
+            rsmpl_diff::check_raise(
+                &cli.repo,
+                cli.staged,
+                cli.rev.as_deref(),
+                &raw,
+                &patch.rsmpl,
+            )
+            .map_err(map_diff_err)?,
+        ),
+        None => None,
+    };
+
     if cli.format == Format::Json {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "version": rsmpl_patch::REPORT_VERSION,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
@@ -177,12 +266,15 @@ fn run() -> Result<(), CliError> {
                 entry
             }).collect::<Vec<_>>(),
         });
+        if let Some(report) = &check {
+            payload["check"] = check_json(report);
+        }
         println!(
             "{}",
             serde_json::to_string(&payload)
                 .map_err(|e| CliError::msg(format!("cannot serialize JSON report: {e}")))?
         );
-        return Ok(());
+        return check_verdict(&check);
     }
 
     if patch.rsmpl.trim().is_empty() {
@@ -190,8 +282,53 @@ fn run() -> Result<(), CliError> {
         // applyrs` never feeds an empty patch (which `applyrs` rejects
         // as an authoring typo, T59). The stderr note signals it.
         eprintln!("(no changes)");
-        return Ok(());
+        return check_verdict(&check);
     }
     print!("{}", patch.rsmpl);
-    Ok(())
+    check_verdict(&check)
+}
+
+fn map_diff_err(e: rsmpl_diff::DiffError) -> CliError {
+    CliError::msg(match e {
+        rsmpl_diff::DiffError::Source(s) => s.to_string(),
+        rsmpl_diff::DiffError::Infer(i) => i.to_string(),
+        rsmpl_diff::DiffError::Verify(v) => match v {
+            rsmpl_diff::VerifyError::NativeParse(msg) => {
+                format!("{msg} (want `git diff -U0` text, a saved PR patch, or `git diff` output)")
+            }
+            rsmpl_diff::VerifyError::Raise(msg) => msg,
+        },
+    })
+}
+
+/// WI-16: JSON form of the T361 verdict (SPEC D.2). `first_divergence`
+/// is `null` on success — a failure always names file + line, never a
+/// bare `false`.
+fn check_json(report: &rsmpl_diff::VerifyReport) -> serde_json::Value {
+    serde_json::json!({
+        "verified": report.verified,
+        "files_compared": report.files_compared,
+        "first_divergence": report.first_divergence.as_ref().map(|d| serde_json::json!({
+            "file": d.file, "line": d.line, "want": d.want, "got": d.got,
+        })),
+    })
+}
+
+/// WI-16: text-mode one-line verdict on stderr; stdout stays the patch
+/// artifact. Divergence exits 2 with file + line named.
+fn check_verdict(check: &Option<rsmpl_diff::VerifyReport>) -> Result<(), CliError> {
+    let Some(report) = check else {
+        return Ok(());
+    };
+    if report.verified {
+        eprintln!("verified: true ({} files compared)", report.files_compared);
+        return Ok(());
+    }
+    let div = report
+        .first_divergence
+        .as_ref()
+        .map(|d| format!("{} diverges at line {}", d.file, d.line))
+        .unwrap_or_else(|| "no divergence named".to_string());
+    eprintln!("verified: false: {div}");
+    Err(CliError::CheckFailed)
 }

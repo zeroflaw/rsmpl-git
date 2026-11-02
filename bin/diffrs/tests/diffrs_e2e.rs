@@ -1493,3 +1493,193 @@ fn live_symlink_retarget_round_trips() {
         PathBuf::from("b.txt")
     );
 }
+
+// WI-16: `--patch` raises from native patch text against the repo
+// pre-image, byte-identical to the git-collected raise, and `--check`
+// verifies the raise in one command (T361 loop, no repo mutation).
+#[test]
+fn patch_text_raises_identical_and_checks() {
+    assert!(sibling_applyrs().exists(), "sibling applyrs missing");
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\nfn other() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "src/lib.rs", "fn bar() {}\nfn other() {}\n");
+
+    let collected = run(dir.path(), &[]);
+    assert_eq!(collected.status.code(), Some(0));
+    let collected_patch = String::from_utf8_lossy(&collected.stdout).to_string();
+    assert!(!collected_patch.trim().is_empty(), "raise is empty");
+
+    // Native text straight from `git diff`, raised via `--patch`.
+    let native = Command::new("git")
+        .args(["diff", "--unified=0", "--no-color", "--no-ext-diff"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(native.status.success());
+    let native_text = String::from_utf8_lossy(&native.stdout).to_string();
+    assert!(!native_text.trim().is_empty(), "no native change");
+
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(&native_text)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        collected_patch,
+        "`--patch` raise must equal the git-collected raise"
+    );
+
+    // One-command verify: `--patch` + `--check`.
+    let out = Command::new(binary())
+        .arg("--patch")
+        .arg(&native_text)
+        .arg("--check")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let verdicts: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("verified: "))
+        .collect();
+    assert_eq!(
+        verdicts.len(),
+        1,
+        "one-line verdict expected, got: {stderr}"
+    );
+    assert!(verdicts[0].starts_with("verified: true ("), "got: {stderr}");
+
+    // T361 hygiene on the same pair: a real apply byte-compares against
+    // the expected tree (the `--check` above is the loop; this is the
+    // independent ground truth it must agree with).
+    git(dir.path(), &["stash", "-q"]);
+    let checked = check_with_applyrs(dir.path(), &collected_patch);
+    assert_eq!(checked.status.code(), Some(0));
+    let applied = Command::new(sibling_applyrs())
+        .arg("--patch")
+        .arg(&collected_patch)
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(applied.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+        "fn bar() {}\nfn other() {}\n"
+    );
+}
+
+// WI-16: `--file` on a saved patch raises without mutating the repo
+// (`git status` before == after), including under `--staged --check`.
+#[test]
+fn file_input_leaves_repo_untouched() {
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "src/lib.rs", "fn bar() {}\n");
+    git(dir.path(), &["add", "-A"]);
+
+    let native = Command::new("git")
+        .args([
+            "diff",
+            "--cached",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(native.status.success());
+    let saved = dir.path().join("saved.patch");
+    std::fs::write(&saved, &native.stdout).unwrap();
+
+    let status_before = Command::new("git")
+        .args(["status", "--porcelain=v1", "-uall"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(status_before.status.success());
+
+    let out = Command::new(binary())
+        .arg("--file")
+        .arg(&saved)
+        .arg("--staged")
+        .arg("--check")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let patch = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(patch.contains("fn bar"), "got: {patch}");
+
+    let status_after = Command::new("git")
+        .args(["status", "--porcelain=v1", "-uall"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        status_before.stdout, status_after.stdout,
+        "`--file` must not mutate the repo"
+    );
+    std::fs::remove_file(&saved).unwrap();
+}
+
+// WI-16: `--format json --check` carries the `check` object
+// (`verified`, `files_compared`, `first_divergence: null` on success).
+#[test]
+fn check_json_reports_verified_object() {
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "fn foo() {}\n");
+    commit_all(dir.path());
+    write(dir.path(), "src/lib.rs", "fn bar() {}\n");
+
+    let out = Command::new(binary())
+        .arg("--format")
+        .arg("json")
+        .arg("--check")
+        .arg("--repo")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["check"]["verified"], serde_json::json!(true), "got: {v}");
+    assert!(
+        v["check"]["files_compared"].as_u64().unwrap_or(0) >= 1,
+        "got: {v}"
+    );
+    assert_eq!(
+        v["check"]["first_divergence"],
+        serde_json::Value::Null,
+        "got: {v}"
+    );
+}

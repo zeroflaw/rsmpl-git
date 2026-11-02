@@ -77,6 +77,8 @@ gitrs diff --repo ./my-repo              # pending unstaged changes as RSmPL (st
 gitrs diff --staged                      # index vs HEAD instead of worktree
 gitrs diff HEAD~1                        # history: changes since a revision
 gitrs diff --format json                 # {"version":1,"files":[…],"patch":"…"}
+gitrs diff --patch "$(git diff)" --check # raise from patch text, verify in one command (T361 loop)
+gitrs diff --file saved.patch            # raise from a saved patch file (never mutates the repo)
 ```
 
 v1 compresses fn/item renames (one ident delta), N-site

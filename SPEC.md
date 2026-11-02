@@ -7375,7 +7375,13 @@ compressed RSmPL-Git patch to stdout — the token-efficient view of
 what changed. Minimal surface, same philosophy as `applyrs`:
 `--repo` (default `.`), `--format text|json` (default `text`),
 `--staged` (index vs HEAD/rev instead of worktree), one optional
-`[rev]` forwarded to `git diff [rev]` (e.g. `HEAD~1` for history).
+`[rev]` forwarded to `git diff [rev]` (e.g. `HEAD~1` for history),
+`--patch <TEXT>` / `--file <PATH>` to raise from native patch text
+instead of collecting (e.g. `git diff` output, a saved PR patch — the
+repo supplies the pre-image, the text supplies the delta; `--staged`
+/ `[rev]` still select the pre-image base either way; nothing is
+written to the worktree), and `--check` to verify the raise
+in-process (below).
 
 Collection: unstaged worktree-vs-index plus untracked files (emitted
 as new-file ordinary sections, since `git diff` never shows them;
@@ -7513,6 +7519,24 @@ drop the mode flip, while the per-hunk prelude keeps the mode lines
 (text mode prints only the patch). Failures carry the same error
 object as `applyrs` (`code/rule/file/range/reason/suggestion/repair`
 via `StructuredError`, stdout-only with `--format json`, exit 2).
+`--check` verifies the raise with the T361 loop: the raised patch is
+scratch-applied to an in-memory copy of the pre-image and
+byte-compared against the true post-tree derived by applying the
+native diff to the same pre-image (changed-files bounded; no worktree
+copy, no `git apply`). JSON gains `"check": {verified,
+files_compared, first_divergence}` (`first_divergence` is `null` on
+success, else `{file, line, want, got}` naming the first differing
+line — a failure is never a bare `false`); text mode keeps stdout as
+the patch artifact and prints a one-line `verified: true|false …`
+verdict on stderr. Failure exits 2 with the divergence named. The
+check never trusts lowering validation alone: `applyrs --check`
+(parse + lower + `git apply --check`) stays green on sweep
+over-match — the lowered diff applies cleanly while rewriting sites
+the native diff never touched — so only the scratch-apply +
+byte-compare proves a raise (T361). Provenance boundary: `--check`
+proves changed-files closure; off-diff same-name uses in untouched
+files stay the engine's apply-time veto backstop (the same context
+infer's totality probes run in).
 Each `hunks` entry carries per-hunk
 provenance for one emitted semantic hunk, plus one entry per
 wholly-ordinary section (WI-15c — the list is never bare `"hunks":
