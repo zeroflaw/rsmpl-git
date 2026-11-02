@@ -345,7 +345,10 @@ pub(crate) fn try_subhunk_partition(
     // block plus the run's own header (~53 measured over the native
     // slice: filter + rule tag + extra header). Each method run therefore
     // costs three extra guards beyond its base (total 64/run — the same
-    // method-run price the per-hunk `* 4` budget pays).
+    // method-run price the per-hunk `* 4` budget pays). The filter header
+    // itself is priced per emission (`filter_header_excess`): long
+    // enclosing `impl` headers contribute exactly their surplus over the
+    // measured baseline on top of the fixed per-run price.
     let n_method_runs = groups
         .iter()
         .filter(|(_, native, detector, _, _)| {
@@ -361,6 +364,7 @@ pub(crate) fn try_subhunk_partition(
         > hunk.len()
             + PRECISION_GUARD * n_claimed_pairs.max(1)
             + 3 * PRECISION_GUARD * n_method_runs
+            + super::block_headers::filter_header_excess(&fragment)
     {
         used_rules.truncate(checkpoint);
         return None;
@@ -941,5 +945,37 @@ mod tests {
             "prov: {prov:?}"
         );
         assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
+    }
+
+    #[test]
+    fn mixed_long_header_method_vis_and_literal_splits() {
+        // P3 long-header item: the same mixed single hunk under a ~90-char
+        // generic `impl` header declines at HEAD (the scaled guard prices
+        // the measured short-header filter, not this one). Per-emission
+        // pricing adds exactly the header surplus, so the method run
+        // claims and the literal stays ordinary verbatim in place.
+        let hdr = "impl<T: Clone + std::fmt::Debug + Send + Sync> Svc<T> where T: Clone {";
+        let pre = format!("{hdr}\n    fn alpha(x: i32) {{\n        1\n    }}\n}}\n");
+        let hunk = "@@ -2,2 +2,2 @@ impl Svc {\n-    fn alpha(x: i32) {\n-        1\n+    pub fn alpha(x: i32) {\n+        2\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = try_subhunk_partition(
+            hunk,
+            "f.rs",
+            Some(&pre),
+            &mut used,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("long-header method run must claim with ordinary remainder");
+        assert_eq!(out.matches("rule=").count(), 1, "got:\n{out}");
+        assert!(out.contains("-     fn alpha(...) {"), "got:\n{out}");
+        assert!(out.contains("+     pub fn alpha(...) {"), "got:\n{out}");
+        assert!(
+            out.contains("-        1\n+        2\n"),
+            "literal remainder verbatim, got:\n{out}"
+        );
+        assert!(out.contains(hdr), "filter header verbatim, got:\n{out}");
+        assert_eq!(applied(&pre_map(&pre), &out), native_post(&pre, hunk));
     }
 }

@@ -203,6 +203,49 @@ pub(crate) fn block_hunk_body(header_line: &str, minus_fn: &str, plus_fn: &str) 
     )
 }
 
+/// Baseline verbatim filter-header length the method-run byte budgets
+/// were measured against (`"impl Svc {"`, the probe behind the
+/// per-hunk `* 4`, whole-section `* 2`, and subhunk `+3/run` prices).
+/// Headers at or under this length contribute zero excess, so every
+/// previously-firing emission is byte-identical under per-emission
+/// pricing; longer headers contribute exactly their surplus.
+pub(crate) const FILTER_HEADER_BASELINE: usize = 10;
+
+/// Per-emission price of the mandatory WI-4a filter block: the summed
+/// surplus of every verbatim `impl` filter-header line in `emission`
+/// over [`FILTER_HEADER_BASELINE`]. Callers add this to their fixed
+/// budget instead of bumping the fixed budget itself, so an unusually
+/// long enclosing-block header no longer vetoes a proved method
+/// single on bytes alone. Only `  impl…{` / `  unsafe impl…{` context
+/// lines count — diet pair lines, rule tags, and native text never do.
+pub(crate) fn filter_header_excess(emission: &str) -> usize {
+    emission
+        .lines()
+        .filter_map(|l| {
+            // Filter headers render as marker-prefixed verbatim source
+            // (`block_hunk_body` adds exactly two marker spaces, plus
+            // whatever indent the source header itself carries inside
+            // `mod` bodies), so match on the trimmed line: only the
+            // header text prices the excess, the marker/indent scaffold
+            // is fixed and already covered by the base budgets. Native
+            // `-`/`+` lines never match (the marker survives trimming).
+            let content = l.trim_start();
+            let rest = content.strip_prefix("unsafe ").unwrap_or(content);
+            let body = rest.strip_prefix("impl")?;
+            if !(body.is_empty()
+                || body.starts_with(' ')
+                || body.starts_with('<')
+                || body.starts_with('{'))
+            {
+                return None;
+            }
+            if !content.trim_end().ends_with('{') {
+                return None;
+            }
+            Some(content.len().saturating_sub(FILTER_HEADER_BASELINE))
+        })
+        .sum()
+}
 /// Engine totality probe for one emitted block hunk: replay the exact
 /// emission (header filter + fn pair) on a scratch tree and require
 /// the match count to equal `n`. Twin headers (`impl A` twice in one
@@ -365,5 +408,51 @@ mod tests {
             "fn new(...) {",
             1
         ));
+    }
+
+    #[test]
+    fn filter_header_excess_prices_only_long_impl_headers() {
+        // Baseline and shorter headers contribute nothing, so every
+        // previously-firing emission is byte-identical under
+        // per-emission pricing.
+        assert_eq!(FILTER_HEADER_BASELINE, 10);
+        assert_eq!(filter_header_excess("  impl Svc {\n      ...\n"), 0);
+        assert_eq!(filter_header_excess("  impl A {\n      ...\n"), 0);
+        // Longer headers contribute exactly their surplus.
+        let long = "impl<T: Clone + Send> Svc<T> where T: Send {";
+        let body = block_hunk_body(long, "fn alpha(...) {", "pub fn alpha(...) {");
+        assert_eq!(
+            filter_header_excess(&body),
+            long.len() - FILTER_HEADER_BASELINE
+        );
+        // `unsafe impl` counts; trait headers, pair lines, rule tags,
+        // and native `-`/`+` lines never do.
+        assert_eq!(
+            filter_header_excess("  unsafe impl Svc {\n      ...\n"),
+            "unsafe impl Svc {".len() - FILTER_HEADER_BASELINE
+        );
+        assert_eq!(filter_header_excess("  trait T {\n      ...\n"), 0);
+        assert_eq!(
+            filter_header_excess("-     fn alpha(...) {\n+     pub fn alpha(...) {\n"),
+            0
+        );
+        assert_eq!(
+            filter_header_excess("@@ -2,3 @@ rule=r1\n# allow=many\n"),
+            0
+        );
+        assert_eq!(filter_header_excess("-impl Svc {\n+impl Svc {\n"), 0);
+        // Indented source headers (inside `mod`) count their header
+        // text, not the marker/indent scaffold.
+        assert_eq!(
+            filter_header_excess("      impl A {\n      ...\n"),
+            0,
+            "short indented header still zero"
+        );
+        // Multiple filter headers sum.
+        let two = format!("  impl A {{\n      ...\n  {long}\n      ...\n");
+        assert_eq!(
+            filter_header_excess(&two),
+            long.len() - FILTER_HEADER_BASELINE
+        );
     }
 }

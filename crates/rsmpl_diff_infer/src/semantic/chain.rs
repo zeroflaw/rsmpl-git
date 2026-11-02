@@ -784,10 +784,15 @@ pub(crate) fn compress_section(
         // closers ≈ +30 over a free single on the stripped section the
         // guard actually sees) is a mandatory proof anchor (D10), not
         // bloat — the 16-byte budget was calibrated on filter-free
-        // singles. The detector's own gates (vis/qual-only, engine-count
+        // singles. A long enclosing `impl` header contributes exactly
+        // its surplus over the measured baseline on top (`per-emission`
+        // pricing, shared with the per-hunk and subhunk budgets), so the
+        // allowance scales with the proof, never with a bumped guard.
+        // The detector's own gates (vis/qual-only, engine-count
         // totality + D13 byte-compare) are unchanged; the allowance only
-        // prices the filter. Per-hunk stays 16 (mixed-section method
-        // singles stay ordinary — WI-4 partition territory, pinned).
+        // prices the filter. Mixed-section method singles ride the
+        // per-hunk fallback (four-guard method-run price + per-emission
+        // header excess); single mixed hunks ride the subhunk partition.
         let prec_checkpoint = used_rules.len();
         if let Some((prec, detector)) = super::try_precision_definition_single(
             &minuses, &pluses, path, file_old, &changed, used_rules,
@@ -797,7 +802,7 @@ pub(crate) fn compress_section(
                 && minuses.len() == 1
                 && minuses[0].starts_with([' ', '\t'])
             {
-                super::PRECISION_GUARD * 2
+                super::PRECISION_GUARD * 2 + super::block_headers::filter_header_excess(&prec)
             } else {
                 super::PRECISION_GUARD
             };

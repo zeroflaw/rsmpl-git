@@ -781,13 +781,16 @@ pub(crate) fn compress_balanced_pair_body(
             // per-hunk, unlike the whole-section arm), so the per-hunk
             // budget is four guards (64) — the same method-run price the
             // whole-section arm (32 + ~37 dropped prelude) and the subhunk
-            // scaled guard pay.
+            // scaled guard pay. The filter header itself is priced per
+            // emission (`filter_header_excess`): a long enclosing `impl`
+            // header contributes exactly its surplus over the measured
+            // baseline, so only the proof anchor scales, never the guard.
             let wins = if minuses.len() == 1 {
                 match semantic::guard_for(detector) {
                     semantic::Guard::Precision => {
                         let allow =
                             if detector == "sig_evolution" && minuses[0].starts_with([' ', '\t']) {
-                                semantic::PRECISION_GUARD * 4
+                                semantic::PRECISION_GUARD * 4 + semantic::filter_header_excess(body)
                             } else {
                                 semantic::PRECISION_GUARD
                             };
@@ -1803,6 +1806,99 @@ mod tests {
         assert_eq!(detector, "sig_evolution");
         assert!(body.contains("-     fn alpha(...) {"), "got:\n{body}");
         assert!(body.contains("+     pub fn alpha(...) {"), "got:\n{body}");
+    }
+
+    #[test]
+    fn per_hunk_long_impl_header_method_single_fires_per_emission() {
+        // P3 long-header item: the same method-vis single under a ~110-char
+        // generic `impl` header declines on bytes at HEAD (the fixed 64
+        // budget prices the measured short-header filter, not this one).
+        // Per-emission pricing adds exactly the header surplus, so the
+        // proved single fires; the diet pair lines are unchanged and the
+        // emission real-applies byte-identical.
+        let hdr = "impl<T: Clone + std::fmt::Debug + Send + Sync + VeryLongTraitName> Svc<T> where T: Clone + Send {";
+        let pre = format!("{hdr}\n    fn alpha(x: i32) {{\n        x\n    }}\n}}\n");
+        let pair_native = "@@ -2 +2 @@\n-    fn alpha(x: i32) {\n+    pub fn alpha(x: i32) {\n";
+        let (body, detector) = compress_balanced_pair_body(
+            &["    fn alpha(x: i32) {"],
+            &["    pub fn alpha(x: i32) {"],
+            "f.rs",
+            Some(&pre),
+            &[2],
+            pair_native.len(),
+            &mut Vec::new(),
+        )
+        .expect("long-header method single must fire per-hunk per emission");
+        assert_eq!(detector, "sig_evolution");
+        assert!(body.contains("-     fn alpha(...) {"), "got:\n{body}");
+        assert!(body.contains("+     pub fn alpha(...) {"), "got:\n{body}");
+        assert!(
+            body.contains(hdr),
+            "filter header must ride verbatim: {body}"
+        );
+        let reparsed = format!("diff --git f.rs\n{body}");
+        let parsed = rsmpl_patch::parse_patch(&reparsed).expect("emission must parse");
+        let mut files = pre_map(&[("f.rs", &pre)]);
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .expect("long-header emission must apply");
+        assert_eq!(
+            files["f.rs"],
+            format!("{hdr}\n    pub fn alpha(x: i32) {{\n        x\n    }}\n}}\n"),
+            "post-tree must carry the spaced vis verbatim"
+        );
+        let _ = report;
+    }
+
+    #[test]
+    fn per_hunk_short_header_excess_is_zero_budget_unchanged() {
+        // The baseline header prices zero excess: short-header behavior is
+        // byte-identical before/after per-emission pricing.
+        let pre = "impl Svc {\n    fn alpha(x: i32) {\n        x\n    }\n}\n";
+        let pair_native = "@@ -2 +2 @@\n-    fn alpha(x: i32) {\n+    pub fn alpha(x: i32) {\n";
+        let (body, _) = compress_balanced_pair_body(
+            &["    fn alpha(x: i32) {"],
+            &["    pub fn alpha(x: i32) {"],
+            "f.rs",
+            Some(pre),
+            &[2],
+            pair_native.len(),
+            &mut Vec::new(),
+        )
+        .expect("short-header single must keep firing");
+        assert_eq!(semantic::filter_header_excess(&body), 0);
+    }
+
+    #[test]
+    fn e2e_long_impl_header_method_single_raises_whole_section() {
+        // P3 long-header item, whole-section arm: a single-site method-vis
+        // single under a long generic `impl` header declines at HEAD (the
+        // fixed 32 budget prices the measured short-header filter). The
+        // per-emission surplus restores it; the emission real-applies
+        // byte-identical with the verbatim header and spaced vis.
+        let hdr = "impl<T: Clone + std::fmt::Debug + Send + Sync + VeryLongTraitName> Svc<T> where T: Clone + Send {";
+        let pre = format!("{hdr}\n    fn alpha(x: i32) {{\n        x\n    }}\n}}\n");
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@\n-    fn alpha(x: i32) {\n+    pub fn alpha(x: i32) {\n"
+            .to_string();
+        let pre_map_data = pre_map(&[("f.rs", pre.as_str())]);
+        let out =
+            semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map_data)
+                .expect("long-header whole-section single must raise");
+        assert!(out.contains("-     fn alpha(...) {"), "got:\n{out}");
+        assert!(out.contains("+     pub fn alpha(...) {"), "got:\n{out}");
+        assert!(out.contains(hdr), "filter header verbatim, got:\n{out}");
+        validated_live(&out, &pre_map_data);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = pre_map_data.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            format!("{hdr}\n    pub fn alpha(x: i32) {{\n        x\n    }}\n}}\n"),
+            "got:\n{}",
+            files["f.rs"]
+        );
     }
 
     #[test]

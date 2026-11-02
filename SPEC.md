@@ -7894,7 +7894,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     prelude-carrying section, the per-hunk fallback allows 64 over the
     bare pair hunk (measured ~41: filter + rule tag), and the subhunk
     scaled guard prices three extra guards per method run beyond its
-    base (extra header + filter + tag, ~53 measured). Totality is the
+    base (extra header + filter + tag, ~53 measured). Each budget prices
+    the verbatim filter header per emission: headers longer than the
+    measured baseline (`impl Svc {`) contribute exactly their surplus,
+    so a long enclosing block never vetoes a proved single on bytes
+    alone. Totality is the
     engine-count check plus the scratch-apply byte-compare in every
     path, so mixed-section method singles fire beside ordinary or
     other-class pairs; in-scope twins, two-slot evolutions, and

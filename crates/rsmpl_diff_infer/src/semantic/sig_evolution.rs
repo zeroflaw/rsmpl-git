@@ -11,6 +11,10 @@
 //! prelude-carrying section (`chain.rs`), the per-hunk fallback
 //! (`lib.rs`) allows 64 over the bare pair hunk, and the subhunk scaled
 //! guard prices three extra guards per method run beyond its base.
+//! Each budget additionally prices the verbatim `impl` filter header
+//! per emission (`block_headers::filter_header_excess`): headers longer
+//! than the measured baseline contribute exactly their surplus, so a
+//! long enclosing block never vetoes a proved single on bytes alone.
 //! Totality is the engine-count check plus the scratch-apply
 //! byte-compare in every path.
 
