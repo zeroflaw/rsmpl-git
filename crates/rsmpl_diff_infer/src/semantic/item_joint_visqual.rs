@@ -552,6 +552,38 @@ mod tests {
     }
 
     #[test]
+    fn pub_in_vis_joint_classifies_and_round_trips() {
+        use super::super::infer_semantic_with_pre_images;
+        use std::collections::HashMap;
+        // Classifier keeps the spaced spelling on the raw prefixes.
+        let j = joint("fn foo() {", "pub(in crate) fn bar() {")
+            .expect("pub(in crate) joint must classify");
+        assert_eq!(j.old_prefix, "");
+        assert_eq!(j.new_prefix, "pub(in crate) ");
+        // End to end: the joint raises and the engine applies the
+        // canonical spelling byte-identical (`verified`).
+        let pre: HashMap<String, String> = [(
+            "f.rs".to_string(),
+            "fn foo() {}\nfn main() {\n    foo();\n}\n".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-fn foo() {}\n+pub(in crate) fn bar() {}\n@@ -3,1 +3,1 @@\n-    foo();\n+    bar();\n"
+            .to_string();
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("pub(in crate) fn joint must raise");
+        assert!(out.contains("pub(in crate)"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "pub(in crate) fn bar() {}\nfn main() {\n    bar();\n}\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
     fn extern_qual_fires() {
         // Qualifier-addition is the one evolving slot.
         let j =

@@ -634,4 +634,57 @@ mod tests {
             "pub struct S;\nstruct U;\npub struct T;\n"
         );
     }
+
+    #[test]
+    fn pub_in_crate_single_and_sweep_fire() {
+        // `pub(in crate)` vis steps raise like every other closed-set
+        // spelling — and the emission the engine applies is the valid
+        // spaced form (the stripped `pub(incrate)` never parses).
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-struct S;\n+pub(in crate) struct S;\n",
+        );
+        let pre = pre_map(&[("f.rs", "struct S;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("pub(in crate) single must fire");
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        assert!(out.contains("+ pub(in crate) struct S\n"), "got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub(in crate) struct S;\n"
+        );
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-struct S;\n-struct T;\n+pub(in crate) struct S;\n+pub(in crate) struct T;\n",
+        );
+        let pre = pre_map(&[("f.rs", "struct S;\nstruct T;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("pub(in crate) sweep must fire");
+        assert!(out.contains("+ pub(in crate) struct N\n"), "got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub(in crate) struct S;\npub(in crate) struct T;\n"
+        );
+    }
+
+    #[test]
+    fn pub_in_self_ref_declines() {
+        // A vis naming the renamed item is an evolution, never a
+        // joint — the canonical spelling exposes `Old` to the
+        // ident-boundary gate (the stripped `pub(inOld)` hid it).
+        let mut used = Vec::new();
+        assert!(
+            super::try_item_rename_vis_joint(
+                "pub(in Old) struct Old {",
+                "pub struct New {",
+                "f.rs",
+                Some("pub(in Old) struct Old {\n}\n"),
+                &[1],
+                &mut used,
+            )
+            .is_none(),
+            "self-referential pub(in Old) joint must decline"
+        );
+        assert!(used.is_empty());
+    }
 }

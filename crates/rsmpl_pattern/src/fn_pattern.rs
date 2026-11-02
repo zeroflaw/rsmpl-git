@@ -353,6 +353,10 @@ pub fn parse_fn_pattern(
                     "close the visibility with `)` (e.g. `pub(crate) fn foo(...) { ... })`",
                 ));
             }
+            // Token-concat strips the `pub(in …)` space (`pub(incrate)`,
+            // unparseable on emit) — restore the canonical spelling so
+            // the engine writes valid Rust verbatim.
+            vis = crate::item_rename::canonical_vis_prefix(&vis);
         }
         visibility = VisPat::Concrete(vis);
     } else if i < toks.len() && vis_metas.contains(&toks[i]) {
@@ -808,6 +812,22 @@ mod tests {
         let p = parse("fn foo(...) { ... }");
         let item: syn::ItemFn = syn::parse_str("pub fn foo() {}").unwrap();
         assert!(!p.matches_item_fn(&item));
+    }
+
+    #[test]
+    fn pub_in_vis_keeps_its_space() {
+        // The vis token-join strips whitespace (`pub(incrate)`); the
+        // canonical spelling is what the engine emits verbatim, so the
+        // join restores it — otherwise every `pub(in …)` fn rewrite is
+        // unparseable on apply.
+        assert_eq!(
+            parse("pub(in crate) fn foo(...) { ... }").visibility,
+            VisPat::Concrete("pub(in crate)".into())
+        );
+        assert_eq!(
+            parse("pub(crate) fn foo(...) { ... }").visibility,
+            VisPat::Concrete("pub(crate)".into())
+        );
     }
 
     #[test]

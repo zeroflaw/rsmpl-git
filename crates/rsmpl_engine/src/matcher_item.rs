@@ -23,8 +23,8 @@ struct ItemCandidate {
     name: String,
     ident: proc_macro2::Span,
     attrs: Vec<syn::Attribute>,
-    /// Whitespace-stripped rendered visibility (`""` when inherited or
-    /// for kinds without visibility).
+    /// Canonical rendered visibility (`""` when inherited or
+    /// for kinds without visibility; `pub(in …)` keeps its space).
     vis_text: String,
     /// Start-bound and end-bound spans of the `pub…` run (`None` when
     /// inherited or for kinds without visibility).
@@ -60,12 +60,18 @@ fn push_candidate(
     });
 }
 
-/// Whitespace-stripped rendered visibility (`""` when inherited), so the
-/// target compares equal to the whitespace-free pattern prefix.
+/// Whitespace-insensitive rendered visibility (`""` when inherited),
+/// canonicalized so the `pub(in …)` space survives (`pub(in crate)`,
+/// never the unparseable `pub(incrate)` the engine emits verbatim).
 fn norm_vis_text(vis: &syn::Visibility) -> String {
     match vis {
         syn::Visibility::Inherited => String::new(),
-        _ => quote::quote!(#vis).to_string().split_whitespace().collect(),
+        _ => rsmpl_pattern::canonical_vis_prefix(
+            &quote::quote!(#vis)
+                .to_string()
+                .split_whitespace()
+                .collect::<String>(),
+        ),
     }
 }
 
@@ -559,10 +565,14 @@ pub fn apply_item_rename_hunk(
                         e += 1;
                     }
                     edits.push(TextEdit::new(va, e, String::new()));
-                } else if original
-                    .get(va..vb)
-                    .is_some_and(|got| got.split_whitespace().collect::<String>() != plus_prefix)
-                {
+                } else if original.get(va..vb).is_some_and(|got| {
+                    // Canonical compare: a `pub(in crate)` site must equal
+                    // a `pub(in crate)` plus (stripped both sides they
+                    // would read `pub(incrate)` vs `pub(in crate)` and a
+                    // spurious byte-identical edit would be pushed).
+                    rsmpl_pattern::canonical_vis_prefix(&got.split_whitespace().collect::<String>())
+                        != plus_prefix
+                }) {
                     edits.push(TextEdit::new(va, vb, plus_prefix.clone()));
                 }
             } else if !plus_prefix.is_empty() {
@@ -1135,6 +1145,37 @@ mod tests {
         let src = "mod outer {\n    struct Old;\n}\n";
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("    pub(crate) struct New;"), "got: {out}");
+    }
+
+    #[test]
+    fn pub_in_vis_round_trips_byte_identical() {
+        // `pub(in path)` keeps its space end to end: the canonical
+        // prefix emits valid Rust (the stripped `pub(incrate)` is
+        // unparseable — loud PARSE_CONFLICT before this fix), the
+        // minus gate matches spaced sites, and the replace guard
+        // pushes no edit when the site already equals the plus.
+        let add = rename_patch("struct Old", "pub(in crate) struct New", "@@ -1,1 +1,1 @@");
+        let out = apply(&add, "struct Old;\n").unwrap();
+        assert_eq!(out, "pub(in crate) struct New;\n", "got: {out:?}");
+        let change = rename_patch(
+            "pub struct Old",
+            "pub(in crate) struct New",
+            "@@ -1,1 +1,1 @@",
+        );
+        let out = apply(&change, "pub struct Old;\n").unwrap();
+        assert_eq!(out, "pub(in crate) struct New;\n", "got: {out:?}");
+        // A `pub(in crate)` site matches a `pub(in crate)` minus (the
+        // canonical gate), and a pure rename preserves it byte-for-byte.
+        let keep = rename_patch(
+            "pub(in crate) struct Old",
+            "pub(in crate) struct New",
+            "@@ -1,1 +1,1 @@",
+        );
+        let out = apply(&keep, "pub(in crate) struct Old;\n").unwrap();
+        assert_eq!(out, "pub(in crate) struct New;\n", "got: {out:?}");
+        // Wrong-vis sites skip, as with every other vis spelling.
+        let patch = rename_patch("struct Old", "pub(in crate) struct New", "@@ -1,1 +1,1 @@");
+        assert!(apply(&patch, "pub struct Old;\n").is_err());
     }
 
     #[test]

@@ -226,9 +226,32 @@ fn split_visibility(s: &str) -> (&str, &str) {
 
 /// Strip all whitespace so equivalent prefixes compare equal
 /// (`pub (crate)` ≡ `pub(crate)`). Applied per prefix part; parts are
-/// joined with a single space by the caller.
+/// joined with a single space by the caller. The `pub(in …)` form keeps
+/// one space after `in` (`pub(in crate)`, never `pub(incrate)`): the
+/// stripped form is unparseable Rust and the engine emits this spelling
+/// verbatim, so stripping it would mint a broken rewrite.
 fn normalize_prefix(raw: &str) -> String {
-    raw.chars().filter(|c| !c.is_whitespace()).collect()
+    canonical_vis_prefix(
+        &raw.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>(),
+    )
+}
+
+/// Canonical visibility spelling for an already whitespace-stripped
+/// `pub…` run: `pub(in<path>)` gains the single legal space
+/// (`pub(in crate)`); every other spelling passes through unchanged.
+/// Shared by the item-rename prefix, the fn vis token-join, and the
+/// engine's rendered-vis normalization so all three compare AND emit
+/// identically (a site, a pattern, and an emission never disagree on
+/// the bytes of a restricted visibility).
+pub fn canonical_vis_prefix(stripped: &str) -> String {
+    if let Some(inner) = stripped.strip_prefix("pub(in") {
+        if let Some(path) = inner.strip_suffix(')') {
+            return format!("pub(in {path})");
+        }
+    }
+    stripped.to_string()
 }
 
 /// Consume one lowercase keyword when followed by a delimiter.
@@ -492,9 +515,11 @@ pub(crate) fn split_vis_rest(prefix: &str) -> (String, String) {
 
 /// WI-1 closed vis set the terse renames accept: `""`, `pub`,
 /// `pub(crate)`, `pub(super)`, `pub(in <path>)`. Prefixes here are
-/// whitespace-stripped (`normalize_prefix`), so the `pub(in …)` inner
-/// path carries no spaces; segments are `::`-separated idents with an
-/// optional leading `crate`/`self`/`super`/`$crate` head.
+/// canonical (`normalize_prefix` keeps the single `pub(in …)` space),
+/// so the inner path carries no spaces; segments are `::`-separated
+/// idents with an optional leading `crate`/`self`/`super`/`$crate`
+/// head. The fully-stripped `pub(in<path>)` spelling is accepted too
+/// (defensive: it compares equal pre-canonicalization).
 pub(crate) fn is_closed_item_vis(vis: &str) -> bool {
     if vis.is_empty() || vis == "pub" {
         return true;
@@ -670,6 +695,32 @@ mod tests {
         // `macro_rules!` takes no visibility or `unsafe`.
         assert!(parse_side("pub macro_rules! Old").is_err());
         assert!(parse_side("unsafe macro_rules! Old").is_err());
+    }
+
+    #[test]
+    fn pub_in_prefix_keeps_its_space() {
+        // `pub(in path)` canonicalizes to the single-space spelling —
+        // the stripped `pub(incrate)` is unparseable Rust and the engine
+        // emits the prefix verbatim, so stripping it mints a broken
+        // rewrite (loud PARSE_CONFLICT authored, ordinary raised).
+        assert_eq!(prefix_of("pub(in crate) struct S"), "pub(in crate)");
+        assert_eq!(prefix_of("pub(in  crate) struct S"), "pub(in crate)");
+        assert_eq!(prefix_of("pub (in crate) struct S"), "pub(in crate)");
+        assert_eq!(prefix_of("pub(incrate) struct S"), "pub(in crate)");
+        assert_eq!(prefix_of("pub(in crate::x) struct S"), "pub(in crate::x)");
+        // Non-`in` spellings are untouched.
+        assert_eq!(prefix_of("pub (crate) struct S"), "pub(crate)");
+        assert_eq!(prefix_of("pub struct S"), "pub");
+        assert_eq!(prefix_of("struct S"), "");
+        // The splitter and the closed set accept the canonical form.
+        assert_eq!(
+            split_vis_rest("pub(in crate)"),
+            ("pub(in crate)".to_string(), String::new())
+        );
+        assert_eq!(
+            split_vis_rest("pub(in crate) mut"),
+            ("pub(in crate)".to_string(), "mut".to_string())
+        );
     }
 
     #[test]
