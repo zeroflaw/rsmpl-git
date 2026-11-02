@@ -1,12 +1,13 @@
 //! C21: general Stmt/Expr hunks must not rewrite bound binder idents
 //! the binder machinery cannot track.
 //!
-//! `binder_rename` (correctly, conservatively) accepts only bare-`x`
-//! single-binder diffs, so a destructuring rename (`let (a, old) = E;` →
-//! `let (a, new) = E;`, `if let Some(old) = E { ... }` → `if let Some(new)
-//! = E { ... }`) falls through to the general-template path, which
-//! rewrites the header, strands body/file uses, files no orphans, and
-//! still reports `verified`. This gate closes that verdict.
+//! `binder_rename` (correctly, conservatively) accepts only single-binder
+//! diffs (bare-`x` plus Stmt single-leaf destructuring), so a
+//! multi-leaf destructuring rename (`let (a, b) = E;` → `let (c, d) =
+//! E;`, `if let Some(old) = E { ... }` → `if let Some(new) = E { ... }`)
+//! falls through to the general-template path, which rewrites the
+//! header, strands body/file uses, files no orphans, and still reports
+//! `verified`. This gate closes that verdict.
 //!
 //! Veto invariant (keyed by binding, D11): let `m`/`p` be the hole-erased
 //! concrete bound-ident sets of minus/plus `Pat` positions. The hunk is
@@ -20,16 +21,18 @@
 //! `RSMPL_PATTERN_CONFLICT` C21 when no binder identity owns the hunk
 //! (the minus *does* match, so a no-match error would mislead).
 //!
-//! Plain bare-ident renames keep today's behavior through binder
-//! identity (completion + orphans). Sequences are exempt at the call
-//! site except a final-position plain-`let` rename, which enters
-//! binder identity (residue slice 1): the raiser owns other
+//! Plain bare-ident renames and Stmt single-leaf destructuring renames
+//! keep today's behavior through binder identity (completion +
+//! orphans). Sequences are exempt at the call site except a
+//! rename-once plain-`let` rename at any single position, which enters
+//! binder identity (residue slices 1-2): the raiser owns other
 //! binder-renaming hetero runs there (WI-5d single-block fusion,
 //! completed by sibling hunks in the same patch — c48a6e6 pins the
 //! shape), so a hunk-local veto would break the apply direction of a
-//! proven cycle; broader sequencing completion is follow-up work,
-//! not this gate. Unparseable sides never veto (downstream gates own
-//! them).
+//! proven cycle; sequence-contained destructuring and old-mentioning
+//! windows stay declined (exempt window-only), owned by the next
+//! slice, not this gate. Unparseable sides never veto (downstream
+//! gates own them).
 
 use std::collections::HashSet;
 

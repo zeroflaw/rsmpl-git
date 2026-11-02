@@ -265,20 +265,21 @@ pub fn apply_sequence_hunk(
     Ok((matched, all_bindings))
 }
 
-/// Sequence-contained plain-binder completion (residue slice 1): when
-/// the compiled sequence renames exactly one plain `let` binder in its
-/// final position, rewrite unshadowed post-window value uses of the old
-/// ident (`follow`), reusing the audited `let` walker verbatim (same
-/// shadow/nested-fn/macro/attribute discipline, same shorthand
-/// expansion). The window replacement above is the definition (labelled
-/// `rename`, parity with the single-`let` arm); only strictly
-/// post-window edits are kept, so follows never overlap the window.
+/// Sequence-contained plain-binder completion (residue slices 1-2):
+/// when the compiled sequence renames exactly one plain `let` binder
+/// at any single position, rewrite unshadowed post-window value uses
+/// of the old ident (`follow`), reusing the audited `let` walker
+/// verbatim (same shadow/nested-fn/macro/attribute discipline, same
+/// shorthand expansion). The window replacement above is the
+/// definition (labelled `rename`, parity with the single-`let` arm);
+/// only strictly post-window edits are kept, so follows never overlap
+/// the window.
 ///
-/// Returns `None` when the pattern is not a final-position plain binder
-/// rename, or when the target's final statement does not bind `old`
-/// exactly once (fail-safe: the window still applies and `orphans`
-/// still file via `general_orphans` — today's posture, never a
-/// mis-resolved rewrite).
+/// Returns `None` when the pattern is not a rename-once plain binder
+/// rename, or when the target window does not bind `old` exactly once
+/// at exactly one position (fail-safe: the window still applies and
+/// `orphans` still file via `general_orphans` — today's posture, never
+/// a mis-resolved rewrite).
 fn sequence_binder_follows(
     parsed: &syn::File,
     original: &str,
@@ -300,20 +301,30 @@ fn sequence_binder_follows(
     if b.scope != rsmpl_pattern::binder::BinderScope::Let {
         return None;
     }
-    let last = tgt_locals.last()?;
-    let mut offs = crate::use_graph_local::pat_old_offsets(&last.pat, &b.old, original, index);
-    offs.sort_unstable();
-    offs.dedup();
-    if offs.len() != 1 {
-        return None;
+    // Exactly one window position may bind `old` (structurally walked,
+    // so destructuring shadows resolve); all others must bind zero
+    // times — the target-side mirror of the pattern rename-once gate.
+    let mut hit: Option<usize> = None;
+    for (i, local) in tgt_locals.iter().enumerate() {
+        let mut offs = crate::use_graph_local::pat_old_offsets(&local.pat, &b.old, original, index);
+        offs.sort_unstable();
+        offs.dedup();
+        if offs.is_empty() {
+            continue;
+        }
+        if offs.len() != 1 || hit.is_some() {
+            return None;
+        }
+        if original.get(offs[0]..offs[0] + b.old.len()) != Some(b.old.as_str()) {
+            return None;
+        }
+        hit = Some(i);
     }
+    let idx = hit?;
     // The renamed statement's own span is the binder range (the
     // single-`let` arm's discipline: its init RHS names the outer scope
     // and is never completed).
-    let (ss, se) = crate::matcher_item::span_bytes(original, index, last.span())?;
-    if original.get(offs[0]..offs[0] + b.old.len()) != Some(b.old.as_str()) {
-        return None;
-    }
+    let (ss, se) = crate::matcher_item::span_bytes(original, index, tgt_locals[idx].span())?;
     let mut edits = crate::use_graph_local::let_binder_follow_edits(
         parsed, original, index, ss, se, &b.old, &b.new,
     );
@@ -544,14 +555,29 @@ mod tests {
     }
 
     #[test]
-    fn sequence_non_final_rename_applies_window_only() {
-        // Known remainder: a rename outside the final position keeps
-        // today's posture (window applies, no completion) — the next
-        // slice owns intra-window completion.
+    fn sequence_non_final_rename_completes_post_window_use() {
+        // Residue slice 2: rename-once at any position completes
+        // post-window uses (the definition is `rename`, the use is
+        // `follow`).
         let patch = format!(
             "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
         );
         let src = "fn f() {\n    let old = g(1);\n    let b = g(2);\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+        assert!(!out.contains("old"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_old_mentioning_window_applies_window_only() {
+        // A later window statement naming the binder strands inside
+        // the replacement: the binder arm declines (pinned remainder,
+        // narrowed to mentioning windows only).
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = old;\n+ let new = E0;\n+ let b = old;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = old;\n    let c = old;\n}\n";
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("let new = g(1);"), "got: {out}");
         assert!(out.contains("let c = old;"), "got: {out}");

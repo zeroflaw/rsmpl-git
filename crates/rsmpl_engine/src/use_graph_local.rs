@@ -33,9 +33,12 @@ pub fn is_local_binder_rename(compiled: &rsmpl_pattern::CompiledPattern) -> bool
 }
 
 /// `(old, new)` binder idents when `kind` is a plain `let old = E;` →
-/// `let new = E;` rename with identical init and type annotation.
-/// Anything else (destructuring, init/type change, `let-else`,
-/// attribute delta) yields `None` — today's behaviour is kept.
+/// `let new = E;` rename — or the single-leaf destructuring twin
+/// (`let (a, old) = E;` → `let (a, new) = E;`, struct/shorthand/slice
+/// wrapper spellings, exactly one leaf differs) — with identical init
+/// and type annotation. Anything else (multi-leaf, init/type change,
+/// `let-else`, attribute delta) yields `None` — today's behaviour is
+/// kept.
 ///
 /// WI-3: delegates to the single pattern identity
 /// ([`rsmpl_pattern::binder::binder_rename`]); the scope filter keeps
@@ -402,8 +405,19 @@ mod tests {
     }
 
     #[test]
-    fn destructuring_vetoes() {
+    fn destructuring_single_leaf_fires() {
+        // Residue slice 2: single-leaf destructuring completes like a
+        // plain rename.
         let kind = general_stmt("let (a, b) = __RSMPL_E0;", "let (a, c) = E;");
+        assert_eq!(
+            let_binder_rename(&kind),
+            Some(("b".to_string(), "c".to_string()))
+        );
+    }
+
+    #[test]
+    fn destructuring_multi_leaf_vetoes() {
+        let kind = general_stmt("let (a, b) = __RSMPL_E0;", "let (c, d) = E;");
         assert_eq!(let_binder_rename(&kind), None);
     }
 

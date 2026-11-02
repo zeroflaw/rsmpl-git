@@ -5,10 +5,12 @@
 //! closure-param, match-arm, `for` / `if let` / `while let`, or a
 //! closure parameter nested in a `let` init, the F3 spelling) — yields
 //! a [`BinderRename`]. Spellings that cannot prove single-binder
-//! identity (destructuring deltas, init/type/body changes, `move`
+//! identity (multi-leaf destructuring deltas, init/type/body changes, `move`
 //! deltas, multi-binder diffs, bare-`P` annotation add/drop) yield
 //! `None` and keep general-template behaviour with no binder
-//! privileges (SPEC 18.1, D11).
+//! privileges (SPEC 18.1, D11). Single-leaf `let` destructuring deltas
+//! and rename-once sequence-contained plain renames (any position)
+//! yield scope-`Let` identity with the `let` completion/orphan duty.
 
 use std::collections::HashMap;
 
@@ -186,22 +188,238 @@ fn parse_expr_forgiving(s: &str) -> Option<syn::Expr> {
     syn::parse_str::<syn::Expr>(&fixed).ok()
 }
 
+/// Declared hole names (`P`, `E`, …) for a general pattern: idents that
+/// replay matched fragments and never count as binders.
+fn declared_holes(placeholders: &[(String, String)]) -> std::collections::HashSet<String> {
+    placeholders.iter().map(|(n, _)| n.clone()).collect()
+}
+
+/// True when `name` is a hole/marker ident (never a binder).
+fn is_hole_name(name: &str, declared: &std::collections::HashSet<String>) -> bool {
+    name.starts_with("__RSMPL_") || declared.contains(name)
+}
+
+/// Whole-ident occurrence of `needle` in `hay` (ident-boundary gated).
+fn contains_ident_bounded(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() || !hay.contains(needle) {
+        return false;
+    }
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let hb = hay.as_bytes();
+    let nb = needle.as_bytes();
+    let mut i = 0;
+    while i + nb.len() <= hb.len() {
+        if &hb[i..i + nb.len()] == nb {
+            let prev_ok = i == 0 || !is_ident_byte(hb[i - 1]);
+            let next_ok = i + nb.len() == hb.len() || !is_ident_byte(hb[i + nb.len()]);
+            if prev_ok && next_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Single-leaf destructuring diff: `Ok(Some((old, new)))` when `m`/`p`
+/// are structurally equal except exactly one leaf plain-ident binder
+/// differs; `Ok(None)` when token-equal; `Err(())` on any other shape
+/// (multi-leaf, constructor/path/arity change, `Or`, hole concretion).
+fn single_leaf_diff(
+    m: &syn::Pat,
+    p: &syn::Pat,
+    ph: &HashMap<&str, &str>,
+    declared: &std::collections::HashSet<String>,
+) -> Result<Option<(String, String)>, ()> {
+    fn merge(
+        a: Option<(String, String)>,
+        b: Option<(String, String)>,
+    ) -> Result<Option<(String, String)>, ()> {
+        match (a, b) {
+            (None, None) => Ok(None),
+            (Some(d), None) | (None, Some(d)) => Ok(Some(d)),
+            (Some(_), Some(_)) => Err(()),
+        }
+    }
+    match (m, p) {
+        (syn::Pat::Ident(mm), syn::Pat::Ident(pp)) => {
+            if mm.subpat.is_some() || pp.subpat.is_some() {
+                return Err(());
+            }
+            let mn = mm.ident.to_string();
+            let pn = pp.ident.to_string();
+            let m_hole = is_hole_name(&mn, declared);
+            let p_hole = is_hole_name(&pn, declared);
+            if m_hole || p_hole {
+                // Hole positions replay fragments: only token-equal
+                // holes compare equal, anything else vetoes (concretion
+                // is C21's domain, never binder identity).
+                if mn == pn && mm.mutability.is_some() == pp.mutability.is_some() {
+                    return Ok(None);
+                }
+                return Err(());
+            }
+            // Concrete leaves: delegate mut discipline to the caller
+            // shape (same as plain `let`).
+            if mn == pn {
+                if mm.mutability.is_some() != pp.mutability.is_some() {
+                    return Err(());
+                }
+                return Ok(None);
+            }
+            if mm.mutability.is_some() != pp.mutability.is_some() {
+                return Err(());
+            }
+            // Same-type leaves compare at the top-level `pat_ty`
+            // gate; inner `Type` nodes compare inline below.
+            Ok(Some((mn, pn)))
+        }
+        (syn::Pat::Type(mm), syn::Pat::Type(pp)) => {
+            if normalize_placeholders(&render(&mm.ty), ph)
+                != normalize_placeholders(&render(&pp.ty), ph)
+            {
+                return Err(());
+            }
+            single_leaf_diff(&mm.pat, &pp.pat, ph, declared)
+        }
+        (syn::Pat::Paren(mm), syn::Pat::Paren(pp)) => {
+            single_leaf_diff(&mm.pat, &pp.pat, ph, declared)
+        }
+        (syn::Pat::Reference(mm), syn::Pat::Reference(pp)) => {
+            if mm.mutability.is_some() != pp.mutability.is_some() {
+                return Err(());
+            }
+            single_leaf_diff(&mm.pat, &pp.pat, ph, declared)
+        }
+        (syn::Pat::Tuple(mm), syn::Pat::Tuple(pp)) => {
+            if mm.elems.len() != pp.elems.len() {
+                return Err(());
+            }
+            let mut acc: Option<(String, String)> = None;
+            for (a, b) in mm.elems.iter().zip(pp.elems.iter()) {
+                acc = merge(acc, single_leaf_diff(a, b, ph, declared)?)?;
+            }
+            Ok(acc)
+        }
+        (syn::Pat::TupleStruct(mm), syn::Pat::TupleStruct(pp)) => {
+            if render(&mm.path) != render(&pp.path) || mm.elems.len() != pp.elems.len() {
+                return Err(());
+            }
+            let mut acc: Option<(String, String)> = None;
+            for (a, b) in mm.elems.iter().zip(pp.elems.iter()) {
+                acc = merge(acc, single_leaf_diff(a, b, ph, declared)?)?;
+            }
+            Ok(acc)
+        }
+        (syn::Pat::Struct(mm), syn::Pat::Struct(pp)) => {
+            if render(&mm.path) != render(&pp.path) || mm.fields.len() != pp.fields.len() {
+                return Err(());
+            }
+            let mut acc: Option<(String, String)> = None;
+            for (a, b) in mm.fields.iter().zip(pp.fields.iter()) {
+                let shorthand = a.colon_token.is_none() && b.colon_token.is_none();
+                if shorthand {
+                    // Shorthand `S { old }` binds `old`: the member and
+                    // the pat rename in lockstep, so a member change is
+                    // the same single-leaf diff (not a second delta).
+                    let ma = render(&a.member);
+                    let mb = render(&b.member);
+                    if ma != mb {
+                        match single_leaf_diff(&a.pat, &b.pat, ph, declared)? {
+                            Some((o, n)) => {
+                                // Member text for shorthand is the
+                                // bare ident; accept iff the pat diff
+                                // renames the same ident.
+                                let ma_id = ma
+                                    .split_whitespace()
+                                    .last()
+                                    .unwrap_or("")
+                                    .trim_end_matches(',');
+                                let mb_id = mb
+                                    .split_whitespace()
+                                    .last()
+                                    .unwrap_or("")
+                                    .trim_end_matches(',');
+                                if o != ma_id || n != mb_id {
+                                    return Err(());
+                                }
+                                acc = merge(acc, Some((o, n)))?;
+                            }
+                            None => return Err(()),
+                        }
+                        continue;
+                    }
+                    acc = merge(acc, single_leaf_diff(&a.pat, &b.pat, ph, declared)?)?;
+                    continue;
+                }
+                if render(&a.member) != render(&b.member)
+                    || a.colon_token.is_some() != b.colon_token.is_some()
+                {
+                    return Err(());
+                }
+                acc = merge(acc, single_leaf_diff(&a.pat, &b.pat, ph, declared)?)?;
+            }
+            Ok(acc)
+        }
+        (syn::Pat::Slice(mm), syn::Pat::Slice(pp)) => {
+            if mm.elems.len() != pp.elems.len() {
+                return Err(());
+            }
+            let mut acc: Option<(String, String)> = None;
+            for (a, b) in mm.elems.iter().zip(pp.elems.iter()) {
+                acc = merge(acc, single_leaf_diff(a, b, ph, declared)?)?;
+            }
+            Ok(acc)
+        }
+        _ => {
+            // Binder-free or opaque positions: token-equal only.
+            if normalize_placeholders(&render(m), ph) == normalize_placeholders(&render(p), ph) {
+                Ok(None)
+            } else {
+                Err(())
+            }
+        }
+    }
+}
+
 /// `(old, new)` for a plain `let old = E;` → `let new = E;` rename with
-/// identical init and type annotation.
+/// identical init and type annotation, plus the single-leaf
+/// destructuring twin (`let (a, old) = E;` → `let (a, new) = E;`,
+/// struct/shorthand/slice/wrapper spellings — exactly one leaf
+/// differs, same init/type discipline).
 fn let_binder(kind: &PatternKind) -> Option<(String, String)> {
     let (minus_sub, plus_body, placeholders) = general_parts(kind, GeneralShape::Stmt)?;
     let ph = ph_map(placeholders);
+    let declared = declared_holes(placeholders);
     let Ok(syn::Stmt::Local(minus)) = syn::parse_str::<syn::Stmt>(minus_sub) else {
         return None;
     };
     let Ok(syn::Stmt::Local(plus)) = syn::parse_str::<syn::Stmt>(plus_body) else {
         return None;
     };
-    let (old_id, old_mut) = single_ident_binder(&minus.pat)?;
-    let (new_id, new_mut) = single_ident_binder(&plus.pat)?;
-    if old_id == new_id || old_mut != new_mut {
-        return None;
+    if let (Some((old_id, old_mut)), Some((new_id, new_mut))) = (
+        single_ident_binder(&minus.pat),
+        single_ident_binder(&plus.pat),
+    ) {
+        // Plain pair present on both sides: the plain discipline owns
+        // it (a destructuring leaf never reaches here).
+        if old_id == new_id || old_mut != new_mut {
+            return None;
+        }
+        if pat_ty(&minus.pat, &ph) != pat_ty(&plus.pat, &ph) {
+            return None;
+        }
+        let minus_init = minus.init.as_ref().map(|i| render(&i.expr))?;
+        let plus_init = plus.init.as_ref().map(|i| render(&i.expr))?;
+        if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
+            return None;
+        }
+        return Some((old_id, new_id));
     }
+    // Single-leaf destructuring twin: exactly one leaf differs, same
+    // init/type discipline as the plain arm.
     if pat_ty(&minus.pat, &ph) != pat_ty(&plus.pat, &ph) {
         return None;
     }
@@ -210,20 +428,25 @@ fn let_binder(kind: &PatternKind) -> Option<(String, String)> {
     if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
         return None;
     }
-    Some((old_id, new_id))
+    match single_leaf_diff(&minus.pat, &plus.pat, &ph, &declared) {
+        Ok(Some((o, n))) => Some((o, n)),
+        _ => None,
+    }
 }
 
-/// Sequence-contained plain `let` rename: K (2-4) plain `let` statements
-/// where the LAST position renames a plain single-ident binder
-/// (`let old = E;` -> `let new = E;`, same init and type annotation)
-/// and every earlier position is placeholder-normalized token-equal.
+/// Sequence-contained plain `let` rename: K (2-4) plain `let`
+/// statements where EXACTLY ONE position renames a plain single-ident
+/// binder (`let old = E;` -> `let new = E;`, same init and type
+/// annotation) and every other position is placeholder-normalized
+/// token-equal.
 ///
-/// The rename-last restriction is the soundness gate: every other
-/// window statement precedes the binder, so its uses name the outer
-/// scope and replay verbatim (correctly left), and no in-window use
-/// can strand. Multi-delta (hetero-fusion) runs, destructuring
-/// positions, deletions, and non-final renames decline (`None`) and
-/// keep today's exempt behaviour.
+/// The rename-once gate is the soundness discipline: no other window
+/// statement may mention `old`/`new` as an ident-boundary occurrence,
+/// so no in-window use can strand inside the replacement; post-window
+/// uses complete via the `let` follow/orphan machinery with the window
+/// end as the floor. Multi-delta (hetero-fusion) runs, destructuring
+/// positions, and deletions decline (`None`) and keep today's exempt
+/// behaviour.
 fn sequence_binder(kind: &PatternKind) -> Option<(String, String)> {
     let (minus_sub, plus_body, placeholders) = general_parts(kind, GeneralShape::Sequence)?;
     let ph = ph_map(placeholders);
@@ -250,31 +473,42 @@ fn sequence_binder(kind: &PatternKind) -> Option<(String, String)> {
         minus_locals.push(m);
         plus_locals.push(p);
     }
-    let (m_last, p_last) = (minus_locals.last().unwrap(), plus_locals.last().unwrap());
-    // Every earlier position must be token-equal modulo placeholders.
-    for (m, p) in minus_locals[..minus_locals.len() - 1]
-        .iter()
-        .zip(plus_locals[..plus_locals.len() - 1].iter())
-    {
-        if normalize_placeholders(&render(m), &ph) != normalize_placeholders(&render(p), &ph) {
+    // Exactly one position renames; the rest are token-equal modulo
+    // placeholders (the `let` arm's discipline per position).
+    let mut found: Option<(usize, String, String)> = None;
+    for (i, (m, p)) in minus_locals.iter().zip(plus_locals.iter()).enumerate() {
+        if normalize_placeholders(&render(m), &ph) == normalize_placeholders(&render(p), &ph) {
+            continue;
+        }
+        let (old_id, old_mut) = single_ident_binder(&m.pat)?;
+        let (new_id, new_mut) = single_ident_binder(&p.pat)?;
+        if old_id == new_id || old_mut != new_mut {
             return None;
         }
+        if pat_ty(&m.pat, &ph) != pat_ty(&p.pat, &ph) {
+            return None;
+        }
+        let minus_init = m.init.as_ref().map(|i| render(&i.expr))?;
+        let plus_init = p.init.as_ref().map(|i| render(&i.expr))?;
+        if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
+            return None;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some((i, old_id, new_id));
     }
-    // The final position is the plain single-binder rename (the `let`
-    // arm's discipline, minus the init-identity shortcut: inits compare
-    // placeholder-normalized, same as `let`).
-    let (old_id, old_mut) = single_ident_binder(&m_last.pat)?;
-    let (new_id, new_mut) = single_ident_binder(&p_last.pat)?;
-    if old_id == new_id || old_mut != new_mut {
-        return None;
-    }
-    if pat_ty(&m_last.pat, &ph) != pat_ty(&p_last.pat, &ph) {
-        return None;
-    }
-    let minus_init = m_last.init.as_ref().map(|i| render(&i.expr))?;
-    let plus_init = p_last.init.as_ref().map(|i| render(&i.expr))?;
-    if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
-        return None;
+    let (idx, old_id, new_id) = found?;
+    // No other window statement may mention the renamed binder: its
+    // uses would replay verbatim inside the replacement and strand.
+    for (i, m) in minus_locals.iter().enumerate() {
+        if i == idx {
+            continue;
+        }
+        let text = normalize_placeholders(&render(m), &ph);
+        if contains_ident_bounded(&text, &old_id) || contains_ident_bounded(&text, &new_id) {
+            return None;
+        }
     }
     Some((old_id, new_id))
 }
@@ -713,9 +947,57 @@ mod tests {
     }
 
     #[test]
-    fn destructuring_vetoes() {
+    fn destructuring_single_leaf_fires() {
+        // Residue slice 2: single-leaf destructuring diffs complete
+        // like plain renames.
         assert_eq!(
-            binder_rename(&stmt("let (a , b) = __RSMPL_E0;", "let (a , c) = E;")),
+            renamed(&stmt("let (a , b) = __RSMPL_E0;", "let (a , c) = E;")),
+            Some(("b".to_string(), "c".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn destructuring_multi_leaf_vetoes() {
+        assert_eq!(
+            binder_rename(&stmt("let (a , b) = __RSMPL_E0;", "let (c , d) = E;")),
+            None
+        );
+    }
+
+    #[test]
+    fn destructuring_struct_shorthand_slice_fires() {
+        assert_eq!(
+            renamed(&stmt(
+                "let S { f : old , g } = __RSMPL_E0;",
+                "let S { f : new , g } = E;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+        assert_eq!(
+            renamed(&stmt("let S { old } = __RSMPL_E0;", "let S { new } = E;")),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+        assert_eq!(
+            renamed(&stmt("let [a , old] = __RSMPL_E0;", "let [a , new] = E;")),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+        assert_eq!(
+            renamed(&stmt("let &old = __RSMPL_E0;", "let &new = E;")),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn destructuring_path_change_vetoes() {
+        assert_eq!(
+            binder_rename(&stmt("let Some (old) = __RSMPL_E0;", "let Ok (new) = E;")),
+            None
+        );
+        assert_eq!(
+            binder_rename(&stmt(
+                "let (a , old) = __RSMPL_E0;",
+                "let (a , new , b) = E;"
+            )),
             None
         );
     }
@@ -805,13 +1087,25 @@ mod tests {
     }
 
     #[test]
-    fn sequence_non_final_rename_declines() {
-        // Rename-last is the soundness gate: a rename anywhere else
-        // keeps today's exempt behaviour (follow-up slice owns it).
+    fn sequence_non_final_rename_fires() {
+        // Residue slice 2: rename-once at any position completes.
         assert_eq!(
-            binder_rename(&seq(
+            renamed(&seq(
                 "let old = __RSMPL_E0 ;\nlet b = __RSMPL_E1 ;",
                 "let new = E0 ;\nlet b = E1 ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_old_mention_declines() {
+        // Another window statement naming the binder strands inside
+        // the replacement: decline to today's exempt behaviour.
+        assert_eq!(
+            binder_rename(&seq(
+                "let old = __RSMPL_E0 ;\nlet b = old ;",
+                "let new = E0 ;\nlet b = old ;"
             )),
             None
         );

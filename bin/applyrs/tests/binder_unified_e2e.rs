@@ -239,11 +239,13 @@ fn fn_param_completion_applies_and_checks_clean() {
 // C21: a Stmt/Expr general template that rewrites bound binder idents
 // without binder identity never applies — the old shape rewrote the
 // header, stranded body/file uses, and still reported `verified` with no
-// orphans. Stmt + if-let pin the fail-loud gate (text and JSON), the
-// worktree stays untouched, and the single-binder twins above stay green
-// as the exemption pin. Sequences are exempt except a final-position
-// plain `let` rename (hetero fusion owns other binder-renaming runs
-// there; sequencing completion beyond the final position is follow-up).
+// orphans. Stmt multi-leaf + if-let pin the fail-loud gate (text and
+// JSON), the worktree stays untouched, and the single-binder twins above
+// (incl. Stmt single-leaf destructuring and rename-once sequences, which
+// complete like `let`) stay green as the exemption pins. Sequences are
+// exempt except a rename-once plain `let` rename (hetero fusion owns
+// other binder-renaming runs there; sequence-contained destructuring
+// and old-mentioning windows stay declined window-only).
 const C21_REASON: &str = "general template rewrites bound binder idents without binder identity";
 
 fn check_c21_text(dir: &std::path::Path, patch: &str, content: &str) {
@@ -290,11 +292,62 @@ fn check_c21_json(dir: &std::path::Path, patch: &str, content: &str) {
 }
 
 #[test]
-fn destructuring_let_rewrite_fails_c21() {
+fn destructuring_single_leaf_completes() {
+    // Residue slice 2: a Stmt single-leaf destructuring rename enters
+    // binder identity (header + post-use rewrite, `verified`).
     let dir = init_repo();
     let content = "pub fn run() {\n    let (a, old) = (1, 2);\n    let y = old + 1;\n    let _ = (a, y);\n}\n";
     cargo_crate(dir.path(), content);
     let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# expr E\n- let (a, old) = E;\n+ let (a, new) = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let (a, new) = (1, 2);"), "got: {post}");
+    assert!(post.contains("let y = new + 1;"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn destructuring_single_leaf_shadowed_reports_partial() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let (a, old) = (1, 2);\n    let y = old;\n    {\n        let (b, old) = (3, 4);\n        let z = old;\n        let _ = (a, b, y, z);\n    }\n    let w = old;\n    let _ = (a, y, w);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# expr E\n- let (a, old) = E;\n+ let (a, new) = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert!(
+        v["rules"][0]["orphans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("shadowed")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let (a, new) = (1, 2);"), "got: {post}");
+    assert!(post.contains("let (b, old) = (3, 4);"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn destructuring_multi_leaf_still_fails_c21() {
+    // Two leaves move: no binder identity, still fail-loud.
+    let dir = init_repo();
+    let content = "pub fn run() {\n    let (a, b) = (1, 2);\n    let _ = (a, b);\n}\n";
+    cargo_crate(dir.path(), content);
+    let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# expr E\n- let (a, b) = E;\n+ let (c, d) = E;\n";
     check_c21_text(dir.path(), patch, content);
     check_c21_json(dir.path(), patch, content);
 }
@@ -383,11 +436,11 @@ fn closure_param_rename_leaves_attribute_value_and_reports_partial() {
     assert!(post.contains("sum + 1"), "got: {post}");
 }
 
-// Sequence-contained plain renames (residue slice 1): a final-position
-// `let old` -> `let new` completes post-window uses in-hunk and reports
-// `verified`; shadowed/macro post-window uses file orphans and cap at
-// `partial`; a non-final rename keeps the old posture (pinned
-// remainder for the next slice).
+// Sequence-contained plain renames (residue slices 1-2): a rename-once
+// `let old` -> `let new` at any single position completes post-window
+// uses in-hunk and reports `verified`; shadowed/macro post-window uses
+// file orphans and cap at `partial`; old-mentioning windows stay
+// declined window-only (pinned remainder).
 const SEQ_RENAME_LAST_PATCH: &str =
     "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let a = E0;\n- let old = E1;\n+ let a = E0;\n+ let new = E1;\n";
 
@@ -473,10 +526,8 @@ fn sequence_final_rename_macro_reports_partial() {
 }
 
 #[test]
-fn sequence_non_final_rename_applies_window_only() {
-    // Known remainder: a rename outside the final position keeps
-    // today's posture (window applies, no completion) — the next slice
-    // owns intra-window completion.
+fn sequence_non_final_rename_completes_and_checks_clean() {
+    // Residue slice 2: rename-once at any position completes.
     let dir = init_repo();
     cargo_crate(
         dir.path(),
@@ -492,7 +543,7 @@ fn sequence_non_final_rename_applies_window_only() {
     apply_patch(dir.path(), patch);
     let post = read(dir.path(), "src/lib.rs");
     assert!(post.contains("let new = 1;"), "got: {post}");
-    assert!(post.contains("let c = old;"), "got: {post}");
-    // No `cargo_check`: the stranded `let c = old` names a binder that
-    // no longer exists — the pinned remainder for the next slice.
+    assert!(post.contains("let c = new;"), "got: {post}");
+    assert!(!post.contains("old"), "got: {post}");
+    cargo_check(dir.path());
 }

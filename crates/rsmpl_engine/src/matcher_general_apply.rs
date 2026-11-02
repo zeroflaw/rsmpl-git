@@ -291,14 +291,17 @@ pub fn apply_general_hunk(
     // binder (rename/add/concretion) — or drops one with no hole replay
     // — would rewrite the header while stranding body/file uses with no
     // orphans filed; fail loud instead of `verified`. Pure permutations,
-    // hole replays (`P @ sub` → `P`, `Some(x)` → `Some(P)`), and plain
-    // renames through binder identity keep applying. Sequences are
-    // exempt except a final-position plain-`let` rename, which enters
-    // binder identity (completion + orphans): the raiser owns other
+    // hole replays (`P @ sub` → `P`, `Some(x)` → `Some(P)`), plain
+    // renames and Stmt single-leaf destructuring renames through binder
+    // identity keep applying. Sequences are exempt except a rename-once
+    // plain-`let` rename at any single position, which enters binder
+    // identity (completion + orphans): the raiser owns other
     // binder-renaming hetero runs there (WI-5d single-block fusion,
     // completed by sibling hunks in the same patch), so a hunk-local
-    // veto would break the apply direction of a proven cycle; broader
-    // sequencing completion is follow-up work, not this gate.
+    // veto would break the apply direction of a proven cycle;
+    // sequence-contained destructuring and old-mentioning windows stay
+    // declined (exempt window-only), owned by the next slice, not this
+    // gate.
     if matches!(shape, GeneralShape::Stmt | GeneralShape::Expr)
         && !crate::use_graph_local::is_local_binder_rename(compiled)
     {
