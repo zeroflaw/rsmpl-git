@@ -848,6 +848,21 @@ mod tests {
     }
 
     #[test]
+    fn body_evolved_single_line_fires() {
+        // WI-19 slice-4 review: a same-line self-reference pairs through
+        // the body-evolving finder (whole-text agreement); the splice
+        // must honor that proof (see `capture.rs` same-line pins).
+        let minus = "fn fact() -> i32 { fact() }";
+        let plus_body: Vec<String> = vec!["+fn factorial() -> i32 { factorial() }".to_string()];
+        let hits = find_fn_body_evolved_hits(minus, &plus_body);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert_eq!(
+            (hits[0].3.as_str(), hits[0].4.as_str()),
+            ("fact", "factorial")
+        );
+    }
+
+    #[test]
     fn body_evolved_matcher_gates() {
         // Identical bodies belong to the abstract path, never here.
         let body = "{\n    let y = x + 1;\n    y * 2\n}";

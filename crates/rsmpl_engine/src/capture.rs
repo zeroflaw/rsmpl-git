@@ -541,13 +541,18 @@ fn splice_fn_body_evolution(
         fn_at.ok_or_else(|| fail(format!("captured text has no `fn {old_name}` header line")))?;
     let after_fn = &rest[fn_at + 3..];
     let suffix = after_fn[old_name.len()..].to_string();
+    // WI-19 slice-4 review: the header suffix renames in place (same
+    // scanner as the body), so a same-line self-reference
+    // (`fn fact() -> i32 { fact() }`) rides along like the container
+    // splices. The WI-2 veto above already declines shadowing bindings.
+    let renamed_suffix = rsmpl_pattern::rename_ident_in_code(&suffix, &old_name, new_t);
     let pre = new_prefix.trim_end();
     let head = if pre.is_empty() {
         format!("fn {new_t}")
     } else {
         format!("{pre} fn {new_t}")
     };
-    lines[idx] = format!("{ws}{head}{suffix}");
+    lines[idx] = format!("{ws}{head}{renamed_suffix}");
     // Body rename over the whole post-header text (one scanner pass, so
     // multi-line block comments stay sound); the header line above is
     // already spliced and excluded.
@@ -918,6 +923,29 @@ mod tests {
             out.contains("n * factorial(n - 1)"),
             "call renamed, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn body_evolution_splice_renames_same_line_self_ref() {
+        // WI-19 slice-4 review gap: the pairing proves whole-text
+        // agreement, so a same-line self-reference must ride along.
+        // Before the header-suffix rename this emitted
+        // `fn factorial() -> i32 { fact() }` (stale self-ref).
+        let cap = "fn fact() -> i32 { fact() }";
+        let out = splice_evolved_header(cap, "fn fact as factorial(...) { ... }", "r")
+            .expect("single-line as splice must fire");
+        assert_eq!(out, "fn factorial() -> i32 { factorial() }", "got:\n{out}");
+    }
+
+    #[test]
+    fn body_evolution_splice_single_line_keeps_string() {
+        // Same-line scanner discipline, not regex: literals ride
+        // verbatim while the code ident renames.
+        let cap = "fn fact() -> i32 { let s = \"fact\"; fact() }";
+        let out = splice_evolved_header(cap, "fn fact as factorial(...) { ... }", "r")
+            .expect("single-line as splice must fire");
+        assert!(out.contains("\"fact\""), "string kept, got:\n{out}");
+        assert!(out.contains("factorial()"), "call renamed, got:\n{out}");
     }
 
     #[test]
