@@ -124,7 +124,9 @@ impl CaptureStore {
 /// WI-8a: what a `# use=` paste inserts — the bare capture name
 /// (verbatim move) or a header template (a single-line
 /// `fn`/`struct`/`enum`/`union`/`type`/`const`/`static`/`mod`/`trait` header with `...`,
-/// or the multi-line concrete-signature `fn` header with `...`) that
+/// or the multi-line concrete-signature `fn` header with `...`, or the
+/// WI-19 slice 3 joint `fn <Old> as <New>` header with a concrete
+/// signature and `...`) that
 /// the captured body/fields are spliced under (evolution move).
 pub(crate) struct PasteTarget<'a> {
     pub(crate) name: &'a str,
@@ -269,6 +271,8 @@ pub(crate) fn eval_collection_cut(
 /// captured item under an evolution-template header (`pub fn New(...) { ... }`,
 /// `pub fn New(x: i64) -> i64 { ... }` (slice 9 concrete signature),
 /// `pub fn Old as New(...) { ... }` (slice 3b body-evolving: header **and**
+/// self-reference body rename), `pub fn Old as New(x: i64) -> i64 { ... }`
+/// (WI-19 slice 3 signature+body joint: concrete header span **and**
 /// self-reference body rename), `pub struct New { ... }`,
 /// `pub enum New { ... }`,
 /// `pub union New { ... }`, `pub type New = ...;`,
@@ -286,6 +290,14 @@ pub(crate) fn splice_evolved_header(
     rule: &str,
 ) -> Result<String, StructuredError> {
     let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    // WI-19 slice 3: the signature+body joint form is checked before the
+    // `as` and concrete arms (its spelling contains `as` plus a concrete
+    // signature, which each single-purpose parser declines by ownership).
+    if let Some((new_prefix, old_t, new_t)) =
+        rsmpl_pattern::parse_fn_sig_body_template(template.trim())
+    {
+        return splice_fn_sig_body_evolution(captured, &new_prefix, &old_t, &new_t, template, rule);
+    }
     // WI-6 slice 3b: the `as` body-evolving form is checked before the
     // abstract `(...)` form (its tail also contains `(...)`+`...`, but the
     // abstract parser declines the `as` spelling by ownership).
@@ -329,7 +341,7 @@ pub(crate) fn splice_evolved_header(
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, or a concrete signature + `{{ ... }}` (single- or multi-line, got `{}`), a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...`",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, a concrete signature + `{{ ... }}`, or `fn <Old> as <New>(concrete signature) {{ ... }}` for a signature+body joint (single- or multi-line, got `{}`), a single-line `struct` header with `...`, a single-line `enum` header with `...`, a single-line `union` header with `...`, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...`",
                 template.trim()
             ))
         })?;
@@ -502,6 +514,180 @@ fn splice_fn_body_evolution(
         let renamed = rsmpl_pattern::rename_ident_in_code(&body, &old_name, new_t);
         let mut new_lines: Vec<String> = renamed.split('\n').map(str::to_string).collect();
         lines.truncate(idx + 1);
+        lines.append(&mut new_lines);
+    }
+    Ok(lines.join("\n"))
+}
+
+/// WI-19 slice 3: splice a captured `fn` item under a signature+body
+/// joint template (`pub fn Old as New(x: i64) -> i64 { ... }`, single-
+/// or multi-line like the concrete-signature form). The captured header
+/// *span* is replaced with the template's header span (the new name and
+/// signature ride verbatim from the template) and the captured body
+/// tail is renamed `old` → `new` through
+/// [`rsmpl_pattern::rename_ident_in_code`]. The WI-2 binding boundary
+/// applies: a shadowing local, field/method name, macro name, or
+/// attribute interior vetoes loud instead of renaming. Single-line
+/// items fail loud (replacing the only line would drop the body).
+#[allow(clippy::too_many_arguments)]
+fn splice_fn_sig_body_evolution(
+    captured: &str,
+    _new_prefix: &str,
+    old_t: &str,
+    new_t: &str,
+    template: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| {
+        StructuredError::new(ErrorCode::PatternConflict, msg)
+            .with_rule(rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "joint-paste",
+                "write the joint template `+ <prefix>fn <Old> as <New>(concrete signature) { ... }` (exactly one signature slot, WI-2 binding law), or split the move",
+            ))
+    };
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name = match file.items.as_slice() {
+        [syn::Item::Fn(f)] => f.sig.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `fn` item for a signature+body joint template"
+                    .to_string(),
+            ));
+        }
+    };
+    if old_name != old_t {
+        return Err(fail(format!(
+            "signature+body joint paste names `{old_t}` but the capture holds `fn {old_name}`"
+        )));
+    }
+    if let Some(veto) = rsmpl_pattern::body_evolution_veto(captured, &old_name) {
+        return Err(fail(format!(
+            "signature+body joint paste vetoes: `{old_name}` has a {} occurrence at captured line {} (rename it by hand or split the move)",
+            veto.kind, veto.line
+        )));
+    }
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if fn_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx =
+        target.ok_or_else(|| fail(format!("captured text has no `fn {old_name}` header line")))?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let mut cap_end = None;
+    for (off, line) in lines[idx..].iter().enumerate() {
+        if line.trim_end().ends_with('{') {
+            cap_end = Some(idx + off);
+            break;
+        }
+    }
+    let Some(cap_end) = cap_end else {
+        return Err(fail(format!(
+            "signature+body joint paste needs a multi-line `fn {old_name}` capture (single-line items stay ordinary)"
+        )));
+    };
+    if cap_end + 1 >= lines.len() {
+        return Err(fail(format!(
+            "signature+body joint paste needs a multi-line `fn {old_name}` capture (single-line items stay ordinary)"
+        )));
+    }
+    let tmpl = template.trim();
+    let tmpl_lines: Vec<&str> = tmpl.lines().collect();
+    let mut tmpl_end = None;
+    for (off, line) in tmpl_lines.iter().enumerate() {
+        if line.contains('{') && line.contains("...") {
+            tmpl_end = Some(off);
+            break;
+        }
+    }
+    let tmpl_end = tmpl_end.ok_or_else(|| {
+        fail(format!(
+            "evolution paste template must be a joint `fn <Old> as <New>` header with a concrete signature + `{{ ... }}` (got `{tmpl}`)"
+        ))
+    })?;
+    if tmpl_end + 1 != tmpl_lines.len() {
+        return Err(fail(
+            "evolution paste template must end at the `{ ... }` line (got trailing lines after it)"
+                .to_string(),
+        ));
+    }
+    let brace = tmpl.find('{').ok_or_else(|| {
+        fail(format!(
+            "evolution paste template must be a joint `fn <Old> as <New>` header with a concrete signature + `{{ ... }}` (got `{tmpl}`)"
+        ))
+    })?;
+    let header_part = tmpl[..brace].trim_end();
+    let mut span: Vec<String> = header_part.lines().map(str::to_string).collect();
+    if let Some(last) = span.last_mut() {
+        *last = format!("{} {{", last.trim_end());
+    }
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, _) = line.split_at(ws_len);
+    if span.is_empty() {
+        return Err(fail(
+            "signature+body joint paste needs a header span (got an empty template header)"
+                .to_string(),
+        ));
+    }
+    // The template spells `fn <old> as <new>`; the spliced header keeps
+    // only the new name (`fn <new>`), like every other evolution paste.
+    let raw_first = span[0].trim_start().to_string();
+    let fn_at = raw_first.find("fn ").ok_or_else(|| {
+        fail(format!(
+            "signature+body joint paste template holds no `fn {old_t}` header line"
+        ))
+    })?;
+    let after_fn = raw_first[fn_at + 3..].trim_start();
+    let after_old = after_fn.strip_prefix(old_t).ok_or_else(|| {
+        fail(format!(
+            "signature+body joint paste template holds no `fn {old_t}` header line"
+        ))
+    })?;
+    let after_ws = after_old.trim_start();
+    let after_as = after_ws.strip_prefix("as").ok_or_else(|| {
+        fail(format!(
+            "signature+body joint paste template holds no `fn {old_t} as {new_t}` header line"
+        ))
+    })?;
+    if after_as
+        .chars()
+        .next()
+        .is_some_and(|c| c == '_' || c.is_ascii_alphanumeric())
+    {
+        return Err(fail(format!(
+            "signature+body joint paste template holds no `fn {old_t} as {new_t}` header line"
+        )));
+    }
+    let after_new = after_as.trim_start();
+    let new_tail = after_new.strip_prefix(new_t).ok_or_else(|| {
+        fail(format!(
+            "signature+body joint paste template holds no `fn {old_t} as {new_t}` header line"
+        ))
+    })?;
+    span[0] = format!("{ws}{}fn {new_t}{new_tail}", &raw_first[..fn_at]);
+    lines.splice(idx..=cap_end, span);
+    // Body rename over the post-span tail (one scanner pass, so
+    // multi-line block comments stay sound); the replaced header span
+    // is excluded. `cap_end` indexed the pre-splice lines; recompute
+    // the tail start from the new span length.
+    let tail_start = idx + tmpl_end + 1;
+    if tail_start < lines.len() {
+        let body = lines[tail_start..].join("\n");
+        let renamed = rsmpl_pattern::rename_ident_in_code(&body, &old_name, new_t);
+        let mut new_lines: Vec<String> = renamed.split('\n').map(str::to_string).collect();
+        lines.truncate(tail_start);
         lines.append(&mut new_lines);
     }
     Ok(lines.join("\n"))
@@ -1745,5 +1931,56 @@ mod tests {
             "lifetime not renamed, got:\n{out}"
         );
         assert!(out.contains("factorial(x)"), "call renamed, got:\n{out}");
+    }
+
+    #[test]
+    fn joint_splice_replaces_span_and_renames_body() {
+        // WI-19 slice 3: the joint template replaces the whole header
+        // span with the new signature and renames the body self-ref.
+        let cap = "fn fact(n: u32) -> u64 {\n    n as u64 * fact(n - 1)\n}";
+        let out =
+            splice_evolved_header(cap, "pub fn fact as factorial(n: u64) -> u64 { ... }", "r")
+                .expect("joint splice must fire");
+        assert!(
+            out.contains("pub fn factorial(n: u64) -> u64 {"),
+            "new header spliced, got:\n{out}"
+        );
+        assert!(
+            out.contains("n as u64 * factorial(n - 1)"),
+            "call renamed, got:\n{out}"
+        );
+        assert!(!out.contains("fact("), "old call gone, got:\n{out}");
+    }
+
+    #[test]
+    fn joint_splice_multiline_header() {
+        // A multi-line joint template replaces the whole captured span.
+        let cap = "fn fact(\n    n: u32,\n) -> u64 {\n    n as u64 * fact(n - 1)\n}";
+        let out = splice_evolved_header(
+            cap,
+            "pub fn fact as factorial(\n    n: u64,\n) -> u64 { ... }",
+            "r",
+        )
+        .expect("multi-line joint splice must fire");
+        assert!(
+            out.contains("pub fn factorial(\n    n: u64,\n) -> u64 {"),
+            "multi-line header spliced, got:\n{out}"
+        );
+        assert!(
+            out.contains("factorial(n - 1)"),
+            "call renamed, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn joint_splice_vetoes_binding_risks() {
+        // WI-2 boundary shared with the `as` form: a shadowed local
+        // vetoes the authored joint paste with the line named.
+        let cap = "fn fact(n: u32) -> u64 {\n    let fact = 1;\n    fact + fact(n - 1)\n}";
+        let err = splice_evolved_header(cap, "fn fact as factorial(n: u64) -> u64 { ... }", "r")
+            .expect_err("binding risk must veto");
+        let msg = err.to_string();
+        assert!(msg.contains("shadowed-local"), "kind named, got: {msg}");
+        assert!(msg.contains("captured line 2"), "line named, got: {msg}");
     }
 }

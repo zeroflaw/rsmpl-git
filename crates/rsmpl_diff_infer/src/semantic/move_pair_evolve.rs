@@ -55,10 +55,36 @@ pub(crate) fn evolved_pairs_for_item(
                 }),
             });
         }
+        // WI-19 slice 3: signature+body joint `fn` pairs (move+rename
+        // whose body renames its self-references and whose signature
+        // evolves in exactly one slot). The paste carries the joint
+        // template (`fn <old> as <new>(concrete signature) { ... }`);
+        // zero-sig-slot pairs belong to the `as` arm above, two-slot
+        // pairs to the sig arm below (whose match vetos body deltas),
+        // so the three arms are mutually exclusive.
+        for (first, last, prefix, template, name) in
+            super::move_evolve_sig::find_fn_sig_body_evolved_hits(&item.text, pbody)
+        {
+            pairs.push(MovePair {
+                minus_hunk_key: minus_key,
+                plus_hunk_key: plus_key,
+                item: item.clone(),
+                plus_first: first,
+                plus_last: last,
+                evolved: Some(EvolvedPair {
+                    kind: EvolvedKind::Fn,
+                    prefix,
+                    name,
+                    static_mut: false,
+                    template: Some(template),
+                }),
+            });
+        }
         // WI-8 slice 9: signature-evolving `fn` pairs carry the concrete
         // plus-side header as the paste template (mutually exclusive
         // with the abstract finder above — sig-identical pairs return
-        // `None` here, never double-pair).
+        // `None` here — and with the joint arm above, whose match vetos
+        // body-equal pairs, never double-pair).
         for (first, last, prefix, template, name) in
             super::move_evolve_sig::find_fn_sig_evolved_hits(&item.text, pbody)
         {
@@ -240,6 +266,65 @@ mod tests {
             "plus lines must be consumed, got:\n{text}"
         );
         validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn joint_sig_body_fires_with_joint_paste() {
+        // WI-19 slice 3: the 139-shape — move+rename whose body renames
+        // its recursive call plus a one-slot signature delta — fires as
+        // one evolving cut/paste with the joint template carrying the
+        // new signature and the `as` rename.
+        let minus = "fn fact(n: u32) -> u64 {\n    n as u64 * fact(n - 1)\n}\n";
+        let plus = "pub fn factorial(n: u64) -> u64 {\n    n as u64 * factorial(n - 1)\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,3 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,4 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).expect("joint must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ pub fn fact as factorial(n: u64) -> u64 { ... }"),
+            "paste must carry the joint template, got:\n{text}"
+        );
+        assert!(
+            !text.contains("-fn fact"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+pub fn factorial"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn joint_two_slots_stay_ordinary() {
+        // Two signature slots plus a body rename is two changes, not one
+        // intent: no evolving pair claims the plus run.
+        let minus = "fn fact(n: u32) -> u32 {\n    n * fact(n - 1)\n}\n";
+        let plus = "fn factorial(n: u64) -> u64 {\n    n * factorial(n - 1)\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,3 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,3 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used);
+        assert!(
+            out.is_none() || !out.unwrap().join("").contains(" as "),
+            "two-slot joint must not fire"
+        );
     }
 
     #[test]

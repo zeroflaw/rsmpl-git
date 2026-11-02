@@ -210,6 +210,182 @@ pub(crate) fn find_fn_sig_evolved_hits(
     out
 }
 
+/// WI-19 slice 3 signature+body joint `fn` pair check: the signature
+/// evolves in exactly one slot (generics params, `where`, inputs +
+/// variadic, return — each counted once) **and** the body differs.
+/// Vis/name/qualifiers ride verbatim in the joint template (free, like
+/// the concrete path); attrs must stay token-equal. Zero sig slots
+/// belongs to the body-only path, two or more veto to ordinary, and a
+/// token-equal body belongs to the sig-only path. Returns the plus-side
+/// ident when the pair is a joint.
+pub(crate) fn fn_sig_body_evolved_match(minus: &syn::ItemFn, plus: &syn::ItemFn) -> Option<String> {
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    if minus.sig.ident == plus.sig.ident {
+        return None; // no rename — the body delta cannot be a self-ref rename
+    }
+    if tok(&minus.block) == tok(&plus.block) {
+        return None; // no body delta — the sig-only path owns it
+    }
+    let (a, b) = (&minus.sig, &plus.sig);
+    let mut deltas = 0;
+    if tok(&a.generics.params) != tok(&b.generics.params) {
+        deltas += 1;
+    }
+    if opt_tok(&a.generics.where_clause) != opt_tok(&b.generics.where_clause) {
+        deltas += 1;
+    }
+    if tok(&a.inputs) != tok(&b.inputs)
+        || a.variadic.is_some() != b.variadic.is_some()
+        || opt_tok(&a.variadic) != opt_tok(&b.variadic)
+    {
+        deltas += 1;
+    }
+    if tok(&a.output) != tok(&b.output) {
+        deltas += 1;
+    }
+    if deltas != 1 {
+        return None;
+    }
+    Some(plus.sig.ident.to_string())
+}
+
+/// The raw body tail (lines after the header span's `{`-opened line,
+/// markers stripped) of diff-body `item_lines` holding one `fn <name>`
+/// item. Mirrors `header_span`'s scan so the tail starts where the
+/// template span ends; `None` when no header span opens a block.
+fn body_tail(item_lines: &[String], name: &str) -> Option<String> {
+    let mut start = None;
+    for (idx, line) in item_lines.iter().enumerate() {
+        let text = line.get(1..).unwrap_or("");
+        let t = text.trim_start();
+        if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
+            continue;
+        }
+        if find_fn_name(text, name).is_some() {
+            start = Some(idx);
+            break;
+        }
+    }
+    let start = start?;
+    let mut end = None;
+    for (off, line) in item_lines[start..].iter().enumerate() {
+        let text = line.get(1..).unwrap_or("");
+        if text.trim_end().ends_with('{') {
+            end = Some(start + off);
+            break;
+        }
+    }
+    let end = end?;
+    if end + 1 >= item_lines.len() {
+        return None;
+    }
+    Some(
+        item_lines[end + 1..]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Rewrite a concrete template's first-line `fn <new>` as
+/// `fn <old> as <new>` (`None` when the first line holds no such pair).
+fn joint_first_line(concrete: &str, old: &str, new: &str) -> Option<String> {
+    let mut lines: Vec<String> = concrete.lines().map(str::to_string).collect();
+    let first = lines.first()?.clone();
+    let pos = first.find("fn ")?;
+    let after = first[pos + 3..].trim_start();
+    let tail = after.strip_prefix(new)?;
+    if tail
+        .chars()
+        .next()
+        .is_some_and(|c| c == '_' || c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    lines[0] = format!("{}fn {old} as {new}{tail}", &first[..pos]);
+    Some(lines.join("\n"))
+}
+
+/// All signature+body joint `fn` hits of one minus item text in a
+/// pure-plus hunk body. Mirrors `find_fn_sig_evolved_hits`; spans
+/// coincide with parsed `fn` item spans by construction. Each hit
+/// carries the plus-side header prefix, the joint template (concrete
+/// header span with `fn <old> as <new>` on the first line, single- or
+/// multi-line), and the plus-side ident. The body proof is raw-tail
+/// equality after the WI-2 rename plus the veto gate — the same proof
+/// the authored splice relies on, so pairing and splice agree by
+/// construction.
+pub(crate) fn find_fn_sig_body_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemFn>(minus_text) else {
+        return Vec::new();
+    };
+    let old = minus.sig.ident.to_string();
+    let minus_lines: Vec<String> = minus_text.lines().map(|l| format!("-{l}")).collect();
+    if header_span(&minus_lines, &old).is_none() {
+        return Vec::new();
+    }
+    // WI-2: the same binding boundary as the authored splice — a
+    // shadowed local, field/method, macro, or attribute occurrence
+    // stays ordinary even when the text scan agrees.
+    if rsmpl_pattern::body_evolution_veto(minus_text, &old).is_some() {
+        return Vec::new();
+    }
+    let Some(minus_tail) = body_tail(&minus_lines, &old) else {
+        return Vec::new();
+    };
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Fn(plus) = it else {
+            continue;
+        };
+        if fn_sig_body_evolved_match(&minus, plus).is_none() {
+            continue;
+        }
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let name = plus.sig.ident.to_string();
+        let Some((prefix, concrete, _)) = header_span(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        let Some(template) = joint_first_line(&concrete, &old, &name) else {
+            continue;
+        };
+        // Body proof: the renamed minus tail must equal the plus tail
+        // verbatim. Any non-rename body delta vetoes.
+        let Some(plus_tail) = body_tail(&plus_body[(s - 1)..e], &name) else {
+            continue;
+        };
+        if rsmpl_pattern::rename_ident_in_code(&minus_tail, &old, &name) != plus_tail {
+            continue;
+        }
+        out.push((s - 1, e - 1, prefix, template, name));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +517,72 @@ mod tests {
         let hits = find_fn_sig_evolved_hits(minus, &body);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].3, "pub fn new(x: i64) -> i64 { ... }");
+    }
+
+    #[test]
+    fn joint_fires_single_slot_plus_body_rename() {
+        // WI-19 slice 3: one param-type delta plus a self-call rename
+        // fires the joint; the template composes `as` with the concrete
+        // signature.
+        let minus = "fn fact(n: u32) -> u64 {\n    n as u64 * fact(n - 1)\n}\n";
+        let body =
+            plus_body("pub fn factorial(n: u64) -> u64 {\n    n as u64 * factorial(n - 1)\n}\n");
+        let hits = find_fn_sig_body_evolved_hits(minus, &body);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].3, "pub fn fact as factorial(n: u64) -> u64 { ... }");
+        assert_eq!(hits[0].4, "factorial");
+    }
+
+    #[test]
+    fn joint_fires_multiline_header() {
+        // The joint template rides a multi-line plus header verbatim.
+        let minus = "fn fact(\n    n: u32,\n) -> u64 {\n    n as u64 * fact(n - 1)\n}\n";
+        let body = plus_body(
+            "pub fn factorial(\n    n: u64,\n) -> u64 {\n    n as u64 * factorial(n - 1)\n}\n",
+        );
+        let hits = find_fn_sig_body_evolved_hits(minus, &body);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].3,
+            "pub fn fact as factorial(\n    n: u64,\n) -> u64 { ... }"
+        );
+    }
+
+    #[test]
+    fn joint_vetoes_two_sig_slots() {
+        // Param delta + return delta (two slots) stays ordinary even
+        // with a pure body rename.
+        let minus = item_fn("fn fact(n: u32) -> u32 {\n    n * fact(n - 1)\n}");
+        let plus = item_fn("fn factorial(n: u64) -> u64 {\n    n * factorial(n - 1)\n}");
+        assert_eq!(fn_sig_body_evolved_match(&minus, &plus), None);
+    }
+
+    #[test]
+    fn joint_vetoes_zero_sig_slots() {
+        // No signature delta belongs to the body-only path, never here.
+        let minus = item_fn("fn fact(n: u64) -> u64 {\n    n * fact(n - 1)\n}");
+        let plus = item_fn("fn factorial(n: u64) -> u64 {\n    n * factorial(n - 1)\n}");
+        assert_eq!(fn_sig_body_evolved_match(&minus, &plus), None);
+    }
+
+    #[test]
+    fn joint_vetoes_non_rename_body_delta() {
+        // One sig slot but the body delta is not the rename: ordinary.
+        let minus = "fn fact(n: u32) -> u64 {\n    n as u64 * fact(n - 1)\n}\n";
+        let body = plus_body(
+            "pub fn factorial(n: u64) -> u64 {\n    n as u64 * factorial(n - 1) + 1\n}\n",
+        );
+        assert!(find_fn_sig_body_evolved_hits(minus, &body).is_empty());
+    }
+
+    #[test]
+    fn joint_vetoes_shadowed_body() {
+        // A shadowed local strands the joint to ordinary (WI-2).
+        let minus =
+            "fn fact(n: u32) -> u64 {\n    let fact = 1;\n    n as u64 * fact + fact(n - 1)\n}\n";
+        let body = plus_body(
+            "pub fn factorial(n: u64) -> u64 {\n    let factorial = 1;\n    n as u64 * factorial + factorial(n - 1)\n}\n",
+        );
+        assert!(find_fn_sig_body_evolved_hits(minus, &body).is_empty());
     }
 }

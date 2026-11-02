@@ -301,11 +301,12 @@ pub(crate) fn classify(
         // body under the template header. Anything else with `# use=`
         // stays a literal insertion.
         //
-        // Only the concrete-signature `fn` template may span lines
-        // (its plus header rides verbatim); every other evolution
-        // shape stays single-line.
+        // Only the concrete-signature `fn` template and the WI-19 slice 3
+        // signature+body joint template may span lines (their plus header
+        // rides verbatim); every other evolution shape stays single-line.
         let concrete_multi = p.lines().count() > 1
-            && crate::pattern_evolution::parse_fn_full_header_template(p.trim()).is_some();
+            && (crate::pattern_evolution::parse_fn_full_header_template(p.trim()).is_some()
+                || crate::pattern_evolution::parse_fn_sig_body_template(p.trim()).is_some());
         let use_name = if uses.len() == 1
             && (p.lines().count() == 1 || concrete_multi)
             && (p.trim() == uses[0] || is_evolution_template(p.trim()))
@@ -315,7 +316,7 @@ pub(crate) fn classify(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!(
-                    "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, or a concrete signature + `{{ ... }}` (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}`, `+ <vis>fn <Old> as <New>(...) {{ ... }}`, `+ <vis>fn <New>(args) -> ret {{ ... }}` or paste the bare capture name for a verbatim move",
+                    "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, a concrete signature + `{{ ... }}`, or `fn <Old> as <New>(args) -> ret {{ ... }}` for a signature+body joint (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}`, `+ <vis>fn <Old> as <New>(...) {{ ... }}`, `+ <vis>fn <New>(args) -> ret {{ ... }}`, `+ <vis>fn <Old> as <New>(args) -> ret {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
             ));

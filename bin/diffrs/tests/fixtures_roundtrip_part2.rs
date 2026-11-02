@@ -1416,6 +1416,42 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "139-sig-body-joint-fires" {
+        // WI-19 slice 3: a move whose body renames its self-reference
+        // and whose signature evolves in exactly one slot (param type),
+        // with multi-line headers both sides, raises as cut +
+        // joint-template paste (`fn <old> as <new>` with the concrete
+        // signature verbatim across lines). The harness checks the
+        // tree legs; single-line joints are pinned inline
+        // (finder/splice/pair tests).
+        assert!(
+            semantic.contains("# bind="),
+            "joint cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "joint paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ pub fn fact as factorial("),
+            "paste must carry the multi-line joint template, got: {semantic}"
+        );
+        assert!(
+            semantic.contains(") -> u64 { ... }"),
+            "paste must carry the evolved signature, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn fact("),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on

@@ -4366,6 +4366,27 @@ a macro name, or an attribute interior never rewrites — the paste
 fails loud with `RSMPL_PATTERN_CONFLICT` naming the kind and the
 captured line instead of guessing.
 
+A signature+body joint `fn` paste (WI-19 slice 3) composes the
+concrete-signature and `as` forms when a move renames the item, evolves
+its signature in exactly one slot, and renames its self-references:
+
+```diff
+diff --git src/new.rs
+@@ -5,0 @@ rule=paste_helper
+# use=Helper
++ pub fn oldname as newname(x: i64) -> i64 { ... }
+```
+
+The template carries the new signature verbatim (single- or multi-line,
+like the concrete-signature form) and the `as` rename; the engine
+replaces the captured header span with the new-signature header and
+renames the captured body's self-references under the same occurrence
+law and the same loud vetoes as the `as` form. The joint fires in
+raising only for exactly one signature-slot delta (generics params,
+`where`, inputs+variadic, return — vis/name/qualifiers ride verbatim
+for free); zero slots belongs to the `as` form and two or more slots
+stay ordinary.
+
 ```diff
 diff --git src/new.rs
 @@ -5,0 @@ rule=paste_config
@@ -4484,7 +4505,7 @@ Names are patch-local.
 
 A bare `# bind=<Name>` is a scalar capture: it binds exactly one AST object. Combined with `# allow=many` on an item-capture cut hunk (`- I`), it binds an ordered collection: every item matched in scope, in source order (ranges cite the original pre-patch file, never rebased). There is no separate syntax such as `# bind_list=Name` or `# use_list=Name` — the paste side is unchanged (`+ Name` splices the whole collection).
 
-> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, the evolution paste: single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>fn <New>(concrete signature) { ... }` (which may span lines when the plus header does) / `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` / `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` / `+ <prefix>const <New> = ...;` / `+ <prefix>static [mut ]<New> = ...;` / `+ <prefix>mod <New> { ... }` / `+ <prefix>trait <New> { ... }`). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file. An evolution paste is verbatim plus-side text, never a match pattern: its idents (`T`, `Vec`, …) are not metavariable holes, so the unbound-plus gate never fires for it.
+> **v0.1 implementation note:** `# bind=` is additionally restricted to item-capture cut hunks (a bare `- I` pattern), and `# use=` to pure insertion hunks (the bare `+ Name` verbatim paste, the evolution paste: single-line `+ <prefix>fn <New>(...) { ... }` / `+ <prefix>fn <New>(concrete signature) { ... }` (which may span lines when the plus header does) / `+ <prefix>fn <Old> as <New>(...) { ... }` (self-reference body rename) / `+ <prefix>fn <Old> as <New>(concrete signature) { ... }` (signature+body joint, which may span lines when the plus header does) / `+ <prefix>struct <New> { ... }` / `+ <prefix>enum <New> { ... }` / `+ <prefix>union <New> { ... }` / `+ <prefix>type <New> = ...;` / `+ <prefix>const <New> = ...;` / `+ <prefix>static [mut ]<New> = ...;` / `+ <prefix>mod <New> { ... }` / `+ <prefix>trait <New> { ... }`). Rewriting hunks (rename, call rewrite) cannot define captures, and non-insertion hunks cannot consume them. Captured text is the exact matched item span; paste validity at the insertion site is enforced by re-parsing the rewritten file. An evolution paste is verbatim plus-side text, never a match pattern: its idents (`T`, `Vec`, …) are not metavariable holes, so the unbound-plus gate never fires for it.
 
 A hunk that declares both `# bind=<Name>` and `# allow=many` is a collection cut only on an item-capture cut hunk (`- I`); on any other shape it is invalid (`RSMPL_CAPTURE_CONFLICT`, same envelope as the shape fences below). Authors who need to move a single item keep the scalar form (separate scalar captures under distinct names).
 
@@ -9211,13 +9232,28 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    above applies unchanged, except a source file emptied to zero bytes
    (minus hunk covering BOF..EOF) is sound for multi-item cuts (WI-18
    gate: no outside line to double-claim).
-      Everything else (other item kinds, attr deltas, signature+body
-      combos, vis+body combos, non-`fn` self-references, shadowed-body
-      renames the pairing scanner disagrees with, single-line items)
-      stays ordinary: abstract, body-evolving, and concrete-signature
-      multi-line headers fire (diffrs fixtures
-      `137-multiline-abstract-move-fires` and
-      `138-multiline-sig-evolve-fires`).
+    WI-19 slice 3 pairs signature+body joint `fn` moves (WI-6 slice 3b
+    rename plus WI-8 slice 9 signature evolution in exactly one slot —
+    generics params, `where`, inputs+variadic, return; vis/name ride
+    verbatim for free): the paste carries the joint template
+    `+ <prefix>fn <Old> as <New>(concrete signature) { ... }`
+    (single- or multi-line like the concrete form) and the engine
+    replaces the captured header span with the new-signature header
+    while renaming the captured body's self-references under the `as`
+    occurrence law. The pairing proves the same veto plus raw body-tail
+    equality after the rename, so pairing and splice agree by
+    construction; zero-slot pairs belong to the `as` arm and two-slot
+    pairs stay ordinary.
+       Everything else (other item kinds, attr deltas, vis+body combos
+       without a signature delta, two-slot signature+body combos,
+       non-`fn` self-references, shadowed-body
+       renames the pairing scanner disagrees with, single-line items)
+       stays ordinary: abstract, body-evolving, and concrete-signature
+       multi-line headers fire, as do single- and multi-line
+       signature+body joints (diffrs fixtures
+       `137-multiline-abstract-move-fires`,
+       `138-multiline-sig-evolve-fires`, and
+       `139-sig-body-joint-fires`).
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -9548,7 +9584,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(139), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(140), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

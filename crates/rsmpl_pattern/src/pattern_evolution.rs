@@ -609,6 +609,130 @@ pub fn parse_fn_full_header_template(text: &str) -> Option<(String, String)> {
     Some((prefix.to_string(), name))
 }
 
+/// WI-19 slice 3 signature+body joint `fn` evolution-paste template:
+/// `fn <old> as <new>(concrete signature) { ... }` (prefix rides
+/// verbatim: `pub fn fact as factorial(n: u64) -> u64 { ... }`, single-
+/// or multi-line like the concrete-signature form). Returns
+/// `(prefix, old, new)`. Composes the concrete-signature splice (header
+/// span replaced verbatim) with the `as` body law (captured body
+/// self-references renamed through [`rename_ident_in_code`] under the
+/// [`body_evolution_veto`] boundary). `None` for the `(...)` joint
+/// (owned by `parse_fn_body_evolution_template`), the `as`-less
+/// concrete form (owned by `parse_fn_full_header_template`), and every
+/// other shape.
+pub fn parse_fn_sig_body_template(text: &str) -> Option<(String, String, String)> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let first = lines.first()?;
+    let last = lines.last()?;
+    let bytes = first.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut fn_pos = None;
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if bytes[i..].starts_with(b"fn")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 2).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            fn_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let fn_pos = fn_pos?;
+    let prefix = &first[..fn_pos];
+    if !valid_evolution_prefix(prefix) {
+        return None;
+    }
+    let rest = first[fn_pos + 2..].trim_start();
+    let mut old_len = 0;
+    for c in rest.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            old_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if old_len == 0 {
+        return None;
+    }
+    let old = &rest[..old_len];
+    let after_old = &rest[old_len..];
+    let mut j = 0;
+    while after_old
+        .as_bytes()
+        .get(j)
+        .is_some_and(|c| c.is_ascii_whitespace())
+    {
+        j += 1;
+    }
+    if after_old.get(j..j + 2) != Some("as") {
+        return None;
+    }
+    let k = j + 2;
+    if after_old.as_bytes().get(k).is_some_and(|c| is_ident(*c)) {
+        return None;
+    }
+    if j > 0 && after_old.as_bytes()[j - 1].is_ascii_alphanumeric() {
+        return None;
+    }
+    let after_as = after_old[k..].trim_start();
+    let mut new_len = 0;
+    for c in after_as.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            new_len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if new_len == 0 || old == &after_as[..new_len] {
+        return None;
+    }
+    let new = after_as[..new_len].to_string();
+    // The `(...)` abstraction belongs to the body-only form, never here;
+    // the marker-less concrete form belongs to no template.
+    if text.contains("(...)") {
+        return None;
+    }
+    if lines.len() == 1 {
+        let tail = &after_as[new_len..];
+        if !(tail.contains('(') && tail.contains(')') && tail.contains('{') && tail.contains("..."))
+        {
+            return None;
+        }
+    } else if !(text.contains('(') && text.contains(')') && text.contains("...")) {
+        return None;
+    }
+    if !last.trim_end().ends_with('}') || !last.contains('{') || !last.contains("...") {
+        return None;
+    }
+    // The header part with the `as` segment removed must parse as an
+    // `fn` item once closed — validates prefix, signature, and `where`
+    // in one probe. Rebuild it as `<prefix>fn <new>` plus the
+    // post-`new` tail up to (excluding) the `{ ... }` marker: the
+    // first line contributes its tail, interior lines ride verbatim,
+    // and the last line contributes its pre-brace text.
+    let first_tail = &after_as[new_len..];
+    let first_head = &first_tail[..first_tail.find('{').unwrap_or(first_tail.len())];
+    let mut rebuilt = format!("{prefix}fn {new}{first_head}");
+    if lines.len() > 1 {
+        for l in &lines[1..lines.len() - 1] {
+            rebuilt.push('\n');
+            rebuilt.push_str(l);
+        }
+        let last_pre = &lines[lines.len() - 1][..lines[lines.len() - 1].find('{').unwrap_or(0)];
+        rebuilt.push('\n');
+        rebuilt.push_str(last_pre);
+    }
+    if syn::parse_str::<syn::ItemFn>(&format!("{} {{}}", rebuilt.trim_end())).is_err() {
+        return None;
+    }
+    Some((prefix.to_string(), old.to_string(), new))
+}
+
 /// WI-8 slice 1 struct evolution-paste template: a single-line
 /// `struct` header with a `...` body marker
 /// (`pub struct New { ... }`). Returns the verbatim prefix before
@@ -1163,6 +1287,7 @@ pub fn is_evolution_template(text: &str) -> bool {
     let t = text.trim();
     parse_evolution_template(t).is_some()
         || parse_fn_body_evolution_template(t).is_some()
+        || parse_fn_sig_body_template(t).is_some()
         || parse_fn_full_header_template(t).is_some()
         || parse_struct_evolution_template(t).is_some()
         || parse_enum_evolution_template(t).is_some()
@@ -1364,5 +1489,64 @@ mod tests {
         // Strings/comments need no veto either.
         let lit = "fn fact(n: u64) -> u64 {\n    let s = \"fact\";\n    n * fact(n - 1)\n}";
         assert_eq!(body_evolution_veto(lit, "fact"), None);
+    }
+
+    #[test]
+    fn sig_body_template_accepts() {
+        // WI-19 slice 3: the joint of the concrete-signature and `as`
+        // forms — single- and multi-line.
+        assert_eq!(
+            parse_fn_sig_body_template("pub fn fact as factorial(n: u64) -> u64 { ... }"),
+            Some((
+                "pub ".to_string(),
+                "fact".to_string(),
+                "factorial".to_string()
+            ))
+        );
+        assert_eq!(
+            parse_fn_sig_body_template("fn fact as factorial(\n    n: u64,\n) -> u64 { ... }"),
+            Some(("".to_string(), "fact".to_string(), "factorial".to_string()))
+        );
+        assert!(is_evolution_template(
+            "pub fn fact as factorial(n: u64) -> u64 { ... }"
+        ));
+    }
+
+    #[test]
+    fn sig_body_template_rejects() {
+        // The `(...)` joint belongs to the body-only form.
+        assert_eq!(
+            parse_fn_sig_body_template("pub fn fact as factorial(...) { ... }"),
+            None
+        );
+        // The `as`-less concrete form belongs to its own parser.
+        assert_eq!(
+            parse_fn_sig_body_template("pub fn factorial(n: u64) -> u64 { ... }"),
+            None
+        );
+        // Marker-less lines stay loud downstream.
+        assert_eq!(
+            parse_fn_sig_body_template("pub fn fact as factorial(n: u64)"),
+            None
+        );
+        // Same name on both sides is vacuous.
+        assert_eq!(
+            parse_fn_sig_body_template("pub fn fact as fact(n: u64) -> u64 { ... }"),
+            None
+        );
+        // Bad prefixes decline.
+        assert_eq!(
+            parse_fn_sig_body_template("foo( fn fact as factorial(n: u64) -> u64 { ... }"),
+            None
+        );
+        // Ownership: the single-purpose parsers never claim the joint.
+        assert_eq!(
+            parse_fn_body_evolution_template("pub fn fact as factorial(n: u64) -> u64 { ... }"),
+            None
+        );
+        assert_eq!(
+            parse_fn_full_header_template("pub fn fact as factorial(n: u64) -> u64 { ... }"),
+            None
+        );
     }
 }
