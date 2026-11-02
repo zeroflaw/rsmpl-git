@@ -77,7 +77,8 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
   `const`/`static`/`mod`/`union`/`impl`), one ident edit — or one ident
   edit plus one closed-set vis step (`- pub struct Old` /
-  `+ pub(crate) struct New`) (SPEC 14.8).
+  `+ pub(crate) struct New`; same-name plus vis-only is a pure vis
+  evolution, `- struct S` / `+ pub struct S`) (SPEC 14.8).
   File, inline-mod, and block-level (fn bodies) items all match.
   A bare `impl Old`/`impl New` pair renames self-ty + trait-side path; add
   `# allow=many` when several match; definition only — follow up

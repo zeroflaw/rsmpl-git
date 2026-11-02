@@ -915,13 +915,16 @@ fn classify_item_rename(
             if mn == pn {
                 // WI-10a: same-name pairs are attr evolution when the
                 // written attr sets differ (normalized); identical names
-                // *and* identical attrs stay the rename-usage error.
+                // *and* identical attrs *and* identical prefixes stay the
+                // rename-usage error. Same-name + same-attrs + differing
+                // prefixes is a pure vis-evolution candidate — fall through
+                // to the vis gate below instead of erroring here.
                 let norm = |ss: &Vec<String>| {
                     ss.iter()
                         .map(|a| a.split_whitespace().collect::<String>())
                         .collect::<Vec<_>>()
                 };
-                if norm(&mattrs) == norm(&pattrs) {
+                if norm(&mattrs) == norm(&pattrs) && mprefix == pprefix {
                     return Err(StructuredError::new(
                         ErrorCode::PatternConflict,
                         format!(
@@ -988,13 +991,13 @@ fn classify_item_rename(
 
 /// WI-5-R2 vis-evolution gate for bare-item renames: `None` when
 /// `mprefix` → `pprefix` is exactly one closed-set vis step (concrete
-/// names differ, attrs mirror-equal, no qualifier delta), else
-/// `Some(reason)` naming the veto for the author.
+/// names may be equal for pure vis evolution, attrs mirror-equal, no
+/// qualifier delta), else `Some(reason)` naming the veto for the author.
 #[allow(clippy::too_many_arguments)]
 fn bare_vis_evolution_veto(
     kind: crate::item_rename::ItemKind,
     minus_name: &str,
-    plus_name: &str,
+    _plus_name: &str,
     minus_attrs: &[String],
     plus_attrs: &[String],
     mprefix: &str,
@@ -1007,11 +1010,6 @@ fn bare_vis_evolution_veto(
             "item name holes evolve attributes only — write concrete names to rename with a visibility change (`- pub struct Old` / `+ pub(crate) struct New`)".to_string(),
         );
     }
-    if minus_name == plus_name {
-        return Some(
-            "same-name visibility evolution is not an item rename in v1 — write the new name on the `+` side, or use an ordinary hunk".to_string(),
-        );
-    }
     if kind == ItemKind::Impl || kind == ItemKind::MacroRules {
         return Some(format!(
             "`{}` blocks take no visibility (write the bare `<{}> <Name>` form)",
@@ -1019,6 +1017,10 @@ fn bare_vis_evolution_veto(
             kind.as_str()
         ));
     }
+    // Same-name pairs are pure vis evolution (struct/enum vis singles):
+    // fall through to the closed-set vis gate below instead of vetoing.
+    // Same-name + same-vis never reaches here (prefixes equal), and
+    // same-name + attr delta still vetoes at the attr gate below.
     let norm = |ss: &[String]| {
         ss.iter()
             .map(|a| a.split_whitespace().collect::<String>())

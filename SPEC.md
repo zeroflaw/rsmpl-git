@@ -2326,7 +2326,7 @@ Supported kinds:
 Rules:
 
 - Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error, except for the WI-10a Preserve attr-evolution pair (same name with differing written attr sets classifies as an attr delta, not a rename).
-- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. One closed-set vis step may ride a rename (`pub struct Old` / `pub(crate) struct New` — names differ, kinds equal, attrs mirror-equal, no qualifier delta; the engine rewrites the vis slot alongside the name, WI-5-R2). Any other prefix difference — a qualifier delta (`static Old` / `static mut New`), a vis step combined with an attr delta or a same-name pair, or a vis outside the closed set (`""`, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)`) — is a pattern error instead of a silent change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors), and `macro_rules!` definitions take neither visibility nor `unsafe` (`pub macro_rules! Old`, `unsafe macro_rules! Old` are pattern errors). The `!` between `macro_rules` and the name is required (`macro_rules Old` without it is not an item shape). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
+- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. One closed-set vis step may ride a rename (`pub struct Old` / `pub(crate) struct New` — names differ, kinds equal, attrs mirror-equal, no qualifier delta; the engine rewrites the vis slot alongside the name, WI-5-R2). A same-name closed-set vis step is a pure vis evolution (`struct S` / `pub struct S` — same kind/name/suffix, vis differs within the closed set; the rename edit replays the ident while the vis edit carries the change). Any other prefix difference — a qualifier delta (`static Old` / `static mut New`), a vis step combined with an attr delta, or a vis outside the closed set (`""`, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)`) — is a pattern error instead of a silent change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors), and `macro_rules!` definitions take neither visibility nor `unsafe` (`pub macro_rules! Old`, `unsafe macro_rules! Old` are pattern errors). The `!` between `macro_rules` and the name is required (`macro_rules Old` without it is not an item shape). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
 - `auto trait` headers are not supported in v0.1: the author gets a fail-fast pattern error directing to an ordinary hunk (auto traits are never renamed in practice; silently falling through to a no-match would violate Section 2.6).
   The engine reports these rejections verbatim (rule + file lines in text mode; text omits the null range/suggestion lines, JSON carries explicit nulls; suggestion is null throughout):
@@ -2334,7 +2334,6 @@ Rules:
   `auto trait` headers are not supported in v1 (use an ordinary hunk)
    item qualifier differs or is not preserved (`mut` vs `mut`); rename+visibility joints preserve `unsafe`/`mut` — write the same qualifier on both sides or neither
    rename+visibility+attribute is two evolving slots — split the attribute delta into its own hunk or use an ordinary hunk
-   same-name visibility evolution is not an item rename in v1 — write the new name on the `+` side, or use an ordinary hunk
   item rename kind mismatch: minus is `struct` but plus is `enum` (kinds must match)
   item rename minus and plus names are identical (`Old`); write the new name on the `+` side
   `unsafe` is only legal on `trait`/`impl` headers, not `struct` (write the bare `<struct> <Name>` form)
@@ -7892,7 +7891,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     verbatim-header block hunk and ride a doubled precision allowance
     (32, not 16): the WI-4a filter block is a mandatory proof anchor,
     not bloat. Per-hunk stays 16, so mixed-section method singles stay
-    ordinary.
+    ordinary. Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
+    same kind/name/suffix, closed-set vis step; `fn` rides the sig sweep,
+    `mod` stays ordinary, `impl`/`macro_rules!` take no visibility) raise
+    as the concrete directive-free terse pair (`- struct S` /
+    `+ pub struct S`, bare like renames — the engine preserves
+    generics/body/RHS) under default `one` and the 16-byte precision
+    guard; totality is the scratch-apply byte-compare probe, so the
+    hunk claims only its covered site.
 - Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
    `{`-terminated fn header, where every name is preserved per site
    (`minus name == plus name`) but names differ across sites (≥ 2

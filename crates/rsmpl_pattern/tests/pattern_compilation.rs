@@ -578,8 +578,8 @@ fn item_rename_vis_evolution_fires() {
         }
         other => panic!("pure rename must stay ItemRename, got: {other:?}"),
     }
-    // Double slots veto: vis + attribute, vis + kind, same-name vis, and
-    // holes combined with vis.
+    // Double slots veto: vis + attribute, vis + kind, and holes combined
+    // with vis (same-name vis alone is a pure vis evolution — see below).
     let delta = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ #[derive(Debug)]\n+ pub(crate) struct New\n";
     assert!(
         compile(&hunk_of(delta))
@@ -596,8 +596,20 @@ fn item_rename_vis_evolution_fires() {
             .contains("kind mismatch"),
         "vis+kind must veto"
     );
+    // Same-name vis is a pure vis evolution (struct/enum vis singles):
+    // it compiles to ItemRename with evolving prefixes.
     let same = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct S\n+ pub(crate) struct S\n";
-    assert!(compile(&hunk_of(same)).is_err(), "same-name vis must veto");
+    match compile(&hunk_of(same)).unwrap().kind {
+        PatternKind::ItemRename {
+            minus_prefix,
+            plus_prefix,
+            ..
+        } => {
+            assert_eq!(minus_prefix, "pub");
+            assert_eq!(plus_prefix, "pub(crate)");
+        }
+        other => panic!("same-name vis must compile to ItemRename, got: {other:?}"),
+    }
 }
 
 #[test]
