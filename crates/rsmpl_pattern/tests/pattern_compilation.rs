@@ -1605,10 +1605,17 @@ fn keyed_repairs_never_echo_the_reason() {
         format!(
             "{head}@@ -1,1 +1,1 @@ rule=x\n# allow=many\n# expr M\n- use crate::M\n+ use crate::new\n"
         ),
-        // generic fallback: no gate-specific repair exists.
+        // infer declared-kind gate (WI-18 slice 8: was the generic-fallback
+        // example; now carries `infer-declared-kind-template`).
         format!("{head}@@ -1,1 +1,1 @@ rule=x\n# expr T\n- Vec<T>\n+ Box<[T]>\n"),
     ];
-    let codes = ["fn-pattern", "fn-pattern", "pattern", "pattern", "pattern"];
+    let codes = [
+        "fn-pattern",
+        "fn-pattern",
+        "pattern",
+        "pattern",
+        "infer-declared-kind-template",
+    ];
     for (patch, code) in patches.iter().zip(codes) {
         let err = compile(&hunk_of(patch)).unwrap_err();
         assert_eq!(
@@ -1627,9 +1634,17 @@ fn keyed_repairs_never_echo_the_reason() {
         assert!(!write_instead.is_empty(), "got: {patch:?}");
         assert_ne!(write_instead, err.message, "echoes reason: {patch:?}");
     }
-    // The fallback template is the WI-2b generic filler text.
-    let err = compile(&hunk_of(&patches[4])).unwrap_err();
+    // The fallback template is the WI-2b generic filler text (pinned on a
+    // still-bare tail site: the v1 block-comment gate in `pattern_general`).
+    let filler_patch =
+        format!("{head}@@ -1,1 +1,1 @@ rule=x\n- /* c */ foo(E)\n+ /* c */ bar(E)\n");
+    let err = compile(&hunk_of(&filler_patch)).unwrap_err();
     let repair = err.repair.expect("fallback must carry repair");
+    assert_eq!(
+        repair["code"].as_str(),
+        Some("pattern"),
+        "got: {filler_patch:?}"
+    );
     assert_eq!(
         repair["write_instead"].as_str(),
         Some("rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk"),

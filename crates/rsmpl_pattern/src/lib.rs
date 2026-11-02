@@ -8,6 +8,7 @@ pub mod binder;
 mod expr_pattern;
 mod fn_pattern;
 mod infer;
+mod infer_call;
 mod infer_control;
 mod infer_def;
 mod item_rename;
