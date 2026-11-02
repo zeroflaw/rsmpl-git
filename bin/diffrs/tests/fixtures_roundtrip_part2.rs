@@ -1383,6 +1383,39 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "138-multiline-sig-evolve-fires" {
+        // WI-19 slice 2: a signature-evolving move (param + return
+        // deltas) whose headers span multiple lines raises as cut +
+        // concrete-template paste (the template spells the plus header
+        // verbatim across lines). The harness checks the tree legs.
+        assert!(
+            semantic.contains("# bind="),
+            "multiline sig-evolve cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "multiline sig-evolve paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ pub fn new("),
+            "paste must carry the multi-line concrete template, got: {semantic}"
+        );
+        assert!(
+            semantic.contains(") -> i64 { ... }"),
+            "paste must carry the evolved return type, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn old("),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "multiline sig-evolve must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on

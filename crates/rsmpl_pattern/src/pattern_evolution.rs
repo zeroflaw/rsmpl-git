@@ -1,7 +1,8 @@
 //! Evolution-paste template parsing (WI-8a `fn` + WI-8 slice 1
 //! `struct` + WI-8 slice 2 `enum` + WI-8 slice 3 `union` + WI-8 slice 4
 //! `type` + WI-8 slice 5 `const` + WI-8 slice 6 `static` + WI-8 slice 7
-//! `mod` + WI-8 slice 8 `trait` single-line headers).
+//! `mod` + WI-8 slice 8 `trait` single-line headers, plus the WI-19
+//! slice 2 multi-line concrete-signature `fn` header).
 //!
 //! Used by the `Insertion` classifier and the engine capture splice.
 
@@ -515,23 +516,29 @@ fn word_bounded_contains(hay: &str, needle: &str) -> bool {
     })
 }
 
-/// WI-8 slice 9 concrete-signature `fn` evolution-paste template: a
-/// single-line `fn` header with a fully spelled signature and a `...`
-/// body marker (`pub fn New(x: i64) -> i64 { ... }`). Returns the
-/// verbatim prefix before `fn` (vis + qualifiers) and the new ident.
+/// WI-8 slice 9 concrete-signature `fn` evolution-paste template: an
+/// `fn` header with a fully spelled signature and a `...` body
+/// marker, single-line (`pub fn New(x: i64) -> i64 { ... }`) or
+/// multi-line (WI-19 slice 2: the plus header verbatim across lines
+/// with only the `{ ... }` marker closing it). Returns the verbatim
+/// prefix before `fn` (vis + qualifiers, from the first line) and the
+/// new ident.
 /// The signature between the ident and the `{ ... }` marker rides
 /// verbatim from the plus side — the engine's full-header splice
-/// replaces the captured header line with it, so signature-evolving
+/// replaces the captured header span with it, so signature-evolving
 /// moves (`fn old(x: i32) -> i32` → `pub fn new(x: i64) -> i64`) apply
-/// byte-identical. `None` when the line is not a concrete template:
+/// byte-identical. `None` when the text is not a concrete template:
 /// the abstract `(...)` form (owned by `parse_evolution_template`),
-/// marker-less lines, multi-line text, and bad prefixes all decline.
+/// marker-less lines, and bad prefixes all decline.
 pub fn parse_fn_full_header_template(text: &str) -> Option<(String, String)> {
-    let line = text.trim();
-    if line.lines().count() != 1 {
+    let text = text.trim();
+    if text.is_empty() {
         return None;
     }
-    let bytes = line.as_bytes();
+    let lines: Vec<&str> = text.lines().collect();
+    let first = lines.first()?;
+    let last = lines.last()?;
+    let bytes = first.as_bytes();
     let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     // Word-bounded `fn` followed by whitespace (never the `fn` inside
     // another ident, e.g. `myfn`).
@@ -548,11 +555,11 @@ pub fn parse_fn_full_header_template(text: &str) -> Option<(String, String)> {
         i += 1;
     }
     let fn_pos = fn_pos?;
-    let prefix = &line[..fn_pos];
+    let prefix = &first[..fn_pos];
     if !valid_evolution_prefix(prefix) {
         return None;
     }
-    let rest = line[fn_pos + 2..].trim_start();
+    let rest = first[fn_pos + 2..].trim_start();
     let mut ident_len = 0;
     for c in rest.chars() {
         if c == '_' || c.is_ascii_alphanumeric() {
@@ -564,20 +571,29 @@ pub fn parse_fn_full_header_template(text: &str) -> Option<(String, String)> {
     if ident_len == 0 {
         return None;
     }
-    let tail = &rest[ident_len..];
+    let name = rest[..ident_len].to_string();
     // The abstract `(...)` marker form belongs to
     // `parse_evolution_template`, never here.
-    if tail.contains("(...)") {
+    if text.contains("(...)") {
         return None;
     }
     // A concrete signature plus the `{ ... }` body marker: parens for
     // params, a brace opening the marker, `...` inside it, `}` closing
-    // the line. Marker-less concrete lines (e.g. `pub fn n(x: i32)`)
-    // decline — they stay loud downstream, as before.
-    if !(tail.contains('(') && tail.contains(')') && tail.contains('{') && tail.contains("...")) {
+    // the last line. Marker-less concrete lines (e.g. `pub fn
+    // n(x: i32)`) decline — they stay loud downstream, as before.
+    // Multi-line headers carry the parens on interior lines, so the
+    // whole-text probe owns them; the single-line shape keeps its old
+    // tail probe by construction.
+    if lines.len() == 1 {
+        let tail = &rest[ident_len..];
+        if !(tail.contains('(') && tail.contains(')') && tail.contains('{') && tail.contains("..."))
+        {
+            return None;
+        }
+    } else if !(text.contains('(') && text.contains(')') && text.contains("...")) {
         return None;
     }
-    if !line.trim_end().ends_with('}') {
+    if !last.trim_end().ends_with('}') || !last.contains('{') || !last.contains("...") {
         return None;
     }
     // The header part (everything before the first `{` — signatures
@@ -585,12 +601,12 @@ pub fn parse_fn_full_header_template(text: &str) -> Option<(String, String)> {
     // This validates the vis/qualifier prefix, generics, params,
     // return type, and `where` clause in one probe, so the engine can
     // splice it without re-validating.
-    let brace = line.find('{')?;
-    let header_part = line[..brace].trim_end();
+    let brace = text.find('{')?;
+    let header_part = text[..brace].trim_end();
     if syn::parse_str::<syn::ItemFn>(&format!("{header_part} {{}}")).is_err() {
         return None;
     }
-    Some((prefix.to_string(), rest[..ident_len].to_string()))
+    Some((prefix.to_string(), name))
 }
 
 /// WI-8 slice 1 struct evolution-paste template: a single-line

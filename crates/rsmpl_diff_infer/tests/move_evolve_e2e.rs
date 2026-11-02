@@ -302,15 +302,17 @@ fn generics_where_edited_pair_fires_with_concrete_template_and_round_trips() {
 }
 
 #[test]
-fn multiline_header_sig_pair_stays_ordinary() {
-    // WI-8 slice 9 narrowing: a signature delta across a multi-line
-    // header cannot be spelled single-line, so the pair stays a full
-    // delete+insert even though the matcher would fire.
+fn multiline_header_sig_pair_fires_concrete_template() {
+    // WI-19 slice 2: a signature delta across multi-line headers
+    // raises to cut + concrete-template paste (the template spells the
+    // plus header verbatim across lines) and round-trips.
     let fillers: String = (0..40).map(|i| format!("    let v{i} = {i};\n")).collect();
     let minus_fn = format!("fn big(\n    x: i32,\n) -> i32 {{\n{fillers}}}\n");
     let plus_fn = format!("pub fn huge(\n    x: i64,\n) -> i64 {{\n{fillers}}}\n");
     let a_old = format!("fn keep() {{}}\n{minus_fn}");
     let b_old = "fn other() {}\n".to_string();
+    let a_new = "fn keep() {}\n".to_string();
+    let b_new = format!("fn other() {{}}\n\n{plus_fn}");
     let minus: String = minus_fn.lines().map(|l| format!("-{l}\n")).collect();
     let plus: String = plus_fn.lines().map(|l| format!("+{l}\n")).collect();
     let raw = format!(
@@ -327,10 +329,18 @@ fn multiline_header_sig_pair_stays_ordinary() {
     let pre = pre_map(&[("a.rs", &a_old), ("b.rs", &b_old)]);
     let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pre).unwrap();
     assert!(
-        !out.rsmpl.contains("# bind="),
-        "multi-line headers veto the move, got:\n{}",
+        out.rsmpl.contains("# bind=") && out.rsmpl.contains("# use="),
+        "multi-line sig-evolved move must fire, got:\n{}",
         out.rsmpl
     );
+    assert!(
+        out.rsmpl.contains("+ pub fn huge("),
+        "paste must carry the multi-line concrete template, got:\n{}",
+        out.rsmpl
+    );
+    let post_refs = [("a.rs", a_new.as_str()), ("b.rs", b_new.as_str())];
+    let pre_refs = [("a.rs", a_old.as_str()), ("b.rs", b_old.as_str())];
+    assert_round_trip(&out.rsmpl, &pre_refs, &post_refs);
 }
 
 #[test]

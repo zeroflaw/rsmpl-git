@@ -1292,10 +1292,10 @@ fn evolution_template_accepts_restricted_visibility() {
 #[test]
 fn fn_full_header_template_accepts_concrete_signatures() {
     // WI-8 slice 9: signature-evolving moves paste the plus-side header
-    // concretely (`+ pub fn new(x: i64) -> i64 { ... }`). The parser
-    // accepts fully spelled single-line headers and declines the
-    // abstract `(...)` form (owned by `parse_evolution_template`),
-    // marker-less lines, multi-line text, and bad prefixes.
+    // concretely (`+ pub fn new(x: i64) -> i64 { ... }`, single- or
+    // multi-line per WI-19 slice 2). The parser accepts fully spelled
+    // headers and declines the abstract `(...)` form (owned by
+    // `parse_evolution_template`), marker-less lines, and bad prefixes.
     use rsmpl_pattern::parse_fn_full_header_template;
     for tmpl in [
         "fn new(x: i64) -> i64 { ... }",
@@ -1310,6 +1310,10 @@ fn fn_full_header_template_accepts_concrete_signatures() {
     }
     let (pre, name) = parse_fn_full_header_template("pub fn new(x: i64) -> i64 { ... }").unwrap();
     assert_eq!((pre.trim(), name.as_str()), ("pub", "new"));
+    // WI-19 slice 2: the plus header may span lines verbatim.
+    let (pre, name) =
+        parse_fn_full_header_template("pub fn new(\n    x: i64,\n) -> i64 { ... }").unwrap();
+    assert_eq!((pre.trim(), name.as_str()), ("pub", "new"));
     // The abstract form belongs to the abstract parser.
     assert!(parse_fn_full_header_template("pub fn new(...) { ... }").is_none());
     assert!(parse_fn_full_header_template("fn new(...) { ... }").is_none());
@@ -1317,8 +1321,8 @@ fn fn_full_header_template_accepts_concrete_signatures() {
     assert!(parse_fn_full_header_template("pub fn new(x: i32)").is_none());
     assert!(parse_fn_full_header_template("pub fn new(x: i32) {}").is_none());
     assert!(parse_fn_full_header_template("pub fn new(x: i32) -> i32 { }").is_none());
-    // Multi-line text and bad prefixes decline.
-    assert!(parse_fn_full_header_template("pub fn new(\n    x: i32,\n) -> i32 { ... }").is_none());
+    // Marker-less multi-line text declines; bad prefixes decline.
+    assert!(parse_fn_full_header_template("pub fn new(\n    x: i32,\n) -> i32 { }").is_none());
     assert!(parse_fn_full_header_template("foo( fn new(x: i32) { ... }").is_none());
     assert!(parse_fn_full_header_template("fn (x: i32) { ... }").is_none());
     // Non-`fn` templates never cross-accept.

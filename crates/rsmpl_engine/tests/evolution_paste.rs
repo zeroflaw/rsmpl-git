@@ -137,9 +137,9 @@ fn malformed_template_is_loud() {
 
 #[test]
 fn multiline_plus_with_use_is_loud() {
-    // Multi-line plus with `# use=` has no evolution meaning (the
-    // template is single-line by construction) and fails loud instead
-    // of silently ignoring the capture.
+    // Multi-line plus with `# use=` that is not a valid evolution
+    // template (only the concrete-signature `fn` template may span
+    // lines) fails loud instead of silently ignoring the capture.
     let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -3,4 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ fn literal() {}\n+ // note\n";
     let err = apply_multi(patch, vec![("a.rs", SRC), ("b.rs", B_SRC)])
         .expect_err("multi-line plus with `# use=` must fail loud");
@@ -182,15 +182,31 @@ fn concrete_signature_with_generics_and_where_applies() {
 }
 
 #[test]
-fn concrete_template_on_multiline_capture_is_loud() {
-    // The full-header splice replaces exactly one header line: a
-    // multi-line-header capture fails loud instead of leaving stale
-    // signature lines behind.
+fn concrete_template_on_multiline_capture_applies() {
+    // WI-19 slice 2: the span splice replaces the whole multi-line
+    // header span, so no stale signature line survives.
     let src = "fn old_name(\n    x: i32,\n    y: i32,\n) -> i32 {\n    x + y\n}\n";
     let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,6 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ pub fn new_name(x: i64, y: i64) -> i64 { ... }\n";
-    let err = apply_multi(patch, vec![("a.rs", src), ("b.rs", B_SRC)])
-        .expect_err("multi-line-header capture must fail loud");
-    assert!(err.contains("single-line-header"), "got: {err}");
+    let files = apply_multi(patch, vec![("a.rs", src), ("b.rs", B_SRC)]).unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub fn new_name(x: i64, y: i64) -> i64 {\n    x + y\n}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
+}
+
+#[test]
+fn concrete_multiline_template_on_multiline_capture_applies() {
+    // WI-19 slice 2: both sides multi-line — the template spells the
+    // plus header verbatim across lines.
+    let src = "fn old_name(\n    x: i32,\n) -> i32 {\n    x\n}\n";
+    let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,5 @@ rule=cut_old\n# bind=M1\n- I\n\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,0 @@ rule=paste_new\n# use=M1\n+ pub fn new_name(\n+    x: i64,\n+) -> i64 { ... }\n";
+    let files = apply_multi(patch, vec![("a.rs", src), ("b.rs", B_SRC)]).unwrap();
+    assert_eq!(
+        files["b.rs"], "fn other() {}\npub fn new_name(\n    x: i64,\n) -> i64 {\n    x\n}\n",
+        "got: {:?}",
+        files["b.rs"]
+    );
 }
 
 #[test]

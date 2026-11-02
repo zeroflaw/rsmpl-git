@@ -295,12 +295,19 @@ pub(crate) fn classify(
         // header template (`+ pub mod New { ... }`), or `trait`
         // header template (`+ pub trait New { ... }`); WI-8 slice 9
         // adds the concrete-signature `fn` template
-        // (`+ pub fn New(x: i64) -> i64 { ... }`) for
-        // signature-evolving moves. Each is an evolution paste — the
-        // engine splices the captured body under the template header.
-        // Anything else with `# use=` stays a literal insertion.
+        // (`+ pub fn New(x: i64) -> i64 { ... }`, single- or
+        // multi-line per WI-19 slice 2) for signature-evolving moves.
+        // Each is an evolution paste — the engine splices the captured
+        // body under the template header. Anything else with `# use=`
+        // stays a literal insertion.
+        //
+        // Only the concrete-signature `fn` template may span lines
+        // (its plus header rides verbatim); every other evolution
+        // shape stays single-line.
+        let concrete_multi = p.lines().count() > 1
+            && crate::pattern_evolution::parse_fn_full_header_template(p.trim()).is_some();
         let use_name = if uses.len() == 1
-            && p.lines().count() == 1
+            && (p.lines().count() == 1 || concrete_multi)
             && (p.trim() == uses[0] || is_evolution_template(p.trim()))
         {
             Some(uses[0].to_string())

@@ -389,7 +389,26 @@ pub(crate) fn try_move_sweep(
                         }
                     },
                 };
-                format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {tmpl}\n")
+                // WI-19 slice 2: a concrete template may span lines
+                // (multi-line plus header verbatim); each template line
+                // becomes its own `+ ` line. Single-line output is
+                // byte-identical to before. Continuation lines keep
+                // Git verbatim form (`+` + content, no separator
+                // space): the patch parser strips exactly one marker
+                // char, so a separator would indent every continuation
+                // line by one.
+                let plus_lines = tmpl
+                    .lines()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        if i == 0 {
+                            format!("+ {l}\n")
+                        } else {
+                            format!("+{l}\n")
+                        }
+                    })
+                    .collect::<String>();
+                format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n{plus_lines}")
             }
             None => format!("@@ -{anchor},0 @@ rule={paste_rule}\n# use={bind}\n+ {bind}\n"),
         };

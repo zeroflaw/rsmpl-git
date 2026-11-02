@@ -10,15 +10,15 @@
 //! needs its own matcher (the abstract `(...)` template keeps the
 //! captured suffix verbatim and would silently keep the old signature).
 //!
-//! Narrowing (stated in SPEC 20): both sides must carry the header on a
-//! single code line ending with `{` (the full-header splice replaces
-//! exactly that line; multi-line headers would leave stale signature
-//! lines behind), both items must span ≥ 2 lines (a single-line item
-//! has no body lines to ride), bodies and attrs stay token-equal (a
-//! move that rewrites the body is two changes), and at least the
-//! signature differs (sig-identical pairs belong to the abstract path).
-//! All downstream gates (dedup, hunk holds, twin veto, T375) apply
-//! unchanged — this module only produces candidate pairs.
+//! Narrowing (stated in SPEC 20): both sides must open their block
+//! (a header line ending in `{`), both items must span ≥ 2 lines (a
+//! single-line item has no body lines to ride), bodies and attrs stay
+//! token-equal (a move that rewrites the body is two changes), and at
+//! least the signature differs (sig-identical pairs belong to the
+//! abstract path). Headers may span lines (WI-19 slice 2): the splice
+//! replaces the whole header span, so no stale signature line stays
+//! behind. All downstream gates (dedup, hunk holds, twin veto, T375)
+//! apply unchanged — this module only produces candidate pairs.
 //!
 //! D5: this lives in a sibling module because `move_evolve.rs`
 //! (1869 lines) and `moves.rs` (1977 lines) must not grow.
@@ -70,34 +70,63 @@ pub(crate) fn fn_sig_evolved_match(minus: &syn::ItemFn, plus: &syn::ItemFn) -> O
 }
 
 /// The verbatim prefix (vis + qualifiers, leading whitespace stripped)
-/// and trimmed text of the `fn <name>` code line inside `item_lines`
-/// (`None` for attr/doc/comment lines, or when the line holds no
-/// word-bounded `fn <name>` pair). The line must open the block on the
-/// same line (trimmed ends with `{`) and must not be the item's last
-/// line — the full-header splice replaces exactly this line and needs
-/// body lines after it.
-fn single_line_header(item_lines: &[String], name: &str) -> Option<(String, String)> {
+/// and the concrete paste template of the `fn <name>` header *span*
+/// inside `item_lines` (`None` for attr/doc/comment lines, or when no
+/// `fn <name>` code line opens a block). The span runs from the first
+/// `fn <name>` code line through the first line whose trimmed end
+/// opens the block (`... {`), so single- and multi-line headers share
+/// one gate; the span must be followed by body lines (a single-line
+/// item has no body to ride). The template is the span with the
+/// `{`-suffix replaced by `{ ... }`: the first line trimmed (the
+/// engine re-indents it to the capture), continuation lines verbatim.
+fn header_span(item_lines: &[String], name: &str) -> Option<(String, String, usize)> {
+    let mut start = None;
     for (idx, line) in item_lines.iter().enumerate() {
         let text = line.get(1..).unwrap_or("");
         let t = text.trim_start();
         if t.starts_with('#') || t.starts_with('/') || t.starts_with('*') {
             continue;
         }
-        let Some(fn_pos) = find_fn_name(text, name) else {
-            continue;
-        };
-        let trimmed = text.trim_end();
-        if trimmed.ends_with('{') && idx + 1 < item_lines.len() {
-            return Some((
-                text[..fn_pos].trim_start().to_string(),
-                text.trim().to_string(),
-            ));
+        if find_fn_name(text, name).is_some() {
+            start = Some(idx);
+            break;
         }
-        // A `fn <name>` code line that does not meet the single-line
-        // gate vetoes the item (never fall through to a later line).
+        // A `fn <name>` code line that holds no word-bounded pair is
+        // not the header — keep scanning (doc lines are skipped
+        // above; other code lines cannot precede the header).
+    }
+    let start = start?;
+    // The header runs through the first line that opens the block.
+    // Continuation lines (params, generics, `where` clauses) ride
+    // inside the span; a span that never opens a block vetoes.
+    let mut end = None;
+    for (off, line) in item_lines[start..].iter().enumerate() {
+        let text = line.get(1..).unwrap_or("");
+        if text.trim_end().ends_with('{') {
+            end = Some(start + off);
+            break;
+        }
+    }
+    let end = end?;
+    if end + 1 >= item_lines.len() {
         return None;
     }
-    None
+    let first_text = item_lines[start].get(1..).unwrap_or("");
+    let fn_pos = find_fn_name(first_text, name)?;
+    let prefix = first_text[..fn_pos].trim_start().to_string();
+    let mut span: Vec<String> = item_lines[start..=end]
+        .iter()
+        .map(|l| l.get(1..).unwrap_or("").to_string())
+        .collect();
+    if let Some(first) = span.first_mut() {
+        *first = first.trim().to_string();
+    }
+    if let Some(last) = span.last_mut() {
+        let brace = last.find('{')?;
+        *last = format!("{} {{ ... }}", last[..brace].trim_end());
+    }
+    let template = span.join("\n");
+    Some((prefix, template, end - start + 1))
 }
 
 /// Byte offset of a word-bounded `fn <name>` pair (`None` when the line
@@ -133,9 +162,9 @@ fn find_fn_name(line: &str, name: &str) -> Option<usize> {
 /// All signature-evolved `fn` hits of one minus item text in a pure-plus
 /// hunk body. Mirrors `move_evolve::find_evolved_hits`; spans coincide
 /// with parsed `fn` item spans by construction. Each hit carries the
-/// plus-side header prefix, the concrete single-line template
-/// (`<header> ... }`) the emission pastes verbatim, and the plus-side
-/// ident.
+/// plus-side header prefix, the concrete template (the plus header
+/// span with the `{ ... }` marker — single- or multi-line) the
+/// emission pastes verbatim, and the plus-side ident.
 pub(crate) fn find_fn_sig_evolved_hits(
     minus_text: &str,
     plus_body: &[String],
@@ -143,10 +172,10 @@ pub(crate) fn find_fn_sig_evolved_hits(
     let Ok(minus) = syn::parse_str::<syn::ItemFn>(minus_text) else {
         return Vec::new();
     };
-    // Minus-side single-line-header gate: a multi-line minus header
-    // would leave stale signature lines behind the splice.
+    // Minus-side header-span gate: the splice replaces the whole span,
+    // so any span shape pairs (single- or multi-line).
     let minus_lines: Vec<String> = minus_text.lines().map(|l| format!("-{l}")).collect();
-    if single_line_header(&minus_lines, &minus.sig.ident.to_string()).is_none() {
+    if header_span(&minus_lines, &minus.sig.ident.to_string()).is_none() {
         return Vec::new();
     }
     let fragment: String = plus_body
@@ -171,12 +200,12 @@ pub(crate) fn find_fn_sig_evolved_hits(
             continue;
         }
         let name = plus.sig.ident.to_string();
-        // Plus-side single-line-header gate: the template is the header
-        // line verbatim + ` ... }`, so the header must fit on one line.
-        let Some((prefix, header)) = single_line_header(&plus_body[(s - 1)..e], &name) else {
+        // Plus-side header-span gate: the template is the header span
+        // with the `{ ... }` marker (single- or multi-line).
+        let Some((prefix, template, _)) = header_span(&plus_body[(s - 1)..e], &name) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, format!("{header} ... }}"), name));
+        out.push((s - 1, e - 1, prefix, template, name));
     }
     out
 }
@@ -267,22 +296,28 @@ mod tests {
     }
 
     #[test]
-    fn finder_vetoes_multiline_plus_header() {
-        // A multi-line plus header cannot be spelled single-line, so no
-        // hit (stays ordinary) even though the matcher would fire.
+    fn finder_fires_multiline_plus_header() {
+        // WI-19 slice 2: a multi-line plus header pairs — the template
+        // is the plus header span with the `{ ... }` marker.
         let minus = &format!("fn old(x: i32) -> i32 {BODY}");
         let body =
             plus_body("pub fn new(\n    x: i64,\n) -> i64 {\n    let y = x + 1;\n    y * 2\n}");
-        assert!(find_fn_sig_evolved_hits(minus, &body).is_empty());
+        let hits = find_fn_sig_evolved_hits(minus, &body);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].2, "pub ");
+        assert_eq!(hits[0].3, "pub fn new(\n    x: i64,\n) -> i64 { ... }");
+        assert_eq!(hits[0].4, "new");
     }
 
     #[test]
-    fn finder_vetoes_multiline_minus_header() {
-        // A multi-line minus header would leave stale signature lines
-        // behind the single-line splice.
+    fn finder_fires_multiline_minus_header() {
+        // WI-19 slice 2: the span splice replaces the whole minus
+        // header span, so a multi-line minus header pairs too.
         let minus = "fn old(\n    x: i32,\n) -> i32 {\n    x\n}";
-        let body = plus_body("pub fn new(x: i64) -> i64 {\n    x\n}");
-        assert!(find_fn_sig_evolved_hits(minus, &body).is_empty());
+        let body = plus_body("pub fn new(\n    x: i64,\n) -> i64 {\n    x\n}");
+        let hits = find_fn_sig_evolved_hits(minus, &body);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].3, "pub fn new(\n    x: i64,\n) -> i64 { ... }");
     }
 
     #[test]
