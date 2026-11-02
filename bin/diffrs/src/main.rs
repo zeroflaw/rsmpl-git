@@ -154,11 +154,11 @@ fn run() -> Result<(), CliError> {
         }
     };
 
-    // WI-16: patch-text input raises from `--patch`/`--file` text
-    // against the same pre-image bases (`--staged`/`[rev]` select the
-    // base either way); the git path collects as before. The `--check`
-    // loop needs the native text, so the git path re-collects it read-
-    // only (no repo mutation between the two reads).
+    // WI-16 follow-up: single collection serves both the raise and
+    // the `--check` raw — `compress_collected` raises from the same
+    // `CollectedDiff` whose `raw` the T361 loop checks, so concurrent
+    // worktree edits cannot skew the verdict and no second `git
+    // diff`/`git status` pair runs.
     let (patch, raw_for_check) = match (&cli.patch, &cli.file) {
         (Some(text), None) => (
             rsmpl_diff::compress_raw(&cli.repo, text, cli.staged, cli.rev.as_deref())
@@ -186,17 +186,16 @@ fn run() -> Result<(), CliError> {
             )
         }
         (None, None) => {
-            let patch = rsmpl_diff::compress(&cli.repo, cli.staged, cli.rev.as_deref())
+            let collected = rsmpl_diff::collect_native(&cli.repo, cli.staged, cli.rev.as_deref())
                 .map_err(map_diff_err)?;
-            let raw = if cli.check {
-                Some(
-                    rsmpl_diff::collect_native(&cli.repo, cli.staged, cli.rev.as_deref())
-                        .map_err(map_diff_err)?
-                        .raw,
-                )
-            } else {
-                None
-            };
+            let raw = cli.check.then(|| collected.raw.clone());
+            let patch = rsmpl_diff::compress_collected(
+                &cli.repo,
+                cli.staged,
+                cli.rev.as_deref(),
+                &collected,
+            )
+            .map_err(map_diff_err)?;
             (patch, raw)
         }
         (Some(_), Some(_)) => {

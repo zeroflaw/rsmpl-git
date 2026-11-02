@@ -243,20 +243,34 @@ pub fn compress(
         rev: rev.map(str::to_string),
     };
     let collected: CollectedDiff = source.collect()?;
+    compress_collected(repo, staged, rev, &collected)
+}
+
+/// WI-16 follow-up: raise from an already-collected native diff so one
+/// `git diff`/`git status` collection serves both the raise and the
+/// `--check` raw text (the CLI collects once, then calls this and
+/// reuses `collected.raw` for `check_raise` instead of collecting
+/// twice). Byte-identical to [`compress`] by construction: `compress`
+/// is this function over a fresh collection.
+pub fn compress_collected(
+    repo: &Path,
+    staged: bool,
+    rev: Option<&str>,
+    collected: &CollectedDiff,
+) -> Result<CompressedPatch, DiffError> {
     let (pre, proven_downgraded) = pre_images(repo, staged, rev, &collected.files, &collected.raw);
     compress_with_pre(
         &collected.raw,
         &pre,
         proven_downgraded,
         collected.skipped_history,
-        collected.skipped_untracked_dirs,
+        collected.skipped_untracked_dirs.clone(),
     )
 }
 
-/// WI-16: collect the native diff without inferring (the `--check`
-/// path needs the raw text alongside the raised patch; collecting twice
-/// runs the same read-only `git diff`/`git status` pair with no repo
-/// mutation between them).
+/// WI-16: collect the native diff without inferring (the CLI's git
+/// path collects once, raises via [`compress_collected`], and reuses
+/// the collected raw for the `--check` T361 loop).
 pub fn collect_native(
     repo: &Path,
     staged: bool,
@@ -326,7 +340,7 @@ pub fn check_raise(
 
 #[cfg(test)]
 mod tests {
-    use super::rev_base;
+    use super::{rev_base, CollectedDiff};
 
     #[test]
     fn rev_base_strips_ranges_to_their_left_side() {
@@ -335,5 +349,42 @@ mod tests {
         assert_eq!(rev_base("HEAD~1..HEAD"), "HEAD~1");
         assert_eq!(rev_base("HEAD~1...HEAD"), "HEAD~1");
         assert_eq!(rev_base("abc..def"), "abc");
+    }
+
+    #[test]
+    fn compress_collected_reuses_one_collection_without_git_forks() {
+        // WI-16 follow-up: the CLI collects once and raises from the
+        // same `CollectedDiff`. A non-`.rs` section needs no `git show`
+        // blob fetches (`pre_images` only fetches `.rs` paths), so this
+        // runs with no repo and proves the seam forwards the collected
+        // raw + skip flags through the shared `compress_with_pre` path.
+        let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n";
+        let collected = CollectedDiff {
+            raw: raw.to_string(),
+            files: vec!["f.txt".to_string()],
+            skipped_history: true,
+            skipped_untracked_dirs: vec!["empty-dir/".to_string()],
+        };
+        let patch = super::compress_collected(std::path::Path::new("."), false, None, &collected)
+            .expect("ordinary text section must raise");
+        assert!(
+            patch.rsmpl.contains("diff --git f.txt"),
+            "got: {}",
+            patch.rsmpl
+        );
+        assert_eq!(patch.files, vec!["f.txt".to_string()]);
+        assert!(patch.skipped_history);
+        assert_eq!(patch.skipped_untracked_dirs, vec!["empty-dir/".to_string()]);
+        // Empty collection raises empty (the binary reports `(no changes)`).
+        let empty = CollectedDiff {
+            raw: String::new(),
+            files: Vec::new(),
+            skipped_history: false,
+            skipped_untracked_dirs: Vec::new(),
+        };
+        let patch = super::compress_collected(std::path::Path::new("."), false, None, &empty)
+            .expect("empty collection must raise");
+        assert!(patch.rsmpl.is_empty());
+        assert!(patch.files.is_empty());
     }
 }
