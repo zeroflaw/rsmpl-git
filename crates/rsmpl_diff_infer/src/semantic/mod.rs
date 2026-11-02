@@ -88,6 +88,7 @@ mod item_joint_visqual;
 mod item_rename_vis;
 mod item_span;
 mod mod_rename;
+mod pre_pass;
 mod precision_single;
 
 pub(crate) use item_span::item_emission_header;
@@ -181,185 +182,12 @@ pub fn infer_semantic_with_provenance(
     let mut out = String::new();
     let mut used_rules: Vec<String> = Vec::new();
     let mut compressed_any = false;
-    // T430 whole-patch move pre-pass (cross-section bind/use pairs);
-    // per-section detectors run on the rewritten sections below.
-    let sections_owned: Vec<String>;
-    let move_rules_before = used_rules.len();
-    let sections: &[String] = match moves::try_move_sweep(sections, pre, &mut used_rules) {
-        Some(rewritten) => {
-            compressed_any = true;
-            push_move_prov(
-                prov,
-                sections,
-                &rewritten,
-                pre,
-                move_rules_before,
-                &used_rules,
-            );
-            sections_owned = rewritten;
-            &sections_owned
-        }
-        None => sections,
-    };
-    // WI-15a whole-patch item-intent pre-pass (single definition +
-    // same-delta uses joined into one follow hunk); per-section
-    // detectors run on the rewritten sections below.
-    let intent_owned: Vec<String>;
-    let intent_rules_before = used_rules.len();
-    let sections: &[String] =
-        match item_intent::try_item_intent_sweep(sections, pre, &mut used_rules) {
-            Some((rewritten, def_path, _rule)) => {
-                intent_owned = prov::commit_pre_pass(
-                    prov,
-                    sections,
-                    rewritten,
-                    &def_path,
-                    "item_intent",
-                    intent_rules_before,
-                    used_rules.as_slice(),
-                    pre,
-                    &mut compressed_any,
-                );
-                &intent_owned
-            }
-            None => sections,
-        };
-    // WI-3 whole-patch joint-`impl` pre-pass (trait + self-type renames
-    // composed in one `impl` header collapse to one shared-rule intent);
-    // runs on the item-intent output (disjoint: two-def triples never
-    // candidates there, never suppressed).
-    let joint_impl_owned: Vec<String>;
-    let joint_impl_rules_before = used_rules.len();
-    let sections: &[String] =
-        match item_joint_impl::try_joint_impl_rename(sections, pre, &mut used_rules) {
-            Some((rewritten, def_path, _rule)) => {
-                joint_impl_owned = prov::commit_pre_pass(
-                    prov,
-                    sections,
-                    rewritten,
-                    &def_path,
-                    "item_joint_impl",
-                    joint_impl_rules_before,
-                    used_rules.as_slice(),
-                    pre,
-                    &mut compressed_any,
-                );
-                &joint_impl_owned
-            }
-            None => sections,
-        };
-    // WI-4a whole-patch fn-joint pre-pass (single `fn` rename+slot
-    // definition + callee-only call uses in one file collapse to one
-    // follow hunk; vetoed joints suppress their old callee name so the
-    // per-hunk fallback stays wholly ordinary). Runs on the item-intent
-    // output (disjoint: pure renames never candidates, never suppressed).
-    let joint_owned: Vec<String>;
-    let joint_rules_before = used_rules.len();
-    let mut joint_suppressed: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
-    let sections: &[String] = match fn_joint::try_fn_joint_intent(sections, pre, &mut used_rules) {
-        Some((rewritten, def_path, rule, suppressed)) => {
-            joint_suppressed = suppressed;
-            if rule.is_empty() {
-                joint_owned = rewritten;
-                &joint_owned
-            } else {
-                compressed_any = true;
-                let emitted = rewritten
-                    .iter()
-                    .find(|s| {
-                        s.lines().next().is_some_and(|h| {
-                            h.starts_with("diff --git ")
-                                && crate::b_side_path(&h["diff --git ".len()..])
-                                    .is_some_and(|p| p == def_path)
-                        })
-                    })
-                    .cloned()
-                    .unwrap_or_default();
-                let original: String = sections
-                    .iter()
-                    .filter(|s| !rewritten.iter().any(|r| r == *s))
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("");
-                let changed: Vec<usize> = sections
-                    .iter()
-                    .filter(|s| !rewritten.iter().any(|r| r == *s))
-                    .flat_map(|s| crate::totality::changed_old_lines(s.as_str()))
-                    .collect();
-                if !emitted.is_empty() && !original.is_empty() {
-                    let detector_of: Vec<(String, &'static str)> = used_rules[joint_rules_before..]
-                        .iter()
-                        .map(|r| (r.clone(), "fn_joint"))
-                        .collect();
-                    prov::commit_prov(
-                        prov,
-                        &emitted,
-                        &original,
-                        &def_path,
-                        &detector_of,
-                        &changed,
-                        pre.get(&def_path).map(String::as_str),
-                    );
-                }
-                joint_owned = rewritten;
-                &joint_owned
-            }
-        }
-        None => sections,
-    };
-    // WI-15b whole-patch member-intent pre-pass (single member definition
-    // + same-delta uses across files, file/section-pure partial); runs on
-    // the fn-joint output (disjoint def shapes, no double-claim).
-    let member_owned: Vec<String>;
-    let member_rules_before = used_rules.len();
-    let sections: &[String] = match member::try_member_intent_sweep(sections, pre, &mut used_rules)
-    {
-        Some((rewritten, def_path, _rule)) => {
-            member_owned = prov::commit_pre_pass(
-                prov,
-                sections,
-                rewritten,
-                &def_path,
-                "member_rename",
-                member_rules_before,
-                used_rules.as_slice(),
-                pre,
-                &mut compressed_any,
-            );
-            &member_owned
-        }
-        None => sections,
-    };
-    // WI-15c whole-patch mod-intent pre-pass (single `mod old;` def +
-    // same-delta `old::` path uses across files + optional headers-only
-    // file rename, file/section-pure partial); runs on the member-intent
-    // output (disjoint def shapes: `mod`-only this claims).
-    let mod_owned: Vec<String>;
-    let mod_rules_before = used_rules.len();
-    let sections: &[String] =
-        match mod_rename::try_mod_rename_intent_sweep(sections, pre, &mut used_rules) {
-            Some((rewritten, def_path, _rule)) => {
-                mod_owned = prov::commit_pre_pass(
-                    prov,
-                    sections,
-                    rewritten,
-                    &def_path,
-                    "mod_rename",
-                    mod_rules_before,
-                    used_rules.as_slice(),
-                    pre,
-                    &mut compressed_any,
-                );
-                &mod_owned
-            }
-            None => sections,
-        };
-    // WI-12 cross-file assoc/trait-method intents (commits inside).
-    let cross_fired =
-        cross_sweep::try_cross_intents(sections, pre, &mut used_rules, prov, &mut compressed_any);
-    let cross_owned = cross_fired.unwrap_or_else(|| sections.to_vec());
-    let sections: &[String] = &cross_owned;
+    // Whole-patch pre-pass chain (move -> item-intent -> joint-impl ->
+    // fn-joint -> member -> mod -> cross); lives in `pre_pass.rs` (D5
+    // split; this file was at 1993/2000).
+    let (pre_passed, joint_suppressed) =
+        pre_pass::run_pre_passes(sections, pre, &mut used_rules, prov, &mut compressed_any);
+    let sections: &[String] = &pre_passed;
     for section in sections {
         let mut declined = Vec::new();
         match chain::compress_section(
@@ -712,8 +540,6 @@ pub(crate) fn unique_rule(used: &mut Vec<String>, _base: &str) -> String {
 pub use prov::HunkDeclined;
 pub use prov::HunkProvenance;
 pub(crate) use prov::{attempt, declined_guard};
-
-use prov::push_move_prov;
 
 /// True when a `diff --git` header names a rename (differing real
 /// sides, T377) via the shared space-aware splitter.
