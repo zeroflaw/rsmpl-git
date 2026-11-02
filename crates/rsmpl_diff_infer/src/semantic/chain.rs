@@ -1372,6 +1372,36 @@ fn compress_section_per_hunk(
                 used_rules.truncate(add_before);
             }
         }
+        // WI-14 slice 2: `use`-regroup merge (N≥2 `use P::Ti;` minus
+        // lines + one `use P::{...};` plus line). Unbalanced by
+        // construction, so the balanced chain below never sees it;
+        // existing unbalanced owners (partial-delete above) keep
+        // priority and this declines anything outside the merge law.
+        // Precision guard + D13 probe live inside (a regroup never wins
+        // strict T375 since the `rule=` tag costs bytes).
+        if minuses.len() >= 2 && pluses.len() == 1 {
+            let regroup_before = used_rules.len();
+            if let Some((body, detector)) =
+                super::try_use_regroup_hunk(&minuses, &pluses, path, file_old, hunk, used_rules)
+            {
+                push_section_prov(
+                    prov,
+                    &body,
+                    hunk,
+                    path,
+                    detector,
+                    &crate::totality::changed_old_lines(hunk),
+                    file_old,
+                    regroup_before,
+                    used_rules,
+                );
+                compressed_any = true;
+                out.push_str(&body);
+                continue;
+            } else {
+                used_rules.truncate(regroup_before);
+            }
+        }
         // One balanced hunk through the shared detector chain
         // (`compress_balanced_pair_body` — same shapes the verbatim
         // sweep retries leftovers with); ordinary hunks pass through.

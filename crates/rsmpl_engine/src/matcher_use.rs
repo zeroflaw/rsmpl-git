@@ -230,9 +230,280 @@ pub fn apply_use_rename_hunk(
 /// match and strip steps need.
 struct UseItemView<'a> {
     tree: &'a syn::UseTree,
+    vis: syn::Visibility,
     attrs: &'a [syn::Attribute],
     anchor_line: u32,
     attr_start_line: u32,
+}
+
+/// Apply a `use`-regroup merge hunk (SPEC 14.9). Returns the number of
+/// merged sets. Line-wise: the first-in-file member line is replaced by
+/// the verbatim plus line (keeping that line's indent), every other
+/// member line is deleted whole (attribute lines above a deleted item
+/// go with it). Only single-line `use` items match; visibility must
+/// equal the pattern's uniform vis (whitespace-insensitive); leading
+/// `::` is normalized away on both sides.
+pub fn apply_use_regroup_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<usize, StructuredError> {
+    let (prefix, members, vis, plus_line) = match &compiled.kind {
+        PatternKind::UseRegroup {
+            prefix,
+            members,
+            vis,
+            plus_line,
+        } => (
+            prefix.clone(),
+            members.clone(),
+            vis.clone(),
+            plus_line.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected use-regroup merge pattern".to_string(),
+            ));
+        }
+    };
+    let rule = hunk.rule_name();
+    let want_vis: String = vis.chars().filter(|c| !c.is_whitespace()).collect();
+    let minus_paths: Vec<Vec<String>> = members
+        .iter()
+        .map(|m| {
+            let mut p = prefix.clone();
+            p.push(m.clone());
+            p
+        })
+        .collect();
+    let mut items = Vec::new();
+    collect_use_items(&parsed.items, &mut items);
+    // Candidate lines per minus path (scope-filtered, single-line
+    // plain items, uniform vis).
+    let old_start = hunk.header.old_start;
+    let old_len = hunk.header.old_len;
+    let end = old_start + old_len.saturating_sub(1);
+    let mut per_path: Vec<Vec<(u32, u32)>> = vec![Vec::new(); minus_paths.len()];
+    for v in &items {
+        let Some(path) = plain_use_path(v.tree) else {
+            continue;
+        };
+        if norm_use_vis(&v.vis) != want_vis {
+            continue;
+        }
+        let (start, last) = (v.anchor_line, v.anchor_line);
+        let in_scope = match hunk.scope() {
+            Scope::Exact => old_len > 0 && start == old_start && last == end.max(old_start),
+            Scope::File => true,
+            _ => start >= old_start && last <= end.max(old_start),
+        };
+        if !in_scope {
+            continue;
+        }
+        // Single-line items only: a multi-line `use` never matches a
+        // single regroup minus line.
+        if !is_single_line_tree(v.tree) {
+            continue;
+        }
+        for (i, mp) in minus_paths.iter().enumerate() {
+            if path == *mp {
+                per_path[i].push((v.anchor_line, v.attr_start_line));
+            }
+        }
+    }
+    for lines in per_path.iter_mut() {
+        lines.sort();
+        lines.dedup();
+    }
+    if per_path.iter().any(|l| l.is_empty()) {
+        return Ok(0);
+    }
+    let allow_many = hunk.allow() == rsmpl_patch::Allow::Many;
+    let counts: Vec<usize> = per_path.iter().map(|l| l.len()).collect();
+    if !allow_many {
+        if counts.iter().any(|&c| c > 1) {
+            return Ok(counts.into_iter().max().unwrap_or(0));
+        }
+    } else if counts.windows(2).any(|w| w[0] != w[1]) {
+        return Err(StructuredError::new(
+            ErrorCode::MatchConflict,
+            "use-regroup members match different numbers of sites (each member must occur the same number of times under `# allow=many`)",
+        )
+        .with_rule(&rule)
+        .with_repair(StructuredError::internal_repair()));
+    }
+    let sets = if allow_many { counts[0] } else { 1 };
+    let mut merged = 0;
+    for k in 0..sets {
+        let mut set: Vec<(u32, u32)> = per_path.iter().map(|l| l[k]).collect();
+        set.sort();
+        set.dedup();
+        if set.len() != minus_paths.len() {
+            return Err(StructuredError::new(
+                ErrorCode::MatchConflict,
+                "use-regroup members share one line (each member must be its own `use` item)",
+            )
+            .with_rule(&rule)
+            .with_repair(StructuredError::internal_repair()));
+        }
+        // Same-line items (`use a; use b;` on one line) can never merge
+        // line-wise — the tuples above differ by attr span, so check the
+        // lines themselves.
+        {
+            let mut lines: Vec<u32> = set.iter().map(|(l, _)| *l).collect();
+            lines.sort();
+            lines.dedup();
+            if lines.len() != set.len() {
+                return Err(StructuredError::new(
+                    ErrorCode::MatchConflict,
+                    "use-regroup members share one line (each member must be its own `use` item)",
+                )
+                .with_rule(&rule)
+                .with_repair(StructuredError::internal_repair()));
+            }
+        }
+        // Attribute policies are per item and checked only for items
+        // with edits (same posture as the prefix rename).
+        for (line, _) in &set {
+            let v = items
+                .iter()
+                .find(|v| v.anchor_line == *line)
+                .expect("regroup line resolves to its item");
+            check_attrs(v.attrs, hunk.attrs_policy(), &[], &rule, "")?;
+        }
+        let (first_line, _) = set[0];
+        let first_start = index
+            .line_start(first_line)
+            .ok_or_else(|| range_err(&rule, first_line))?;
+        let first_end = line_end_excl_nl(original, index, first_line)
+            .ok_or_else(|| range_err(&rule, first_line))?;
+        let indent: String = original[first_start..first_end]
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        // `# attrs=strip` deletes attribute lines above the kept item
+        // (mirrors the prefix rename, once per item).
+        let first_item = items
+            .iter()
+            .find(|v| v.anchor_line == first_line)
+            .expect("regroup first line resolves");
+        if hunk.attrs_policy() == AttrsPolicy::Strip && !first_item.attrs.is_empty() {
+            let start = index
+                .line_start(first_item.attr_start_line)
+                .ok_or_else(|| range_err(&rule, first_item.attr_start_line))?;
+            if first_start > start {
+                edits.push(TextEdit::new(start, first_start, String::new()));
+            }
+        }
+        edits.push(TextEdit::new(
+            first_start,
+            first_end,
+            format!("{indent}{plus_line}"),
+        ));
+        for (line, attr_start) in set.iter().skip(1) {
+            let del_start = index
+                .line_start(*attr_start)
+                .ok_or_else(|| range_err(&rule, *attr_start))?;
+            // Delete through the newline; a last line without trailing
+            // newline deletes to EOF instead.
+            let del_end = index.line_start(line + 1).unwrap_or(original.len());
+            if del_end <= del_start {
+                return Err(StructuredError::new(
+                    ErrorCode::RangeConflict,
+                    format!("span line {line} outside file"),
+                )
+                .with_rule(&rule)
+                .with_repair(StructuredError::internal_repair()));
+            }
+            edits.push(TextEdit::new(del_start, del_end, String::new()));
+        }
+        merged += 1;
+        if !allow_many {
+            break;
+        }
+    }
+    Ok(merged)
+}
+
+/// Full path segments of a plain `use` tree (`a::b::X` only);
+/// `None` for groups, globs, renames, and qualified trees.
+fn plain_use_path(tree: &syn::UseTree) -> Option<Vec<String>> {
+    let mut segs = Vec::new();
+    let mut t = tree;
+    loop {
+        match t {
+            syn::UseTree::Path(p) => {
+                segs.push(p.ident.to_string());
+                t = &p.tree;
+            }
+            syn::UseTree::Name(n) => {
+                segs.push(n.ident.to_string());
+                return Some(segs);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Visibility normalized for regroup comparison (all whitespace
+/// removed, so `pub(crate)` equals syn's `pub (crate)` render).
+fn norm_use_vis(vis: &syn::Visibility) -> String {
+    let text = match vis {
+        syn::Visibility::Inherited => String::new(),
+        syn::Visibility::Public(_) => "pub".to_string(),
+        syn::Visibility::Restricted(r) => {
+            let path = r
+                .path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            if r.in_token.is_some() {
+                format!("pub(in {path})")
+            } else {
+                format!("pub({path})")
+            }
+        }
+    };
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// True when a `use` tree sits on one line (its span starts and ends
+/// on the same line). Multi-line items never match a single regroup
+/// minus line.
+fn is_single_line_tree(tree: &syn::UseTree) -> bool {
+    use syn::spanned::Spanned;
+    let span = tree.span();
+    span.start().line == span.end().line
+}
+
+/// Byte offset of a 1-based line's end excluding its `\n` (EOF when the
+/// last line has no trailing newline).
+fn line_end_excl_nl(original: &str, index: &LineIndex, line: u32) -> Option<usize> {
+    let start = index.line_start(line)?;
+    let next = index
+        .line_start(line + 1)
+        .unwrap_or_else(|| original.len() + 1);
+    if next > original.len() + 1 {
+        return None;
+    }
+    if next == original.len() + 1 {
+        return Some(original.len());
+    }
+    if next == start {
+        return Some(start);
+    }
+    let bytes = original.as_bytes();
+    if next > start && bytes[next - 1] == b'\n' {
+        Some(next - 1)
+    } else {
+        Some(next)
+    }
 }
 
 /// Collect file- and inline-`mod`-level `use` items.
@@ -243,6 +514,7 @@ fn collect_use_items<'a>(items: &'a [syn::Item], out: &mut Vec<UseItemView<'a>>)
                 let item_span = it.span();
                 out.push(UseItemView {
                     tree: &u.tree,
+                    vis: u.vis.clone(),
                     attrs: &u.attrs,
                     anchor_line: u.use_token.span.start().line as u32,
                     attr_start_line: item_span.start().line as u32,
@@ -285,6 +557,23 @@ mod tests {
         format!(
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n{range} rule=u\n{extra}- {minus}\n+ {plus}\n"
         )
+    }
+
+    fn regroup_patch_in(range: &str, minuses: &[&str], plus: &str, extra: &str) -> String {
+        // Directive-free terse regroup (SPEC 7.1: `rule=` alone marks a
+        // semantic hunk). `extra` appends directive lines when non-empty.
+        let mut out = format!("diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n{range} rule=u\n");
+        if !extra.is_empty() {
+            out.push_str(extra);
+            if !extra.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        for m in minuses {
+            out.push_str(&format!("- {m}\n"));
+        }
+        out.push_str(&format!("+ {plus}\n"));
+        out
     }
 
     #[test]
@@ -497,5 +786,109 @@ mod tests {
                 "got: {err} for {minus}"
             );
         }
+    }
+
+    #[test]
+    fn regroup_merges_at_first_line() {
+        // Merge-only: the first member line becomes the grouped line,
+        // later member lines are deleted whole.
+        let patch = regroup_patch_in(
+            "@@ -1,2 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let src = "use a::b::X;\nuse a::b::Y;\nfn m() {}\n";
+        let out = apply(&patch, src).unwrap();
+        assert_eq!(out, "use a::b::{X, Y};\nfn m() {}\n", "got: {out:?}");
+    }
+
+    #[test]
+    fn regroup_keeps_indent_in_inline_mod() {
+        // Inline-`mod` items are collected; the replacement keeps the
+        // target indent while the deleted line goes whole.
+        let patch = regroup_patch_in(
+            "@@ -2,2 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let src = "mod outer {\n    use a::b::X;\n    use a::b::Y;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert_eq!(
+            out, "mod outer {\n    use a::b::{X, Y};\n}\n",
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn regroup_double_set_one_fails_many_merges() {
+        let src = "use a::b::X;\nuse a::b::Y;\nuse a::b::X;\nuse a::b::Y;\nfn m() {}\n";
+        let one = regroup_patch_in(
+            "@@ -1,4 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let err = apply(&one, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        let many = regroup_patch_in(
+            "@@ -1,4 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "# allow=many\n",
+        );
+        let out = apply(&many, src).unwrap();
+        assert_eq!(
+            out, "use a::b::{X, Y};\nuse a::b::{X, Y};\nfn m() {}\n",
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn regroup_no_match_without_optional_fails() {
+        let patch = regroup_patch_in(
+            "@@ -1,2 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let err = apply(&patch, "use a::b::X;\nuse a::b::Z;\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn regroup_vis_and_tails_gated() {
+        // `pub` pattern never matches plain items.
+        let patch = regroup_patch_in(
+            "@@ -1,2 @@",
+            &["pub use a::b::X;", "pub use a::b::Y;"],
+            "pub use a::b::{X, Y};",
+            "",
+        );
+        let err = apply(&patch, "use a::b::X;\nuse a::b::Y;\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Grouped target members never match plain minus paths.
+        let plain = regroup_patch_in(
+            "@@ -1,2 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let err = apply(&plain, "use a::b::{X};\nuse a::b::Y;\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn regroup_same_line_members_fail() {
+        // Two members on one line can never merge line-wise.
+        let patch = regroup_patch_in(
+            "@@ -1,1 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let err = apply(&patch, "use a::b::X; use a::b::Y;\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 }

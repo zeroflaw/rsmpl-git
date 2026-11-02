@@ -47,4 +47,6 @@ pub use quote_utils::{
     strip_literal_quotes, unmask_literal_spans, validate_quoting, LiteralToken,
 };
 pub use terse_fn::is_terse_fn_line;
-pub use use_rename::{classify_use_rename, parse_use_prefix, UsePrefix};
+pub use use_rename::{
+    classify_use_regroup, classify_use_rename, parse_use_prefix, UsePrefix, UseRegroup,
+};

@@ -97,8 +97,8 @@ in document order (first hunk topmost) with one blank line between items
 Use-path prefix — after a `mod` rename, move imports with one hunk
 (`- use crate::old` / `+ use crate::new`, `# allow=many` or `# sweep`); plain, grouped,
 glob, `as`, and `pub use` tails preserved, segment-wise; members at the
-matched position rewrite too (`crate::{old, x}` → `crate::{new, x}`),
-but never by suffix (`crate::{x::old}` is untouched) (SPEC 14.9).
+matched position rewrite too (`crate::{old, x}` → `crate::{new, x}`), never by suffix; regroup
+merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` (same order/vis, no attrs; split/`as`/glob/nested ordinary) (SPEC 14.9).
 
 Beyond calls — `let` (`- let x = E;` / `+ let y = E;`), general
 expressions (`- E + 1`), types (`- Vec<T>` / `+ Box<[T]>`, `T` inferred),

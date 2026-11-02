@@ -479,6 +479,19 @@ pub(crate) fn classify(
         return Ok(rename);
     }
 
+    // `use`-regroup merge (N≥2 `use P::Ti;` minus lines + one
+    // `use P::{...};` plus line). Before the prefix rename: disjoint
+    // (regroup needs a multi-line minus and a grouped plus; the rename
+    // needs single bare pairs on both sides).
+    if let Some(regroup) = crate::use_rename::classify_use_regroup(m, p, table)? {
+        return Ok(PatternKind::UseRegroup {
+            prefix: regroup.prefix,
+            members: regroup.members,
+            vis: regroup.vis,
+            plus_line: regroup.plus_line,
+        });
+    }
+
     // `use`-path prefix renames (`use crate::old` -> `use crate::new`).
     // Disjoint from item/fn/call shapes; falls through as `None`.
     if let Some((minus_segs, plus_segs)) = crate::use_rename::classify_use_rename(m, p, table)? {

@@ -89,9 +89,9 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between;
   `as` paste (`+ fn old as new(...)`) renames fn + self-calls; shadow/field/macro/attr interiors veto (line named, SPEC 20.2).
-- Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`)
-  moves imports after a `mod` rename; grouped/glob/`as` tails preserved;
-  members at the matched position rewrite too, segment-wise (SPEC 14.9).
+- Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`) moves imports;
+  grouped/glob/`as` tails preserved, members at the matched position rewrite too; regroup
+  merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` (same order/vis, no attrs) (SPEC 14.9).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`T` inferred), 2–4-line `let` sequences (per-position
   `P0`/`E0` holes). Bare `P` never matches `x: T` — write `P: T`.

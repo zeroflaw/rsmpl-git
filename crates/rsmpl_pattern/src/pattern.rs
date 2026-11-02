@@ -291,6 +291,16 @@ pub enum PatternKind {
         minus_segs: Vec<String>,
         plus_path: String,
     },
+    /// `use`-regroup merge (`use a::b::X;` + `use a::b::Y;` ->
+    /// `use a::b::{X, Y};`): N≥2 separate `use` items sharing a prefix
+    /// collapse into one grouped item (SPEC 14.9). Merge-only,
+    /// order-preserving, plain members, uniform visibility.
+    UseRegroup {
+        prefix: Vec<String>,
+        members: Vec<String>,
+        vis: String,
+        plus_line: String,
+    },
     /// Generalized statement/expression/type rewrite (`let x = E`, `a + E`,
     /// `Vec<T>`). `minus_sub` holds the placeholder-substituted pattern
     /// (`__RSMPL_E` idents, backtick literals restored as literal text).
@@ -688,6 +698,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::VariantAddition { .. } => "variant addition",
             PatternKind::ArmAddition { .. } => "match-arm addition",
             PatternKind::UseRename { .. } => "use-path",
+            PatternKind::UseRegroup { .. } => "use-path",
             PatternKind::ItemCapture { .. } => "item-capture",
             PatternKind::Insertion { .. } => "insertion",
             PatternKind::Expr { .. } => "expression",
