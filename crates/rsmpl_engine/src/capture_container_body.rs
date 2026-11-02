@@ -216,6 +216,10 @@ pub(crate) fn splice_struct_header(
                 "evolution paste template must be a single-line `struct` header with `...` (got `{}`)",
                 template.trim()
             ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-struct-splice-template",
+                "write `+ <vis>struct <New> { ... }` as the paste template (splice side), or paste the bare capture name for a verbatim move",
+            ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
@@ -308,6 +312,10 @@ pub(crate) fn splice_enum_header(
             fail(format!(
                 "evolution paste template must be a single-line `enum` header with `...` (got `{}`)",
                 template.trim()
+            ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-enum-splice-template",
+                "write `+ <vis>enum <New> { ... }` as the paste template (splice side), or paste the bare capture name for a verbatim move",
             ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
@@ -402,6 +410,10 @@ pub(crate) fn splice_union_header(
                 "evolution paste template must be a single-line `union` header with `...` (got `{}`)",
                 template.trim()
             ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-union-splice-template",
+                "write `+ <vis>union <New> { ... }` as the paste template (splice side), or paste the bare capture name for a verbatim move",
+            ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
@@ -495,6 +507,10 @@ pub(crate) fn splice_type_header(
                 "evolution paste template must be a single-line `type` header with `= ...;` (got `{}`)",
                 template.trim()
             ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-type-splice-template",
+                "write `+ <vis>type <New> = ...;` as the paste template (splice side), or paste the bare capture name for a verbatim move",
+            ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
@@ -587,6 +603,10 @@ pub(crate) fn splice_static_header(
             fail(format!(
                 "evolution paste template must be a single-line `static` header with `= ...;` (got `{}`)",
                 template.trim()
+            ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-static-splice-template",
+                "write `+ <vis>static [mut ]<New> = ...;` as the paste template (splice side), or paste the bare capture name for a verbatim move",
             ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
@@ -743,6 +763,10 @@ pub(crate) fn splice_trait_header(
                 "evolution paste template must be a single-line `trait` header with `...` (got `{}`)",
                 template.trim()
             ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-trait-splice-template",
+                "write `+ <vis>trait <New> { ... }` as the paste template (splice side), or paste the bare capture name for a verbatim move",
+            ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
@@ -865,6 +889,10 @@ pub(crate) fn splice_mod_header(
                 "evolution paste template must be a single-line `mod` header with `...` (got `{}`)",
                 template.trim()
             ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-mod-splice-template",
+                "write `+ <vis>mod <New> { ... }` as the paste template (splice side), or paste the bare capture name for a verbatim move",
+            ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
@@ -979,6 +1007,10 @@ pub(crate) fn splice_const_header(
             fail(format!(
                 "evolution paste template must be a single-line `const` header with `= ...;` (got `{}`)",
                 template.trim()
+            ))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-const-splice-template",
+                "write `+ <vis>const <New> = ...;` as the paste template (splice side), or paste the bare capture name for a verbatim move",
             ))
         })?;
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
@@ -1264,5 +1296,113 @@ mod tests {
         let err = splice_evolved_header(STRUCT, "struct Other as New { ... }", "r")
             .expect_err("old mismatch must fail");
         assert!(err.to_string().contains("Other"), "got: {err}");
+    }
+
+    fn splice_repair_code(err: &rsmpl_patch::StructuredError) -> String {
+        err.repair
+            .as_ref()
+            .expect("WI-18 slice 2: must carry repair")
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string()
+    }
+
+    fn splice_repair_write_instead(err: &rsmpl_patch::StructuredError) -> String {
+        err.repair
+            .as_ref()
+            .expect("WI-18 slice 2: must carry repair")
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string()
+    }
+
+    #[test]
+    fn wi18_slice2_struct_splice_template_repair_is_specific() {
+        let err = super::splice_struct_header("struct Old { x: u32, }", "struct Bad", "r")
+            .expect_err("bad struct template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-struct-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>struct <New>"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_enum_splice_template_repair_is_specific() {
+        let err = super::splice_enum_header("enum Old { A, B, }", "enum Bad", "r")
+            .expect_err("bad enum template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-enum-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>enum <New>"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_union_splice_template_repair_is_specific() {
+        let err = super::splice_union_header("union Old { x: u32, }", "union Bad", "r")
+            .expect_err("bad union template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-union-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>union <New>"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_type_splice_template_repair_is_specific() {
+        let err = super::splice_type_header("type Old = u32;", "type Bad", "r")
+            .expect_err("bad type template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-type-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>type <New> = ...;"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_static_splice_template_repair_is_specific() {
+        let err = super::splice_static_header("static Old: u32 = 1;", "static Bad", "r")
+            .expect_err("bad static template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-static-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>static [mut ]<New> = ...;"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_trait_splice_template_repair_is_specific() {
+        let err = super::splice_trait_header("trait Old { fn f(&self); }", "trait Bad", "r")
+            .expect_err("bad trait template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-trait-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>trait <New>"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_mod_splice_template_repair_is_specific() {
+        let err = super::splice_mod_header("mod Old { }", "mod Bad", "r")
+            .expect_err("bad mod template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-mod-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>mod <New>"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn wi18_slice2_const_splice_template_repair_is_specific() {
+        let err = super::splice_const_header("const Old: u32 = 1;", "const Bad", "r")
+            .expect_err("bad const template must fail");
+        assert_eq!(splice_repair_code(&err), "evolution-const-splice-template");
+        assert!(
+            splice_repair_write_instead(&err).contains("+ <vis>const <New> = ...;"),
+            "got: {err:?}"
+        );
     }
 }
