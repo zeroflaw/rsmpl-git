@@ -767,15 +767,32 @@ pub(crate) fn compress_section(
         }
         // WI-19b: slot/sig/header + def-only member/macro/assoc singles
         // under the precision guard (same `semantic <= ordinary + 16`
-        // posture as the two shapes above).
+        // posture as the two shapes above). N=1 method `sig_evolution`
+        // (indented vis/qual-only) rides a doubled allowance (32): the
+        // WI-4a verbatim filter block (header + pre-`...` + nesting +
+        // closers ≈ +30 over a free single on the stripped section the
+        // guard actually sees) is a mandatory proof anchor (D10), not
+        // bloat — the 16-byte budget was calibrated on filter-free
+        // singles. The detector's own gates (vis/qual-only, engine-count
+        // totality + D13 byte-compare) are unchanged; the allowance only
+        // prices the filter. Per-hunk stays 16 (mixed-section method
+        // singles stay ordinary — WI-4 partition territory, pinned).
         let prec_checkpoint = used_rules.len();
         if let Some((prec, detector)) = super::try_precision_definition_single(
             &minuses, &pluses, path, file_old, &changed, used_rules,
         ) {
             debug_assert_eq!(super::guard_for(detector), super::Guard::Precision);
+            let allow = if detector == "sig_evolution"
+                && minuses.len() == 1
+                && minuses[0].starts_with([' ', '\t'])
+            {
+                super::PRECISION_GUARD * 2
+            } else {
+                super::PRECISION_GUARD
+            };
             if let Some(prelude) = &rename_prelude {
                 if let Some(final_text) = reheader_rename(&prec, prelude) {
-                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
+                    if final_text.len() <= section.len() + allow {
                         push_section_prov(
                             prov,
                             &final_text,
@@ -791,7 +808,7 @@ pub(crate) fn compress_section(
                     }
                 }
                 used_rules.truncate(prec_checkpoint);
-            } else if prec.len() <= section.len() + super::PRECISION_GUARD {
+            } else if prec.len() <= section.len() + allow {
                 push_section_prov(
                     prov,
                     &prec,

@@ -7888,6 +7888,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     to `Box <[ i32 ]>`, 117 precedent), so those shapes belong to the
     type-sweep family (strict N ≥ 2) instead. An N = 1 sig single
     requires a pre-image (same wide-minus doctrine as the slot sweep).
+    Method (indented) N = 1 vis/qual singles emit the canonical
+    verbatim-header block hunk and ride a doubled precision allowance
+    (32, not 16): the WI-4a filter block is a mandatory proof anchor,
+    not bloat. Per-hunk stays 16, so mixed-section method singles stay
+    ordinary.
 - Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
    `{`-terminated fn header, where every name is preserved per site
    (`minus name == plus name`) but names differ across sites (≥ 2

@@ -64,6 +64,7 @@ pub(crate) mod prefix;
 pub(crate) mod prov;
 mod repeat;
 pub(crate) mod shape;
+mod sig_evolution;
 mod single_block;
 mod slot;
 mod subhunk;
@@ -127,8 +128,8 @@ pub(crate) use definition_evolution::{try_definition_evolution_sweep, PRECISION_
 pub(crate) use general_expr::{try_general_expr_single, try_general_expr_sweep};
 pub(crate) use general_subline::try_subline_general_single;
 pub(crate) use generalized::{
-    try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep,
-    try_sig_evolution_sweep, try_type_sweep, try_untyped_let_sweep,
+    try_let_sweep, try_let_template_sweep, try_pat_swap_sweep, try_sequence_sweep, try_type_sweep,
+    try_untyped_let_sweep,
 };
 pub(crate) use header_evolution::try_header_evolution_sweep;
 pub(crate) use impl_single::try_impl_header_single;
@@ -139,6 +140,7 @@ pub(crate) use perm_single::{
     try_subline_perm_single,
 };
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_sweep};
+pub(crate) use sig_evolution::try_sig_evolution_sweep;
 pub(crate) use single_block::try_single_block_sweep;
 
 pub(crate) use guard::{guard_for, Guard};
