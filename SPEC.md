@@ -8543,6 +8543,21 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   no-diverge `let` (`let_untyped_holds`): the minus template matches
   exactly that domain (ascription agreement is strict, so typed twins
   never match and never count), and the count must equal N.
+  Framed class (WI-14 slice 4): N ≥ 2 pairs whose every line is a
+  single-statement one-line `fn` frame (`fn f0() { let x = E; }` →
+  `fn f0() { let x: T = E; }`) raise to the identical bare hunk (no
+  frame text emitted, D14) when every pair unwraps through the `fn`
+  Stmt rung to an inner `let` of the own-line class with a
+  frame-equal outer (a frame delta alongside the inner rewrite stays
+  ordinary — never a partial claim) — the only frame rung whose
+  outer is never itself a `Stmt::Local`, so the bare emission cannot
+  match an outer `let` first. `let`-outer frames
+  (`let g = || { let x = E; };`) stay ordinary by construction
+  (unwrapping them would hand the engine a template matching the
+  outer `let`, over-matching); mixed whole-line + framed sections
+  stay ordinary (all-or-nothing per side). Same totality (the AST
+  count descends into `fn` bodies; needles are the whole minus
+  lines).
 - Type rewrite sweep (WI-4b, second anti-unification shape): N ≥ 2
   `-`/`+` pairs, each a complete single-line `let PAT: T = INIT;` →
   `let PAT: T′ = INIT;` — the pattern and initializer token-equal per
@@ -9419,7 +9434,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(136), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(137), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

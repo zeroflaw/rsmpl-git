@@ -182,6 +182,33 @@ fn wi4a_let_type_add_extra_site_stays_ordinary() {
 }
 
 #[test]
+fn wi4a_framed_let_type_add_fires() {
+    // WI-14 slice 4, fixture 136: the same type-add class inside
+    // one-line `fn` frames raises to the identical bare hunk (no frame
+    // text emitted); `convert_fixture` already gates `--check` and the
+    // corpus test pins the S→N→S fixed point.
+    let (native_input, semantic) = convert_fixture("136-framed-let-type-add-fires");
+    assert!(
+        semantic.contains("- let P0 = E0;\n"),
+        "minus pattern missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ let P0: u32 = E0;\n"),
+        "plus pattern missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("fn f0"),
+        "no frame text in emission, got: {semantic}"
+    );
+    assert!(
+        semantic.len() < native_input.len(),
+        "framed let sweep must beat native bytes ({} vs {})",
+        semantic.len(),
+        native_input.len()
+    );
+}
+
+#[test]
 fn wi4b_type_sweep_fires() {
     // Fixture 71: two `let X: Vec<..> = ..;` sites with hetero inner
     // types gain one `# allow=many` general-type hunk with an inferred

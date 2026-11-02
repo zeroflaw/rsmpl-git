@@ -25,6 +25,20 @@
 /// Unwrap a single-statement one-line `fn` frame to its inner
 /// expression, or `None` when the line is not such a frame.
 pub(crate) fn fn_frame_inner(line: &str) -> Option<syn::Expr> {
+    single_stmt_expr(fn_frame_stmt_inner(line)?)
+}
+
+/// Unwrap a single-statement one-line `fn` frame to its inner
+/// statement, or `None` when the line is not such a frame. Statement
+/// detectors (WI-14 slice 4: `let`-type-add) need the statement
+/// itself — the expression rung above degrades a `let` to its init,
+/// which is the wrong domain for a `Stmt` template. Only the `fn`
+/// rung is offered: a `let`-outer frame (`let g = || { … };`) is
+/// itself a `Stmt::Local`, so unwrapping it would hand the engine a
+/// bare `let` template that matches the outer `let` first
+/// (outermost-wins) instead of the inner sites — raising it would
+/// over-match by construction.
+pub(crate) fn fn_frame_stmt_inner(line: &str) -> Option<syn::Stmt> {
     let text = line.trim();
     if text.is_empty() {
         return None;
@@ -33,8 +47,7 @@ pub(crate) fn fn_frame_inner(line: &str) -> Option<syn::Expr> {
     if item.block.stmts.len() != 1 {
         return None;
     }
-    let stmt = item.block.stmts.into_iter().next()?;
-    single_stmt_expr(stmt)
+    item.block.stmts.into_iter().next()
 }
 
 /// The unwrap ladder (WI-3): `fn` frame first (unchanged winner),
@@ -192,7 +205,8 @@ fn branch_frame_inner(line: &str) -> Option<syn::Expr> {
 #[cfg(test)]
 mod tests {
     use super::{
-        arm_frame_inner, branch_frame_inner, fn_frame_inner, frame_inner, let_frame_inner,
+        arm_frame_inner, branch_frame_inner, fn_frame_inner, fn_frame_stmt_inner, frame_inner,
+        let_frame_inner,
     };
     use std::collections::HashMap;
 
@@ -254,6 +268,30 @@ mod tests {
     fn multi_stmt_frame_vetoes() {
         // Named residue: multi-statement frames stay ordinary.
         assert!(fn_frame_inner("fn f() { let x = 1; foo(x) }").is_none());
+        assert!(fn_frame_stmt_inner("fn f() { let x = 1; foo(x) }").is_none());
+    }
+
+    #[test]
+    fn stmt_rung_unwraps_single_let() {
+        // WI-14 slice 4: statement detectors need the `let` itself,
+        // not its init.
+        let stmt = fn_frame_stmt_inner("fn f0() { let x = foo(1); }").expect("must unwrap");
+        assert!(matches!(stmt, syn::Stmt::Local(_)));
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&stmt).to_string(),
+            "let x = foo (1) ;"
+        );
+        // Non-`let` single statements unwrap too (caller decides the shape).
+        let stmt = fn_frame_stmt_inner("fn f0() { foo(1) }").expect("expr stmt unwraps");
+        assert!(matches!(stmt, syn::Stmt::Expr(..)));
+        // `let`-outer frames never qualify: the outer is itself a
+        // `Stmt::Local`, so a bare `let` template would match it first.
+        assert!(fn_frame_stmt_inner("let g = || { let x = 1; };").is_none());
+        assert!(fn_frame_stmt_inner("let a = { let x = 1; };").is_none());
+        // Non-frames and multi-statement frames decline.
+        assert!(fn_frame_stmt_inner("    let x = foo(1);").is_none());
+        assert!(fn_frame_stmt_inner("fn m() {").is_none());
+        assert!(fn_frame_stmt_inner("").is_none());
     }
 
     #[test]

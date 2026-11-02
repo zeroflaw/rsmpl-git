@@ -35,6 +35,7 @@ pub(crate) mod group;
 pub(crate) mod guard;
 pub(crate) mod header_evolution;
 pub(crate) mod impl_single;
+mod let_framed;
 mod literal;
 mod literal_frame;
 mod macro_enclosing;

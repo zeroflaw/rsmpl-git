@@ -26,6 +26,13 @@ use syn::spanned::Spanned;
 /// both varying across sites (hence the `P0`/`E0` holes). Emits one
 /// `# allow=many` hunk (tight original range, SPEC D.5) with diet
 /// inferred holes — no `# pat`/`# expr` declarations (SPEC 15.8).
+/// WI-14 slice 4: the same class inside one-line `fn` frames
+/// (`fn f0() { let x = E; }` → `fn f0() { let x: T = E; }`) raises to
+/// the identical bare hunk (D14: no frame text emitted) via the `fn`
+/// Stmt rung — the only frame rung whose outer is never itself a
+/// `Stmt::Local`, so the bare emission cannot match an outer `let`
+/// first. `let`-outer frames (`let g = || { … };`) stay ordinary by
+/// construction (unwrapping them would over-match the outer `let`).
 pub(crate) fn try_let_sweep(
     minuses: &[&str],
     pluses: &[&str],
@@ -34,14 +41,17 @@ pub(crate) fn try_let_sweep(
     changed: &[usize],
     used_rules: &mut Vec<String>,
 ) -> Option<String> {
-    let ty = antiunify_let_type_add(minuses, pluses)?;
-    if !crate::totality::let_untyped_holds(file_old, minuses, changed) {
-        return None;
+    if let Some(ty) = antiunify_let_type_add(minuses, pluses) {
+        if !crate::totality::let_untyped_holds(file_old, minuses, changed) {
+            return None;
+        }
+        return Some(super::let_framed::emit_let_type_add(
+            path, &ty, changed, used_rules,
+        ));
     }
-    let rule = unique_rule(used_rules, "let_type_add");
-    let mut hunk = crate::emission_header(path, &rule, changed);
-    hunk.push_str(&format!("- let P0 = E0;\n+ let P0: {ty} = E0;\n"));
-    Some(hunk)
+    // WI-14 slice 4: framed fallback lives in the `let_framed`
+    // sibling (D5 split — production only, tests stay inline here).
+    super::let_framed::try_framed_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
 }
 
 /// N-site (N ≥ 2) type rewrite sweep: every pair carries the same type
@@ -401,6 +411,117 @@ mod tests {
             "@@ -1,4 +1,4 @@\n fn m() {\n-    let alpha_value = compute_first(input);\n-    let beta_value = compute_second(other);\n+    let alpha_value: u32 = compute_first(input);\n+    let beta_value: u64 = compute_second(other);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    const PRE_FRAMED_THREE: &str =
+        "fn f0() { let x = foo(1); }\nfn f1() { let y = foo(2); }\nfn f2() { let z = foo(3); }\n";
+
+    fn framed_three_pair_body() -> String {
+        "@@ -1,3 +1,3 @@\n-fn f0() { let x = foo(1); }\n-fn f1() { let y = foo(2); }\n-fn f2() { let z = foo(3); }\n+fn f0() { let x: u32 = foo(1); }\n+fn f1() { let y: u32 = foo(2); }\n+fn f2() { let z: u32 = foo(3); }\n"
+            .to_string()
+    }
+
+    #[test]
+    fn framed_let_type_add_fires() {
+        // WI-14 slice 4: the same type-add class inside one-line `fn`
+        // frames raises to the identical bare hunk (no frame text).
+        let raw = section("f.rs", &framed_three_pair_body());
+        let pre = pre_map(&[("f.rs", PRE_FRAMED_THREE)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let P0 = E0;\n"), "got: {out}");
+        assert!(out.contains("+ let P0: u32 = E0;\n"), "got: {out}");
+        assert!(
+            !out.contains("fn f0"),
+            "no frame text in emission, got: {out}"
+        );
+    }
+
+    #[test]
+    fn framed_let_type_add_frame_delta_vetoes() {
+        // A `fn` name delta alongside the inner rewrite is a frame
+        // delta — the bare template would silently drop it.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-fn f0() { let x = foo(1); }\n-fn f1() { let y = foo(2); }\n-fn f2() { let z = foo(3); }\n+fn g0() { let x: u32 = foo(1); }\n+fn g1() { let y: u32 = foo(2); }\n+fn g2() { let z: u32 = foo(3); }\n",
+        );
+        let pre = pre_map(&[("f.rs", PRE_FRAMED_THREE)]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_closure_outer_stays_ordinary() {
+        // Over-match boundary: `let g = || { let x = … };` unwrapped to
+        // the inner `let` would hand the engine a bare template that
+        // matches the OUTER `let g` first (outermost-wins) — so the
+        // `fn`-only Stmt rung declines and the section stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n fn m() {\n-    let g = || { let x = foo(1); };\n-    let h = || { let y = foo(2); };\n-    let k = || { let z = foo(3); };\n+    let g = || { let x: u32 = foo(1); };\n+    let h = || { let y: u32 = foo(2); };\n+    let k = || { let z: u32 = foo(3); };\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let g = || { let x = foo(1); };\n    let h = || { let y = foo(2); };\n    let k = || { let z = foo(3); };\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_arm_block_stays_ordinary() {
+        // Named residue: block-arm frames (`1 => { let a = …; a },`)
+        // are not offered the Stmt rung (fn rung only, this slice), so
+        // the section stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -3,3 +3,3 @@\n fn m() {\n-        1 => { let a = foo(1); a },\n-        2 => { let b = foo(2); b },\n-        _ => { let c = foo(3); c },\n+        1 => { let a: u32 = foo(1); a },\n+        2 => { let b: u32 = foo(2); b },\n+        _ => { let c: u32 = foo(3); c },\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m(x: i32) -> i32 {\n    match x {\n        1 => { let a = foo(1); a },\n        2 => { let b = foo(2); b },\n        _ => { let c = foo(3); c },\n    }\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_mixed_stays_ordinary() {
+        // All-or-nothing per side: a section mixing own-line and
+        // framed pairs declines (totality is whole-file either way,
+        // and neither arm owns the mixed class).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = foo(1);\n-    let b = foo(2);\n+    let a: u32 = foo(1);\n+    let b: u32 = foo(2);\n }\n@@ -5,2 +5,2 @@\n-fn f2() { let z = foo(3); }\n-fn f3() { let w = foo(4); }\n+fn f2() { let z: u32 = foo(3); }\n+fn f3() { let w: u32 = foo(4); }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = foo(1);\n    let b = foo(2);\n}\nfn f2() { let z = foo(3); }\nfn f3() { let w = foo(4); }\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_stray_untyped_vetoes() {
+        // File-wide totality: one stray own-line untyped `let` (4 != 3)
+        // would be silently rewritten — vetoes.
+        let raw = section("f.rs", &framed_three_pair_body());
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn f0() { let x = foo(1); }\nfn f1() { let y = foo(2); }\nfn f2() { let z = foo(3); }\nfn other() {\n    let stray = bar();\n    stray\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_varying_type_vetoes() {
+        // A varying inner type would need an unbound plus-side T0.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-fn f0() { let x = foo(1); }\n-fn f1() { let y = foo(2); }\n+fn f0() { let x: u32 = foo(1); }\n+fn f1() { let y: u64 = foo(2); }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn f0() { let x = foo(1); }\nfn f1() { let y = foo(2); }\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
     }
 
     #[test]
