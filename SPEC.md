@@ -2530,7 +2530,11 @@ re-export chain passes through a second re-exporter), `macro-hidden`
 (macro/attribute/`qself` interiors the resolver cannot attribute, or
 an unsearchable workspace file), `off-target` (names `old` but sits
 outside any rewritten hunk: a re-export that does not point at our
-definition, or a use left behind by a definition-only rename). JSON
+definition, or a use left behind by a definition-only rename),
+`chain-depth` (WI-11: a method chain deeper than the one-hop cap),
+`chain-unproven` (WI-11: a chain step naming no proven constructor or
+stated return type), `ambiguous-bound` (WI-11: a generic-bound receiver
+with two or more candidate bounds). JSON
 `follow_skipped_details: [{file, line, reason}]` carries the skip signal alone:
 the historical `; `-joined `follow_skipped` prose string was removed in
 report schema `version: 4` (WI-20 owns the string's
@@ -2779,11 +2783,20 @@ the receiver names a domain self type (fn-signature params, `let x: C`
 annotations, `let x = S { … }` literal inits, `self` inside a domain
 `impl S` or inside the defining `trait Tr` default body), and `S::old`
 tails where `S` names a domain self type (or the trait itself), plus
-`<S as Tr>::old` qself tails naming the trait. Bare `old` is not method
-syntax (ignored); call/literal/composite bases (`make().old()`) never
-claim; unrelated `X::old` tails are ignored outright. Unproven method
-receivers are `shadowed` (another item defines `old`) or `off-target`
-evidence — never a veto. Inherent `impl S { fn old }` and other-trait
+`<S as Tr>::old` qself tails naming the trait. WI-11 grows the anchor
+order same-file only (D8): `C::ctor(…).old()` where `ctor` is
+`new`/`make`/`default` and the same file contains `impl C` with that
+constructor returning `C`/`Self`; `base.m(…).old()` where `base` is
+anchored and the same file states `m` returning the domain type on the
+base type (one hop — deeper chains skip `chain-depth`); and `t.old()`
+where `t: T` with exactly one bound naming the trait (`T: Tr`, inline
+or `where`; two or more bounds skip `ambiguous-bound`). Bare `old` is
+not method syntax (ignored); literal/composite bases that match no
+chain shape (`make().old()`) never claim; unrelated `X::old` tails are
+ignored outright. Unproven method receivers are `shadowed` (another
+item defines `old`), `off-target`, or the WI-11 chain reasons
+(`chain-depth`, `chain-unproven`, `ambiguous-bound`) evidence — never
+a veto. Inherent `impl S { fn old }` and other-trait
 `impl <Other> for _ { fn old }` defs never claim a trait-header rename
 (different items → `shadowed` evidence). Without follow, leftover
 trait-proven impl defs and anchored call sites report as orphans
@@ -2796,10 +2809,12 @@ definition of the same name — each `fn` ident rewritten and labelled
 plus anchored call sites by the same anchor order over the single-type
 domain (`S`): `recv.old()` with a proven `S` receiver, `self` inside an
 `impl S` block, `S::old` tails, and `<S as _>::old` qself tails naming
-the self type. `trait` declarations, `impl <Trait> for _` definitions,
+the self type, plus the WI-11 same-file chain shapes (constructor calls
+and one-hop method-return chains; generic bounds never prove a concrete
+self type and stay `off-target`). `trait` declarations, `impl <Trait> for _` definitions,
 and other-type inherent `impl U { fn old }` defs never claim (different
-items → `shadowed` evidence); unproven receivers are `shadowed` or
-`off-target`, never a veto. Without follow, leftover domain defs and
+items → `shadowed` evidence); unproven receivers are `shadowed`,
+`off-target`, or the WI-11 chain reasons, never a veto. Without follow, leftover domain defs and
 anchored calls report as orphans with the same reasons. The definition
 set is every inherent `impl S` block of the domain (last-segment
 equality, D8). `impl T for S` headers name a trait-impl block, not a

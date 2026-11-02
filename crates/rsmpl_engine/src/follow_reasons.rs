@@ -16,6 +16,12 @@ pub mod reason {
     pub const GLOB_REEXPORT: &str = "glob-reexport";
     /// A re-export chain passes through a second re-exporter.
     pub const SECOND_HOP: &str = "second-hop";
+    /// A method chain is deeper than the one-hop cap (`S::make().foo().run()`).
+    pub const CHAIN_DEPTH: &str = "chain-depth";
+    /// A chain step names no provable constructor or stated return type.
+    pub const CHAIN_UNPROVEN: &str = "chain-unproven";
+    /// A generic-bound receiver names two or more candidate traits.
+    pub const AMBIGUOUS_BOUND: &str = "ambiguous-bound";
     /// Macro/attribute/`qself` interiors or unsearchable files.
     pub const MACRO_HIDDEN: &str = "macro-hidden";
     /// A re-export/naming that does not point at our definition.

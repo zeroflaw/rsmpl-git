@@ -134,3 +134,58 @@ fn inherent_definition_only_lists_call_orphan() {
         "got: {texts:?}"
     );
 }
+
+// WI-11: constructor-chained receivers prove through the same-file
+// `impl S` return type and complete with `verified`.
+const CTOR_LIB: &str = "pub struct S;\nimpl S {\n    pub fn make() -> S {\n        S\n    }\n    pub fn old(&self) {}\n}\npub fn f() {\n    S::make().old();\n}\n";
+
+const CTOR_PATCH: &str =
+    "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# scope=file\n# follow=uses\n  impl S {\n      ...\n-     V Q fn old G (...) W {\n+     V Q fn new G (...) W {\n          ...\n      }\n  }\n";
+
+#[test]
+fn inherent_ctor_chain_completion_applies_and_checks_clean() {
+    let dir = init_repo();
+    cargo_crate(dir.path(), CTOR_LIB);
+    let v = check_json(dir.path(), CTOR_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "ctor-chained call completes (WI-11), got: {v}"
+    );
+    apply_patch(dir.path(), CTOR_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("fn new(&self)"), "got: {post}");
+    assert!(post.contains("S::make().new();"), "got: {post}");
+    assert!(!post.contains("old"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn inherent_two_hop_chain_skips_chain_depth() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub struct S;\nimpl S {\n    pub fn make() -> S {\n        S\n    }\n    pub fn foo(&self) -> S {\n        S\n    }\n    pub fn old(&self) {}\n}\npub fn f() {\n    S::make().foo().old();\n}\n",
+    );
+    let v = check_json(dir.path(), CTOR_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "two-hop chain exceeds the one-hop cap (WI-11), got: {v}"
+    );
+    let reasons: Vec<String> = v["rules"][0]["follow_skipped_details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["reason"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        reasons.iter().any(|r| r == "chain-depth"),
+        "got: {reasons:?}"
+    );
+    apply_patch(dir.path(), CTOR_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("S::make().foo().old();"), "got: {post}");
+    // No `cargo check`: the definition renamed while the skipped call
+    // still names `old` — the evidence (not the build) is the pin.
+}
