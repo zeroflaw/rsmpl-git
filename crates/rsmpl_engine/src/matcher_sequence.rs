@@ -92,7 +92,11 @@ pub fn apply_sequence_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected statement-sequence pattern".to_string(),
-            ))
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "sequence-template",
+                "write 2-4 single-line plain `let` statements on the `-` side, e.g. `- let P0 = E0;` / `- let P1 = E1;` with a matching `+` side (empty `+` deletes); sequences never span items",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -105,6 +109,10 @@ pub fn apply_sequence_hunk(
             format!("invalid statement-sequence pattern: {e}"),
         )
         .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "sequence-let-syntax",
+            "write valid Rust `let` statements on the `-` side, e.g. `let P0 = E0;` (2-4 single-line plain lets, no `if`/`for`/`return`)",
+        ))
     })?;
     let mut pat_locals: Vec<syn::Local> = Vec::with_capacity(minus_block.stmts.len());
     for stmt in &minus_block.stmts {
@@ -115,7 +123,11 @@ pub fn apply_sequence_hunk(
                     ErrorCode::PatternConflict,
                     "statement-sequence members must be plain `let` statements in v1".to_string(),
                 )
-                .with_rule(&rule))
+                .with_rule(&rule)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "sequence-let-only",
+                    "write only plain `let` statements (no `if`/`for`/`return`/items), 2-4 lines, one per line",
+                )))
             }
         }
     }
@@ -125,7 +137,11 @@ pub fn apply_sequence_hunk(
             ErrorCode::PatternConflict,
             "statement-sequence members must be plain `let` statements in v1".to_string(),
         )
-        .with_rule(&rule));
+        .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "sequence-let-only",
+            "write only plain `let` statements (no `if`/`for`/`return`/items), 2-4 lines, one per line",
+        )));
     }
     let deleting = plus_raw.trim().is_empty();
     let plus_lines: Vec<String> = if deleting {
@@ -154,7 +170,11 @@ pub fn apply_sequence_hunk(
                     body.len()
                 ),
             )
-            .with_rule(&rule));
+            .with_rule(&rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "sequence-plus-count",
+                "write exactly K single-line `let` statements on the `+` side (same count as `-`, empty `+` deletes the window)",
+            )));
         }
         body
     };
@@ -769,5 +789,173 @@ mod tests {
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("let new = g(1);"), "got: {out}");
         assert!(out.contains("let c = new;"), "got: {out}");
+    }
+
+    fn wi18_seq_hunk_and_pattern() -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let P0 = E0;\n- let P1 = E1;\n+ let P0: u32 = E0;\n+ let P1: u32 = E1;\n"
+        );
+        let mut parsed_patch = rsmpl_patch::parse_patch(&patch).expect("test patch parses");
+        for f in &mut parsed_patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("valid sequence compiles");
+        let src = "fn f() {\n    let a = 1;\n    let b = 2;\n}\n".to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_seq_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 3: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice3_sequence_dispatch_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_seq_hunk_and_pattern();
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_sequence_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected statement-sequence pattern");
+        let (code, w) = wi18_seq_repair(&err);
+        assert_eq!(code, "sequence-template");
+        assert!(w.contains("2-4 single-line plain `let`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice3_sequence_invalid_minus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_seq_hunk_and_pattern();
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::General { minus_sub, .. } => {
+                *minus_sub = "let = ==".to_string();
+            }
+            _ => panic!("want sequence pattern"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_sequence_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("invalid minus must fail");
+        assert!(
+            err.message
+                .starts_with("invalid statement-sequence pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_seq_repair(&err);
+        assert_eq!(code, "sequence-let-syntax");
+        assert!(w.contains("`let P0 = E0;`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice3_sequence_non_let_member_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_seq_hunk_and_pattern();
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::General { minus_sub, .. } => {
+                *minus_sub = "foo();\nbar();".to_string();
+            }
+            _ => panic!("want sequence pattern"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_sequence_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("non-let member must fail");
+        assert_eq!(
+            err.message,
+            "statement-sequence members must be plain `let` statements in v1"
+        );
+        let (code, w) = wi18_seq_repair(&err);
+        assert_eq!(code, "sequence-let-only");
+        assert!(w.contains("only plain `let`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice3_sequence_k_range_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_seq_hunk_and_pattern();
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::General { minus_sub, .. } => {
+                *minus_sub = "let a = 1;".to_string();
+            }
+            _ => panic!("want sequence pattern"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_sequence_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("K=1 must fail");
+        assert_eq!(
+            err.message,
+            "statement-sequence members must be plain `let` statements in v1"
+        );
+        let (code, w) = wi18_seq_repair(&err);
+        assert_eq!(code, "sequence-let-only");
+        assert!(w.contains("2-4 lines"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice3_sequence_plus_count_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_seq_hunk_and_pattern();
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::General { plus_raw, .. } => {
+                *plus_raw = "let P0: u32 = E0; let P1: u32 = E1;".to_string();
+            }
+            _ => panic!("want sequence pattern"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_sequence_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("one-line two-stmt plus must fail");
+        assert!(
+            err.message.contains("plus side must hold 2 single-line"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_seq_repair(&err);
+        assert_eq!(code, "sequence-plus-count");
+        assert!(w.contains("same count"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice3_sequence_plus_count_reachable_via_apply() {
+        // Authored trigger: one '+' statement split across two diff lines
+        // parses as 2 stmts at compile time but counts as 3 lines at match
+        // time, so the engine plus-count gate (not the C18 compile gate)
+        // fires.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let P0 = E0;\n- let P1 = E1;\n+ let P0: u32 =\n+ E0;\n+ let P1: u32 = E1;\n"
+        );
+        let src = "fn f() {\n    let a = 1;\n    let b = 2;\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(
+            err.contains("plus side must hold 2 single-line"),
+            "got: {err}"
+        );
+        assert!(
+            !err.contains("\"code\":\"pattern\""),
+            "must not be the generic filler: {err}"
+        );
     }
 }

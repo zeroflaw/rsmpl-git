@@ -379,6 +379,8 @@ mod tests {
     /// WI-18 follow-up slice 2 moved the 8-site container-splice
     /// template family to site-specific `evolution-*-splice-template`
     /// repairs (ceiling 87 -> 79). Any other bare site
+    /// WI-18 follow-up slice 3 moved the 5-site sequence-template family
+    /// to site-specific `sequence-*-template` repairs (ceiling 79 -> 74).
     /// (`Match`/`Range`/`Parse`/`GitHunk`/`Build` or an unclassified
     /// code) fails naming file + line + code, because the filler does
     /// not cover those codes and a bare site there is a prose-only
@@ -387,7 +389,7 @@ mod tests {
     /// The companion runtime enumeration lives in
     /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
     /// patch per patch-input class); this test is the source gate.
-    const PATTERN_TAIL_CEILING: usize = 79;
+    const PATTERN_TAIL_CEILING: usize = 74;
 
     #[test]
     fn wi18_source_scan_every_site_carries_repair_or_allow_list() {
