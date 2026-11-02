@@ -2477,7 +2477,7 @@ without `# fallback=syntax` the hunk vetoes with `RSMPL_SYMBOL_CONFLICT`
 naming the first shadow (`path:line`); with it all use rewriting is
 skipped and each shadow is listed in `follow_skipped_details`. Same-file
 shadowing (a local binding, an enum variant) and opaque sites
-(macro/attribute interiors, `qself` paths, glob imports paired with a
+(macro/attribute interiors — paths and values, `qself` paths, glob imports paired with a
 same-name use) veto or skip exactly as before, now reported
 `path:line`-qualified when the workspace holds several files;
 single-file patches keep the historical `line N` wording.

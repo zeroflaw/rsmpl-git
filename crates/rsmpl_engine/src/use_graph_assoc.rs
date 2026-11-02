@@ -939,6 +939,45 @@ impl<'ast> Visit<'ast> for AssocWalker<'_> {
                 ));
             }
         }
+        // Value idents (`#[doc = Old]`, `#[foo(Old)]`) are equally
+        // opaque: they never resolve to the renamed assoc item.
+        match &node.meta {
+            syn::Meta::NameValue(nv) => {
+                struct ValuePaths<'o> {
+                    old: &'o str,
+                    opaque: Vec<u32>,
+                }
+                impl<'ast> Visit<'ast> for ValuePaths<'_> {
+                    fn visit_path(&mut self, node: &'ast syn::Path) {
+                        for seg in &node.segments {
+                            if seg.ident == self.old {
+                                self.opaque.push(seg.ident.span().start().line as u32);
+                            }
+                        }
+                        visit::visit_path(self, node);
+                    }
+                    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                        for line in macro_ident_lines(&node.tokens, self.old) {
+                            self.opaque.push(line);
+                        }
+                    }
+                }
+                let mut values = ValuePaths {
+                    old: self.domain.old.as_str(),
+                    opaque: Vec::new(),
+                };
+                values.visit_expr(&nv.value);
+                for line in values.opaque {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::List(list) => {
+                for line in macro_ident_lines(&list.tokens, self.domain.old.as_str()) {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::Path(_) => {}
+        }
     }
 }
 
@@ -1000,5 +1039,16 @@ mod tests {
         // `Item` sits on line 3; the attribute starts on line 2.
         let src = "trait Tr { type Item; }\n#[a::\nItem]\nfn f() {}\n";
         assert_eq!(opaque_lines_for_attr(src, "Item"), vec![3]);
+    }
+
+    #[test]
+    fn attribute_value_and_list_form_are_opaque() {
+        let src = "trait Tr { type Item; }\n#[doc = Item]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "Item"), vec![2]);
+        let src = "trait Tr { type Item; }\n#[foo(Item)]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "Item"), vec![2]);
+        // String literals are not idents: silent.
+        let src = "trait Tr { type Item; }\n#[doc = \"Item\"]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "Item"), Vec::<u32>::new());
     }
 }

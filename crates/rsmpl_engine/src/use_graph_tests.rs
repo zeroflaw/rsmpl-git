@@ -136,6 +136,22 @@ fn multiline_attribute_reports_ident_line() {
 }
 
 #[test]
+fn attribute_value_and_list_form_are_opaque() {
+    // `#[doc = Old]` value and `#[foo(Old)]` list tokens are opaque
+    // at their own ident lines, never claimed as uses.
+    let src = "struct Old;\n#[doc = Old]\nfn f() {}\n";
+    let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
+    assert!(err.reason.contains("line 2"), "got: {}", err.reason);
+    let src = "struct Old;\n#[foo(Old)]\nfn f() {}\n";
+    let err = resolve_for_test(src, "Old", "struct Old", false).unwrap_err();
+    assert!(err.reason.contains("line 2"), "got: {}", err.reason);
+    // String literals are not idents: no veto, clean follow.
+    let src = "struct Old;\n#[doc = \"Old\"]\nfn f(x: Old) -> Old {\n    x\n}\n";
+    let out = resolve_for_test(src, "Old", "struct Old", false).unwrap();
+    assert!(out.skipped.is_empty(), "skipped: {:?}", out.skipped);
+}
+
+#[test]
 fn multiline_qself_reports_ident_line() {
     // `Old` sits on line 3; the `<...>` starts on line 2.
     let src = "struct Old;\nfn f(x: <T as Tr>::a::\n    Old) {}\n";

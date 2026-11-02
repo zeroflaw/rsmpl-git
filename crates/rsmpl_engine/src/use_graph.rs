@@ -1013,6 +1013,50 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 ));
             }
         }
+        // Value idents (`#[doc = Old]`, `#[foo(Old)]`) are equally
+        // opaque: they never resolve to the renamed item.
+        // `Meta::NameValue` values are real exprs, so their paths are
+        // collected structurally; `Meta::List` tokens are never parsed,
+        // so they are scanned as token trees. String literals
+        // (`#[doc = "Old"]`) are `Literal`, never `Ident`, and stay out
+        // by construction.
+        match &node.meta {
+            syn::Meta::NameValue(nv) => {
+                struct ValuePaths<'o> {
+                    old: &'o str,
+                    opaque: Vec<u32>,
+                }
+                impl<'ast> Visit<'ast> for ValuePaths<'_> {
+                    fn visit_path(&mut self, node: &'ast syn::Path) {
+                        for seg in &node.segments {
+                            if seg.ident == self.old {
+                                self.opaque.push(seg.ident.span().start().line as u32);
+                            }
+                        }
+                        visit::visit_path(self, node);
+                    }
+                    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                        for line in macro_ident_lines(&node.tokens, self.old) {
+                            self.opaque.push(line);
+                        }
+                    }
+                }
+                let mut values = ValuePaths {
+                    old: self.old,
+                    opaque: Vec::new(),
+                };
+                values.visit_expr(&nv.value);
+                for line in values.opaque {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::List(list) => {
+                for line in macro_ident_lines(&list.tokens, self.old) {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::Path(_) => {}
+        }
     }
 }
 

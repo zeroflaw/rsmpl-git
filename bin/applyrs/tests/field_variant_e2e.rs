@@ -243,3 +243,55 @@ fn variant_sibling_definition_never_vetoes() {
     assert!(got.contains("New,"), "E::Old renamed, got:\n{got}");
     assert!(got.contains("enum F"), "F untouched, got:\n{got}");
 }
+
+#[test]
+fn field_attribute_value_vetoes_then_skips_with_fallback() {
+    // Attribute values are opaque to member renames (scalar parity):
+    // `#[doc = old]` vetoes without fallback, rewrites def + anchored
+    // use and reports `macro-hidden` with fallback.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "struct S {\n    old: u32,\n}\nfn f(s: S) -> u32 {\n    s.old\n}\n#[doc = old]\nfn g() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=rename_field\n# follow=uses\n  struct S {\n- old: u32\n+ new: u32\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(!out.status.success(), "opacity veto expected");
+    let v = json_of(&out);
+    assert_eq!(v["error"]["code"], "RSMPL_SYMBOL_CONFLICT", "got: {v}");
+
+    let patch_fb = "diff --git src/lib.rs\n@@ -1,4 @@ rule=rename_field\n# follow=uses\n# fallback=syntax\n  struct S {\n- old: u32\n+ new: u32\n";
+    let out = run_stdin(
+        dir.path(),
+        patch_fb,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = json_of(&out);
+    assert_eq!(v["checked"]["semantics"], "partial", "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"]
+        .as_array()
+        .expect("skips present");
+    assert!(
+        details
+            .iter()
+            .any(|d| d["line"] == 7 && d["reason"] == "macro-hidden"),
+        "attr line named, got: {v}"
+    );
+
+    let out = run_stdin(dir.path(), patch_fb, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("new: u32,"), "got:\n{got}");
+    assert!(got.contains("s.new"), "got:\n{got}");
+    assert!(got.contains("#[doc = old]"), "value kept, got:\n{got}");
+}

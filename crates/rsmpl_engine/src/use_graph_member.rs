@@ -747,12 +747,55 @@ impl<'ast> Visit<'ast> for MemberCollector<'_> {
     }
 
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
-        // Attribute paths cannot spell field accesses or `E::Old`
-        // variant paths in valid Rust; unlike scalar renames there is no
-        // opacity class here — do not visit interiors either (macros in
-        // attributes stay uncovered by design, same as scalar attribute
-        // handling which only records the path itself).
-        let _ = node;
+        // Attribute paths and values cannot spell anchored member uses
+        // in valid Rust, but a same-spelling ident inside one is
+        // evidence, never a rewrite (scalar parity): record it opaque
+        // at its own ident line instead of staying silent.
+        for seg in node.path().segments.iter() {
+            if seg.ident == self.old {
+                self.opaque.push((
+                    seg.ident.span().start().line as u32,
+                    "an attribute".to_string(),
+                ));
+            }
+        }
+        match &node.meta {
+            syn::Meta::NameValue(nv) => {
+                struct ValuePaths<'o> {
+                    old: &'o str,
+                    opaque: Vec<u32>,
+                }
+                impl<'ast> Visit<'ast> for ValuePaths<'_> {
+                    fn visit_path(&mut self, node: &'ast syn::Path) {
+                        for seg in &node.segments {
+                            if seg.ident == self.old {
+                                self.opaque.push(seg.ident.span().start().line as u32);
+                            }
+                        }
+                        visit::visit_path(self, node);
+                    }
+                    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                        for line in macro_ident_lines(&node.tokens, self.old) {
+                            self.opaque.push(line);
+                        }
+                    }
+                }
+                let mut values = ValuePaths {
+                    old: self.old,
+                    opaque: Vec::new(),
+                };
+                values.visit_expr(&nv.value);
+                for line in values.opaque {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::List(list) => {
+                for line in macro_ident_lines(&list.tokens, self.old) {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::Path(_) => {}
+        }
     }
 }
 
@@ -804,5 +847,20 @@ mod tests {
         // `Old` sits on line 3; the `<...>::a::` starts on line 2.
         let src = "enum E { Old }\nfn f(x: <T as Tr>::a::\n    Old) {}\n";
         assert_eq!(opaque_lines_for(src, "E", "Old"), vec![3]);
+    }
+
+    #[test]
+    fn attribute_path_value_and_list_form_are_opaque() {
+        // Member attributes were fully silent before the parity fix;
+        // now path + value + list forms all surface as opaque.
+        let src = "struct S { old: u32 }\n#[old]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for(src, "S", "old"), vec![2]);
+        let src = "struct S { old: u32 }\n#[doc = old]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for(src, "S", "old"), vec![2]);
+        let src = "struct S { old: u32 }\n#[foo(old)]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for(src, "S", "old"), vec![2]);
+        // String literals are not idents: silent.
+        let src = "struct S { old: u32 }\n#[doc = \"old\"]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for(src, "S", "old"), Vec::<u32>::new());
     }
 }

@@ -196,3 +196,59 @@ fn macro_mention_vetoes_without_fallback() {
     assert!(stderr.contains("RSMPL_SYMBOL_CONFLICT"), "got: {stderr}");
     assert!(stderr.contains("opaque"), "got: {stderr}");
 }
+
+#[test]
+fn fn_attribute_value_vetoes_then_skips_with_fallback() {
+    // Attribute values are opaque to item renames (binder parity):
+    // `#[doc = old]` vetoes without fallback, rewrites def + call
+    // and reports `macro-hidden` with fallback while the value stays
+    // byte-verbatim.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn old_fn() {}\nfn f() {\n    old_fn();\n}\n#[doc = old_fn]\nfn g() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=fn_attr_val\n# follow=uses\n- fn old_fn\n+ fn new_fn\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(!out.status.success(), "opacity veto expected");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["error"]["code"], "RSMPL_SYMBOL_CONFLICT", "got: {v}");
+
+    let patch_fb = "diff --git src/lib.rs\n@@ -1,1 @@ rule=fn_attr_val\n# follow=uses\n# fallback=syntax\n- fn old_fn\n+ fn new_fn\n";
+    let out = run_stdin(
+        dir.path(),
+        patch_fb,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["checked"]["semantics"], "partial", "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"]
+        .as_array()
+        .expect("skips present");
+    assert!(
+        details
+            .iter()
+            .any(|d| d["line"] == 5 && d["reason"] == "macro-hidden"),
+        "attr line named, got: {v}"
+    );
+
+    // Real apply: def + call rewrite, attribute value verbatim.
+    let out = run_stdin(dir.path(), patch_fb, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("fn new_fn() {}"), "got:\n{got}");
+    assert!(got.contains("new_fn();"), "got:\n{got}");
+    assert!(got.contains("#[doc = old_fn]"), "value kept, got:\n{got}");
+}
