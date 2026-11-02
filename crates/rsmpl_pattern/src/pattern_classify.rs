@@ -319,7 +319,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, a concrete signature + `{{ ... }}`, or `fn <Old> as <New>(args) -> ret {{ ... }}` for a signature+body joint (got `{}`); write `+ <vis>fn <New>(...) {{ ... }}`, `+ <vis>fn <Old> as <New>(...) {{ ... }}`, `+ <vis>fn <New>(args) -> ret {{ ... }}`, `+ <vis>fn <Old> as <New>(args) -> ret {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-fn-template",
+                "write `+ <vis>fn <New>(...) { ... }`, `+ <vis>fn <Old> as <New>(...) { ... }`, `+ <vis>fn <New>(args) -> ret { ... }`, `+ <vis>fn <Old> as <New>(args) -> ret { ... }` or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_struct_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -327,7 +331,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `struct` header with `...` (got `{}`); write `+ <vis>struct <New> {{ ... }}`, `+ <vis>struct <Old> as <New> {{ ... }}` for a self-reference body rename, or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-struct-template",
+                "write `+ <vis>struct <New> { ... }`, `+ <vis>struct <Old> as <New> { ... }` for a self-reference body rename, or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_enum_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -335,7 +343,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `enum` header with `...` (got `{}`); write `+ <vis>enum <New> {{ ... }}`, `+ <vis>enum <Old> as <New> {{ ... }}` for a self-reference body rename, or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-enum-template",
+                "write `+ <vis>enum <New> { ... }`, `+ <vis>enum <Old> as <New> { ... }` for a self-reference body rename, or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_union_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -343,7 +355,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `union` header with `...` (got `{}`); write `+ <vis>union <New> {{ ... }}`, `+ <vis>union <Old> as <New> {{ ... }}` for a self-reference body rename, or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-union-template",
+                "write `+ <vis>union <New> { ... }`, `+ <vis>union <Old> as <New> { ... }` for a self-reference body rename, or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_type_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -351,7 +367,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `type` header with `= ...;` (got `{}`); write `+ <vis>type <New> = ...;` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-type-template",
+                "write `+ <vis>type <New> = ...;` or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_const_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -359,7 +379,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `const` header with `= ...;` (got `{}`); write `+ <vis>const <New> = ...;` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-const-template",
+                "write `+ <vis>const <New> = ...;` or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_static_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -367,7 +391,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `static` header with `= ...;` (got `{}`); write `+ <vis>static [mut ]<New> = ...;` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-static-template",
+                "write `+ <vis>static [mut ]<New> = ...;` or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_mod_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -375,7 +403,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `mod` header with `...` (got `{}`); write `+ <vis>mod <New> {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-mod-template",
+                "write `+ <vis>mod <New> { ... }` or paste the bare capture name for a verbatim move",
+            )));
         } else if uses.len() == 1 && p.lines().count() == 1 && has_trait_keyword(p.trim()) {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
@@ -383,7 +415,11 @@ pub(crate) fn classify(
                     "evolution paste template must be a single-line `trait` header with `...` (got `{}`); write `+ <vis>trait <New> {{ ... }}` or paste the bare capture name for a verbatim move",
                     p.trim()
                 ),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-trait-template",
+                "write `+ <vis>trait <New> { ... }` or paste the bare capture name for a verbatim move",
+            )));
         } else {
             None
         };
@@ -1386,4 +1422,119 @@ fn classify_member_rename(
 fn is_type_pair(minus_raw: &str, plus_raw: &str) -> bool {
     syn::parse_str::<syn::Type>(minus_raw.trim()).is_ok()
         && syn::parse_str::<syn::Type>(plus_raw.trim()).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bad_paste_err(plus: &str) -> StructuredError {
+        let patch = format!("diff --git src/new.rs\n@@ -1,0 @@ rule=r\n# use=M1\n+ {plus}\n");
+        let hunk: RsmplHunk = match rsmpl_patch::parse_patch(&patch)
+            .expect("test patch parses")
+            .files
+            .remove(0)
+            .hunks
+            .remove(0)
+        {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let err = crate::pattern::compile(&hunk).expect_err("bad template must fail");
+        assert_eq!(
+            err.code,
+            ErrorCode::PatternConflict,
+            "wrong code for `{plus}`: {err:?}"
+        );
+        assert!(err.repair.is_some(), "WI-18 slice 1: must carry repair");
+        err
+    }
+
+    fn repair_code(err: &StructuredError) -> String {
+        err.repair
+            .as_ref()
+            .expect("repair")
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string()
+    }
+
+    fn repair_template(err: &StructuredError) -> String {
+        err.repair
+            .as_ref()
+            .expect("repair")
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string()
+    }
+
+    #[test]
+    fn wi18_slice1_fn_template_repair_is_specific() {
+        let err = bad_paste_err("fn bad template without parens");
+        assert_eq!(repair_code(&err), "evolution-fn-template");
+        let w = repair_template(&err);
+        assert!(w.contains("+ <vis>fn <New>(...)"), "got: {w}");
+        assert_ne!(
+            w,
+            "rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk"
+        );
+    }
+
+    #[test]
+    fn wi18_slice1_struct_template_repair_is_specific() {
+        let err = bad_paste_err("struct bad without ellipsis");
+        assert_eq!(repair_code(&err), "evolution-struct-template");
+        assert!(repair_template(&err).contains("+ <vis>struct <New>"));
+    }
+
+    #[test]
+    fn wi18_slice1_enum_template_repair_is_specific() {
+        let err = bad_paste_err("enum bad without ellipsis");
+        assert_eq!(repair_code(&err), "evolution-enum-template");
+        assert!(repair_template(&err).contains("+ <vis>enum <New>"));
+    }
+
+    #[test]
+    fn wi18_slice1_union_template_repair_is_specific() {
+        let err = bad_paste_err("union bad without ellipsis");
+        assert_eq!(repair_code(&err), "evolution-union-template");
+        assert!(repair_template(&err).contains("+ <vis>union <New>"));
+    }
+
+    #[test]
+    fn wi18_slice1_type_template_repair_is_specific() {
+        let err = bad_paste_err("type bad without semi");
+        assert_eq!(repair_code(&err), "evolution-type-template");
+        assert!(repair_template(&err).contains("+ <vis>type <New> = ...;"));
+    }
+
+    #[test]
+    fn wi18_slice1_const_template_repair_is_specific() {
+        let err = bad_paste_err("const bad without semi");
+        assert_eq!(repair_code(&err), "evolution-const-template");
+        assert!(repair_template(&err).contains("+ <vis>const <New> = ...;"));
+    }
+
+    #[test]
+    fn wi18_slice1_static_template_repair_is_specific() {
+        let err = bad_paste_err("static bad without semi");
+        assert_eq!(repair_code(&err), "evolution-static-template");
+        assert!(repair_template(&err).contains("+ <vis>static [mut ]<New> = ...;"));
+    }
+
+    #[test]
+    fn wi18_slice1_mod_template_repair_is_specific() {
+        let err = bad_paste_err("mod bad without ellipsis");
+        assert_eq!(repair_code(&err), "evolution-mod-template");
+        assert!(repair_template(&err).contains("+ <vis>mod <New>"));
+    }
+
+    #[test]
+    fn wi18_slice1_trait_template_repair_is_specific() {
+        let err = bad_paste_err("trait bad without ellipsis");
+        assert_eq!(repair_code(&err), "evolution-trait-template");
+        assert!(repair_template(&err).contains("+ <vis>trait <New>"));
+    }
 }
