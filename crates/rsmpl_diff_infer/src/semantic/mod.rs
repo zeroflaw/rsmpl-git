@@ -134,6 +134,7 @@ pub(crate) use generalized::{
 };
 pub(crate) use header_evolution::try_header_evolution_sweep;
 pub(crate) use impl_single::try_impl_header_single;
+pub(crate) use item_rename_vis::try_item_vis_sweep;
 pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;
 pub(crate) use perm_single::{

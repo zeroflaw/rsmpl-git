@@ -53,7 +53,7 @@ Fn rename — `fn foo(...)` matches only plain fns; write `pub`/`async`/
 generics explicitly to match them (SPEC 14.1). Slots written explicitly
 evolve, `...`/same-metavar slots are preserved, bodies are never rewritten
 (SPEC 14.7). A `trait T {` header + fn pair rewrites trait methods incl.
-`;` decls (never `pub`, SPEC 13.4). Other items rename with a bare pair, one ident edit — or one ident edit plus one closed-set vis step (`- pub struct Old` / `+ pub(crate) struct New`; same-name plus vis-only step is a pure vis evolution, `- struct S` / `+ pub struct S`),
+`;` decls (never `pub`, SPEC 13.4). Other items rename with a bare pair, one ident edit — or one ident edit plus one closed-set vis step (`- pub struct Old` / `+ pub(crate) struct New`; same-name plus vis-only step is a pure vis evolution, `- struct S` / `+ pub struct S`, uniform N≥2 steps sweep as `- struct N` / `+ pub struct N` with `# allow=many`),
 vis/generics/bodies preserved (SPEC 14.8; definition-only, follow-ups
 per the 14.8 table — or one `# follow=uses` hunk for workspace uses; a definition keeps its name and templates its value (`- type A = Vec<T>;` / `+ type A = Box<[T]>;`, const/static likewise, struct-field/enum-payload/discriminant likewise under their container header, `# follow=uses` rejected)):
 

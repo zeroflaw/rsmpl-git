@@ -578,8 +578,9 @@ fn item_rename_vis_evolution_fires() {
         }
         other => panic!("pure rename must stay ItemRename, got: {other:?}"),
     }
-    // Double slots veto: vis + attribute, vis + kind, and holes combined
-    // with vis (same-name vis alone is a pure vis evolution — see below).
+    // Double slots veto: vis + attribute and vis + kind (same-name vis
+    // alone is a pure vis evolution — see below; same-hole vis likewise,
+    // differing holes stay vetoed — see below).
     let delta = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ #[derive(Debug)]\n+ pub(crate) struct New\n";
     assert!(
         compile(&hunk_of(delta))
@@ -610,6 +611,34 @@ fn item_rename_vis_evolution_fires() {
         }
         other => panic!("same-name vis must compile to ItemRename, got: {other:?}"),
     }
+    // Same-hole vis is the same pure evolution with a bound-per-site
+    // name (vis-sweep residue): it compiles to ItemRename with evolving
+    // prefixes and a `$N` hole on both sides.
+    let hole = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# allow=many\n- struct N\n+ pub struct N\n";
+    match compile(&hunk_of(hole)).unwrap().kind {
+        PatternKind::ItemRename {
+            minus_name,
+            plus_name,
+            minus_prefix,
+            plus_prefix,
+            ..
+        } => {
+            assert_eq!(minus_name, "$N", "got: {minus_name}");
+            assert_eq!(plus_name, "$N", "got: {plus_name}");
+            assert_eq!(minus_prefix, "");
+            assert_eq!(plus_prefix, "pub");
+        }
+        other => panic!("same-hole vis must compile to ItemRename, got: {other:?}"),
+    }
+    // Differing holes are a rename+vis joint with holes: vetoed.
+    let differ = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# allow=many\n# ident M\n- struct N\n+ pub struct M\n";
+    assert!(
+        compile(&hunk_of(differ))
+            .unwrap_err()
+            .to_string()
+            .contains("must match on both sides"),
+        "differing-hole vis must veto"
+    );
 }
 
 #[test]

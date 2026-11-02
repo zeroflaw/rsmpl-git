@@ -160,8 +160,8 @@ pub(crate) fn try_item_vis_single(
 }
 
 /// Scratch-apply byte-compare probe (T361): the emitted bare pair must
-/// apply with `matches == 1` and reproduce the native plus line at the
-/// changed site with every other line byte-identical.
+/// apply with `matches == changed.len()` and reproduce the native plus
+/// lines at every changed site with every other line byte-identical.
 fn scratch_reproduces(
     pre: &str,
     path: &str,
@@ -186,14 +186,16 @@ fn scratch_reproduces(
     if post_lines.len() != pre_lines.len() {
         return false;
     }
-    let Some(post_line) = post_lines.get(changed[0].saturating_sub(1)) else {
-        return false;
-    };
-    if post_line.trim() != pluses[0].trim() {
-        return false;
+    for (site, plus) in changed.iter().zip(pluses.iter()) {
+        let Some(post_line) = post_lines.get(site.saturating_sub(1)) else {
+            return false;
+        };
+        if post_line.trim() != plus.trim() {
+            return false;
+        }
     }
     for (idx, (a, b)) in pre_lines.iter().zip(post_lines.iter()).enumerate() {
-        if idx + 1 == changed[0] {
+        if changed.contains(&(idx + 1)) {
             continue;
         }
         if a != b {
@@ -201,6 +203,99 @@ fn scratch_reproduces(
         }
     }
     true
+}
+
+/// N≥2 bare-item vis sweep (vis-single residue): one uniform closed-set
+/// vis step over N same-kind items with per-site preserved names,
+/// emitted as a single N-holed terse pair (`- struct N` /
+/// `+ pub struct N`) under `# allow=many`. The uniform delta is proved
+/// by construction (one shared minus/plus prefix across all pairs);
+/// totality is the scratch-apply byte-compare probe (`matches == N`
+/// plus per-site post equality, so an in-scope twin vetoes to today's
+/// singles). `fn` rides the sig/header sweeps, `mod` rides file-move
+/// intents, `impl`/`macro_rules!` take no visibility — all decline here.
+/// Detector name `item_rename` (shared with the single; the whole-section
+/// and per-hunk callers keep their existing guards — strict T375, which
+/// a one-hunk diet sweep beats by construction).
+pub(crate) fn try_item_vis_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != pluses.len() || minuses.len() < 2 {
+        return None;
+    }
+    if changed.len() != minuses.len() {
+        return None;
+    }
+    let mut uniform: Option<(String, String, String)> = None;
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let old = m.trim_end();
+        let new = p.trim_end();
+        if old == new {
+            return None;
+        }
+        let (old_prefix, old_kind, old_ident, old_suffix) = split_item(old)?;
+        let (new_prefix, new_kind, new_ident, new_suffix) = split_item(new)?;
+        if old_kind != new_kind || old_ident != new_ident || old_suffix != new_suffix {
+            return None;
+        }
+        if old_prefix == new_prefix {
+            return None;
+        }
+        if matches!(old_kind.as_str(), "fn" | "impl" | "macro_rules!" | "mod") {
+            return None;
+        }
+        if !is_closed_vis_prefix(&old_prefix) || !is_closed_vis_prefix(&new_prefix) {
+            return None;
+        }
+        if contains_word(&old_prefix, &old_ident)
+            || contains_word(&old_prefix, &new_ident)
+            || contains_word(&new_prefix, &old_ident)
+            || contains_word(&new_prefix, &new_ident)
+        {
+            return None;
+        }
+        // Attr lines are separate diff lines; a diff line carrying `#[`
+        // text is not a bare-item vis shape.
+        if old.contains("#[") || new.contains("#[") {
+            return None;
+        }
+        // One uniform delta: every pair shares the same minus and plus
+        // vis (divergent plus sides stay ordinary, never half-claimed).
+        match &uniform {
+            None => uniform = Some((old_prefix, new_prefix, old_kind)),
+            Some((fp, np, fk)) => {
+                if *fp != old_prefix || *np != new_prefix || *fk != old_kind {
+                    return None;
+                }
+            }
+        }
+    }
+    // Verbatim territory: identical minus lines belong to the verbatim
+    // sweep, never to a partition (same law as both section partitions).
+    {
+        let mut ordered: Vec<&&str> = minuses.iter().collect();
+        ordered.sort();
+        ordered.dedup();
+        if ordered.len() != minuses.len() {
+            return None;
+        }
+    }
+    let (old_prefix, new_prefix, kind) = uniform?;
+    let pre = file_old?;
+    let checkpoint = used_rules.len();
+    let rule = unique_rule(used_rules, "vis_sweep");
+    let mut hunk = item_emission_header(path, &rule, Some(pre), changed);
+    hunk.push_str(&format!("- {old_prefix}{kind} N\n+ {new_prefix}{kind} N\n"));
+    if !scratch_reproduces(pre, path, &hunk, changed, pluses) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some(hunk)
 }
 
 #[cfg(test)]
@@ -236,6 +331,57 @@ mod tests {
         assert!(out.contains("+ pub struct S\n"), "got:\n{out}");
         assert!(!out.contains("# allow=many"), "allow-one, got:\n{out}");
         assert_eq!(applied_post(&out, &pre)["f.rs"], "pub struct S;\n");
+    }
+
+    #[test]
+    fn sweep_fires_hetero_and_round_trips() {
+        // N≥2 uniform vis step over hetero names: one N-holed sweep
+        // hunk (not two singles), real-apply byte-identical.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-struct S;\n-struct T;\n+pub struct S;\n+pub struct T;\n",
+        );
+        let pre = pre_map(&[("f.rs", "struct S;\nstruct T;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("vis sweep must fire");
+        assert_eq!(
+            out.matches("rule=").count(),
+            1,
+            "one sweep hunk, got:\n{out}"
+        );
+        assert!(out.contains("# allow=many\n"), "got:\n{out}");
+        assert!(out.contains("- struct N\n"), "got:\n{out}");
+        assert!(out.contains("+ pub struct N\n"), "got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub struct S;\npub struct T;\n"
+        );
+    }
+
+    #[test]
+    fn sweep_removal_and_pub_crate_fire() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-pub struct S;\n-pub struct T;\n+struct S;\n+struct T;\n",
+        );
+        let pre = pre_map(&[("f.rs", "pub struct S;\npub struct T;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("vis-removal sweep must fire");
+        assert!(out.contains("- pub struct N\n"), "got:\n{out}");
+        assert!(out.contains("+ struct N\n"), "got:\n{out}");
+        assert_eq!(applied_post(&out, &pre)["f.rs"], "struct S;\nstruct T;\n");
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-pub struct S;\n-pub struct T;\n+pub(crate) struct S;\n+pub(crate) struct T;\n",
+        );
+        let pre = pre_map(&[("f.rs", "pub struct S;\npub struct T;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("pub -> pub(crate) sweep must fire");
+        assert!(out.contains("+ pub(crate) struct N\n"), "got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub(crate) struct S;\npub(crate) struct T;\n"
+        );
     }
 
     #[test]
@@ -332,6 +478,160 @@ mod tests {
             )
             .is_none(),
             "same-vis must decline"
+        );
+    }
+
+    #[test]
+    fn sweep_enum_multiline_covering_span_fires() {
+        // Multi-line items: the covering span wraps whole bodies, the
+        // terse pair still rewrites headers only.
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-enum E {\n+pub enum E {\n@@ -4,1 +4,1 @@\n-enum F {\n+pub enum F {\n",
+        );
+        let pre = pre_map(&[("f.rs", "enum E {\n    A,\n}\nenum F {\n    B,\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("enum sweep must fire");
+        assert_eq!(
+            out.matches("rule=").count(),
+            1,
+            "one sweep hunk, got:\n{out}"
+        );
+        assert!(out.contains("- enum N\n"), "got:\n{out}");
+        assert!(out.contains("+ pub enum N\n"), "got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub enum E {\n    A,\n}\npub enum F {\n    B,\n}\n"
+        );
+    }
+
+    #[test]
+    fn sweep_veto_matrix() {
+        // N=1 belongs to the single (sweep gate is N≥2).
+        let mut used = Vec::new();
+        assert!(
+            super::try_item_vis_sweep(
+                &["struct S;"],
+                &["pub struct S;"],
+                "f.rs",
+                Some("struct S;\n"),
+                &[1],
+                &mut used
+            )
+            .is_none(),
+            "N=1 must decline the sweep"
+        );
+        assert!(used.is_empty());
+        // Divergent plus sides: never half-claimed under one rule; the
+        // pipeline degrades to two singles instead.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-struct S;\n-struct T;\n+pub struct S;\n+pub(crate) struct T;\n",
+        );
+        let pre = pre_map(&[("f.rs", "struct S;\nstruct T;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("divergent pair must still raise as singles");
+        assert!(
+            !out.contains("struct N"),
+            "no N-hole sweep on divergent plus, got:\n{out}"
+        );
+        assert_eq!(out.matches("rule=").count(), 2, "two singles, got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub struct S;\npub(crate) struct T;\n"
+        );
+        // Two-slot (vis+RHS) vetoes the sweep and stays ordinary: no
+        // single can claim `type A` either (vis+RHS is two evolving
+        // slots for the single too).
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-type A = Vec<u8>;\n-type B = Vec<u8>;\n+pub type A = Box<[u8]>;\n+pub type B = Box<[u8]>;\n",
+        );
+        let pre = pre_map(&[("f.rs", "type A = Vec<u8>;\ntype B = Vec<u8>;\n")]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+            "vis+RHS sweep must stay ordinary"
+        );
+        // Mixed kinds decline the sweep (one pattern is kind-specific);
+        // the pipeline degrades to two singles.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,2 @@\n-struct S;\n-enum E {\n+pub struct S;\n+pub enum E {\n",
+        );
+        let pre = pre_map(&[("f.rs", "struct S;\nenum E {\n    A,\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("mixed kinds must still raise as singles");
+        assert!(
+            !out.contains("struct N"),
+            "no N-hole sweep on mixed kinds, got:\n{out}"
+        );
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub struct S;\npub enum E {\n    A,\n}\n"
+        );
+        // Identical minus lines are verbatim territory.
+        let mut used = Vec::new();
+        assert!(
+            super::try_item_vis_sweep(
+                &["struct S;", "struct S;"],
+                &["pub struct S;", "pub struct S;"],
+                "f.rs",
+                Some("struct S;\nstruct S;\n"),
+                &[1, 2],
+                &mut used
+            )
+            .is_none(),
+            "duplicate minus lines must decline"
+        );
+        assert!(used.is_empty());
+        // Excluded kinds decline the sweep directly.
+        for (m0, m1, p0, p1) in [
+            (
+                "fn foo() {",
+                "fn bar() {",
+                "pub fn foo() {",
+                "pub fn bar() {",
+            ),
+            ("mod a;", "mod b;", "pub mod a;", "pub mod b;"),
+        ] {
+            let mut used = Vec::new();
+            assert!(
+                super::try_item_vis_sweep(
+                    &[m0, m1],
+                    &[p0, p1],
+                    "f.rs",
+                    Some("x\n"),
+                    &[1, 2],
+                    &mut used
+                )
+                .is_none(),
+                "{m0} / {m1} must decline"
+            );
+            assert!(used.is_empty());
+        }
+    }
+
+    #[test]
+    fn sweep_in_scope_twin_vetoes_to_singles() {
+        // An untouched same-shape item inside the covering span matches
+        // the N-hole minus too (`matches == 3 ≠ 2`), so the sweep
+        // vetoes — but the two changed sites still raise as singles via
+        // the per-hunk fallback (separate hunks here).
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-struct S;\n+pub struct S;\n@@ -3,1 +3,1 @@\n-struct T;\n+pub struct T;\n",
+        );
+        let pre = pre_map(&[("f.rs", "struct S;\nstruct U;\nstruct T;\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("twin-separated singles must fire");
+        assert!(
+            !out.contains("struct N"),
+            "no N-hole sweep with an in-scope twin, got:\n{out}"
+        );
+        assert_eq!(out.matches("rule=").count(), 2, "two singles, got:\n{out}");
+        assert_eq!(
+            applied_post(&out, &pre)["f.rs"],
+            "pub struct S;\nstruct U;\npub struct T;\n"
         );
     }
 }

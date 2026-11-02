@@ -77,6 +77,17 @@ pub(crate) fn run_pair_chain(
     {
         return Some((header, "header_evolution"));
     }
+    // N≥2 bare-item vis sweep (uniform closed-set vis step over
+    // same-kind items, N-hole emission) — immediately after its
+    // fn-header sibling (disjoint by construction: that one owns
+    // `{`-terminated fn headers and declines bare items; this one
+    // declines `fn`), before the trait-method detector (those own
+    // `;` decls, never bare vis pairs).
+    if let Some(vis) =
+        super::try_item_vis_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
+        return Some((vis, "item_rename"));
+    }
     // WI-10b: attribute-delta sweep (uniform attr-line add/remove/replace
     // over hetero items, N-hole emission) — immediately after its slot
     // sibling (those own header shapes; this owns pure-attr lines, which

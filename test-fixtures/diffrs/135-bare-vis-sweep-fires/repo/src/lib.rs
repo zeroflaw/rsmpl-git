@@ -1,0 +1,2 @@
+struct Alpha;
+struct Beta;

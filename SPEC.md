@@ -7891,14 +7891,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
     verbatim-header block hunk and ride a doubled precision allowance
     (32, not 16): the WI-4a filter block is a mandatory proof anchor,
     not bloat. Per-hunk stays 16, so mixed-section method singles stay
-    ordinary. Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
+    ordinary.     Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
     same kind/name/suffix, closed-set vis step; `fn` rides the sig sweep,
     `mod` stays ordinary, `impl`/`macro_rules!` take no visibility) raise
     as the concrete directive-free terse pair (`- struct S` /
     `+ pub struct S`, bare like renames — the engine preserves
     generics/body/RHS) under default `one` and the 16-byte precision
     guard; totality is the scratch-apply byte-compare probe, so the
-    hunk claims only its covered site.
+    hunk claims only its covered site. Bare-item N ≥ 2 vis sweeps (one
+    uniform closed-set vis step over same-kind items with per-site
+    preserved names and suffixes; divergent plus sides, two-slot pairs,
+    mixed kinds, and duplicate minus lines decline) raise as a single
+    N-holed terse pair (`- struct N` / `+ pub struct N`) under
+    `# allow=many`; the engine binds each name per site and replays it
+    while rewriting the vis slot, and totality is the same scratch-apply
+    probe at N sites (an in-scope twin vetoes to singles). Same-hole
+    visibility evolution is allowed in authored patches (`- struct N` /
+    `+ pub struct N`); differing holes stay a pattern error (rename+vis
+    joints with holes are concrete-only).
 - Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
    `{`-terminated fn header, where every name is preserved per site
    (`minus name == plus name`) but names differ across sites (≥ 2
@@ -9401,7 +9411,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(135), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(136), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

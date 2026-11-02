@@ -869,9 +869,10 @@ fn classify_item_rename(
             let pprefix = pside.prefix;
             // WI-10b: bare diet/`# ident` names hole-ify in item name
             // position (fn N-hole precedent, SPEC 15.8). Holes only ever
-            // evolve attributes: both sides hole with an attr delta, or
-            // the hunk fails below. `$`-prefixed spellings keep the
-            // existing rejection in `parse_side`.
+            // evolve attributes or visibility: both sides hole with an
+            // attr delta, or both sides hole the same name with a vis
+            // step — anything else fails below. `$`-prefixed spellings
+            // keep the existing rejection in `parse_side`.
             let minus_hole = holes.contains(&mn);
             let plus_hole = holes.contains(&pn);
             if minus_hole {
@@ -993,11 +994,14 @@ fn classify_item_rename(
 /// `mprefix` → `pprefix` is exactly one closed-set vis step (concrete
 /// names may be equal for pure vis evolution, attrs mirror-equal, no
 /// qualifier delta), else `Some(reason)` naming the veto for the author.
+/// Same-hole pairs (`- struct N` / `+ pub struct N`) are pure evolution
+/// (no rename) and ride the same gate; differing holes are a rename+vis
+/// joint with holes and stay vetoed (WI-5 joints are concrete-only).
 #[allow(clippy::too_many_arguments)]
 fn bare_vis_evolution_veto(
     kind: crate::item_rename::ItemKind,
     minus_name: &str,
-    _plus_name: &str,
+    plus_name: &str,
     minus_attrs: &[String],
     plus_attrs: &[String],
     mprefix: &str,
@@ -1005,9 +1009,9 @@ fn bare_vis_evolution_veto(
     has_hole: bool,
 ) -> Option<String> {
     use crate::item_rename::{is_closed_item_vis, split_vis_rest, ItemKind};
-    if has_hole {
+    if has_hole && minus_name != plus_name {
         return Some(
-            "item name holes evolve attributes only — write concrete names to rename with a visibility change (`- pub struct Old` / `+ pub(crate) struct New`)".to_string(),
+            "item name holes must match on both sides to evolve visibility (`- struct N` / `+ pub struct N`); write concrete names to rename with a visibility change (`- pub struct Old` / `+ pub(crate) struct New`)".to_string(),
         );
     }
     if kind == ItemKind::Impl || kind == ItemKind::MacroRules {
@@ -1048,7 +1052,14 @@ fn bare_vis_evolution_veto(
             "visibility `{mvis}` → `{pvis}` is outside the closed vis set (`\"\"`, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)`) — use an ordinary hunk"
         ));
     }
-    if contains_vis_ident(&mvis, minus_name) || contains_vis_ident(&pvis, minus_name) {
+    // Holes bind per site, so a vis spelling the hole name (`pub(in N)`
+    // with an `N`-hole) is self-referential for every bound site —
+    // compare the bare spelling too (`$` never matches ident tokens).
+    let bare_hole = minus_name.strip_prefix('$');
+    let names_self_ref = |vis: &str| {
+        contains_vis_ident(vis, minus_name) || bare_hole.is_some_and(|b| contains_vis_ident(vis, b))
+    };
+    if names_self_ref(&mvis) || names_self_ref(&pvis) {
         return Some(
             "self-referential visibility (`pub(in <name>)` naming the renamed item) is an evolution, never a rename joint — use an ordinary hunk".to_string(),
         );

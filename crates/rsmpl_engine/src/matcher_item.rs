@@ -1136,4 +1136,40 @@ mod tests {
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("    pub(crate) struct New;"), "got: {out}");
     }
+
+    #[test]
+    fn item_name_hole_evolves_vis_across_hetero_names() {
+        // Vis-sweep residue: a bare `N` on both sides with one vis step
+        // binds per site, replays each name, and rewrites the vis slot
+        // (add, remove, and replace), skipping wrong-vis sites.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=r\n# lang=rust\n# allow=many\n- struct N\n+ pub struct N\n";
+        let src = "struct A;\nstruct B(u32);\n";
+        let out = apply(patch, src).unwrap();
+        assert_eq!(out, "pub struct A;\npub struct B(u32);\n", "got: {out:?}");
+        let remove = patch.replace("- struct N\n+ pub struct N", "- pub struct N\n+ struct N");
+        let out = apply(&remove, "pub struct A;\npub struct B(u32);\n").unwrap();
+        assert_eq!(out, "struct A;\nstruct B(u32);\n", "got: {out:?}");
+        let change = patch.replace(
+            "- struct N\n+ pub struct N",
+            "- pub struct N\n+ pub(crate) struct N",
+        );
+        let out = apply(&change, "pub struct A;\npub struct B;\n").unwrap();
+        assert_eq!(
+            out, "pub(crate) struct A;\npub(crate) struct B;\n",
+            "got: {out:?}"
+        );
+        // Wrong-vis sites skip (the minus vis gates each site); a file
+        // with no minus-vis site fails to match.
+        assert!(apply(patch, "pub struct A;\npub struct B;\n").is_err());
+        // Differing holes are still a rename+vis joint with holes: veto.
+        let differ = patch
+            .replace("# allow=many", "# allow=many\n# ident M")
+            .replace("+ pub struct N", "+ pub struct M");
+        let err = apply(&differ, src).unwrap_err();
+        assert!(err.contains("must match on both sides"), "got: {err}");
+        // Same-hole same-vis is still the rename-usage error.
+        let nodelta = patch.replace("+ pub struct N", "+ struct N");
+        let err = apply(&nodelta, src).unwrap_err();
+        assert!(err.contains("identical"), "got: {err}");
+    }
 }

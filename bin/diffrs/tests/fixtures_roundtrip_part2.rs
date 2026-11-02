@@ -1324,6 +1324,36 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "135-bare-vis-sweep-fires" {
+        // Vis-sweep residue: a uniform closed-set vis step over two
+        // hetero structs raises as one N-holed sweep hunk (not two
+        // singles); the harness checks the tree legs (--check + lowered
+        // git apply).
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            1,
+            "one sweep intent must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# allow=many"),
+            "sweep keeps allow-many, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- struct N\n"),
+            "N-holed minus pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ pub struct N\n"),
+            "N-holed plus pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "sweep must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on
