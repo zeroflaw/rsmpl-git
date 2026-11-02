@@ -898,9 +898,11 @@ mod tests {
         // ordinary downstream is the byte guard — the fixed `...`/`}`
         // scaffold never fits `ordinary + 16` — never the probe. Pin
         // the layer split so a future guard change cannot silently
-        // start rewriting fn attr sites. (Paren-free attrs only:
-        // `#[inline(always)]` re-renders `#[inline (always)]` and vetoes
-        // in the probe — an engine round-trip quirk, pinned ordinary.)
+        // start rewriting fn attr sites. (WI-14 slice-5 residue: the
+        // fn-pattern token join used to re-render `#[inline(always)]`
+        // as `#[inline (always)]`, vetoing paren attrs in the probe;
+        // the punctuation-gated join replays them verbatim, so the
+        // probe passes and only the guard declines.)
         let pre = "#[inline]\nfn solo() {}\n";
         let mut used = Vec::new();
         let (out, detector) = try_attr_replace_sweep(
@@ -914,6 +916,30 @@ mod tests {
         .expect("fn singleton must pass the detector probe");
         assert_eq!(detector, "attr_sweep");
         assert!(out.contains("- fn solo(...) {"), "got:\n{out}");
+        assert_eq!(used, vec!["r1".to_string()]);
+    }
+
+    #[test]
+    fn pair_chain_entry_single_fn_paren_attr_passes_probe() {
+        // WI-14 slice-5 residue pin: paren attrs used to veto in the
+        // probe via the `#[inline (always)]` re-render; post-fix the
+        // detector probe passes byte-identical (live `diffrs` still
+        // reports the fn N=1 ordinary — the byte guard owns that, and
+        // the guard pin below owns the proof).
+        let pre = "#[inline(always)]\nfn solo() {}\n";
+        let mut used = Vec::new();
+        let (out, detector) = try_attr_replace_sweep(
+            &["#[inline(always)]"],
+            &["#[inline(never)]"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            &mut used,
+        )
+        .expect("paren-attr fn singleton must pass the detector probe");
+        assert_eq!(detector, "attr_sweep");
+        assert!(out.contains("- fn solo(...) {"), "got:\n{out}");
+        assert!(out.contains("+ #[inline(never)]"), "got:\n{out}");
         assert_eq!(used, vec!["r1".to_string()]);
     }
 

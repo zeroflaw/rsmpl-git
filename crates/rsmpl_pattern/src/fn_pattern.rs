@@ -236,6 +236,47 @@ fn unterminated_sig(slot: &str) -> String {
 /// Parse a single function pattern string like
 /// `pub async fn foo<T>(...) -> T where T: Clone { ... }`.
 ///
+/// Join one `#[...]` attribute's tokens back into its authored spacing
+/// (WI-14 slice-5 residue): a blanket single-space join re-rendered
+/// `#[inline(always)]` as `# [ inline ( always ) ]`, and the engine's
+/// `compact_attr` restores every gap except ident-before-`(` — so every
+/// paren/bracket/brace attr on a fn vetoed in the raiser probe and
+/// mis-emitted when authored. String literals are single tokens from
+/// `tokenize_pattern`, so punctuation-gated elision never touches
+/// string interiors (unlike a post-hoc string `replace`, which would
+/// corrupt `#[doc = "a (b)"]`).
+fn join_attr_tokens(acc: &[String]) -> String {
+    /// No space before these (closing/opening punctuation and infixes
+    /// that bind left).
+    fn no_space_before(t: &str) -> bool {
+        matches!(
+            t,
+            "(" | "[" | "]" | ")" | "," | ";" | "::" | "->" | "..." | ".."
+        )
+    }
+    let mut s = String::new();
+    for (k, t) in acc.iter().enumerate() {
+        if k == 0 {
+            s.push_str(t);
+            continue;
+        }
+        let prev = acc[k - 1].as_str();
+        // `=>` arrives as two tokens (`=` then `>`); anything else
+        // ending in `>` (`->`, `=>` already fused, `>`) binds left.
+        let fat_arrow = t == ">" && prev == "=";
+        if no_space_before(t) || fat_arrow || prev == "(" || prev == "[" || prev == "#" {
+            s.push_str(t);
+        } else {
+            s.push(' ');
+            s.push_str(t);
+        }
+    }
+    s
+}
+
+/// Parse a single function pattern string like
+/// `pub async fn foo<T>(...) -> T where T: Clone { ... }`.
+///
 /// Metavariable names for `V/Q/G/W` slots are supplied by the caller from
 /// directives (visibility/qualifier_list/generic_params/where_clause kinds).
 /// WI-5: `ident_metas` carries `# ident` names plus the inferred `N` hole;
@@ -321,7 +362,7 @@ pub fn parse_fn_pattern(
                     "close the `#[...]` attribute with `]` before the `fn` line",
                 ));
             }
-            attrs_written.push(acc.join(" "));
+            attrs_written.push(join_attr_tokens(&acc));
         } else {
             attrs_written.push(toks[i].clone());
             i += 1;
@@ -869,6 +910,40 @@ mod tests {
         assert_eq!(p3.attrs_written.len(), 1, "got: {:?}", p3.attrs_written);
         let p4 = parse("//! Inner doc.\nfn foo(...) { ... }");
         assert_eq!(p4.attrs_written.len(), 1, "got: {:?}", p4.attrs_written);
+    }
+
+    #[test]
+    fn attr_join_replays_authored_spacing() {
+        // WI-14 slice-5 residue: token-join + `compact_attr` re-rendered
+        // `#[inline(always)]` as `#[inline (always)]`, so every
+        // paren/bracket/brace attr on a fn vetoed in the raiser probe
+        // and mis-emitted when authored. Punctuation-gated elision
+        // replays the authored bytes; string interiors (single tokens)
+        // are never touched.
+        let j = |s: &str| join_attr_tokens(&tokenize_pattern(s));
+        assert_eq!(j("#[inline(always)]"), "#[inline(always)]");
+        assert_eq!(j("#[inline]"), "#[inline]");
+        assert_eq!(j("#[derive(Debug, Clone)]"), "#[derive(Debug, Clone)]");
+        assert_eq!(
+            j("#[cfg_attr(feature = \"x\", derive(Debug))]"),
+            "#[cfg_attr(feature = \"x\", derive(Debug))]"
+        );
+        assert_eq!(j("#[serde(rename = \"y\")]"), "#[serde(rename = \"y\")]");
+        assert_eq!(j("#[doc = \"hello\"]"), "#[doc = \"hello\"]");
+        // String-interior spacing survives (the old blanket `replace`
+        // posture would have fused it).
+        assert_eq!(j("#[doc = \"a (b)\"]"), "#[doc = \"a (b)\"]");
+        assert_eq!(j("#[doc = \"a ,b\"]"), "#[doc = \"a ,b\"]");
+        // Same-line `#[a] fn` groups keep their text; the fn tail is
+        // not swallowed.
+        let p = parse("#[inline(always)]\nfn foo(...) { ... }");
+        assert_eq!(p.attrs_written, vec!["#[inline(always)]"]);
+        let p2 = parse("#[must_use] #[inline(never)]\nfn foo(...) { ... }");
+        assert_eq!(p2.attrs_written.len(), 2, "got: {:?}", p2.attrs_written);
+        assert_eq!(p2.attrs_written[1], "#[inline(never)]");
+        // Multi-attr plus-side order is preserved verbatim.
+        let p3 = parse("#[derive(Debug, Clone)]\nfn foo(...) { ... }");
+        assert_eq!(p3.attrs_written, vec!["#[derive(Debug, Clone)]"]);
     }
 
     #[test]

@@ -1601,6 +1601,29 @@ mod tests {
     }
 
     #[test]
+    fn attrs_delta_paren_attrs_replay_verbatim() {
+        // WI-14 slice-5 residue: `parse_fn_pattern` token-joined attrs
+        // (`acc.join(" ")`), and `compact_attr` restores every gap
+        // except ident-before-`(`, so `#[inline(never)]` applied as
+        // `#[inline (never)]`. The punctuation-gated join replays the
+        // authored bytes exactly (replace and add alike).
+        let rep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- #[inline(always)]\n- fn foo(...) {\n+ #[inline(never)]\n+ fn foo(...) {\n      ...\n  }\n";
+        let out = apply(rep, "#[inline(always)]\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "#[inline(never)]\nfn foo() {}\n", "got: {out:?}");
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# sweep\n- fn foo(...) {\n+ #[cfg_attr(feature = \"x\", derive(Debug))]\n+ fn foo(...) {\n      ...\n  }\n";
+        let out = apply(add, "fn foo() {}\n").unwrap();
+        assert_eq!(
+            out, "#[cfg_attr(feature = \"x\", derive(Debug))]\nfn foo() {}\n",
+            "got: {out:?}"
+        );
+        // String-interior spacing is the author's spelling, replayed
+        // verbatim rather than fused.
+        let doc = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@ rule=x\n# lang=rust\n- #[doc = \"old (v1)\"]\n- fn foo(...) {\n+ #[doc = \"new (v2)\"]\n+ fn foo(...) {\n      ...\n  }\n";
+        let out = apply(doc, "#[doc = \"old (v1)\"]\nfn foo() {}\n").unwrap();
+        assert_eq!(out, "#[doc = \"new (v2)\"]\nfn foo() {}\n", "got: {out:?}");
+    }
+
+    #[test]
     fn optional_no_match_ok() {
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n# optional\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
         let out = apply(patch, "fn a() {}\n").unwrap();
