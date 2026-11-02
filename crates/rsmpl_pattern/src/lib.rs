@@ -20,6 +20,7 @@ mod pattern_def_evo;
 mod pattern_ellipsis;
 mod pattern_evolution;
 mod pattern_evolution_container;
+mod pattern_evolution_impl;
 mod pattern_general;
 mod pattern_item_joint;
 mod pattern_member_evo;
@@ -47,6 +48,9 @@ pub use pattern_evolution_container::{
     container_body_evolution_template, item_body_evolution_veto,
     parse_enum_body_evolution_template, parse_struct_body_evolution_template,
     parse_union_body_evolution_template,
+};
+pub use pattern_evolution_impl::{
+    impl_body_evolution_template, impl_body_evolution_veto, parse_impl_body_evolution_template,
 };
 pub use pattern_member_evo::norm_arm_expr;
 pub use quote_utils::{

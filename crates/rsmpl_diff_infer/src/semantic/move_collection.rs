@@ -323,6 +323,7 @@ fn evolving_template_for(kind: EvolvedKind, prefix: &str, hole: &str, is_mut: bo
         EvolvedKind::Const => super::move_evolve::const_evolution_template(prefix, hole),
         EvolvedKind::Static => super::move_evolve::static_evolution_template(prefix, hole, is_mut),
         EvolvedKind::Mod => super::move_evolve::mod_evolution_template(prefix, hole),
+        EvolvedKind::Impl => rsmpl_pattern::impl_body_evolution_template("", "Old", hole),
         EvolvedKind::Trait => super::move_evolve::trait_evolution_template(prefix, hole),
     }
 }

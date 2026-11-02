@@ -24,6 +24,7 @@ pub(crate) enum EvolvedKind {
     Struct,
     Enum,
     Union,
+    Impl,
     Type,
     Const,
     Static,

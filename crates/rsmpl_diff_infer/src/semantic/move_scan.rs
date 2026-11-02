@@ -88,7 +88,9 @@ fn move_cut_eligible(it: &syn::Item) -> bool {
 }
 
 /// Single plain ident for named items; `None` for ident-less items
-/// (impl blocks, use decls, macros) which stay ordinary.
+/// (use decls, macros) which stay ordinary. Inherent `impl` blocks
+/// contribute their self-ty last segment (`impl Old` → `Old`);
+/// trait-impls (`impl Tr for Ty`) stay `None` (WI-3 owns that header).
 fn item_ident(it: &syn::Item) -> Option<String> {
     match it {
         syn::Item::Fn(f) => Some(f.sig.ident.to_string()),
@@ -100,8 +102,21 @@ fn item_ident(it: &syn::Item) -> Option<String> {
         syn::Item::Static(s) => Some(s.ident.to_string()),
         syn::Item::Mod(m) => Some(m.ident.to_string()),
         syn::Item::Union(u) => Some(u.ident.to_string()),
+        syn::Item::Impl(imp) if imp.trait_.is_none() => self_ty_ident(&imp.self_ty),
         _ => None,
     }
+}
+
+/// Last segment of a plain-path self-ty (`Old`, `Old<T>`, `crate::Old`).
+/// Anything else (references, tuples, `dyn`, qself) is not a moveable
+/// self-ty.
+fn self_ty_ident(ty: &syn::Type) -> Option<String> {
+    if let syn::Type::Path(tp) = ty {
+        if tp.qself.is_none() {
+            return tp.path.segments.last().map(|s| s.ident.to_string());
+        }
+    }
+    None
 }
 
 /// All occurrences of the contiguous `needle` line run in `body`

@@ -209,6 +209,30 @@ pub(crate) fn evolved_pairs_for_item(
             super::move_evolve::find_type_evolved_hits(&item.text, pbody),
             EvolvedKind::Type,
         );
+        // WI-19 residue: inherent-`impl` body-evolving pairs (self-ty
+        // rename with `Old::` body paths). The paste carries the `as`
+        // template (`impl <old> as <new> { ... }`); mutually exclusive
+        // with every other arm (no abstract `impl` arm exists, and the
+        // match vetoes body-equal pairs).
+        for (first, last, prefix, old, name) in
+            super::move_evolve_impl::find_impl_body_evolved_hits(&item.text, pbody)
+        {
+            let template = rsmpl_pattern::impl_body_evolution_template(&prefix, &old, &name);
+            pairs.push(MovePair {
+                minus_hunk_key: minus_key,
+                plus_hunk_key: plus_key,
+                item: item.clone(),
+                plus_first: first,
+                plus_last: last,
+                evolved: Some(EvolvedPair {
+                    kind: EvolvedKind::Impl,
+                    prefix,
+                    name,
+                    static_mut: false,
+                    template: Some(template),
+                }),
+            });
+        }
         push_abstract(
             &mut pairs,
             item,
@@ -413,6 +437,66 @@ mod tests {
             "plus lines must be consumed, got:\n{text}"
         );
         validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn impl_body_evolve_141_fires_with_as_paste() {
+        // WI-19 residue: the 141-shape — move+rename whose `impl`
+        // self-ty renames and whose body self-paths follow — fires as
+        // one evolving cut/paste with the `as` template carrying the
+        // body delta.
+        let minus = "impl Old {\n    fn make() -> Old {\n        Old\n    }\n}\n";
+        let plus = "impl New {\n    fn make() -> New {\n        New\n    }\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,5 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,5 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out =
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).expect("141 must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ impl Old as New { ... }"),
+            "paste must carry the `impl` `as` template, got:\n{text}"
+        );
+        assert!(
+            !text.contains("-impl Old"),
+            "minus lines must be consumed, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+impl New"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn impl_body_evolve_assoc_name_stays_ordinary() {
+        // WI-19 residue / WI-2: an assoc item named like the self-ty
+        // strands the `as` arm (renaming the method would change its
+        // namespace, not the self-ty).
+        let minus = "impl Old {\n    fn Old(&self) {}\n}\n";
+        let plus = "impl New {\n    fn New(&self) {}\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,3 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,3 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used);
+        assert!(
+            out.is_none() || !out.unwrap().join("").contains(" as "),
+            "assoc-name impl joint must not fire"
+        );
     }
 
     #[test]

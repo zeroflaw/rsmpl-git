@@ -12,6 +12,7 @@ mod canonical_tree;
 mod capture;
 mod capture_container_body;
 mod capture_evolve;
+mod capture_impl_body;
 mod crate_graph;
 mod drift;
 mod edits;

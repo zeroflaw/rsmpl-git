@@ -89,7 +89,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 - Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; struct-field/enum-payload/discriminant likewise under their container header; name preserved, SPEC 14.8).
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between;
-  `as` paste (`+ fn old as new(...)`) renames fn + self-calls, joint (`+ fn old as new(x: i64) -> i64`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads; shadow/field/macro/attr interiors veto, two slots stay ordinary (SPEC 20.2).
+  `as` paste (`+ fn old as new(...)`) renames fn + self-calls, joint (`+ fn old as new(x: i64) -> i64`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, inherent-`impl` (`+ impl old as new { ... }`) renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto, two slots stay ordinary (SPEC 20.2).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`) moves imports;
   grouped/glob/`as` tails preserved, members at the matched position rewrite too; regroup
   merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` (same order/vis, no attrs) (SPEC 14.9).

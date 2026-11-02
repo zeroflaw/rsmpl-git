@@ -1483,6 +1483,37 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "141-impl-body-evolve-fires" {
+        // WI-19 residue: an inherent-`impl` move whose body delta is
+        // exactly the self-ty rename (self-paths `Old::`/`Old` follow)
+        // raises as cut + `as`-template paste
+        // (`impl <old> as <new> { ... }`). The harness checks the tree
+        // legs; assoc/macro/attr/shadow twins are pinned inline
+        // (finder/splice/pair tests).
+        assert!(
+            semantic.contains("# bind="),
+            "impl cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "impl paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ impl Old as New { ... }"),
+            "paste must carry the `impl` `as` template, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-impl Old {"),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "impl body-evolve must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on

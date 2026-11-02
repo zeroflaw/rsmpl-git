@@ -119,6 +119,16 @@ pub(crate) fn run_pass1(
             } else {
                 None
             };
+            // WI-19 residue: a scalar cut over an `impl` block also
+            // contains its methods (`collect_impl_method_spans`). Keep
+            // the outermost spans only, so one `impl` block cuts as one
+            // capture. `Allow::Many` paths (deletion, collection) keep
+            // every span — they own nested items by design.
+            let targets = if rh.allow() != rsmpl_patch::Allow::Many {
+                outermost_spans(&targets)
+            } else {
+                targets
+            };
             ensure_match_count(
                 targets.len(),
                 rh.allow(),
@@ -205,4 +215,19 @@ pub(crate) fn run_pass1(
         }
     }
     Ok(())
+}
+
+/// Keep spans not strictly contained in another span (outermost wins).
+/// Scalar cuts own one item; an `impl` block's header span contains its
+/// methods' spans, so without this the cut sees N targets and fails.
+fn outermost_spans(targets: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    targets
+        .iter()
+        .copied()
+        .filter(|(s, e)| {
+            !targets
+                .iter()
+                .any(|(os, oe)| (*os != *s || *oe != *e) && *os <= *s && *e <= *oe)
+        })
+        .collect()
 }

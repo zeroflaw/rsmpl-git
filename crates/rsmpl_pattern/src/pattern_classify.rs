@@ -420,6 +420,18 @@ pub(crate) fn classify(
                 "evolution-trait-template",
                 "write `+ <vis>trait <New> { ... }` or paste the bare capture name for a verbatim move",
             )));
+        } else if uses.len() == 1 && p.lines().count() == 1 && has_impl_keyword(p.trim()) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                format!(
+                    "evolution paste template must be `impl <Old> as <New> {{ ... }}` for an inherent-`impl` self-ty rename (got `{}`); write `+ impl <Old> as <New> {{ ... }}` or paste the bare capture name for a verbatim move",
+                    p.trim()
+                ),
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "evolution-impl-template",
+                "write `+ impl <Old> as <New> { ... }` for an inherent-`impl` self-ty rename, or paste the bare capture name for a verbatim move",
+            )));
         } else {
             None
         };

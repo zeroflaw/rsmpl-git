@@ -1308,6 +1308,7 @@ pub fn is_evolution_template(text: &str) -> bool {
         || crate::pattern_evolution_container::parse_struct_body_evolution_template(t).is_some()
         || crate::pattern_evolution_container::parse_enum_body_evolution_template(t).is_some()
         || crate::pattern_evolution_container::parse_union_body_evolution_template(t).is_some()
+        || crate::pattern_evolution_impl::parse_impl_body_evolution_template(t).is_some()
         || parse_struct_evolution_template(t).is_some()
         || parse_enum_evolution_template(t).is_some()
         || parse_union_evolution_template(t).is_some()
