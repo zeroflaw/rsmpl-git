@@ -538,7 +538,9 @@ pub(crate) fn try_attr_sweep_section(
             names: vec![key.2],
         });
     }
-    // Group hunks by class, first-occurrence order; singletons decline.
+    // Group hunks by class, first-occurrence order. Singleton classes
+    // (N = 1) proceed to the probe below under the precision guard
+    // (WI-14 slice 1); multi-member classes keep strict per-class T375.
     let mut classes: Vec<(AttrClass, Vec<usize>)> = Vec::new();
     for (idx, site) in sites.iter().enumerate() {
         match classes.iter_mut().find(|(k, _)| *k == site.class) {
@@ -555,9 +557,17 @@ pub(crate) fn try_attr_sweep_section(
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     for (class, members) in &classes {
-        if members.len() < 2 {
-            continue;
-        }
+        // WI-14 slice 1: singleton classes (N = 1 derive-add and its
+        // Delete/Replace siblings) proceed to the probe under the
+        // definition-shape precision posture (`body <= ordinary + 16`,
+        // the WI-19b singles doctrine): the concrete owner header
+        // anchors the single site and `probe_tiered` demands
+        // `matches == 1` plus a byte-identical post-tree, so proof
+        // replaces bytes (D3). Fn-family singletons still lose on bytes
+        // (fixed `...`/`}` scaffold over a 1-line hunk) and stay
+        // ordinary — honest, pinned. Multi-member classes keep strict
+        // per-class T375 below.
+        let singleton = members.len() == 1;
         let names: Vec<String> = members
             .iter()
             .map(|&idx| sites[idx].names[0].clone())
@@ -572,14 +582,20 @@ pub(crate) fn try_attr_sweep_section(
         let Some(lines) = probe_tiered(path, pre, &ordinary, class, &names, members.len()) else {
             continue;
         };
-        // Per-class T375: a class fires iff its body beats its covered
-        // ordinary hunks. A losing class declines alone — it never vetoes
-        // a winning class (partial compression over all-or-nothing).
+        // Per-class T375: a multi-member class fires iff its body beats
+        // its covered ordinary hunks. A singleton fires under the
+        // precision posture (`<= ordinary + PRECISION_GUARD`). A losing
+        // class declines alone — it never vetoes a winning class
+        // (partial compression over all-or-nothing).
         let hunk_len: usize = members
             .iter()
             .map(|&idx| hunks[sites[idx].hunk].len())
             .sum();
-        if lines.len() >= hunk_len {
+        if singleton {
+            if lines.len() > hunk_len + super::PRECISION_GUARD {
+                continue;
+            }
+        } else if lines.len() >= hunk_len {
             continue;
         }
         candidates.push(Candidate {
@@ -858,5 +874,142 @@ mod tests {
             try_attr_sweep_section(section, "f.rs", &mut used, Some(migrated_pre), &mut fired)
                 .expect("migrated site must not veto");
         assert!(out.contains("fn N("), "got:\n{out}");
+    }
+
+    // WI-14 slice 1: singleton classes (N = 1) fire under the precision
+    // guard. The F10/WI-14 probe: one derive-add over one struct raises
+    // to the concrete-name bare pair and real-applies byte-identical.
+    #[test]
+    fn section_singleton_insert_fires_and_round_trips() {
+        let pre = "struct S { x: i32 }\nstruct T { y: i32 }\n";
+        let section = "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -0,0 +1 @@\n+#[derive(Clone)]\n";
+        let mut used = Vec::new();
+        let mut fired = Vec::new();
+        let out = try_attr_sweep_section(section, "f.rs", &mut used, Some(pre), &mut fired)
+            .expect("insert singleton must fire");
+        // Concrete owner name — hetero `N` is impossible with one site.
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
+        assert!(out.contains("+ struct S\n"), "got:\n{out}");
+        assert!(!out.contains("struct N"), "got:\n{out}");
+        // The distinct twin `T` never matches the concrete minus, so it
+        // neither vetoes nor rewrites.
+        assert_eq!(fired, vec![("r1".to_string(), "attr_sweep")]);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "#[derive(Clone)]\nstruct S { x: i32 }\nstruct T { y: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn section_singleton_delete_fires_and_round_trips() {
+        let pre = "#[derive(Clone)]\nstruct S { x: i32 }\n";
+        let section =
+            "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +0,0 @@\n-#[derive(Clone)]\n";
+        let mut used = Vec::new();
+        let mut fired = Vec::new();
+        let out = try_attr_sweep_section(section, "f.rs", &mut used, Some(pre), &mut fired)
+            .expect("delete singleton must fire");
+        assert!(out.contains("- #[derive(Clone)]\n"), "got:\n{out}");
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        assert!(out.contains("+ struct S\n"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "struct S { x: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn section_singleton_replace_fires_and_round_trips() {
+        // A non-whole section: the balanced replace hunk is claimed, the
+        // unbalanced insertion passes through byte-identical.
+        let pre = "#[derive(Debug)]\nstruct S { x: i32 }\n";
+        let section = "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-#[derive(Debug)]\n+#[derive(Clone)]\n@@ -2,0 +3 @@\n+fn g() {}\n";
+        let mut used = Vec::new();
+        let mut fired = Vec::new();
+        let out = try_attr_sweep_section(section, "f.rs", &mut used, Some(pre), &mut fired)
+            .expect("replace singleton must fire");
+        assert!(out.contains("- #[derive(Debug)]\n"), "got:\n{out}");
+        assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
+        assert!(out.contains("@@ -2,0 +3 @@\n+fn g() {}\n"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "#[derive(Clone)]\nstruct S { x: i32 }\nfn g() {}\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn section_singleton_nested_same_name_twin_vetoes() {
+        // Two `S` owners (nested modules): the concrete header matches
+        // twice, so the probe count (2 != 1) vetoes — stays ordinary.
+        let pre = "mod m {\n    pub struct S { x: i32 }\n}\nstruct S { y: i32 }\n";
+        let section = "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -3,0 +4 @@\n+#[derive(Clone)]\n";
+        let mut used = Vec::new();
+        let mut fired = Vec::new();
+        assert!(
+            try_attr_sweep_section(section, "f.rs", &mut used, Some(pre), &mut fired).is_none(),
+            "same-name twin must veto the singleton"
+        );
+        assert!(used.is_empty());
+        assert!(fired.is_empty());
+    }
+
+    #[test]
+    fn section_singleton_fn_stays_ordinary_on_bytes() {
+        // Fn-family singletons are byte-impossible under any byte guard
+        // (fixed `...`/`}` scaffold over a 1-line hunk): honest
+        // ordinary, no rule burned.
+        let pre = "fn solo() {}\n";
+        let section = "diff --git f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -0,0 +1 @@\n+#[inline]\n";
+        let mut used = Vec::new();
+        let mut fired = Vec::new();
+        assert!(
+            try_attr_sweep_section(section, "f.rs", &mut used, Some(pre), &mut fired).is_none(),
+            "fn singleton must stay ordinary"
+        );
+        assert!(used.is_empty());
+        assert!(fired.is_empty());
+    }
+
+    #[test]
+    fn e2e_derive_add_singleton_compresses() {
+        // Pipeline reachability: the lone-insert F10/WI-14 probe raises
+        // through `infer_semantic_with_pre_images`, not just the unit
+        // entry — concrete name, no `N` hole, byte-identical post-tree.
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -0,0 +1 @@\n+#[derive(Clone)]\n".to_string();
+        let pre_map = {
+            let mut m = HashMap::new();
+            m.insert("f.rs".to_string(), "struct S { x: i32 }\n".to_string());
+            m
+        };
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("derive-add singleton must compress end to end");
+        assert!(out.contains("- struct S\n"), "got:\n{out}");
+        assert!(out.contains("+ #[derive(Clone)]\n"), "got:\n{out}");
+        assert!(!out.contains("struct N"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"], "#[derive(Clone)]\nstruct S { x: i32 }\n",
+            "got:\n{}",
+            files["f.rs"]
+        );
     }
 }

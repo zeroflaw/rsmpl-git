@@ -7861,7 +7861,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
    same engine-count check over the `N`-holed minus header (free fns)
    or per-`impl`-block probes (methods) — an untouched same-shape
    header vetoes to ordinary. Detector name `header_evolution`.
-- Attribute-delta sweep: N ≥ 2 pure-attr hunks (bare `+#[...]`
+- Attribute-delta sweep: N ≥ 1 pure-attr hunks (bare `+#[...]`
   insertions, bare `-#[...]` deletions, or balanced attr-line
   replacements) sharing one uniform attr-line delta over hetero items.
   Owners come from the pre-image (`syn` walk: the innermost item
@@ -7876,9 +7876,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   emitted hunk must apply to the pre-image with `matches == class
   size` and reproduce byte-identically the result of applying the
   claimed ordinary hunks (count equality alone can coincide wrongly).
-   Per-class T375 (each body beats its covered hunks); a losing class
-   declines alone, never vetoing a winning one. Detector name
-   `attr_sweep`.
+   Per-class T375 (each body beats its covered hunks); N = 1 fires
+   under the precision posture (`body <= ordinary + 16` — the
+   definition-shape guard, WI-19b doctrine: the concrete owner header
+   anchors the single site and the probe demands `matches == 1`, so
+   proof replaces bytes; Fn-family singles stay ordinary on bytes).
+   A losing class declines alone, never vetoing a winning one.
+   Detector name `attr_sweep`.
 - Definition-value evolution (WI-12 slice 1): one balanced pair
   (N == 1) — or N ≥ 2 uniform pairs sharing one shape class,
   identity, and exact RHS delta — compresses to the WI-11 authored
