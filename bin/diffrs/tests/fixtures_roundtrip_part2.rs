@@ -1123,6 +1123,37 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "131-joint-impl-extras-fires" {
+        // WI-3b: triple with a `type`-alias self-ty plus a follow-use
+        // line raises as one shared-rule intent (trait pair first,
+        // self-type second); the composed header and the use line are
+        // follow-rewritten, never stated.
+        assert!(
+            semantic.contains("rule=r1\n"),
+            "joint impl extras must share one rule, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- trait Printable\n"),
+            "trait pair must ride first, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- type Old\n"),
+            "type-alias pair must ride second, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("impl Printable"),
+            "composed header is follow-rewritten, never stated, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("fn f(x: Old)"),
+            "use line is follow-rewritten, never stated, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint impl extras must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "127-move-body-evolve-strings-kept" {
         // WI-6 slice 3b variant: the moved body renames its self-reference
         // but keeps a `"fact"` string literal and a `// fact` comment

@@ -7559,21 +7559,24 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   (`struct`/`enum`/`trait`/`type`/`const`/`static`/`mod`)
   rename+vis/qual joints stay ordinary (future slice: `ItemRename` is
   rename-only — pattern and engine work).
-- Joint `impl Trait for Type` raising (WI-3, detector `item_joint_impl`):
+- Joint `impl Trait for Type` raising (WI-3, WI-3b, detector `item_joint_impl`):
   exactly one `trait` definition rename pair plus exactly one self-type
-  definition rename pair (`struct`/`enum`/`union`) plus exactly one
-  composed `impl` header pair (`impl OldTr for OldTy<sfx>` →
-  `impl NewTr for NewTy<same sfx>`, single unqualified idents, no
-  `impl<…>` generics) in one file, and no other changed line, compresses
-  to two hunks under one shared rule (`# sweep` + `# follow=uses` each,
-  trait pair first per the def-before-member law). The composed header is
-  never stated: the two follows rewrite it at apply time. Totality is the
-  D13 joint scratch-apply probe (composed emission on a `pre` clone must
-  reproduce the plus lines at the three sites with every other line of
-  every file byte-identical — off-diff same-name uses fail the unchanged
-  leg) plus twin-definition vetoes and the T375 byte-win guard. Extra
-  follow-use lines alongside the triple and cross-file trait/type/impl
-  groups stay ordinary (future slices).
+  definition rename pair (`struct`/`enum`/`union`/`type` alias with equal
+  RHS) plus exactly one composed `impl` header pair (`impl OldTr for
+  OldTy<sfx>` → `impl NewTr for NewTy<same sfx>`, single unqualified
+  idents, no `impl<…>` generics) in one file, plus zero or more
+  follow-use lines (each renaming at least one full half
+  ident-boundary, no dedicated call-callee/macro-head position, no
+  def-shaped third delta — the `extra_claimable` gate), compresses to
+  two hunks under one shared rule (`# sweep` + `# follow=uses` each,
+  trait pair first per the def-before-member law). The composed header
+  and the extras are never stated: the two follows rewrite them at
+  apply time. Totality is the D13 joint scratch-apply probe (composed
+  emission on a `pre` clone must reproduce the plus lines at every
+  claimed site with every other line of every file byte-identical —
+  off-diff same-name uses fail the unchanged leg) plus twin-definition
+  vetoes and the T375 byte-win guard. Cross-file trait/type/impl groups
+  stay ordinary (WI-12).
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)
@@ -9286,7 +9289,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(129), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(130), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
