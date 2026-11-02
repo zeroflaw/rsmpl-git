@@ -87,6 +87,7 @@ pub fn general_orphans(
             path,
             edits_before,
             &old,
+            compiled,
         );
     }
     // WI-3: let-wrapped closure binder (F3 headline). The outer `let`

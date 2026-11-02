@@ -294,14 +294,15 @@ pub fn apply_general_hunk(
     // hole replays (`P @ sub` → `P`, `Some(x)` → `Some(P)`), plain
     // renames and Stmt single-leaf destructuring renames through binder
     // identity keep applying. Sequences are exempt except a rename-once
-    // plain-`let` rename at any single position, which enters binder
-    // identity (completion + orphans): the raiser owns other
-    // binder-renaming hetero runs there (WI-5d single-block fusion,
-    // completed by sibling hunks in the same patch), so a hunk-local
-    // veto would break the apply direction of a proven cycle;
-    // sequence-contained destructuring and old-mentioning windows stay
-    // declined (exempt window-only), owned by the next slice, not this
-    // gate.
+    // `let` rename (plain or single-leaf destructuring) at any single
+    // position, which enters binder identity (completion + orphans,
+    // incl. authored init-substitution of later in-window uses): the
+    // raiser owns other binder-renaming hetero runs there (WI-5d
+    // single-block fusion, completed by sibling hunks in the same
+    // patch), so a hunk-local veto would break the apply direction of
+    // a proven cycle; spelled-`old` uses replay verbatim (orphans),
+    // partial swaps and `new`/pat mentions stay declined (exempt
+    // window-only).
     if matches!(shape, GeneralShape::Stmt | GeneralShape::Expr)
         && !crate::use_graph_local::is_local_binder_rename(compiled)
     {

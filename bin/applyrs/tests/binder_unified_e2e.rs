@@ -243,9 +243,11 @@ fn fn_param_completion_applies_and_checks_clean() {
 // JSON), the worktree stays untouched, and the single-binder twins above
 // (incl. Stmt single-leaf destructuring and rename-once sequences, which
 // complete like `let`) stay green as the exemption pins. Sequences are
-// exempt except a rename-once plain `let` rename (hetero fusion owns
-// other binder-renaming runs there; sequence-contained destructuring
-// and old-mentioning windows stay declined window-only).
+// exempt except a rename-once `let` rename (plain or single-leaf
+// destructuring, with optional authored init-substitution of later
+// in-window uses — hetero fusion owns other binder-renaming runs
+// there; spelled-`old` uses replay verbatim as orphans, partial swaps
+// and `new`/pat mentions stay declined window-only).
 const C21_REASON: &str = "general template rewrites bound binder idents without binder identity";
 
 fn check_c21_text(dir: &std::path::Path, patch: &str, content: &str) {
@@ -436,11 +438,14 @@ fn closure_param_rename_leaves_attribute_value_and_reports_partial() {
     assert!(post.contains("sum + 1"), "got: {post}");
 }
 
-// Sequence-contained plain renames (residue slices 1-2): a rename-once
-// `let old` -> `let new` at any single position completes post-window
-// uses in-hunk and reports `verified`; shadowed/macro post-window uses
-// file orphans and cap at `partial`; old-mentioning windows stay
-// declined window-only (pinned remainder).
+// Sequence-contained renames (residue slices 1-3): a rename-once
+// `let old` -> `let new` (plain or single-leaf destructuring) at any
+// single position completes post-window uses in-hunk and reports
+// `verified`; shadowed/macro post-window uses file orphans and cap at
+// `partial`; authored init-substitution (`let b = old` -> `let b = new`)
+// completes in-window by authoring; spelled-`old` in-window uses replay
+// verbatim and strand as orphans (`partial`); partial swaps and
+// `new`/pat mentions stay declined window-only (pinned remainder).
 const SEQ_RENAME_LAST_PATCH: &str =
     "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let a = E0;\n- let old = E1;\n+ let a = E0;\n+ let new = E1;\n";
 
@@ -544,6 +549,151 @@ fn sequence_non_final_rename_completes_and_checks_clean() {
     let post = read(dir.path(), "src/lib.rs");
     assert!(post.contains("let new = 1;"), "got: {post}");
     assert!(post.contains("let c = new;"), "got: {post}");
+    assert!(!post.contains("old"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_spelled_substitution_completes_and_checks_clean() {
+    // Residue slice 3: the author spells the intra-window use with the
+    // new name; window applies verbatim, post-window completes,
+    // `verified`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 1;\n    let b = old;\n    let c = old;\n    let _ = (b, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = old;\n+ let new = E0;\n+ let b = new;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 1;"), "got: {post}");
+    assert!(post.contains("let b = new;"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+    assert!(!post.contains("old"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_spelled_old_strands_partial() {
+    // Residue slice 3: the in-window use replays the old name (no
+    // substitution spelled); post-window still completes and the
+    // leftover strands as an orphan, capping at `partial`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 1;\n    let b = old;\n    let c = old;\n    let _ = (b, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = old;\n+ let new = E0;\n+ let b = old;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    // The narrowed sequence cover surfaces the replayed in-window use
+    // (line 3) instead of hiding it inside the window edit.
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([{
+            "file": "src/lib.rs",
+            "line": 3,
+            "reason": "off-target",
+            "text": "let b = old;",
+        }]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 1;"), "got: {post}");
+    assert!(post.contains("let b = old;"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+}
+
+#[test]
+fn sequence_destructuring_position_completes_and_checks_clean() {
+    // Residue slice 3: single-leaf destructuring at a sequence
+    // position completes post-window uses, `verified`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let (x, old) = (1, 2);\n    let b = 3;\n    let c = old;\n    let _ = (x, b, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let (x, old) = E0;\n- let b = E1;\n+ let (x, new) = E0;\n+ let b = E1;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let (x, new) = (1, 2);"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+    assert!(!post.contains("old"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_destructuring_shadowed_reports_partial() {
+    // Residue slice 3: the narrowed cover keeps post-window shadow
+    // precision for destructuring defs too.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let (x, old) = (1, 2);\n    let b = old;\n    {\n        let old = 9;\n        let c = old;\n        let _ = c;\n    }\n    let d = old;\n    let _ = (x, b, d);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let (x, old) = E0;\n- let b = old;\n+ let (x, new) = E0;\n+ let b = new;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert!(
+        v["rules"][0]["orphans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("shadowed")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let (x, new) = (1, 2);"), "got: {post}");
+    assert!(post.contains("let b = new;"), "got: {post}");
+    assert!(post.contains("let old = 9;"), "got: {post}");
+    assert!(post.contains("let d = new;"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_multi_substitution_completes_and_checks_clean() {
+    // Residue slice 3: several later in-window uses spelled with the
+    // new name all complete in-window plus post-window, `verified`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 1;\n    let b = old;\n    let c = old;\n    let d = old;\n    let _ = (b, c, d);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = old;\n- let c = old;\n+ let new = E0;\n+ let b = new;\n+ let c = new;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 1;"), "got: {post}");
+    assert!(post.contains("let b = new;"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+    assert!(post.contains("let d = new;"), "got: {post}");
     assert!(!post.contains("old"), "got: {post}");
     cargo_check(dir.path());
 }

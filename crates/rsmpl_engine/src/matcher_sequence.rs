@@ -265,21 +265,26 @@ pub fn apply_sequence_hunk(
     Ok((matched, all_bindings))
 }
 
-/// Sequence-contained plain-binder completion (residue slices 1-2):
-/// when the compiled sequence renames exactly one plain `let` binder
-/// at any single position, rewrite unshadowed post-window value uses
-/// of the old ident (`follow`), reusing the audited `let` walker
-/// verbatim (same shadow/nested-fn/macro/attribute discipline, same
-/// shorthand expansion). The window replacement above is the
+/// Sequence-contained binder completion (residue slices 1-3):
+/// when the compiled sequence renames exactly one `let` binder
+/// (plain or single-leaf destructuring, with optional authored
+/// init-substitution positions spelling later in-window uses with the
+/// new name) at any single position, rewrite unshadowed post-window
+/// value uses of the old ident (`follow`), reusing the audited `let`
+/// walker verbatim (same shadow/nested-fn/macro/attribute discipline,
+/// same shorthand expansion). The window replacement above is the
 /// definition (labelled `rename`, parity with the single-`let` arm);
 /// only strictly post-window edits are kept, so follows never overlap
-/// the window.
+/// the window. In-window uses replay verbatim from the plus side —
+/// spelled-`new` substitution positions complete in-window by
+/// authoring, spelled-`old` ones strand as orphans (honest `partial`).
 ///
-/// Returns `None` when the pattern is not a rename-once plain binder
-/// rename, or when the target window does not bind `old` exactly once
-/// at exactly one position (fail-safe: the window still applies and
-/// `orphans` still file via `general_orphans` — today's posture, never
-/// a mis-resolved rewrite).
+/// Returns `None` when the pattern is not a rename-once binder rename,
+/// when the target window does not bind `old` exactly once at exactly
+/// one position, or when another window position binds `new`
+/// (window-local capture — fail-safe: the window still applies and
+/// `orphans` still file via `general_orphans`, never a mis-resolved
+/// rewrite).
 fn sequence_binder_follows(
     parsed: &syn::File,
     original: &str,
@@ -304,21 +309,29 @@ fn sequence_binder_follows(
     // Exactly one window position may bind `old` (structurally walked,
     // so destructuring shadows resolve); all others must bind zero
     // times — the target-side mirror of the pattern rename-once gate.
+    // No window position may bind `new`: the rename would capture it
+    // (the renamed definition plus any spelled substitution would
+    // double-bind).
     let mut hit: Option<usize> = None;
     for (i, local) in tgt_locals.iter().enumerate() {
         let mut offs = crate::use_graph_local::pat_old_offsets(&local.pat, &b.old, original, index);
         offs.sort_unstable();
         offs.dedup();
-        if offs.is_empty() {
-            continue;
+        if !offs.is_empty() {
+            if offs.len() != 1 || hit.is_some() {
+                return None;
+            }
+            if original.get(offs[0]..offs[0] + b.old.len()) != Some(b.old.as_str()) {
+                return None;
+            }
+            hit = Some(i);
         }
-        if offs.len() != 1 || hit.is_some() {
+        let mut news = crate::use_graph_local::pat_old_offsets(&local.pat, &b.new, original, index);
+        news.sort_unstable();
+        news.dedup();
+        if !news.is_empty() {
             return None;
         }
-        if original.get(offs[0]..offs[0] + b.old.len()) != Some(b.old.as_str()) {
-            return None;
-        }
-        hit = Some(i);
     }
     let idx = hit?;
     // The renamed statement's own span is the binder range (the
@@ -570,14 +583,131 @@ mod tests {
     }
 
     #[test]
-    fn sequence_old_mentioning_window_applies_window_only() {
-        // A later window statement naming the binder strands inside
-        // the replacement: the binder arm declines (pinned remainder,
-        // narrowed to mentioning windows only).
+    fn sequence_spelled_substitution_completes_in_window_and_after() {
+        // Residue slice 3: the author spells the intra-window use with
+        // the new name; the window applies verbatim (plus keeps
+        // re-matching) and post-window uses complete too.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = old;\n+ let new = E0;\n+ let b = new;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = old;\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let b = new;"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+        assert!(!out.contains("old"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_destructuring_position_completes_post_window_use() {
+        // Residue slice 3: single-leaf destructuring at a sequence
+        // position completes post-window uses.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let (x, old) = E0;\n- let b = E1;\n+ let (x, new) = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let (x, old) = g();\n    let b = h();\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let (x, new) = g();"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+        assert!(!out.contains("old"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_destructuring_with_spelled_substitution() {
+        // Both new shapes compose: destructuring rename plus a spelled
+        // intra-window substitution.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let (x, old) = E0;\n- let b = old;\n+ let (x, new) = E0;\n+ let b = new;\n"
+        );
+        let src = "fn f() {\n    let (x, old) = g();\n    let b = old;\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let (x, new) = g();"), "got: {out}");
+        assert!(out.contains("let b = new;"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+        assert!(!out.contains("old"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_spelled_old_strands_in_window_only() {
+        // The author replays the old name in-window (no substitution
+        // spelled): the arm still fires, post-window completes, and the
+        // in-window leftover strands for the orphan scan (e2e pins the
+        // `partial` verdict; here the text posture is pinned).
         let patch = format!(
             "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = old;\n+ let new = E0;\n+ let b = old;\n"
         );
         let src = "fn f() {\n    let old = g(1);\n    let b = old;\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let b = old;"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_shadowed_init_replays_verbatim() {
+        // A shadowed init matches only through a hole; the hole replays
+        // verbatim while post-window uses still complete around it.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
+        );
+        let src =
+            "fn f() {\n    let old = g(1);\n    let b = { let old = 9; old };\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let old = 9;"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_destructuring_macro_post_window_use_stays() {
+        // Destructuring defs share the plain follow path: the macro
+        // interior stays verbatim while the plain post-window use
+        // completes.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let (x, old) = E0;\n- let b = E1;\n+ let (x, new) = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let (x, old) = g();\n    let b = h();\n    println!(\"{}\", old);\n    let d = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let (x, new) = g();"), "got: {out}");
+        assert!(out.contains("println!(\"{}\", old);"), "got: {out}");
+        assert!(out.contains("let d = new;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_macro_init_replays_verbatim() {
+        // Macro interiors never rewrite: the hole replays verbatim,
+        // the macro text stays, the plain post-window use completes.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = foo!(old);\n    let d = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let b = foo!(old);"), "got: {out}");
+        assert!(out.contains("let d = new;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_new_mentioning_window_applies_window_only() {
+        // Naming the new ident elsewhere risks capture: decline the
+        // arm, window applies verbatim, post-window strands.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = new;\n+ let new = E0;\n+ let b = new;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = new;\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let c = old;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_window_binding_new_declines_arm() {
+        // Another window statement binding `new` would double-bind
+        // after the rename: decline the arm (window still applies).
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let P0 = E0;\n- let old = E1;\n+ let P0 = E0;\n+ let new = E1;\n"
+        );
+        let src = "fn f() {\n    let new = g(0);\n    let old = g(1);\n    let c = old;\n}\n";
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("let new = g(1);"), "got: {out}");
         assert!(out.contains("let c = old;"), "got: {out}");

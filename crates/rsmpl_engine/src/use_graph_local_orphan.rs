@@ -12,6 +12,9 @@ use crate::lines::{FileState, LineIndex};
 use crate::use_graph_local::{format_capture_spans, orphan_line_text};
 use crate::use_graph_orphan::collect_orphans;
 
+/// Byte span in the pre-image file text.
+type Span = (usize, usize);
+
 /// WI-13: modelled shadow ranges for same-name binders outside the
 /// `let` / closure-param family: `(binder_def, construct_scope_end)`
 /// for `for` / `if let` / `while let` patterns, match-arm patterns, and
@@ -164,6 +167,121 @@ pub(crate) fn extra_binder_shadow_ranges(
     grab.out
 }
 
+/// Sequence-window orphan cover (residue slice 3): map the
+/// pattern-side rename/substitution positions onto one applied target
+/// window.
+///
+/// Returns the def span plus extra exclusion spans (authored
+/// substitution statements, whose old uses the plus side rewrote
+/// verbatim), or `None` when the window cannot be mapped exactly
+/// (fail-safe: the caller keeps today's whole-window cover).
+/// Substitution statements are excluded wholesale: their old mentions
+/// are proven swapped by the pattern round-trip over a structurally
+/// matched target, so no true leftover hides there — except old idents
+/// nested inside a hole-bound subtree (shadow/macro interiors smuggled
+/// through `E1`), which stay silent (pinned remainder).
+pub(crate) fn sequence_window_cover(
+    kind: &rsmpl_pattern::PatternKind,
+    window: (usize, usize),
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    old: &str,
+) -> Option<(Span, Vec<Span>)> {
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+    let rsmpl_pattern::PatternKind::General {
+        shape, minus_sub, ..
+    } = kind
+    else {
+        return None;
+    };
+    if *shape != rsmpl_pattern::GeneralShape::Sequence {
+        return None;
+    }
+    let (idx, subs, _, _) = rsmpl_pattern::binder::sequence_binder_positions(kind)?;
+    let minus_block = syn::parse_str::<syn::Block>(&format!("{{ {minus_sub} }}")).ok()?;
+    let k = minus_block.stmts.len();
+    if !(2..=4).contains(&k) || subs.iter().any(|j| *j >= k) || idx >= k {
+        return None;
+    }
+    struct Blocks<'ast> {
+        blocks: Vec<&'ast syn::Block>,
+    }
+    impl<'ast> Visit<'ast> for Blocks<'ast> {
+        fn visit_block(&mut self, node: &'ast syn::Block) {
+            self.blocks.push(node);
+            syn::visit::visit_block(self, node);
+        }
+    }
+    let mut grab = Blocks { blocks: Vec::new() };
+    grab.visit_file(parsed);
+    // Collect every K-run of plain `let` siblings whose byte span is
+    // exactly the window edit span (positional correspondence with the
+    // apply zip). At most one run can match; anything else bails.
+    let mut runs: Vec<(Vec<Span>, Vec<syn::Local>)> = Vec::new();
+    for block in &grab.blocks {
+        if block.stmts.len() < k {
+            continue;
+        }
+        for start in 0..=(block.stmts.len() - k) {
+            let run = &block.stmts[start..start + k];
+            let mut spans: Vec<(usize, usize)> = Vec::with_capacity(k);
+            let mut locals: Vec<syn::Local> = Vec::with_capacity(k);
+            let mut ok = true;
+            for stmt in run {
+                let syn::Stmt::Local(l) = stmt else {
+                    ok = false;
+                    break;
+                };
+                let Some(se) = crate::matcher_item::span_bytes(original, index, stmt.span()) else {
+                    ok = false;
+                    break;
+                };
+                spans.push(se);
+                locals.push(l.clone());
+            }
+            if !ok {
+                continue;
+            }
+            let (Some(first), Some(last)) = (spans.first(), spans.last()) else {
+                continue;
+            };
+            if (first.0, last.1) == window {
+                runs.push((spans, locals));
+            }
+        }
+    }
+    if runs.len() != 1 {
+        return None;
+    }
+    let (spans, run) = runs.pop().unwrap();
+    // The target window must bind `old` exactly once, at the pattern
+    // rename index.
+    let mut hit: Option<usize> = None;
+    for (i, local) in run.iter().enumerate() {
+        let mut offs = crate::use_graph_local::pat_old_offsets(&local.pat, old, original, index);
+        offs.sort_unstable();
+        offs.dedup();
+        if offs.is_empty() {
+            continue;
+        }
+        if offs.len() != 1 || hit.is_some() {
+            return None;
+        }
+        hit = Some(i);
+    }
+    if hit? != idx {
+        return None;
+    }
+    let def = spans[idx];
+    let mut extra: Vec<(usize, usize)> = Vec::new();
+    for j in subs {
+        extra.push(spans[j]);
+    }
+    Some((def, extra))
+}
+
 /// WI-2a post-binder orphan scan for `let`-binder renames (same file
 /// only: locals can never dangle cross-file; uses before the binder
 /// statement end name the outer scope, including the binder's own init
@@ -173,12 +291,20 @@ pub(crate) fn extra_binder_shadow_ranges(
 /// `Block` containing the binder (the same enclosing scope follows
 /// rewrite in). Same-name uses in other fns/other blocks name a
 /// different scope and are not orphans.
+///
+/// Residue slice 3: for sequence binder windows the cover narrows from
+/// the whole-window edit to the def span plus follow spans (plus
+/// authored-substitution exclusions), so in-window leftovers surface
+/// through the existing claimable/shadow/macro machinery instead of
+/// hiding inside the window edit. Unmappable windows keep the legacy
+/// whole-window cover (fail-safe).
 pub(crate) fn let_binder_orphans(
     states: &HashMap<String, FileState>,
     file_edits: &HashMap<String, Vec<TextEdit>>,
     path: &str,
     edits_before: usize,
     old: &str,
+    compiled: &rsmpl_pattern::CompiledPattern,
 ) -> Vec<crate::OrphanReport> {
     let Some(st) = states.get(path) else {
         return Vec::new();
@@ -195,12 +321,64 @@ pub(crate) fn let_binder_orphans(
     if hunk_edits.is_empty() {
         return Vec::new();
     }
-    let renamed: Vec<(usize, usize)> = hunk_edits.iter().map(|e| (e.start, e.end)).collect();
-    let binder_spans: Vec<(usize, usize)> = hunk_edits
+    // Sequence narrowing (slice 3): map each non-follow window edit
+    // onto its def + substitution spans. All windows must map exactly;
+    // otherwise keep the legacy whole-window cover (fail-safe).
+    let mut narrowed: Option<(Vec<Span>, Vec<Span>)> = None;
+    if let rsmpl_pattern::PatternKind::General {
+        shape: rsmpl_pattern::GeneralShape::Sequence,
+        ..
+    } = &compiled.kind
+    {
+        let windows: Vec<(usize, usize)> = hunk_edits
+            .iter()
+            .filter(|e| e.label != Some("follow"))
+            .map(|e| (e.start, e.end))
+            .collect();
+        if !windows.is_empty() {
+            let mut defs: Vec<(usize, usize)> = Vec::new();
+            let mut extras: Vec<(usize, usize)> = Vec::new();
+            let mut ok = true;
+            for w in windows {
+                match sequence_window_cover(&compiled.kind, w, parsed, original, index, old) {
+                    Some((d, e)) => {
+                        defs.push(d);
+                        extras.extend(e);
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                narrowed = Some((defs, extras));
+            }
+        }
+    }
+    let follow_spans: Vec<(usize, usize)> = hunk_edits
         .iter()
-        .filter(|e| e.label != Some("follow"))
+        .filter(|e| e.label == Some("follow"))
         .map(|e| (e.start, e.end))
         .collect();
+    let (renamed, binder_spans): (Vec<Span>, Vec<Span>) = match narrowed {
+        Some((defs, extras)) => {
+            let mut r = defs.clone();
+            r.extend(follow_spans);
+            r.extend(extras);
+            (r, defs)
+        }
+        None => {
+            let renamed: Vec<(usize, usize)> =
+                hunk_edits.iter().map(|e| (e.start, e.end)).collect();
+            let binder_spans: Vec<(usize, usize)> = hunk_edits
+                .iter()
+                .filter(|e| e.label != Some("follow"))
+                .map(|e| (e.start, e.end))
+                .collect();
+            (renamed, binder_spans)
+        }
+    };
     let fallback = binder_spans
         .iter()
         .map(|(s, _)| *s)

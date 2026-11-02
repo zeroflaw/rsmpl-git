@@ -24,15 +24,16 @@
 //! Plain bare-ident renames and Stmt single-leaf destructuring renames
 //! keep today's behavior through binder identity (completion +
 //! orphans). Sequences are exempt at the call site except a
-//! rename-once plain-`let` rename at any single position, which enters
-//! binder identity (residue slices 1-2): the raiser owns other
-//! binder-renaming hetero runs there (WI-5d single-block fusion,
-//! completed by sibling hunks in the same patch — c48a6e6 pins the
-//! shape), so a hunk-local veto would break the apply direction of a
-//! proven cycle; sequence-contained destructuring and old-mentioning
-//! windows stay declined (exempt window-only), owned by the next
-//! slice, not this gate. Unparseable sides never veto (downstream
-//! gates own them).
+//! rename-once `let` rename (plain or single-leaf destructuring) at
+//! any single position, which enters binder identity (residue slices
+//! 1-3, incl. authored init-substitution spelling later in-window uses
+//! with the new name): the raiser owns other binder-renaming hetero
+//! runs there (WI-5d single-block fusion, completed by sibling hunks
+//! in the same patch — c48a6e6 pins the shape), so a hunk-local veto
+//! would break the apply direction of a proven cycle; spelled-`old`
+//! in-window uses replay verbatim (strand as orphans), and partial
+//! swaps plus `new`/pat mentions stay declined (exempt window-only).
+//! Unparseable sides never veto (downstream gates own them).
 
 use std::collections::HashSet;
 

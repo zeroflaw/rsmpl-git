@@ -9,8 +9,10 @@
 //! deltas, multi-binder diffs, bare-`P` annotation add/drop) yield
 //! `None` and keep general-template behaviour with no binder
 //! privileges (SPEC 18.1, D11). Single-leaf `let` destructuring deltas
-//! and rename-once sequence-contained plain renames (any position)
-//! yield scope-`Let` identity with the `let` completion/orphan duty.
+//! and rename-once sequence-contained renames (plain or single-leaf
+//! destructuring at any position, plus authored init-substitution of
+//! later in-window uses) yield scope-`Let` identity with the `let`
+//! completion/orphan duty.
 
 use std::collections::HashMap;
 
@@ -434,22 +436,39 @@ fn let_binder(kind: &PatternKind) -> Option<(String, String)> {
     }
 }
 
-/// Sequence-contained plain `let` rename: K (2-4) plain `let`
-/// statements where EXACTLY ONE position renames a plain single-ident
-/// binder (`let old = E;` -> `let new = E;`, same init and type
-/// annotation) and every other position is placeholder-normalized
-/// token-equal.
+/// Sequence-contained `let` rename: K (2-4) `let` statements where
+/// EXACTLY ONE position renames a binder — plain single-ident
+/// (`let old = E;` -> `let new = E;`) or single-leaf destructuring
+/// (`let (x, old) = E;` -> `let (x, new) = E;`, struct/shorthand/slice
+/// twins) — with same init and type annotation. Every other position
+/// is either placeholder-normalized token-equal or an
+/// *init-substitution* spelling the intra-window use explicitly:
+/// same pat, init differing only by `old` → `new` swaps
+/// (`let b = old;` -> `let b = new;`). The window applies verbatim,
+/// so the plus side keeps re-matching the post-image (SPEC 24.6);
+/// post-window uses complete via the `let` follow/orphan machinery
+/// with the window end as the floor.
 ///
-/// The rename-once gate is the soundness discipline: no other window
-/// statement may mention `old`/`new` as an ident-boundary occurrence,
-/// so no in-window use can strand inside the replacement; post-window
-/// uses complete via the `let` follow/orphan machinery with the window
-/// end as the floor. Multi-delta (hetero-fusion) runs, destructuring
-/// positions, and deletions decline (`None`) and keep today's exempt
-/// behaviour.
+/// The rename-once gate is the soundness discipline: substitution
+/// positions must name the same pair, sit strictly *after* the
+/// renamed position (a pre-binder use names an outer binder), and
+/// round-trip exactly (partial swaps decline); any other delta —
+/// hetero-fusion runs, deletions, same-position init changes,
+/// `new`/earlier/pat mentions outside substitution — declines
+/// (`None`) and keeps today's exempt behaviour.
 fn sequence_binder(kind: &PatternKind) -> Option<(String, String)> {
+    sequence_binder_positions(kind).map(|(_, _, old, new)| (old, new))
+}
+
+/// Pattern-side positions of a sequence binder rename: the renamed
+/// index, the authored init-substitution indices, and the pair. The
+/// orphan cover (`rsmpl_engine`) maps these onto target windows.
+pub fn sequence_binder_positions(
+    kind: &PatternKind,
+) -> Option<(usize, Vec<usize>, String, String)> {
     let (minus_sub, plus_body, placeholders) = general_parts(kind, GeneralShape::Sequence)?;
     let ph = ph_map(placeholders);
+    let declared = declared_holes(placeholders);
     if plus_body.trim().is_empty() {
         return None;
     }
@@ -473,44 +492,146 @@ fn sequence_binder(kind: &PatternKind) -> Option<(String, String)> {
         minus_locals.push(m);
         plus_locals.push(p);
     }
-    // Exactly one position renames; the rest are token-equal modulo
-    // placeholders (the `let` arm's discipline per position).
+    // Exactly one pat-rename; every other position token-equal or a
+    // clean init-substitution for the same pair.
     let mut found: Option<(usize, String, String)> = None;
+    let mut substitutions: Vec<usize> = Vec::new();
     for (i, (m, p)) in minus_locals.iter().zip(plus_locals.iter()).enumerate() {
         if normalize_placeholders(&render(m), &ph) == normalize_placeholders(&render(p), &ph) {
             continue;
         }
-        let (old_id, old_mut) = single_ident_binder(&m.pat)?;
-        let (new_id, new_mut) = single_ident_binder(&p.pat)?;
-        if old_id == new_id || old_mut != new_mut {
+        if let Some((old_id, new_id)) = sequence_position_rename(m, p, &ph, &declared) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some((i, old_id, new_id));
+            continue;
+        }
+        substitutions.push(i);
+    }
+    let (idx, old_id, new_id) = found?;
+    // Substitution positions: same pat, init a total old→new swap
+    // round-tripping exactly, strictly after the renamed position.
+    for i in &substitutions {
+        if *i < idx {
+            return None;
+        }
+        let (m, p) = (minus_locals[*i], plus_locals[*i]);
+        if normalize_placeholders(&render(&m.pat), &ph)
+            != normalize_placeholders(&render(&p.pat), &ph)
+        {
             return None;
         }
         if pat_ty(&m.pat, &ph) != pat_ty(&p.pat, &ph) {
             return None;
         }
-        let minus_init = m.init.as_ref().map(|i| render(&i.expr))?;
-        let plus_init = p.init.as_ref().map(|i| render(&i.expr))?;
-        if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
+        let m_init = m.init.as_ref().map(|x| render(&x.expr))?;
+        let p_init = p.init.as_ref().map(|x| render(&x.expr))?;
+        let m_norm = normalize_placeholders(&m_init, &ph);
+        let p_norm = normalize_placeholders(&p_init, &ph);
+        if !contains_ident_bounded(&m_norm, &old_id) {
             return None;
         }
-        if found.is_some() {
+        if replace_ident_bounded(&m_norm, &old_id, &new_id) != p_norm
+            || replace_ident_bounded(&p_norm, &new_id, &old_id) != m_norm
+        {
             return None;
         }
-        found = Some((i, old_id, new_id));
     }
-    let (idx, old_id, new_id) = found?;
-    // No other window statement may mention the renamed binder: its
-    // uses would replay verbatim inside the replacement and strand.
-    for (i, m) in minus_locals.iter().enumerate() {
-        if i == idx {
+    // Soundness on the remaining token-equal positions: `old` may
+    // appear (an in-window use replays verbatim and strands as an
+    // orphan when it names the renamed binder — honest `partial`,
+    // never silent); `new` may not (the rename would capture it), nor
+    // may another pat mention the pair (a second bound occurrence
+    // unmans the single-binder proof).
+    for (i, (m, p)) in minus_locals.iter().zip(plus_locals.iter()).enumerate() {
+        if i == idx || substitutions.contains(&i) {
             continue;
         }
-        let text = normalize_placeholders(&render(m), &ph);
-        if contains_ident_bounded(&text, &old_id) || contains_ident_bounded(&text, &new_id) {
-            return None;
+        for local in [m, p] {
+            let text = normalize_placeholders(&render(local), &ph);
+            if contains_ident_bounded(&text, &new_id) {
+                return None;
+            }
+        }
+        for local in [m, p] {
+            let pat_text = normalize_placeholders(&render(&local.pat), &ph);
+            if contains_ident_bounded(&pat_text, &old_id)
+                || contains_ident_bounded(&pat_text, &new_id)
+            {
+                return None;
+            }
         }
     }
-    Some((old_id, new_id))
+    Some((idx, substitutions, old_id, new_id))
+}
+
+/// Replace whole-ident occurrences of `needle` with `replacement`
+/// (ident-boundary gated).
+fn replace_ident_bounded(hay: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() || !hay.contains(needle) {
+        return hay.to_string();
+    }
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let hb = hay.as_bytes();
+    let nb = needle.as_bytes();
+    let mut out = String::with_capacity(hay.len());
+    let mut i = 0;
+    while i < hb.len() {
+        if i + nb.len() <= hb.len() && &hb[i..i + nb.len()] == nb {
+            let prev_ok = i == 0 || !is_ident_byte(hb[i - 1]);
+            let next_ok = i + nb.len() == hb.len() || !is_ident_byte(hb[i + nb.len()]);
+            if prev_ok && next_ok {
+                out.push_str(replacement);
+                i += nb.len();
+                continue;
+            }
+        }
+        let ch = hay[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// One sequence position rename: plain single-ident or single-leaf
+/// destructuring, same init/type discipline as the `let` arm.
+fn sequence_position_rename(
+    m: &syn::Local,
+    p: &syn::Local,
+    ph: &HashMap<&str, &str>,
+    declared: &std::collections::HashSet<String>,
+) -> Option<(String, String)> {
+    if let (Some((old_id, old_mut)), Some((new_id, new_mut))) =
+        (single_ident_binder(&m.pat), single_ident_binder(&p.pat))
+    {
+        if old_id == new_id || old_mut != new_mut {
+            return None;
+        }
+        if pat_ty(&m.pat, ph) != pat_ty(&p.pat, ph) {
+            return None;
+        }
+        let minus_init = m.init.as_ref().map(|i| render(&i.expr))?;
+        let plus_init = p.init.as_ref().map(|i| render(&i.expr))?;
+        if normalize_placeholders(&minus_init, ph) != normalize_placeholders(&plus_init, ph) {
+            return None;
+        }
+        return Some((old_id, new_id));
+    }
+    if pat_ty(&m.pat, ph) != pat_ty(&p.pat, ph) {
+        return None;
+    }
+    let minus_init = m.init.as_ref().map(|i| render(&i.expr))?;
+    let plus_init = p.init.as_ref().map(|i| render(&i.expr))?;
+    if normalize_placeholders(&minus_init, ph) != normalize_placeholders(&plus_init, ph) {
+        return None;
+    }
+    match single_leaf_diff(&m.pat, &p.pat, ph, declared) {
+        Ok(Some((o, n))) => Some((o, n)),
+        _ => None,
+    }
 }
 
 /// Shared closure-parameter diff: exactly one single-ident parameter
@@ -1099,13 +1220,105 @@ mod tests {
     }
 
     #[test]
-    fn sequence_old_mention_declines() {
-        // Another window statement naming the binder strands inside
-        // the replacement: decline to today's exempt behaviour.
+    fn sequence_later_old_mention_fires() {
+        // Residue slice 3: a later window init naming the binder replays
+        // verbatim and strands as an orphan (honest `partial`); the arm
+        // still fires so post-window uses complete.
         assert_eq!(
-            binder_rename(&seq(
+            renamed(&seq(
                 "let old = __RSMPL_E0 ;\nlet b = old ;",
                 "let new = E0 ;\nlet b = old ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_earlier_old_mention_fires() {
+        // A pre-binder use names an outer binder and replays verbatim
+        // untouched; the arm still fires for post-window completion.
+        assert_eq!(
+            renamed(&seq(
+                "let b = old ;\nlet old = __RSMPL_E0 ;",
+                "let b = old ;\nlet new = E0 ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_init_substitution_fires() {
+        // Residue slice 3: the author spells the intra-window use
+        // explicitly (`let b = old` -> `let b = new`); the window
+        // applies verbatim and the plus side keeps re-matching.
+        assert_eq!(
+            renamed(&seq(
+                "let old = __RSMPL_E0 ;\nlet b = old ;",
+                "let new = E0 ;\nlet b = new ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_partial_substitution_declines() {
+        // Only total swaps complete: a leftover `old` in the plus init
+        // is a second delta, not a substitution.
+        assert_eq!(
+            binder_rename(&seq(
+                "let old = __RSMPL_E0 ;\nlet b = f (old) ;",
+                "let new = E0 ;\nlet b = f (new , old) ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_substitution_before_rename_declines() {
+        // A substitution at a pre-binder position names an outer
+        // binder: unowned, decline.
+        assert_eq!(
+            binder_rename(&seq(
+                "let b = old ;\nlet old = __RSMPL_E0 ;",
+                "let b = new ;\nlet new = E0 ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_same_position_init_change_declines() {
+        // The renamed statement's own init must stay token-equal (it
+        // names the outer scope, never completed).
+        assert_eq!(
+            binder_rename(&seq(
+                "let old = old ;\nlet b = __RSMPL_E1 ;",
+                "let new = new ;\nlet b = E1 ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_new_mention_declines() {
+        // Another window statement naming the new ident risks capture.
+        assert_eq!(
+            binder_rename(&seq(
+                "let old = __RSMPL_E0 ;\nlet b = new ;",
+                "let new = E0 ;\nlet b = new ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_pat_mention_declines() {
+        // `old` in another position's type annotation is not a value
+        // use the engine may rewrite: decline.
+        assert_eq!(
+            binder_rename(&seq(
+                "let old = __RSMPL_E0 ;\nlet b : old = __RSMPL_E1 ;",
+                "let new = E0 ;\nlet b : old = E1 ;"
             )),
             None
         );
@@ -1124,14 +1337,60 @@ mod tests {
     }
 
     #[test]
-    fn sequence_destructuring_declines() {
+    fn sequence_destructuring_fires() {
+        // Residue slice 3: single-leaf destructuring at a sequence
+        // position completes like a plain rename.
         assert_eq!(
-            binder_rename(&seq(
+            renamed(&seq(
                 "let a = __RSMPL_E0 ;\nlet (x , old) = __RSMPL_E1 ;",
                 "let a = E0 ;\nlet (x , new) = E1 ;"
             )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_destructuring_multi_leaf_declines() {
+        assert_eq!(
+            binder_rename(&seq(
+                "let a = __RSMPL_E0 ;\nlet (x , y) = __RSMPL_E1 ;",
+                "let a = E0 ;\nlet (u , v) = E1 ;"
+            )),
             None
         );
+    }
+
+    #[test]
+    fn sequence_destructuring_with_intra_fires() {
+        // Destructuring rename plus a later in-window use replayed
+        // verbatim (strands as orphan); plus the spelled-substitution
+        // twin completing in-window.
+        assert_eq!(
+            renamed(&seq(
+                "let (x , old) = __RSMPL_E0 ;\nlet b = old ;",
+                "let (x , new) = E0 ;\nlet b = old ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+        assert_eq!(
+            renamed(&seq(
+                "let (x , old) = __RSMPL_E0 ;\nlet b = old ;",
+                "let (x , new) = E0 ;\nlet b = new ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_positions_name_idx_and_substitutions() {
+        // The orphan cover maps these onto target windows.
+        let (idx, subs, old, new) = sequence_binder_positions(&seq(
+            "let old = __RSMPL_E0 ;\nlet b = old ;\nlet c = old ;",
+            "let new = E0 ;\nlet b = new ;\nlet c = old ;",
+        ))
+        .unwrap();
+        assert_eq!((idx, old.as_str(), new.as_str()), (0, "old", "new"));
+        assert_eq!(subs, vec![1]);
     }
 
     #[test]
