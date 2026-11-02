@@ -1,0 +1,9 @@
+diff --git src/old.rs
+@@ -1,44 @@ rule=cut_helper
+# bind=Helper
+- I
+
+diff --git src/new.rs
+@@ -3,0 @@ rule=paste_helper
+# use=Helper
++ Helper
