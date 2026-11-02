@@ -314,6 +314,7 @@ const CYCLE_OK: &[&str] = &[
     "93-verbatim-single",
     "50-repeat-let",
     "62-repeat-grow",
+    "106-repeat-fold-single",
     "54-raw-addr",
     "80-raw-addr-flip",
 ];
@@ -492,10 +493,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site symbol rewrite re-infers ordinary",
     ),
 
-    (
-        "106-repeat-fold-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = Box::new(Box::new(x));` → `let v = x;`); the authored `# repeat` fold template (`Box::new(E0)` → `E0`) and the literal single diverge canonically (repeat-fold N=1 templated single is WI-7 slice 1 work)",
-    ),
     (
         "107-sequence-single",
         "verbatim-single (WI-6s1): hetero pair re-infers as two literal verbatim singles (`rule=r1` type-add + `rule=r2` wrap-add, WI-4 hetero-fusion partition); the authored single hetero holed sequence and the two literal singles diverge canonically in shape (holed sequence template is WI-7 slice 2 work)",

@@ -586,6 +586,22 @@ pub(crate) fn compress_balanced_pair_body(
             declined_guard(declined, "method_same_literal", "precision-guard");
             used_rules.truncate(checkpoint);
         }
+        // WI-7 slice-1 (repeat family): single-pair full-strip fold
+        // under the precision guard (uniqueness proved by
+        // `template_repeat_holds` at n=1 plus the T361 byte-compare with
+        // `# repeat`; `guard_for("repeat_fold")` stays Strict for multis).
+        if let Some(single) = attempt(
+            declined,
+            "repeat_fold",
+            semantic::try_repeat_fold_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "repeat_fold"));
+            }
+            declined_guard(declined, "repeat_fold", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
     }
     let full: Option<(String, &'static str)> = if minuses.len() == 1 {
         // Single pairs: definition shapes under the precision guard

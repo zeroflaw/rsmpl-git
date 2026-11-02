@@ -149,6 +149,101 @@ pub(crate) fn try_partial_strip_sweep(
     Some(hunk)
 }
 
+/// WI-7 slice 1: single-pair full-strip fold (N = 1) under the
+/// precision guard. One pair whose minus peels through the shared 1-arg
+/// callee to the plus fixpoint (`Box::new(Box::new(x))` → `x`, `let`-init
+/// sites unwrap the same way) emits the allow-one fold template
+/// (`- C(E0)` / `+ E0`, inferred hole, SPEC 15.8) with `# repeat` when
+/// nested two or more deep (flat single-layer strips emit the plain
+/// hunk, mirroring the sweep). Uniqueness is the sweep's own fold
+/// counter at n = 1 (`template_repeat_holds`: the real `# sweep` +
+/// `# repeat` probe must match exactly one outermost site — nested
+/// matches are folds, an untouched twin vetoes) plus the T361
+/// byte-compare pre-reservation with `# repeat`
+/// (`repeat_single_reproduces`). Detector name `repeat_fold` (same
+/// family, provenance unchanged).
+pub(crate) fn try_repeat_fold_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let pre = file_old?;
+    let m = minuses[0];
+    let p = pluses[0];
+    if m.trim_start().starts_with('&') || p.trim_start().starts_with('&') {
+        return None;
+    }
+    let (callee, layers) = peel_layers(m, p)?;
+    let lit = super::shape::literal_path_last(&callee);
+    let minus_template = format!("{lit}(E0)");
+    if !crate::totality::template_repeat_holds(path, Some(pre), &minus_template, 1) {
+        return None;
+    }
+    if !repeat_single_reproduces(path, pre, changed[0], m, p, &minus_template, "E0") {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("repeat_{callee}_fold"));
+    let header = crate::emission_header(path, &rule, changed);
+    let mut hunk = if layers >= 2 {
+        header.replace("# allow=many\n", "# repeat\n")
+    } else {
+        header.replace("# allow=many\n", "")
+    };
+    hunk.push_str(&format!("- {minus_template}\n+ E0\n"));
+    Some(hunk)
+}
+
+/// T361 byte-compare pre-reservation for the fold single (WI-7 slice 1):
+/// the ranged allow-one `# repeat` emission must real-apply to the
+/// pre-image byte-identical to the native single-line swap. Same
+/// contract as `general_expr::single_reproduces`, plus the `# repeat`
+/// line the fold emission carries (without it a nested site counts per
+/// level and the probe disagrees with the real sweep).
+fn repeat_single_reproduces(
+    path: &str,
+    pre: &str,
+    line_no: usize,
+    minus_line: &str,
+    plus_line: &str,
+    minus_tpl: &str,
+    plus_tpl: &str,
+) -> bool {
+    if line_no == 0 {
+        return false;
+    }
+    let mut lines: Vec<&str> = pre.split('\n').collect();
+    let Some(cur) = lines.get(line_no - 1).copied() else {
+        return false;
+    };
+    if cur != minus_line {
+        return false;
+    }
+    lines[line_no - 1] = plus_line;
+    let expected = lines.join("\n");
+    let probe_section = format!(
+        "{}\n@@ -{line_no},1 @@ rule=probe\n# repeat\n- {minus_tpl}\n+ {plus_tpl}\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe_section) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    report.rules.iter().map(|r| r.matches).sum::<usize>() == 1
+        && files.get(path).is_some_and(|got| *got == expected)
+}
+
 /// Peel exactly one shared-callee layer (WI-1d): the minus spine and
 /// the plus spine must share the same 1-arg `callee` at every layer,
 /// the minus must run exactly one layer deeper, and the innermost
@@ -670,6 +765,144 @@ mod tests {
         let out = infer_semantic_with_pre(&raw, &pre);
         validated_live(&out, &pre);
         assert!(out.contains("- Crate::`Wrap`(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_fold_single_nested_fires_with_repeat() {
+        // WI-7 slice 1: one nested pair re-infers as the holed fold
+        // template (allow-one + `# repeat`), verified live.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn a(x: i32) -> i32 {\n-    let v = Box::new(Box::new(x));\n+    let v = x;\n     v\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn a(x: i32) -> i32 {\n    let v = Box::new(Box::new(x));\n    v\n}\n",
+        )]);
+        let out = infer_semantic_with_pre(&raw, &pre);
+        validated_live(&out, &pre);
+        assert!(out.contains("# repeat\n"), "got: {out}");
+        assert!(out.contains("- Box::new(E0)\n"), "got: {out}");
+        assert!(out.contains("+ E0\n"), "got: {out}");
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one single, got: {out}"
+        );
+    }
+
+    #[test]
+    fn repeat_fold_single_flat_fires_plain() {
+        // One unwrapped layer: the plain hunk (no `# repeat`) mirrors
+        // the sweep's flat emission, still holed.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn a(x: i32) -> i32 {\n-    let v = Box::new(x);\n+    let v = x;\n     v\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn a(x: i32) -> i32 {\n    let v = Box::new(x);\n    v\n}\n",
+        )]);
+        let out = infer_semantic_with_pre(&raw, &pre);
+        validated_live(&out, &pre);
+        assert!(!out.contains("# repeat"), "flat strip is plain, got: {out}");
+        assert!(out.contains("- Box::new(E0)\n"), "got: {out}");
+        assert!(out.contains("+ E0\n"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_fold_single_bare_call_fires() {
+        // Bare (non-`let`) nested pair fires the same template.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    foo(foo(first_argument));\n+    first_argument;\n }\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn m() {\n    foo(foo(first_argument));\n}\n")]);
+        let out = infer_semantic_with_pre(&raw, &pre);
+        validated_live(&out, &pre);
+        assert!(out.contains("# repeat\n"), "got: {out}");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn repeat_fold_single_twin_vetoes() {
+        // An untouched outermost twin (`Box::new(y)`) counts 2 under the
+        // fold probe — the fold single declines at the direct level
+        // (live: the pipeline falls back to the literal verbatim floor,
+        // probed via `diffrs` on the twin worktree).
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn a(x: i32) -> i32 {\n    let v = Box::new(Box::new(x));\n    v\n}\nfn b(y: i32) -> i32 {\n    let w = Box::new(y);\n    w\n}\n",
+        )]);
+        assert!(
+            super::try_repeat_fold_single(
+                &["    let v = Box::new(Box::new(x));"],
+                &["    let v = x;"],
+                "f.rs",
+                pre.get("f.rs").map(String::as_str),
+                &[2],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "twin must veto the holed fold single"
+        );
+    }
+
+    #[test]
+    fn repeat_fold_single_gates_decline() {
+        // Partial strip, plus-holds-callee, `&`-led, turbofish,
+        // leading-`::`, and array len-deltas decline the fold single.
+        let pre_one = |old: &str| pre_map(&[("f.rs", &format!("fn m() {{\n    {old}\n}}\n"))]);
+        let direct = |m: &str, p: &str, pre: &HashMap<String, String>| {
+            super::try_repeat_fold_single(
+                std::slice::from_ref(&m),
+                std::slice::from_ref(&p),
+                "f.rs",
+                pre.get("f.rs").map(String::as_str),
+                &[2],
+                &mut Vec::new(),
+            )
+        };
+        // Partial strip `C(C(x))` → `C(x)` is the strip detector's.
+        let pre = pre_one("let v = Box::new(Box::new(x));");
+        assert!(direct(
+            "    let v = Box::new(Box::new(x));",
+            "    let v = Box::new(x);",
+            &pre
+        )
+        .is_none());
+        // Plus still holds the callee — repeat would fold past post.
+        let pre = pre_one("let v = Box::new(wrap(Box::new(x)));");
+        assert!(direct(
+            "    let v = Box::new(wrap(Box::new(x)));",
+            "    let v = wrap(Box::new(x));",
+            &pre
+        )
+        .is_none());
+        // `&`-led, turbofish, leading-`::` decline.
+        let pre = pre_one("let v = &Box::new(Box::new(x));");
+        assert!(direct(
+            "    let v = &Box::new(Box::new(x));",
+            "    let v = &x;",
+            &pre
+        )
+        .is_none());
+        let pre = pre_one("let v = Box::<u8>::new(Box::<u8>::new(x));");
+        assert!(direct(
+            "    let v = Box::<u8>::new(Box::<u8>::new(x));",
+            "    let v = x;",
+            &pre
+        )
+        .is_none());
+        let pre = pre_one("let v = ::Box::new(::Box::new(x));");
+        assert!(direct(
+            "    let v = ::Box::new(::Box::new(x));",
+            "    let v = x;",
+            &pre
+        )
+        .is_none());
+        // Array len-delta is not a call fold (WI-7 residue: 63/118).
+        let pre = pre_one("let buf = [7u8; 8];");
+        assert!(direct("    let buf = [7u8; 8];", "    let buf = [7u8; 16];", &pre).is_none());
     }
 
     fn infer_semantic_with_pre(raw: &str, pre: &HashMap<String, String>) -> String {

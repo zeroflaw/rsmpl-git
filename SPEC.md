@@ -8959,10 +8959,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   strips every depth bottom-up (Section 17.8). The plus side must hold
   no same-callee call (repeat would keep folding past the diff's
   post-state). Pre-image totality is the engine-count fold check: the
-  real fold probe (`- C(E0)` / `+ E0` with `# sweep` + `# repeat`)
-  must match exactly N outermost sites (nested matches are folds, not
-  separate sites; macro/string twins never count — the engine never
-  enters them). Detector name `repeat_fold`.
+   real fold probe (`- C(E0)` / `+ E0` with `# sweep` + `# repeat`)
+   must match exactly N outermost sites (nested matches are folds, not
+   separate sites; macro/string twins never count — the engine never
+   enters them). Detector name `repeat_fold`. At N = 1 a full-strip
+   single fires as the allow-one fold template (tight original range,
+   `# repeat` when nested two or more deep, plain hunk for a flat
+   single-layer strip) under the precision guard: uniqueness is the
+   same fold counter at n = 1 plus the T361 byte-compare with
+   `# repeat`; an untouched outermost twin vetoes to the literal floor.
+   N = 1 partial strips stay with `partial_strip`/ordinary.
 - Partial-strip sweep (WI-1d): N ≥ 2 `-`/`+` pairs where every minus is
   the same 1-arg callee applied exactly one layer deeper than the plus
   (`C(C(x))` → `C(x)`; uniform depth both sides — mixed `2→1` + `3→2`
