@@ -23,6 +23,12 @@ struct ItemCandidate {
     name: String,
     ident: proc_macro2::Span,
     attrs: Vec<syn::Attribute>,
+    /// Whitespace-stripped rendered visibility (`""` when inherited or
+    /// for kinds without visibility).
+    vis_text: String,
+    /// Start-bound and end-bound spans of the `pub…` run (`None` when
+    /// inherited or for kinds without visibility).
+    vis_span: Option<(proc_macro2::Span, proc_macro2::Span)>,
     start_line: u32,
     end_line: u32,
     anchor_line: u32,
@@ -34,8 +40,13 @@ fn push_candidate(
     name: String,
     ident: proc_macro2::Span,
     attrs: Vec<syn::Attribute>,
+    vis: Option<&syn::Visibility>,
     item_span: proc_macro2::Span,
 ) {
+    let (vis_text, vis_span) = match vis {
+        Some(v) => (norm_vis_text(v), vis_line_span(v)),
+        None => (String::new(), None),
+    };
     out.push(ItemCandidate {
         name,
         attr_start_line: item_span.start().line as u32,
@@ -44,7 +55,32 @@ fn push_candidate(
         anchor_line: ident.start().line as u32,
         ident,
         attrs,
+        vis_text,
+        vis_span,
     });
+}
+
+/// Whitespace-stripped rendered visibility (`""` when inherited), so the
+/// target compares equal to the whitespace-free pattern prefix.
+fn norm_vis_text(vis: &syn::Visibility) -> String {
+    match vis {
+        syn::Visibility::Inherited => String::new(),
+        _ => quote::quote!(#vis).to_string().split_whitespace().collect(),
+    }
+}
+
+/// Start-bound and end-bound spans of the `pub…` run (`None` when
+/// inherited). `syn::Visibility` has no `Spanned` impl, so the arms
+/// below name the token spans directly.
+fn vis_line_span(vis: &syn::Visibility) -> Option<(proc_macro2::Span, proc_macro2::Span)> {
+    match vis {
+        syn::Visibility::Inherited => None,
+        syn::Visibility::Public(t) => Some((t.span, t.span)),
+        syn::Visibility::Restricted(r) => {
+            let end = r.paren_token.span.join();
+            Some((r.pub_token.span, end))
+        }
+    }
 }
 
 /// Last-segment ident of a plain path type (`Old`, `Old<T>`, `crate::Old`).
@@ -93,6 +129,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             s.ident.to_string(),
             s.ident.span(),
             s.attrs.clone(),
+            Some(&s.vis),
             s.span(),
         ),
         syn::Item::Enum(e) if want == ItemKind::Enum => push_candidate(
@@ -100,6 +137,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             e.ident.to_string(),
             e.ident.span(),
             e.attrs.clone(),
+            Some(&e.vis),
             e.span(),
         ),
         syn::Item::Trait(t) if want == ItemKind::Trait => push_candidate(
@@ -107,6 +145,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             t.ident.to_string(),
             t.ident.span(),
             t.attrs.clone(),
+            Some(&t.vis),
             t.span(),
         ),
         syn::Item::Union(u) if want == ItemKind::Union => push_candidate(
@@ -114,6 +153,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             u.ident.to_string(),
             u.ident.span(),
             u.attrs.clone(),
+            Some(&u.vis),
             u.span(),
         ),
         syn::Item::Type(t) if want == ItemKind::Type => push_candidate(
@@ -121,6 +161,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             t.ident.to_string(),
             t.ident.span(),
             t.attrs.clone(),
+            Some(&t.vis),
             t.span(),
         ),
         syn::Item::Const(c) if want == ItemKind::Const => push_candidate(
@@ -128,6 +169,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             c.ident.to_string(),
             c.ident.span(),
             c.attrs.clone(),
+            Some(&c.vis),
             c.span(),
         ),
         syn::Item::Static(s) if want == ItemKind::Static => push_candidate(
@@ -135,6 +177,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             s.ident.to_string(),
             s.ident.span(),
             s.attrs.clone(),
+            Some(&s.vis),
             s.span(),
         ),
         syn::Item::Mod(m) if want == ItemKind::Mod => push_candidate(
@@ -142,6 +185,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
             m.ident.to_string(),
             m.ident.span(),
             m.attrs.clone(),
+            Some(&m.vis),
             m.span(),
         ),
         syn::Item::Macro(m) if want == ItemKind::MacroRules => {
@@ -158,6 +202,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
                     ident.to_string(),
                     ident.span(),
                     m.attrs.clone(),
+                    None,
                     m.span(),
                 );
             }
@@ -169,6 +214,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
                     ident.to_string(),
                     ident.span(),
                     imp.attrs.clone(),
+                    None,
                     imp.span(),
                 );
             }
@@ -185,6 +231,7 @@ fn consider(it: &syn::Item, want: ItemKind, out: &mut Vec<ItemCandidate>) {
                         ident.to_string(),
                         ident.span(),
                         imp.attrs.clone(),
+                        None,
                         imp.span(),
                     );
                 }
@@ -312,18 +359,23 @@ pub fn apply_item_rename_hunk(
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
 ) -> Result<usize, StructuredError> {
-    let (kind, minus_name, plus_name, minus_attrs) = match &compiled.kind {
+    let (kind, minus_name, plus_name, minus_attrs, minus_prefix, plus_prefix) = match &compiled.kind
+    {
         PatternKind::ItemRename {
             kind,
             minus_name,
             plus_name,
             minus_attrs,
+            minus_prefix,
+            plus_prefix,
             ..
         } => (
             *kind,
             minus_name.clone(),
             plus_name.clone(),
             minus_attrs.clone(),
+            minus_prefix.clone(),
+            plus_prefix.clone(),
         ),
         _ => {
             return Err(StructuredError::new(
@@ -332,6 +384,9 @@ pub fn apply_item_rename_hunk(
             ));
         }
     };
+    // WI-5-R2: a vis-evolving pair rewrites the visibility slot alongside
+    // the name; the pure-rename path (equal prefixes) is unchanged.
+    let evolving = minus_prefix != plus_prefix;
     // A `+` side that writes attributes the `-` side omitted is ambiguous
     // (same rule as General stmts): reject instead of guessing. WI-10a:
     // under Preserve an add (minus empty) is the delta, not ambiguity.
@@ -423,6 +478,12 @@ pub fn apply_item_rename_hunk(
         if !in_scope(c, hunk.scope(), old_start, old_len) {
             continue;
         }
+        // WI-5-R2: an evolving vis pair only matches targets carrying the
+        // minus vis (whitespace-stripped render); anything else is a
+        // different spelling -- skipped, never rewritten.
+        if evolving && c.vis_text != minus_prefix {
+            continue;
+        }
         // Preserve plus written minus-side attributes constrains the match
         // (T235, SPEC 14.6 — same as fn hunks): sites carrying different
         // attributes are skipped, never silently rewritten. WI-10a: delta
@@ -473,6 +534,52 @@ pub fn apply_item_rename_hunk(
                 plus_name.clone()
             };
             edits.push(TextEdit::new(a, b, replay).with_label("rename"));
+        }
+        // WI-5-R2: concrete vis evolution rides the rename -- insert (no
+        // target vis), delete (bare plus vis), or replace. Insertion lands
+        // after the item-line indent so nested items keep their indent.
+        if evolving {
+            if let Some((vs, ve)) = c.vis_span {
+                let (va, vb) = {
+                    let a = index
+                        .offset(vs.start().line as u32, vs.start().column)
+                        .ok_or_else(|| range_err(&rule, vs.start().line as u32))?;
+                    let b = index
+                        .offset(ve.end().line as u32, ve.end().column)
+                        .ok_or_else(|| range_err(&rule, ve.end().line as u32))?;
+                    (a, b)
+                };
+                if plus_prefix.is_empty() {
+                    let mut e = vb;
+                    while original
+                        .as_bytes()
+                        .get(e)
+                        .is_some_and(|ch| *ch == b' ' || *ch == b'\t')
+                    {
+                        e += 1;
+                    }
+                    edits.push(TextEdit::new(va, e, String::new()));
+                } else if original
+                    .get(va..vb)
+                    .is_some_and(|got| got.split_whitespace().collect::<String>() != plus_prefix)
+                {
+                    edits.push(TextEdit::new(va, vb, plus_prefix.clone()));
+                }
+            } else if !plus_prefix.is_empty() {
+                let line_at = index
+                    .line_start(c.anchor_line)
+                    .ok_or_else(|| range_err(&rule, c.anchor_line))?;
+                let indent: usize = original[line_at..]
+                    .chars()
+                    .take_while(|ch| *ch == ' ' || *ch == '\t')
+                    .map(|ch| ch.len_utf8())
+                    .sum();
+                edits.push(TextEdit::new(
+                    line_at + indent,
+                    line_at + indent,
+                    format!("{plus_prefix} "),
+                ));
+            }
         }
         // WI-10a: attr-delta edits (Preserve only). Add inserts above the
         // item line; remove deletes the matched lines; replace swaps each
@@ -986,5 +1093,47 @@ mod tests {
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("macro_rules! New {"), "got: {out}");
         assert!(out.contains("macro_rules! Other {"), "got: {out}");
+    }
+
+    #[test]
+    fn vis_evolution_add_remove_change_apply() {
+        // WI-5-R2: rename + one vis step rewrites the vis slot alongside
+        // the name, preserving generics/bodies/attrs.
+        let add = rename_patch("struct Old", "pub struct New", "@@ -1,1 +1,1 @@");
+        let out = apply(&add, "struct Old;\n").unwrap();
+        assert_eq!(out, "pub struct New;\n", "got: {out:?}");
+        let narrow = rename_patch("pub(crate) enum Old", "enum New", "@@ -1,4 +1,4 @@");
+        let src = "#[derive(Debug)]\npub(crate) enum Old {\n    A,\n}\n";
+        let out = apply(&narrow, src).unwrap();
+        assert!(out.contains("enum New {"), "got: {out}");
+        assert!(out.contains("#[derive(Debug)]"), "got: {out}");
+        assert!(!out.contains("pub(crate)"), "got: {out}");
+        let change = rename_patch("pub struct Old", "pub(crate) struct New", "@@ -1,3 +1,3 @@");
+        let out = apply(&change, "pub struct Old<T> {\n    x: T,\n}\n").unwrap();
+        assert!(out.contains("pub(crate) struct New<T> {"), "got: {out}");
+        assert!(out.contains("x: T,"), "got: {out}");
+        assert!(!out.contains("Old"), "got: {out}");
+    }
+
+    #[test]
+    fn vis_evolution_wrong_vis_skips() {
+        // The evolving pair only matches targets carrying the minus vis.
+        let patch = rename_patch("struct Old", "pub struct New", "@@ -1,1 +1,1 @@");
+        assert!(apply(&patch, "pub struct Old;\n").is_err());
+        let patch = rename_patch("pub struct Old", "pub(crate) struct New", "@@ -1,1 +1,1 @@");
+        assert!(apply(&patch, "struct Old;\n").is_err());
+        // Pure renames still ignore vis (preserved, never rewritten).
+        let pure = rename_patch("struct Old", "struct New", "@@ -1,1 +1,1 @@");
+        let out = apply(&pure, "pub struct Old;\n").unwrap();
+        assert!(out.contains("pub struct New;"), "got: {out}");
+    }
+
+    #[test]
+    fn vis_evolution_nested_keeps_indent() {
+        // Insertion lands after the item-line indent.
+        let patch = rename_patch("struct Old", "pub(crate) struct New", "@@ -2,1 +2,1 @@");
+        let src = "mod outer {\n    struct Old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("    pub(crate) struct New;"), "got: {out}");
     }
 }

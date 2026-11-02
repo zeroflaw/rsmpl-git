@@ -918,12 +918,21 @@ fn classify_item_rename(
                 }
             }
             if mprefix != pprefix {
-                return Err(StructuredError::new(
-                    ErrorCode::PatternConflict,
-                    format!(
-                        "item rename prefixes differ (`{mprefix}` vs `{pprefix}`); item renames are rename-only — write the same prefix on both sides or neither (visibility/generics/bodies are preserved)"
-                    ),
-                ));
+                // WI-5-R2: a rename may evolve exactly the vis slot (one
+                // concrete vis → another, qualifiers preserved); anything
+                // else stays the rename-only error via the veto reason.
+                if let Some(reason) = bare_vis_evolution_veto(
+                    mk,
+                    &mn,
+                    &pn,
+                    &mattrs,
+                    &pattrs,
+                    &mprefix,
+                    &pprefix,
+                    minus_hole || plus_hole,
+                ) {
+                    return Err(StructuredError::new(ErrorCode::PatternConflict, reason));
+                }
             }
             Ok(Some(PatternKind::ItemRename {
                 kind: mk,
@@ -931,6 +940,8 @@ fn classify_item_rename(
                 plus_name: pn,
                 minus_attrs: mattrs,
                 plus_attrs: pattrs,
+                minus_prefix: mprefix,
+                plus_prefix: pprefix,
             }))
         }
         (Some(_), None) => {
@@ -960,6 +971,93 @@ fn classify_item_rename(
         }
         (None, None) => Ok(None),
     }
+}
+
+/// WI-5-R2 vis-evolution gate for bare-item renames: `None` when
+/// `mprefix` → `pprefix` is exactly one closed-set vis step (concrete
+/// names differ, attrs mirror-equal, no qualifier delta), else
+/// `Some(reason)` naming the veto for the author.
+#[allow(clippy::too_many_arguments)]
+fn bare_vis_evolution_veto(
+    kind: crate::item_rename::ItemKind,
+    minus_name: &str,
+    plus_name: &str,
+    minus_attrs: &[String],
+    plus_attrs: &[String],
+    mprefix: &str,
+    pprefix: &str,
+    has_hole: bool,
+) -> Option<String> {
+    use crate::item_rename::{is_closed_item_vis, split_vis_rest, ItemKind};
+    if has_hole {
+        return Some(
+            "item name holes evolve attributes only — write concrete names to rename with a visibility change (`- pub struct Old` / `+ pub(crate) struct New`)".to_string(),
+        );
+    }
+    if minus_name == plus_name {
+        return Some(
+            "same-name visibility evolution is not an item rename in v1 — write the new name on the `+` side, or use an ordinary hunk".to_string(),
+        );
+    }
+    if kind == ItemKind::Impl || kind == ItemKind::MacroRules {
+        return Some(format!(
+            "`{}` blocks take no visibility (write the bare `<{}> <Name>` form)",
+            kind.as_str(),
+            kind.as_str()
+        ));
+    }
+    let norm = |ss: &[String]| {
+        ss.iter()
+            .map(|a| a.split_whitespace().collect::<String>())
+            .collect::<Vec<_>>()
+    };
+    if norm(minus_attrs) != norm(plus_attrs) {
+        return Some(
+            "rename+visibility+attribute is two evolving slots — split the attribute delta into its own hunk or use an ordinary hunk".to_string(),
+        );
+    }
+    let (mvis, mrest) = split_vis_rest(mprefix);
+    let (pvis, prest) = split_vis_rest(pprefix);
+    if mrest != prest || !mrest.is_empty() {
+        return Some(format!(
+            "item qualifier differs or is not preserved (`{mrest}` vs `{prest}`); rename+visibility joints preserve `unsafe`/`mut` — write the same qualifier on both sides or neither"
+        ));
+    }
+    if mvis == pvis {
+        return Some(format!(
+            "item rename prefixes differ (`{mprefix}` vs `{pprefix}`); item renames are rename-only — write the same prefix on both sides or neither (visibility/generics/bodies are preserved)"
+        ));
+    }
+    if !is_closed_item_vis(&mvis) || !is_closed_item_vis(&pvis) {
+        return Some(format!(
+            "visibility `{mvis}` → `{pvis}` is outside the closed vis set (`\"\"`, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)`) — use an ordinary hunk"
+        ));
+    }
+    if contains_vis_ident(&mvis, minus_name) || contains_vis_ident(&pvis, minus_name) {
+        return Some(
+            "self-referential visibility (`pub(in <name>)` naming the renamed item) is an evolution, never a rename joint — use an ordinary hunk".to_string(),
+        );
+    }
+    None
+}
+
+/// Ident-boundary containment for vis strings (never substring).
+fn contains_vis_ident(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut token = String::new();
+    for c in haystack.chars().chain(std::iter::once(' ')) {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            token.push(c);
+        } else {
+            if token == needle {
+                return true;
+            }
+            token.clear();
+        }
+    }
+    false
 }
 
 /// Container ident a `struct`/`enum` context line declares

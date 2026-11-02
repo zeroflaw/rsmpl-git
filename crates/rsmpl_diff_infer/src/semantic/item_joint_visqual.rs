@@ -300,6 +300,90 @@ pub(crate) fn joint_emit(
     out
 }
 
+/// A bare-item rename + single vis-evolution def pair: raw prefixes
+/// (original text before the kind keyword, trailing space included,
+/// `""` when bare) plus the kind and the old/new names.
+pub(crate) struct BareVisJoint {
+    pub(crate) old_prefix: String,
+    pub(crate) new_prefix: String,
+    pub(crate) kind: String,
+    pub(crate) old: String,
+    pub(crate) new: String,
+}
+
+/// Classify a native pair as a bare-item rename + exactly one vis step:
+/// `Some` when both lines are `split_item` definitions of the same
+/// non-`fn` vis-bearing kind with differing names, differing closed-set
+/// vis prefixes, and equal suffixes -- else `None`. Pure renames (equal
+/// prefixes), `fn` headers (the fn joint owns them), `mod` (WI-15c owns
+/// mod intents), `impl` / `macro_rules!` (no vis slot), `unsafe`/`mut`
+/// lines (never a bare vis prefix, so they decline at `split_item`),
+/// suffix deltas, unknown vis, and self-referential vis all decline
+/// (never a partial claim).
+pub(crate) fn classify_bare_vis_joint(minus: &str, plus: &str) -> Option<BareVisJoint> {
+    if minus.trim_end() == plus.trim_end() {
+        return None;
+    }
+    let (old_prefix, old_kind, old_ident, old_suffix) = super::split_item(minus.trim_end())?;
+    let (new_prefix, new_kind, new_ident, new_suffix) = super::split_item(plus.trim_end())?;
+    if old_kind == "fn" || old_kind != new_kind {
+        return None;
+    }
+    if matches!(old_kind.as_str(), "impl" | "macro_rules!" | "mod") {
+        return None;
+    }
+    if old_ident.is_empty() || new_ident.is_empty() || old_ident == new_ident {
+        return None;
+    }
+    // Equal prefixes are the pure-rename path (never claimed here);
+    // suffix deltas are a second slot.
+    if old_prefix == new_prefix || old_suffix != new_suffix {
+        return None;
+    }
+    if !is_fn_vis_prefix(&old_prefix) || !is_fn_vis_prefix(&new_prefix) {
+        return None;
+    }
+    // Self-referential vis (`pub(in old)`) is an evolution, never this
+    // joint: either name inside either prefix vetoes.
+    if contains_ident(&old_prefix, &old_ident)
+        || contains_ident(&old_prefix, &new_ident)
+        || contains_ident(&new_prefix, &old_ident)
+        || contains_ident(&new_prefix, &new_ident)
+    {
+        return None;
+    }
+    Some(BareVisJoint {
+        old_prefix,
+        new_prefix,
+        kind: old_kind,
+        old: old_ident,
+        new: new_ident,
+    })
+}
+
+/// Bare-item joint follow emission: sweep dummy + follow + the concrete
+/// evolved terse def pair (never a hole -- the intent proved one concrete
+/// vis step).
+pub(crate) fn bare_joint_emit(
+    path: &str,
+    rule: &str,
+    kind: &str,
+    old_prefix: &str,
+    old: &str,
+    new_prefix: &str,
+    new: &str,
+) -> String {
+    let mut out = crate::git_header(path);
+    out.push('\n');
+    out.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
+    out.push_str("# sweep\n");
+    out.push_str("# follow=uses\n");
+    out.push_str(&format!(
+        "- {old_prefix}{kind} {old}\n+ {new_prefix}{kind} {new}\n"
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +634,78 @@ mod tests {
             files["a.rs"]
         );
         assert!(!files["a.rs"].contains("foo"), "got: {}", files["a.rs"]);
+    }
+
+    fn bare(minus: &str, plus: &str) -> Option<BareVisJoint> {
+        classify_bare_vis_joint(minus, plus)
+    }
+
+    #[test]
+    fn bare_vis_joint_fires() {
+        let j =
+            bare("pub struct Old {", "pub(crate) struct New {").expect("vis joint must classify");
+        assert_eq!(j.old_prefix, "pub ");
+        assert_eq!(j.new_prefix, "pub(crate) ");
+        assert_eq!(j.kind, "struct");
+        assert_eq!((j.old.as_str(), j.new.as_str()), ("Old", "New"));
+        // Vis addition / removal / further vis-bearing kinds.
+        assert!(bare("struct Old;", "pub struct New;").is_some());
+        assert!(bare("pub(crate) enum Old {", "enum New {").is_some());
+        assert!(bare("pub trait Old {", "pub(crate) trait New {").is_some());
+        assert!(bare("type Old = u8;", "pub type New = u8;").is_some());
+        // Indented nested items ride (split_item tolerates their indent).
+        assert!(bare("    pub struct Old;", "    pub(crate) struct New;").is_some());
+    }
+
+    #[test]
+    fn bare_vis_joint_declines() {
+        // Pure renames belong to split_delta, never here.
+        assert!(bare("pub struct Old {", "pub struct New {").is_none());
+        assert!(bare("struct Old;", "struct New;").is_none());
+        // `fn` headers belong to the fn joint; `mod` to WI-15c; `impl`
+        // and `macro_rules!` take no visibility.
+        assert!(bare("pub fn foo() {", "pub(crate) fn bar() {").is_none());
+        assert!(bare("pub mod old {", "pub(crate) mod new {").is_none());
+        assert!(bare("impl Old {", "impl New {").is_none());
+        // Suffix deltas are a second slot.
+        assert!(bare("pub struct Old {", "pub(crate) struct New(i32);").is_none());
+        assert!(bare("type Old = u8;", "pub type New = u16;").is_none());
+        // Unknown vis spellings veto.
+        assert!(bare("pub(foo) struct Old {", "pub struct New {").is_none());
+        // Self-referential vis is an evolution, never this joint.
+        assert!(bare("pub(in Foo) struct Foo {", "pub struct Bar {").is_none());
+        assert!(bare("pub struct Foo {", "pub(in Bar) struct Bar {").is_none());
+        // `unsafe`/`mut` lines parse with shifted idents, so no joint
+        // claims them.
+        assert!(bare("unsafe trait Old {", "unsafe trait New {").is_none());
+        assert!(bare("static mut Old;", "static mut New;").is_none());
+        // Indented assoc items decline (split_item posture).
+        assert!(bare("    type Old = u8;", "    pub type New = u8;").is_none());
+    }
+
+    #[test]
+    fn bare_joint_emission_applies_jointly() {
+        let pre: HashMap<String, String> = HashMap::from([(
+            "a.rs".to_string(),
+            "pub struct Old {\n    x: i32,\n}\nfn f(s: Old) -> i32 {\n    s.x\n}\n".to_string(),
+        )]);
+        let emission = bare_joint_emit("a.rs", "r1", "struct", "pub ", "Old", "pub(crate) ", "New");
+        assert!(emission.contains("- pub struct Old\n"));
+        assert!(emission.contains("+ pub(crate) struct New\n"));
+        assert!(emission.contains("# follow=uses"));
+        let parsed = rsmpl_patch::parse_patch(&emission).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("emission must apply");
+        assert!(
+            files["a.rs"].contains("pub(crate) struct New {"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(
+            files["a.rs"].contains("fn f(s: New) -> i32 {"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(!files["a.rs"].contains("Old"), "got: {}", files["a.rs"]);
     }
 }

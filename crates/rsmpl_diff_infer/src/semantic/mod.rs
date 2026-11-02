@@ -80,6 +80,7 @@ mod item_joint_field_add;
 mod item_joint_field_evo;
 mod item_joint_impl;
 mod item_joint_visqual;
+mod item_rename_vis;
 mod item_span;
 mod mod_rename;
 
@@ -1937,5 +1938,48 @@ mod tests {
         assert_eq!(strip_field_label("text:"), None);
         assert_eq!(strip_field_label("text : foo()"), Some(("text", "foo()")));
         assert_eq!(strip_field_label("_t1: foo()"), Some(("_t1", "foo()")));
+    }
+
+    #[test]
+    fn vis_joint_probe_emits_evolved_pair() {
+        // WI-5-R2: the vis-evolving twin of the pure def probe emits the
+        // concrete evolved terse pair the engine vis arm applies.
+        let pre = pre_map(&[("a.rs", "pub struct Old {\n    x: i32,\n}\n")]);
+        let def_pre = pre.get("a.rs").map(String::as_str);
+        let mut used = Vec::new();
+        let out = super::item_rename_vis::try_item_rename_vis_joint(
+            "pub struct Old {",
+            "pub(crate) struct New {",
+            "a.rs",
+            def_pre,
+            &[1],
+            &mut used,
+        )
+        .expect("vis joint must emit");
+        assert!(out.contains("- pub struct Old\n"), "got:\n{out}");
+        assert!(out.contains("+ pub(crate) struct New\n"), "got:\n{out}");
+        validated_live(&out, &pre);
+        // Pure, double-slot, fn, mod, and self-ref shapes decline.
+        for (minus, plus) in [
+            ("pub struct Old {", "pub struct New {"),
+            ("pub struct Old {", "pub(crate) struct New(i32);"),
+            ("pub fn foo() {", "pub(crate) fn bar() {"),
+            ("pub mod old {", "pub(crate) mod new {"),
+            ("pub(in Foo) struct Foo {", "pub struct Bar {"),
+        ] {
+            let mut used = Vec::new();
+            assert!(
+                super::item_rename_vis::try_item_rename_vis_joint(
+                    minus,
+                    plus,
+                    "a.rs",
+                    None,
+                    &[1],
+                    &mut used
+                )
+                .is_none(),
+                "{minus} / {plus} must decline"
+            );
+        }
     }
 }

@@ -87,6 +87,11 @@ pub enum PatternKind {
         plus_name: String,
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
+        /// Normalized vis prefixes (`""` bare, else `pub…` with no trailing
+        /// space). Equal for pure renames; WI-5-R2 vis joints carry the
+        /// concrete evolution here (never a hole).
+        minus_prefix: String,
+        plus_prefix: String,
     },
     /// Struct-field rename (`struct S {` context + `old: T` -> `new: T`):
     /// only the field ident span is replaced; the container, visibility,

@@ -68,12 +68,32 @@ fn auto_trait_rejected_verbatim() {
 
 #[test]
 fn prefix_differ_rejected_verbatim() {
+    // WI-5-R2: qualifier deltas stay rename-only violations (verbatim
+    // reason below); pure vis steps evolve instead (next arm applies).
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- static Old\n+ static mut New\n";
+    let reason = "item qualifier differs or is not preserved (`` vs `mut`); rename+visibility joints preserve `unsafe`/`mut` — write the same qualifier on both sides or neither";
+    check_text(patch, "src/lib.rs", "static Old: u8 = 1;\n", reason);
+    let v = check_json(patch, "src/lib.rs", "static Old: u8 = 1;\n");
+    assert_eq!(v["error"]["reason"], serde_json::json!(reason), "got: {v}");
+}
+
+#[test]
+fn vis_step_applies_verbatim() {
+    // WI-5-R2: a rename with one closed-set vis step rewrites the vis
+    // slot alongside the name — no longer the prefixes-differ error.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "pub struct Old {}\n");
     let patch =
         "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# lang=rust\n- pub struct Old\n+ struct New\n";
-    let reason = "item rename prefixes differ (`pub` vs ``); item renames are rename-only — write the same prefix on both sides or neither (visibility/generics/bodies are preserved)";
-    check_text(patch, "src/lib.rs", "pub struct Old {}\n", reason);
-    let v = check_json(patch, "src/lib.rs", "pub struct Old {}\n");
-    assert_eq!(v["error"]["reason"], serde_json::json!(reason), "got: {v}");
+    let out = run_stdin(dir.path(), patch, &["--check"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(dir.path(), "src/lib.rs"), "pub struct Old {}\n");
 }
 
 #[test]

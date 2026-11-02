@@ -194,6 +194,8 @@ pub(crate) fn try_item_intent_sweep(
     // most one def of either kind per patch).
     let mut def_is_fn_joint = false;
     let mut joint_new_prefix = String::new();
+    let mut def_is_bare_joint = false;
+    let mut joint_bare_new_prefix = String::new();
     for (i, pair) in pairs.iter().enumerate() {
         if let Some((prefix, kind, old, new)) = split_delta(&pair.minus, &pair.plus) {
             if def_idx.is_some() {
@@ -220,6 +222,21 @@ pub(crate) fn try_item_intent_sweep(
             def_prefix = j.old_prefix.clone();
             joint_new_prefix = j.new_prefix;
             def_is_fn_joint = true;
+        } else if let Some(j) =
+            super::item_joint_visqual::classify_bare_vis_joint(&pair.minus, &pair.plus)
+        {
+            // A second def of either kind vetoes (never a partial pair).
+            if def_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+            def_idx = Some(i);
+            def_kind = j.kind.clone();
+            old_ident = j.old.clone();
+            new_ident = j.new.clone();
+            def_prefix = j.old_prefix.clone();
+            joint_bare_new_prefix = j.new_prefix;
+            def_is_bare_joint = true;
         }
     }
     let def_idx = def_idx?;
@@ -500,14 +517,27 @@ pub(crate) fn try_item_intent_sweep(
     } else if !is_fn_intent {
         let mut probe_used = vec![format!("probe{}", used_rules.len())];
         let def_pre = pre.get(&def.path).map(String::as_str);
-        try_item_rename(
-            &def.minus,
-            &def.plus,
-            &def.path,
-            def_pre,
-            std::slice::from_ref(&def.site),
-            &mut probe_used,
-        )?;
+        if def_is_bare_joint {
+            // WI-5-R2: the vis-evolving twin of the pure probe -- the
+            // concrete evolved terse pair the engine vis arm applies.
+            super::item_rename_vis::try_item_rename_vis_joint(
+                &def.minus,
+                &def.plus,
+                &def.path,
+                def_pre,
+                std::slice::from_ref(&def.site),
+                &mut probe_used,
+            )?;
+        } else {
+            try_item_rename(
+                &def.minus,
+                &def.plus,
+                &def.path,
+                def_pre,
+                std::slice::from_ref(&def.site),
+                &mut probe_used,
+            )?;
+        }
     }
     // Build the emission: sweep dummy + follow + def pair (WI-5: the
     // attr delta rides above the def pair in the joint arm; slice 2b:
@@ -516,7 +546,7 @@ pub(crate) fn try_item_intent_sweep(
     // emits the concrete evolved terse pair through its own arm, and
     // joints never stack (at most one intent per patch).
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let emission = if def_is_fn_joint {
+    let emission = if def_is_fn_joint || def_is_bare_joint {
         if attr_joint.is_some()
             || field_joint.is_some()
             || variant_joint.is_some()
@@ -526,14 +556,26 @@ pub(crate) fn try_item_intent_sweep(
             used_rules.truncate(checkpoint);
             return None;
         }
-        super::item_joint_visqual::joint_emit(
-            &def.path,
-            &rule,
-            &def_prefix,
-            &old_ident,
-            &joint_new_prefix,
-            &new_ident,
-        )
+        if def_is_bare_joint {
+            super::item_joint_visqual::bare_joint_emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &joint_bare_new_prefix,
+                &new_ident,
+            )
+        } else {
+            super::item_joint_visqual::joint_emit(
+                &def.path,
+                &rule,
+                &def_prefix,
+                &old_ident,
+                &joint_new_prefix,
+                &new_ident,
+            )
+        }
     } else {
         match (
             attr_joint,
@@ -1845,5 +1887,95 @@ mod tests {
             out[0]
         );
         validated_live(&out[0], &pre);
+    }
+
+    #[test]
+    fn bare_vis_joint_two_file_fires_and_round_trips() {
+        // WI-5-R2: `pub struct Old` → `pub(crate) struct New` + use lines
+        // across files raises to one shared-rule follow hunk.
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-pub struct Old {\n+pub(crate) struct New {\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n@@ -4,1 +4,1 @@\n-impl Old {\n+impl New {\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "pub struct Old {\n    x: i32,\n}\n"),
+            (
+                "b.rs",
+                "fn f(s: Old) -> i32 {\n    0\n}\nimpl Old {\n    fn m(&self) {}\n}\n",
+            ),
+        ]);
+        let mut used = Vec::new();
+        let (out, path, rule) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("bare joint must fire");
+        assert_eq!(path, "a.rs");
+        assert_eq!(out.len(), 1, "one intent section, got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- pub struct Old"), "got:\n{}", out[0]);
+        assert!(
+            out[0].contains("+ pub(crate) struct New"),
+            "got:\n{}",
+            out[0]
+        );
+        assert!(!rule.is_empty());
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["a.rs"].contains("pub(crate) struct New {"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(files["b.rs"].contains("s: New"), "got: {}", files["b.rs"]);
+        assert!(
+            files["b.rs"].contains("impl New {"),
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(!files["b.rs"].contains("Old"), "got: {}", files["b.rs"]);
+    }
+
+    #[test]
+    fn bare_vis_joint_vetoes() {
+        // Twin definitions veto (unique-definition rule).
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-pub struct Old {\n+pub(crate) struct New {\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-pub struct Old {\n+pub(crate) struct New {\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "pub struct Old {\n    x: i32,\n}\n"),
+            ("b.rs", "pub struct Old {\n    y: i32,\n}\n"),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+        // Suffix deltas are a second slot: no def claims the pair.
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-pub struct Old {\n+pub(crate) struct New(i32);\n@@ -4,1 +4,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "a.rs",
+            "pub struct Old {\n    x: i32,\n}\nfn f(s: Old) -> i32 {\n    0\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+        // Self-referential vis is an evolution, never this joint.
+        let sections = vec![
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-pub(in Old) struct Old {\n+pub struct New {\n@@ -4,1 +4,1 @@\n-fn f(s: Old) -> i32 {\n+fn f(s: New) -> i32 {\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "a.rs",
+            "pub(in Old) struct Old {\n    x: i32,\n}\nfn f(s: Old) -> i32 {\n    0\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
     }
 }

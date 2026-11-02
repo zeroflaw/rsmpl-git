@@ -2297,7 +2297,7 @@ absence; pairs with a concrete plus side for insertion).
 
 ### 14.8 Other item renames
 
-Function renames (14.1–14.7) are strict about explicitly written slots because signatures evolve. Renaming any other item kind is rename-only: the author writes a bare `<kind> <Name>` pair and the engine replaces exactly one name-ident span per match, preserving visibility, generics, bodies, attributes, and formatting byte-for-byte (the same fast-path as a name-only function rename).
+Function renames (14.1–14.7) are strict about explicitly written slots because signatures evolve. Renaming any other item kind is rename-only with one exception: a rename may evolve exactly the visibility slot by one closed-set step (`- pub struct Old` / `+ pub(crate) struct New`, WI-5-R2); otherwise the author writes a bare `<kind> <Name>` pair and the engine replaces exactly one name-ident span per match, preserving visibility, generics, bodies, attributes, and formatting byte-for-byte (the same fast-path as a name-only function rename).
 
 Example (rename a struct without restating its fields):
 
@@ -2326,13 +2326,15 @@ Supported kinds:
 Rules:
 
 - Both sides must name the same kind; a kind mismatch (`struct` → `enum`) is a pattern error. Identical minus/plus names are a pattern error, except for the WI-10a Preserve attr-evolution pair (same name with differing written attr sets classifies as an attr delta, not a rename).
-- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. Unlike function slots, there is no slot to evolve, so a *differing* prefix (`pub struct Old` / `struct New`) is a pattern error instead of a silent vis change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors), and `macro_rules!` definitions take neither visibility nor `unsafe` (`pub macro_rules! Old`, `unsafe macro_rules! Old` are pattern errors). The `!` between `macro_rules` and the name is required (`macro_rules Old` without it is not an item shape). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
+- An optional leading `pub…` / `unsafe` / `mut` prefix is accepted for matching convenience, but the minus and plus spellings must agree (whitespace-insensitive): `struct Old` matches `pub struct Old<T> { ... }` and preserves everything except the ident, and `pub struct Old` / `pub struct New` renames likewise. One closed-set vis step may ride a rename (`pub struct Old` / `pub(crate) struct New` — names differ, kinds equal, attrs mirror-equal, no qualifier delta; the engine rewrites the vis slot alongside the name, WI-5-R2). Any other prefix difference — a qualifier delta (`static Old` / `static mut New`), a vis step combined with an attr delta or a same-name pair, or a vis outside the closed set (`""`, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)`) — is a pattern error instead of a silent change. Prefix–kind legality is enforced: `unsafe` only on `trait`/`impl` headers, no visibility on `impl` (`unsafe struct`, `pub impl` are pattern errors), and `macro_rules!` definitions take neither visibility nor `unsafe` (`pub macro_rules! Old`, `unsafe macro_rules! Old` are pattern errors). The `!` between `macro_rules` and the name is required (`macro_rules Old` without it is not an item shape). Any other concrete text (generics, fields, types, values, `where`) is a pattern error directing the author to the bare form.
 - `$Meta` abstracted names are not supported for item renames in v0.1 (write concrete names). Backtick literal quoting follows Section 15.4.
 - `auto trait` headers are not supported in v0.1: the author gets a fail-fast pattern error directing to an ordinary hunk (auto traits are never renamed in practice; silently falling through to a no-match would violate Section 2.6).
   The engine reports these rejections verbatim (rule + file lines in text mode; text omits the null range/suggestion lines, JSON carries explicit nulls; suggestion is null throughout):
   ```text
   `auto trait` headers are not supported in v1 (use an ordinary hunk)
-  item rename prefixes differ (`pub` vs ``); item renames are rename-only — write the same prefix on both sides or neither (visibility/generics/bodies are preserved)
+   item qualifier differs or is not preserved (`mut` vs `mut`); rename+visibility joints preserve `unsafe`/`mut` — write the same qualifier on both sides or neither
+   rename+visibility+attribute is two evolving slots — split the attribute delta into its own hunk or use an ordinary hunk
+   same-name visibility evolution is not an item rename in v1 — write the new name on the `+` side, or use an ordinary hunk
   item rename kind mismatch: minus is `struct` but plus is `enum` (kinds must match)
   item rename minus and plus names are identical (`Old`); write the new name on the `+` side
   `unsafe` is only legal on `trait`/`impl` headers, not `struct` (write the bare `<struct> <Name>` form)
@@ -5296,8 +5298,8 @@ for a known directive key (other verbatim reasons in Section 9.6),
 any `# repeat` on a
 non-call/non-general-expression shape, on a capture hunk, or with an empty
 minus/plus side (no silent no-op repeat, Sections 17.8, 24.4), any
-item-rename hunk whose minus/plus `pub…` / `unsafe` / `mut` prefixes
-differ (rename-only, no silent vis change), any item-rename side with a
+item-rename hunk whose minus/plus qualifier prefixes differ, whose vis
+step leaves the closed vis set, or whose vis step rides anything but a rename (no silent qualifier/vis change), any item-rename side with a
 kind-illegal prefix (`unsafe` off `trait`/`impl`, visibility on `impl`),
 or any kind mismatch, identical-name, or `auto trait` header — all Section
 14.8, which lists the engine-verbatim reasons,
@@ -7557,10 +7559,22 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   (method) headers, `;` decls, multi-line headers, twin definitions
   (counted over every vis/qual spelling of `fn old`), unbalanced
   sections, and missing pre-images veto the whole intent (the joint
-  probe doubles as the uniqueness guard). Bare-item
-  (`struct`/`enum`/`trait`/`type`/`const`/`static`/`mod`)
-  rename+vis/qual joints stay ordinary (future slice: `ItemRename` is
-  rename-only — pattern and engine work).
+  probe doubles as the uniqueness guard). Bare-item rename+vis joint
+  (WI-5-R2, same detector; `struct`/`enum`/`trait`/`union`/`type`/
+  `const`/`static`): a definition pair differing in the name plus
+  exactly one closed-set vis step (`pub struct Old` →
+  `pub(crate) struct New`, suffix token-equal) joined with at least
+  one claimable use from the pure arm's domain emits the follow hunk
+  with the concrete evolved terse pair (`- pub struct Old` /
+  `+ pub(crate) struct New` — never a hole; the engine rewrites the
+  vis slot alongside the name, preserving generics/bodies/attrs).
+  Qualifier-bearing lines (`unsafe trait`, `static mut`) never parse
+  as a bare vis prefix, so vis joints over them stay ordinary; `mod`
+  joints decline (WI-15c owns mod intents); same-name vis evolution,
+  vis+attribute double slots, unknown vis, self-referential vis, and
+  suffix (generics/`where`/body-shape) deltas stay ordinary (multi-line
+  bare headers classify on their first line when the suffix is token-equal;
+  WI-5-R3 still owns multi-line `fn` headers).
 - Joint `impl Trait for Type` raising (WI-3, WI-3b, detector `item_joint_impl`):
   exactly one `trait` definition rename pair plus exactly one self-type
   definition rename pair (`struct`/`enum`/`union`/`type` alias with equal
@@ -9291,7 +9305,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(131), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(132), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

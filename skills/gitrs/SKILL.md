@@ -75,7 +75,9 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   `use crate::old_api;` lets bare `old_api(...)` match; for plain renames
   prefer `- crate::old_api(E)` / `+ crate::new_api(E)` (SPEC 19).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
-  `const`/`static`/`mod`/`union`/`impl`), one ident edit (SPEC 14.8).
+  `const`/`static`/`mod`/`union`/`impl`), one ident edit — or one ident
+  edit plus one closed-set vis step (`- pub struct Old` /
+  `+ pub(crate) struct New`) (SPEC 14.8).
   File, inline-mod, and block-level (fn bodies) items all match.
   A bare `impl Old`/`impl New` pair renames self-ty + trait-side path; add
   `# allow=many` when several match; definition only — follow up

@@ -458,6 +458,73 @@ fn err<T>(msg: impl Into<String>) -> Result<T, StructuredError> {
     ))
 }
 
+/// Split a normalized item-rename prefix into its leading vis part and the
+/// qualifier remainder (`unsafe` / `mut` / `""`). The prefix grammar
+/// (`split_visibility` + optional `unsafe` + optional `mut`, whitespace
+/// stripped) puts the vis first: `""`, `pub`, `pub(...)`, or a bare
+/// qualifier with no vis (`unsafe`, `mut`).
+pub(crate) fn split_vis_rest(prefix: &str) -> (String, String) {
+    if prefix.is_empty() {
+        return (String::new(), String::new());
+    }
+    if prefix == "unsafe" || prefix == "mut" {
+        return (String::new(), prefix.to_string());
+    }
+    if let Some(rest) = prefix.strip_prefix("pub") {
+        if rest.is_empty() {
+            return ("pub".to_string(), String::new());
+        }
+        if rest.starts_with('(') {
+            if let Some(end) = rest.find(')') {
+                let vis = format!("pub{}", &rest[..=end]);
+                let tail = rest[end + 1..].trim_start();
+                return (vis, tail.to_string());
+            }
+            return (prefix.to_string(), String::new());
+        }
+        if rest.starts_with(char::is_whitespace) {
+            return ("pub".to_string(), rest.trim_start().to_string());
+        }
+        return (prefix.to_string(), String::new());
+    }
+    (prefix.to_string(), String::new())
+}
+
+/// WI-1 closed vis set the terse renames accept: `""`, `pub`,
+/// `pub(crate)`, `pub(super)`, `pub(in <path>)`. Prefixes here are
+/// whitespace-stripped (`normalize_prefix`), so the `pub(in …)` inner
+/// path carries no spaces; segments are `::`-separated idents with an
+/// optional leading `crate`/`self`/`super`/`$crate` head.
+pub(crate) fn is_closed_item_vis(vis: &str) -> bool {
+    if vis.is_empty() || vis == "pub" {
+        return true;
+    }
+    if vis == "pub(crate)" || vis == "pub(super)" {
+        return true;
+    }
+    let Some(inner) = vis
+        .strip_prefix("pub(in")
+        .map(str::trim_start)
+        .and_then(|r| r.strip_suffix(')'))
+    else {
+        return false;
+    };
+    let mut segs = inner.split("::").peekable();
+    let mut first = true;
+    while let Some(seg) = segs.next() {
+        if seg.is_empty() {
+            return false;
+        }
+        let head_ok =
+            first && matches!(seg, "crate" | "self" | "super" | "$crate") && segs.peek().is_some();
+        if !head_ok && !is_ident(seg) {
+            return false;
+        }
+        first = false;
+    }
+    !first
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,5 +670,40 @@ mod tests {
         // `macro_rules!` takes no visibility or `unsafe`.
         assert!(parse_side("pub macro_rules! Old").is_err());
         assert!(parse_side("unsafe macro_rules! Old").is_err());
+    }
+
+    #[test]
+    fn vis_rest_splitter_matrix() {
+        assert_eq!(split_vis_rest(""), (String::new(), String::new()));
+        assert_eq!(split_vis_rest("pub"), ("pub".to_string(), String::new()));
+        assert_eq!(
+            split_vis_rest("pub(crate)"),
+            ("pub(crate)".to_string(), String::new())
+        );
+        assert_eq!(
+            split_vis_rest("pub mut"),
+            ("pub".to_string(), "mut".to_string())
+        );
+        assert_eq!(
+            split_vis_rest("pub unsafe"),
+            ("pub".to_string(), "unsafe".to_string())
+        );
+        assert_eq!(
+            split_vis_rest("unsafe"),
+            (String::new(), "unsafe".to_string())
+        );
+        assert_eq!(split_vis_rest("mut"), (String::new(), "mut".to_string()));
+    }
+
+    #[test]
+    fn closed_item_vis_matrix() {
+        for vis in ["", "pub", "pub(crate)", "pub(super)", "pub(in crate)"] {
+            assert!(is_closed_item_vis(vis), "{vis:?}");
+        }
+        // Normalized (whitespace-stripped) `pub(in …)` spellings match too.
+        assert!(is_closed_item_vis("pub(incrate::x)"));
+        for vis in ["pub(foo)", "pubmut", "crate", "pub(in)"] {
+            assert!(!is_closed_item_vis(vis), "{vis:?}");
+        }
     }
 }

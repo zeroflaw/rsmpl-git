@@ -501,21 +501,22 @@ fn item_rename_mismatch_rejected() {
 
 #[test]
 fn item_rename_prefix_difference_rejected() {
-    // T23a: spelled vis/qualifier differences fail fast (rename-only,
-    // never a silent vis change). Bare-vs-spelled both directions.
+    // T23a + WI-5-R2: qualifier differences fail fast (rename-only over
+    // qualifiers, never a silent `mut`/`unsafe` change). Pure vis steps
+    // now evolve (see `item_rename_vis_evolution_fires`); they no longer
+    // belong in this rejection list.
     for (minus, plus) in [
-        ("pub struct Old", "struct New"),
-        ("struct Old", "pub struct New"),
-        ("pub struct Old", "pub(crate) struct New"),
         ("static Old", "static mut New"),
+        ("static mut Old", "pub static mut New"),
         ("unsafe trait Old", "trait New"),
+        ("unsafe trait Old", "pub unsafe trait New"),
     ] {
         let text = format!(
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- {minus}\n+ {plus}\n"
         );
         let err = compile(&hunk_of(&text)).unwrap_err();
         assert!(
-            err.to_string().contains("prefixes differ"),
+            err.to_string().contains("qualifier"),
             "{minus} / {plus} got: {err}"
         );
     }
@@ -525,6 +526,78 @@ fn item_rename_prefix_difference_rejected() {
         compile(&hunk_of(text)).unwrap().kind,
         PatternKind::ItemRename { .. }
     ));
+}
+
+#[test]
+fn item_rename_vis_evolution_fires() {
+    // WI-5-R2: a rename may evolve exactly the vis slot (one concrete
+    // vis → another, qualifiers preserved). The compiled pattern carries
+    // both prefixes; the pure path stores them equal.
+    for (minus, plus, want_minus, want_plus) in [
+        ("pub struct Old", "struct New", "pub", ""),
+        ("struct Old", "pub struct New", "", "pub"),
+        (
+            "pub struct Old",
+            "pub(crate) struct New",
+            "pub",
+            "pub(crate)",
+        ),
+        (
+            "pub(crate) enum Old",
+            "pub(super) enum New",
+            "pub(crate)",
+            "pub(super)",
+        ),
+    ] {
+        let text = format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- {minus}\n+ {plus}\n"
+        );
+        let kind = compile(&hunk_of(&text)).unwrap().kind;
+        match kind {
+            PatternKind::ItemRename {
+                minus_prefix,
+                plus_prefix,
+                ..
+            } => {
+                assert_eq!(minus_prefix, want_minus, "{minus} / {plus}");
+                assert_eq!(plus_prefix, want_plus, "{minus} / {plus}");
+            }
+            other => panic!("{minus} / {plus} must compile to ItemRename, got: {other:?}"),
+        }
+    }
+    // Pure renames store equal prefixes (no vis edit at apply).
+    let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ pub struct New\n";
+    match compile(&hunk_of(text)).unwrap().kind {
+        PatternKind::ItemRename {
+            minus_prefix,
+            plus_prefix,
+            ..
+        } => {
+            assert_eq!(minus_prefix, "pub");
+            assert_eq!(plus_prefix, "pub");
+        }
+        other => panic!("pure rename must stay ItemRename, got: {other:?}"),
+    }
+    // Double slots veto: vis + attribute, vis + kind, same-name vis, and
+    // holes combined with vis.
+    let delta = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ #[derive(Debug)]\n+ pub(crate) struct New\n";
+    assert!(
+        compile(&hunk_of(delta))
+            .unwrap_err()
+            .to_string()
+            .contains("two evolving slots"),
+        "vis+attr must veto"
+    );
+    let kind = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ pub(crate) enum New\n";
+    assert!(
+        compile(&hunk_of(kind))
+            .unwrap_err()
+            .to_string()
+            .contains("kind mismatch"),
+        "vis+kind must veto"
+    );
+    let same = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=x\n# lang=rust\n- pub struct S\n+ pub(crate) struct S\n";
+    assert!(compile(&hunk_of(same)).is_err(), "same-name vis must veto");
 }
 
 #[test]

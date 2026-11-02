@@ -1256,5 +1256,39 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "133-bare-visjoint-fires" {
+        // WI-5-R2: a bare-item rename + vis narrowing joins its use
+        // sites into one follow hunk carrying the concrete evolved
+        // terse pair (never a hole); the harness checks the tree legs
+        // (--check + lowered git apply).
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            1,
+            "one joint intent must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# follow=uses"),
+            "joint must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- pub struct Old\n"),
+            "evolved minus pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ pub(crate) struct New\n"),
+            "evolved plus pair must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn f(s: Old)"),
+            "use lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     }
 }

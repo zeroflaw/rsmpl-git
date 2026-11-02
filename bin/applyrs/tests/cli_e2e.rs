@@ -553,18 +553,19 @@ fn directive_validation_runs_before_range_validation() {
 
 #[test]
 fn item_rename_prefix_difference_fails_fast_text_and_json() {
-    // T23a: spelled vis/qualifier differences are rename-only violations,
-    // never silent vis changes — text keeps the stderr diagnostic, JSON
-    // carries the envelope on stdout (exit 2 both).
+    // T23a + WI-5-R2: qualifier differences stay rename-only violations
+    // (never silent `mut`/`unsafe` changes) — text keeps the stderr
+    // diagnostic, JSON carries the envelope on stdout (exit 2 both).
+    // Pure vis steps evolve instead (see the `vis_evolution` arm below).
     let dir = init_repo();
-    write(dir.path(), "src/lib.rs", "pub struct Old;\n");
+    write(dir.path(), "src/lib.rs", "static Old: u8 = 1;\n");
     let patch =
-        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ struct New\n";
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- static Old\n+ static mut New\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
-    assert!(stderr.contains("prefixes differ"), "got: {stderr}");
+    assert!(stderr.contains("qualifier"), "got: {stderr}");
     let out = run_stdin(dir.path(), patch, &["--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -575,11 +576,24 @@ fn item_rename_prefix_difference_fails_fast_text_and_json() {
         serde_json::json!("RSMPL_PATTERN_CONFLICT")
     );
     assert!(
-        v["error"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("prefixes differ"),
+        v["error"]["reason"].as_str().unwrap().contains("qualifier"),
         "got: {v}"
+    );
+}
+
+#[test]
+fn item_rename_vis_evolution_applies() {
+    // WI-5-R2: a rename may evolve exactly the vis slot — the def vis
+    // and name rewrite together, everything else preserved.
+    let dir = init_repo();
+    write(dir.path(), "src/lib.rs", "pub struct Old;\n");
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=x\n# lang=rust\n- pub struct Old\n+ struct New\n";
+    let out = run_stdin(dir.path(), patch, &[]);
+    assert_eq!(out.status.code(), Some(0), "got: {out:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+        "struct New;\n"
     );
 }
 
