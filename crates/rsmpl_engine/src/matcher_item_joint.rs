@@ -144,7 +144,11 @@ pub fn apply_struct_rename_field_evo_hunk(
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,
                     "expected struct-rename-field-evolution pattern".to_string(),
-                ));
+                )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "item-joint-struct-dispatch-template",
+                    "write `- struct Old` / `+ struct New` plus `- x: Ty` / `+ x: Ty2` (exactly one field-type delta, no container header; SPEC 14.8)",
+                )));
             }
         };
     let rule = hunk.rule_name();
@@ -154,6 +158,10 @@ pub fn apply_struct_rename_field_evo_hunk(
             format!("invalid joint field type pattern: {e}"),
         )
         .with_rule(rule.clone())
+        .with_repair(StructuredError::fix_pattern_repair(
+            "item-joint-struct-field-template",
+            "write the `- x: Ty` side as a valid Rust type (e.g. `- x: u32`), field name concrete and preserved",
+        ))
     })?;
     syn::parse_str::<syn::Type>(&plus_raw).map_err(|e| {
         StructuredError::new(
@@ -161,6 +169,10 @@ pub fn apply_struct_rename_field_evo_hunk(
             format!("substituted joint field type does not parse: {e}"),
         )
         .with_rule(rule.clone())
+        .with_repair(StructuredError::fix_pattern_repair(
+            "item-joint-struct-field-plus-template",
+            "write the `+ x: Ty` side as a valid Rust type (e.g. `+ x: u64`), field name concrete and preserved",
+        ))
     })?;
     let mut candidates = Vec::new();
     collect(&parsed.items, &old_container, &field, &mut candidates);
@@ -325,7 +337,11 @@ pub fn apply_enum_rename_variant_evo_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected enum-rename-variant-evolution pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "item-joint-enum-dispatch-template",
+                "write `- enum Old` / `+ enum New` plus one variant delta (`- A(u32)` / `+ A(u64)`, `- A { x: u32 }` / `+ A { x: u64 }`, or `- A = 1` / `+ A = 2`; no container header; SPEC 14.8)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -389,6 +405,10 @@ pub fn apply_enum_rename_variant_evo_hunk(
                         format!("invalid joint variant payload type pattern: {e}"),
                     )
                     .with_rule(rule.clone())
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "item-joint-variant-payload-template",
+                        "write the `- A(...)` side payload as valid Rust types (e.g. `- A(u32)`, `- A { x: u32 }`), variant name concrete and preserved",
+                    ))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?
@@ -401,6 +421,10 @@ pub fn apply_enum_rename_variant_evo_hunk(
                     format!("substituted joint variant payload type does not parse: {e}"),
                 )
                 .with_rule(rule.clone())
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "item-joint-variant-payload-plus-template",
+                    "write the `+ A(...)` side payload as valid Rust types (e.g. `+ A(u64)`, `+ A { x: u64 }`), variant name concrete and preserved",
+                ))
             })?;
         }
     }
@@ -412,6 +436,10 @@ pub fn apply_enum_rename_variant_evo_hunk(
                     format!("invalid joint discriminant pattern: {e}"),
                 )
                 .with_rule(rule.clone())
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "item-joint-discriminant-template",
+                    "write the `- A = N` side discriminant as a valid Rust expression (e.g. `- A = 1`), variant name concrete and preserved",
+                ))
             })?,
         )
     } else {
@@ -425,6 +453,10 @@ pub fn apply_enum_rename_variant_evo_hunk(
                     format!("substituted joint discriminant does not parse: {e}"),
                 )
                 .with_rule(rule.clone())
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "item-joint-discriminant-plus-template",
+                    "write the `+ A = N` side discriminant as a valid Rust expression (e.g. `+ A = 2`), variant name concrete and preserved",
+                ))
             })?;
         }
     }
@@ -638,5 +670,276 @@ mod tests {
         let post = apply(&enum_joint_patch("A(u32)", "A(u64)"), pre);
         assert_eq!(post.matches("enum New").count(), 2, "got:\n{post}");
         assert!(!post.contains("Old"), "got:\n{post}");
+    }
+
+    fn wi18_joint_struct_setup() -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(&joint_patch()).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("valid joint compiles");
+        let src = "struct Old {\n    x: u32,\n}\n".to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_joint_enum_setup(
+        member_minus: &str,
+        member_plus: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch =
+            rsmpl_patch::parse_patch(&enum_joint_patch(member_minus, member_plus))
+                .expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("valid joint compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_joint_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 6: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice6_struct_dispatch_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_joint_struct_setup();
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_struct_rename_field_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("wrong kind must fail");
+        assert_eq!(
+            err.message,
+            "expected struct-rename-field-evolution pattern"
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-struct-dispatch-template");
+        assert!(w.contains("`- struct Old`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_struct_field_minus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_joint_struct_setup();
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::StructRenameFieldEvo { minus_sub, .. } => {
+                *minus_sub = "u32 {{{".to_string();
+            }
+            _ => panic!("want struct joint"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_struct_rename_field_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("invalid minus type must fail");
+        assert!(
+            err.message.starts_with("invalid joint field type pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-struct-field-template");
+        assert!(w.contains("`- x: u32`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_struct_field_plus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = wi18_joint_struct_setup();
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::StructRenameFieldEvo { plus_raw, .. } => {
+                *plus_raw = "u64 {{{".to_string();
+            }
+            _ => panic!("want struct joint"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_struct_rename_field_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("invalid plus type must fail");
+        assert!(
+            err.message
+                .starts_with("substituted joint field type does not parse"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-struct-field-plus-template");
+        assert!(w.contains("`+ x: u64`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_enum_dispatch_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_joint_enum_setup("A(u32)", "A(u64)", "enum Old {\n    A(u32),\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_enum_rename_variant_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("wrong kind must fail");
+        assert_eq!(
+            err.message,
+            "expected enum-rename-variant-evolution pattern"
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-enum-dispatch-template");
+        assert!(w.contains("`- enum Old`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_variant_payload_minus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_joint_enum_setup("A(u32)", "A(u64)", "enum Old {\n    A(u32),\n}\n");
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::EnumRenameVariantEvo { payload, .. } => match payload {
+                rsmpl_pattern::VariantPayload::Tuple { minus_subs, .. } => {
+                    minus_subs[0] = "u32 {{{".to_string();
+                }
+                _ => panic!("want tuple payload"),
+            },
+            _ => panic!("want enum joint"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_enum_rename_variant_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("invalid payload minus must fail");
+        assert!(
+            err.message
+                .starts_with("invalid joint variant payload type pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-variant-payload-template");
+        assert!(w.contains("`- A(u32)`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_variant_payload_plus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_joint_enum_setup("A(u32)", "A(u64)", "enum Old {\n    A(u32),\n}\n");
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::EnumRenameVariantEvo { payload, .. } => match payload {
+                rsmpl_pattern::VariantPayload::Tuple { plus_raws, .. } => {
+                    plus_raws[0] = "u64 {{{".to_string();
+                }
+                _ => panic!("want tuple payload"),
+            },
+            _ => panic!("want enum joint"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_enum_rename_variant_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("invalid payload plus must fail");
+        assert!(
+            err.message
+                .starts_with("substituted joint variant payload type does not parse"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-variant-payload-plus-template");
+        assert!(w.contains("`+ A(u64)`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_discriminant_minus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_joint_enum_setup("A = 1", "A = 2", "enum Old {\n    A = 1,\n}\n");
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::EnumRenameVariantEvo { payload, .. } => match payload {
+                rsmpl_pattern::VariantPayload::Discriminant { minus_sub, .. } => {
+                    *minus_sub = "1 +{{".to_string();
+                }
+                _ => panic!("want discriminant payload"),
+            },
+            _ => panic!("want enum joint"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_enum_rename_variant_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("invalid discriminant minus must fail");
+        assert!(
+            err.message
+                .starts_with("invalid joint discriminant pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-discriminant-template");
+        assert!(w.contains("`- A = 1`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice6_discriminant_plus_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_joint_enum_setup("A = 1", "A = 2", "enum Old {\n    A = 1,\n}\n");
+        match &mut compiled.kind {
+            rsmpl_pattern::PatternKind::EnumRenameVariantEvo { payload, .. } => match payload {
+                rsmpl_pattern::VariantPayload::Discriminant { plus_raw, .. } => {
+                    *plus_raw = "2 +{{".to_string();
+                }
+                _ => panic!("want discriminant payload"),
+            },
+            _ => panic!("want enum joint"),
+        }
+        let mut edits = Vec::new();
+        let err = super::apply_enum_rename_variant_evo_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("invalid discriminant plus must fail");
+        assert!(
+            err.message
+                .starts_with("substituted joint discriminant does not parse"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = wi18_joint_repair(&err);
+        assert_eq!(code, "item-joint-discriminant-plus-template");
+        assert!(w.contains("`+ A = 2`"), "got: {w}");
     }
 }
