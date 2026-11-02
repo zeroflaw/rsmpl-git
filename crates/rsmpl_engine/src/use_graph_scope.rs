@@ -342,6 +342,68 @@ fn interior_reports(
             }
             // Macro interiors stay opaque (never descended into).
         }
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            // Attribute interiors are opaque, never claimed as uses (an
+            // ident inside `#[doc = old]` never resolves to the binder).
+            // Gate on the attribute sitting in-scope (same containment as
+            // macros): out-of-scope attributes (e.g. on the closure node
+            // itself) name the outer scope and never dangle. String
+            // literals stay silent by construction (`Literal`, never
+            // `Ident`).
+            use syn::spanned::Spanned;
+            let Some((a, b)) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            else {
+                return;
+            };
+            if !self
+                .scopes
+                .iter()
+                .any(|(rs, _)| rs.iter().any(|(s, e)| *s <= a && b <= *e))
+            {
+                return;
+            }
+            for seg in node.path().segments.iter() {
+                if seg.ident == self.old {
+                    self.opaque_lines.push(seg.ident.span().start().line as u32);
+                }
+            }
+            match &node.meta {
+                syn::Meta::NameValue(nv) => {
+                    struct ValuePaths<'o> {
+                        old: &'o str,
+                        opaque: Vec<u32>,
+                    }
+                    impl<'ast> syn::visit::Visit<'ast> for ValuePaths<'_> {
+                        fn visit_path(&mut self, node: &'ast syn::Path) {
+                            for seg in &node.segments {
+                                if seg.ident == self.old {
+                                    self.opaque.push(seg.ident.span().start().line as u32);
+                                }
+                            }
+                            syn::visit::visit_path(self, node);
+                        }
+                        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                            for line in attr_ident_lines(&node.tokens, self.old) {
+                                self.opaque.push(line);
+                            }
+                        }
+                    }
+                    let mut values = ValuePaths {
+                        old: self.old,
+                        opaque: Vec::new(),
+                    };
+                    values.visit_expr(&nv.value);
+                    self.opaque_lines.extend(values.opaque);
+                }
+                syn::Meta::List(list) => {
+                    self.opaque_lines
+                        .extend(attr_ident_lines(&list.tokens, self.old));
+                }
+                syn::Meta::Path(_) => {}
+            }
+            // Never descended into (opaque).
+        }
     }
 
     let mut interior = Interior {
@@ -739,6 +801,27 @@ fn macro_opaque_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> 
     out
 }
 
+/// Ident-only token scan for attribute interiors (`Meta::List` tokens
+/// and macros inside `Meta::NameValue` values): one entry per matching
+/// ident line. String literals stay silent by construction (`Literal`,
+/// never `Ident`) — unlike macros, attributes never host inline
+/// `{old}` captures, so the literal arm is intentionally absent.
+fn attr_ident_lines(tokens: &proc_macro2::TokenStream, old: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for t in tokens.clone() {
+        match t {
+            proc_macro2::TokenTree::Group(g) => {
+                out.extend(attr_ident_lines(&g.stream(), old));
+            }
+            proc_macro2::TokenTree::Ident(id) if id == old => {
+                out.push(id.span().start().line as u32);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -918,6 +1001,69 @@ mod tests {
         assert_eq!(orphans.len(), 1, "got: {orphans:?}");
         assert_eq!(orphans[0].reason, "macro-hidden");
         assert_eq!(orphans[0].line, 4);
+    }
+
+    #[test]
+    fn for_attribute_path_is_macro_hidden() {
+        // `#[total]` never resolves to the binder: opaque like a macro
+        // interior (let-path + item parity), never an `off-target` use.
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        #[total]\n        let x = 1;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "macro-hidden");
+        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+    }
+
+    #[test]
+    fn for_attribute_value_is_macro_hidden() {
+        // `#[doc = total]` values never resolve either (same law as the
+        // `#[total]` path twin).
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        #[doc = total]\n        let x = 1;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "macro-hidden");
+        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+    }
+
+    #[test]
+    fn for_attribute_list_is_macro_hidden() {
+        // List-token idents (`#[foo(total)]`) are token-stream idents,
+        // never parsed paths — equally opaque (this form was silent
+        // `verified` before the Interior unification).
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        #[foo(total)]\n        let x = 1;\n    }\n}\n";
+        let orphans = expr_orphans(src, Wi2dExprKind::For);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "macro-hidden");
+        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+    }
+
+    #[test]
+    fn for_attribute_string_literal_is_silent() {
+        // `#[doc = "total"]` is a `Literal`, never an `Ident`: prose
+        // mentions of the name stay silent (control).
+        let src =
+            "fn main() {\n    for total in 0..3 {\n        #[doc = \"total\"]\n        let x = 1;\n    }\n}\n";
+        assert!(
+            expr_orphans(src, Wi2dExprKind::For).is_empty(),
+            "got: {:?}",
+            expr_orphans(src, Wi2dExprKind::For)
+        );
+    }
+
+    #[test]
+    fn for_attribute_outside_scope_is_silent() {
+        // An attribute on the `for` node itself sits outside the loop-body
+        // scope: the binder is not visible there, so nothing dangles.
+        let src =
+            "fn main() {\n    #[doc = total]\n    for total in 0..3 {\n        break;\n    }\n}\n";
+        assert!(
+            expr_orphans(src, Wi2dExprKind::For).is_empty(),
+            "got: {:?}",
+            expr_orphans(src, Wi2dExprKind::For)
+        );
     }
 
     #[test]

@@ -1222,17 +1222,17 @@ mod tests {
 
     #[test]
     fn closure_orphans_attribute_value_names_the_line() {
-        // Attribute values never rewrite (opaque like macros), but the
-        // leftover is never silent either: it surfaces as an
-        // `off-target` use-orphan, uniform with the `#[total]` path
-        // twin — the verdict caps instead of verifying.
+        // Attribute values never rewrite (opaque like macros) and never
+        // resolve to the binder: the leftover is a `macro-hidden`
+        // orphan, uniform with the let path and the item/fn/assoc/member
+        // parity — the verdict caps instead of verifying.
         let src =
             "fn main() {\n    let f = |total: u32| { #[doc = total] 0 };\n    let _ = f;\n}\n";
         let kind = general_expr("|total : u32| __RSMPL_E0", "|sum : u32| E");
         let orphans = wi2c_orphans(src, kind, first_closure_span(src));
         assert_eq!(orphans.len(), 1, "got: {orphans:?}");
         assert_eq!(orphans[0].line, 2);
-        assert_eq!(orphans[0].reason, "off-target");
+        assert_eq!(orphans[0].reason, "macro-hidden");
     }
 
     #[test]

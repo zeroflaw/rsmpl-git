@@ -410,9 +410,9 @@ fn let_rename_leaves_attribute_value_and_reports_partial() {
 
 #[test]
 fn closure_param_rename_leaves_attribute_value_and_reports_partial() {
-    // Non-let twin: the closure body use rewrites, the `#[doc = old]`
-    // value stays verbatim, and the leftover is an `off-target`
-    // orphan — uniform with the `#[old]` path twin.
+    // Non-let twin of the let attribute-value pin: the closure body use
+    // rewrites, the `#[doc = old]` value stays verbatim, and the leftover
+    // is a `macro-hidden` orphan (let-path parity, SPEC WI-2c).
     let dir = init_repo();
     cargo_crate(
         dir.path(),
@@ -428,13 +428,44 @@ fn closure_param_rename_leaves_attribute_value_and_reports_partial() {
     assert!(
         orphans
             .iter()
-            .any(|o| o["reason"] == serde_json::json!("off-target")),
+            .any(|o| o["reason"] == serde_json::json!("macro-hidden")),
         "got: {v}"
     );
     apply_patch(dir.path(), CLOSURE_PARAM_PATCH);
     let post = read(dir.path(), "src/lib.rs");
     assert!(post.contains("|sum: u32|"), "got: {post}");
     assert!(post.contains("#[doc = total]"), "got: {post}");
+    assert!(post.contains("sum + 1"), "got: {post}");
+}
+
+#[test]
+fn closure_param_rename_leaves_attribute_list_and_reports_partial() {
+    // List-token twin (`#[foo(old)]`): token-stream idents never resolve
+    // to the binder either — same `macro-hidden` + `partial` envelope with
+    // a verbatim real apply (the list form was silent `verified` before
+    // the Interior unification).
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let f = |total: u32| { #[foo(total)] total + 1 };\n    let _ = f;\n}\n",
+    );
+    let v = check_json(dir.path(), CLOSURE_PARAM_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    let orphans = v["rules"][0]["orphans"].as_array().unwrap();
+    assert!(
+        orphans
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("macro-hidden")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), CLOSURE_PARAM_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("|sum: u32|"), "got: {post}");
+    assert!(post.contains("#[foo(total)]"), "got: {post}");
     assert!(post.contains("sum + 1"), "got: {post}");
 }
 
