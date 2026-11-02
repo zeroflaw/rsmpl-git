@@ -24,6 +24,7 @@ pub(crate) fn joint_emission(
     add_joint: Option<&super::item_joint_field_add::AddJoint>,
     variant_add_joint: Option<&super::item_joint_field_add::AddJoint>,
     del_joint: Option<&super::item_joint_delete::DelJoint>,
+    variant_del_joint: Option<&super::item_joint_delete::DelJoint>,
 ) -> Option<String> {
     match (
         attr_joint,
@@ -32,48 +33,57 @@ pub(crate) fn joint_emission(
         add_joint,
         variant_add_joint,
         del_joint,
+        variant_del_joint,
     ) {
-        (Some(api), None, None, None, None, None) => Some(super::item_joint_attr::joint_emit(
-            def_path,
-            rule,
-            def_kind,
-            def_prefix,
-            old_ident,
-            new_ident,
-            &pairs[api].minus,
-            &pairs[api].plus,
-        )),
-        (None, Some(fpi), None, None, None, None) => Some(super::item_joint_field_evo::joint_emit(
-            def_path,
-            rule,
-            def_kind,
-            def_prefix,
-            old_ident,
-            new_ident,
-            &pairs[fpi].minus,
-            &pairs[fpi].plus,
-        )),
-        (None, None, Some(vpi), None, None, None) => Some(super::item_joint_field_evo::joint_emit(
-            def_path,
-            rule,
-            def_kind,
-            def_prefix,
-            old_ident,
-            new_ident,
-            &pairs[vpi].minus,
-            &pairs[vpi].plus,
-        )),
-        (None, None, None, Some(add), None, None) => Some(super::item_joint_field_add::add_emit(
-            def_path,
-            rule,
-            def_kind,
-            def_prefix,
-            old_ident,
-            new_ident,
-            add.point,
-            &add.member_plus,
-        )),
-        (None, None, None, None, Some(add), None) => {
+        (Some(api), None, None, None, None, None, None) => {
+            Some(super::item_joint_attr::joint_emit(
+                def_path,
+                rule,
+                def_kind,
+                def_prefix,
+                old_ident,
+                new_ident,
+                &pairs[api].minus,
+                &pairs[api].plus,
+            ))
+        }
+        (None, Some(fpi), None, None, None, None, None) => {
+            Some(super::item_joint_field_evo::joint_emit(
+                def_path,
+                rule,
+                def_kind,
+                def_prefix,
+                old_ident,
+                new_ident,
+                &pairs[fpi].minus,
+                &pairs[fpi].plus,
+            ))
+        }
+        (None, None, Some(vpi), None, None, None, None) => {
+            Some(super::item_joint_field_evo::joint_emit(
+                def_path,
+                rule,
+                def_kind,
+                def_prefix,
+                old_ident,
+                new_ident,
+                &pairs[vpi].minus,
+                &pairs[vpi].plus,
+            ))
+        }
+        (None, None, None, Some(add), None, None, None) => {
+            Some(super::item_joint_field_add::add_emit(
+                def_path,
+                rule,
+                def_kind,
+                def_prefix,
+                old_ident,
+                new_ident,
+                add.point,
+                &add.member_plus,
+            ))
+        }
+        (None, None, None, None, Some(add), None, None) => {
             Some(super::item_joint_field_add::variant_add_emit(
                 def_path,
                 rule,
@@ -85,17 +95,31 @@ pub(crate) fn joint_emission(
                 &add.member_plus,
             ))
         }
-        (None, None, None, None, None, Some(del)) => Some(super::item_joint_delete::del_emit(
-            def_path,
-            rule,
-            def_kind,
-            def_prefix,
-            old_ident,
-            new_ident,
-            del.point,
-            &del.member_minus,
-        )),
-        (None, None, None, None, None, None) => Some(super::item_joint_attr::emit(
+        (None, None, None, None, None, Some(del), None) => {
+            Some(super::item_joint_delete::del_emit(
+                def_path,
+                rule,
+                def_kind,
+                def_prefix,
+                old_ident,
+                new_ident,
+                del.point,
+                &del.member_minus,
+            ))
+        }
+        (None, None, None, None, None, None, Some(del)) => {
+            Some(super::item_joint_delete::variant_del_emit(
+                def_path,
+                rule,
+                def_kind,
+                def_prefix,
+                old_ident,
+                new_ident,
+                del.point,
+                &del.member_minus,
+            ))
+        }
+        (None, None, None, None, None, None, None) => Some(super::item_joint_attr::emit(
             def_path, rule, def_kind, def_prefix, old_ident, new_ident,
         )),
         _ => None,

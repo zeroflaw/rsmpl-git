@@ -187,6 +187,14 @@ pub(crate) fn apply_rsmpl_hunk(
             compiled,
             edits,
         ),
+        PatternKind::VariantDeletion { .. } => matcher_member_del::apply_variant_deletion_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        ),
         PatternKind::VariantAddition { .. } => matcher_member_evo::apply_variant_addition_hunk(
             parsed,
             &state.original,

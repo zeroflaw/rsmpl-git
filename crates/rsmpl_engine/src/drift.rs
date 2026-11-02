@@ -98,6 +98,7 @@ pub(crate) fn is_drift_eligible(rh: &RsmplHunk, compiled: &CompiledPattern) -> b
             | PatternKind::VariantPayloadEvolution { .. }
             | PatternKind::FieldAddition { .. }
             | PatternKind::FieldDeletion { .. }
+            | PatternKind::VariantDeletion { .. }
             | PatternKind::VariantAddition { .. }
             | PatternKind::ArmAddition { .. }
     )

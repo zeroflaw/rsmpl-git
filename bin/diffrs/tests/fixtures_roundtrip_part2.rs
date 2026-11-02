@@ -1574,6 +1574,43 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "143-enum-rename-variant-delete-fires" {
+        // WI-21 slice 2: enum rename + single variant deletion with no
+        // live uses of the deleted variant raises as the shared-rule
+        // two-hunk composition (deletion hunk + rename follow hunk);
+        // the harness checks the tree legs (--check + lowered git
+        // apply); two-deletion/live-use/cross-kind twins are pinned
+        // inline (finder tests).
+        assert!(
+            semantic.matches("rule=r1").count() == 2,
+            "both hunks share one rule, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# follow=uses"),
+            "rename half must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- enum Old"),
+            "def minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ enum New"),
+            "def plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- B,"),
+            "deletion minus must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("+ B,"),
+            "deletion must not gain a plus side, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "variant deletion joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on

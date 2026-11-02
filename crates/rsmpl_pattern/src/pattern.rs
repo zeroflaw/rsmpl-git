@@ -232,6 +232,18 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Enum-variant deletion (`enum E {` context + `- C[,…]`):
+    /// a point deletion inside the container (WI-21 slice 2: the
+    /// rename+variant-deletion joint carrier). The variant name is
+    /// concrete, the deleted line is concrete text (v1: no templates).
+    /// `# follow=uses` is rejected (C17). Reports `reparse-only`.
+    VariantDeletion {
+        enum_name: String,
+        variant: String,
+        minus_raw: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// Enum-variant addition (`enum E {` context + `+ C[,…]`):
     /// a point insertion inside the container. The variant line is
     /// concrete text (bare/unit/tuple/struct/discriminant).
@@ -641,10 +653,12 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // WI-12d: match-arm additions are likewise concrete (`syn::Arm`).
     // WI-21 slice 1: field deletions are likewise concrete (the minus
     // ident names the deleted field; nothing is bound on the plus side).
+    // WI-21 slice 2: variant deletions are likewise concrete.
     if matches!(
         &kind,
         PatternKind::FieldAddition { .. }
             | PatternKind::FieldDeletion { .. }
+            | PatternKind::VariantDeletion { .. }
             | PatternKind::VariantAddition { .. }
             | PatternKind::ArmAddition { .. }
     ) {
@@ -712,6 +726,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
             PatternKind::FieldAddition { .. } => "field addition",
             PatternKind::FieldDeletion { .. } => "field deletion",
+            PatternKind::VariantDeletion { .. } => "variant deletion",
             PatternKind::VariantAddition { .. } => "variant addition",
             PatternKind::ArmAddition { .. } => "match-arm addition",
             PatternKind::UseRename { .. } => "use-path",
