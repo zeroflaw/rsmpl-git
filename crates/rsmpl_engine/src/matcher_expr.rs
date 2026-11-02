@@ -416,7 +416,11 @@ pub fn apply_expr_hunk_with_graph(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected expression pattern".to_string(),
-            ))
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "general-expr-dispatch-template",
+                "write a call/method-call/macro/general-expression pair (`- foo(E)` / `+ bar(E)`; see SPEC 17-18)",
+            )))
         }
     };
     let rule = hunk.rule_name();
@@ -1707,5 +1711,48 @@ mod tests {
         let err = apply(patch, src).unwrap_err();
         assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
         assert!(err.contains("..."), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod wi18_slice12_tests {
+    // WI-18 slice 12: the expression dispatch else-arm carries the
+    // site-specific `general-expr-dispatch-template` repair
+    // (defence-in-depth: dispatch routes by kind, so the arm is forced
+    // with a wrong-kind `Raw` overwrite, slice-7/10/11 idiom).
+    use crate::edits::TextEdit;
+
+    const CALL_SHAPE: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,5 @@ rule=rename_calls\n# lang=rust\n# allow=many\n# expr E\n- foo(E)\n+ bar(E)\n";
+
+    #[test]
+    fn wi18_slice12_expr_dispatch_repair_is_specific() {
+        let mut parsed_patch = rsmpl_patch::parse_patch(CALL_SHAPE).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let mut compiled = rsmpl_pattern::compile(&hunk).expect("call patch compiles");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let src = "fn a() {\n    foo(1);\n}\n".to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_expr_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected expression pattern");
+        let repair = err.repair.expect("WI-18 slice 12: must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("general-expr-dispatch-template")
+        );
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(write_instead, err.message);
+        assert!(write_instead.contains("SPEC 17"), "got: {write_instead}");
     }
 }

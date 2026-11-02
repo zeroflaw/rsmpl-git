@@ -272,7 +272,11 @@ pub(crate) fn apply_rsmpl_hunk(
             ErrorCode::PatternConflict,
             "unsupported pattern shape in v0.1 (only fn rename, struct/enum/trait/union/type/const/static/mod/impl item rename, type-alias/const-static evolution, `use`-path prefix rename, call rewrite, let-stmt/general-expr/type rewrite, item delete/insert, macro path rewrite)",
         )
-        .with_rule(rule)),
+        .with_rule(rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "plan-dispatch-raw-template",
+            "write a supported shape (fn/item rename, call/let/expr/type rewrite, evolution pair, `use` prefix, delete/insert, macro path; see SPEC 18.6) or use an ordinary hunk",
+        ))),
     }
 }
 
@@ -286,4 +290,42 @@ pub(crate) fn range_err(rule: &str, file: &str, line: u32) -> StructuredError {
     .with_rule(rule)
     .with_file(file)
     .with_repair(StructuredError::internal_repair())
+}
+
+#[cfg(test)]
+mod wi18_slice12_tests {
+    // WI-18 slice 12: the `Raw` dispatch arm carries the site-specific
+    // `plan-dispatch-raw-template` repair. The pin runs the real route
+    // (an empty `-`/`+` pair compiles to `Raw` naturally, no overwrite —
+    // the `unsupported_shape_empty_pattern_verbatim` e2e shape).
+    #[test]
+    fn wi18_slice12_raw_dispatch_repair_is_specific() {
+        let patch_text =
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=r\n# expr E\n-\n+\n";
+        let patch = rsmpl_patch::parse_patch(patch_text).expect("empty patch parses");
+        let mut files = std::collections::HashMap::new();
+        files.insert("src/lib.rs".to_string(), "fn main() {}\n".to_string());
+        let mut patch = patch;
+        for f in &mut patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        let err = crate::apply_patch_to_tree(&mut files, &patch).expect_err("Raw must fail");
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+        assert!(
+            err.message.starts_with("unsupported pattern shape in v0.1"),
+            "got: {}",
+            err.message
+        );
+        let repair = err.repair.expect("WI-18 slice 12: must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("plan-dispatch-raw-template")
+        );
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(write_instead, err.message);
+        assert!(write_instead.contains("SPEC 18.6"), "got: {write_instead}");
+    }
 }

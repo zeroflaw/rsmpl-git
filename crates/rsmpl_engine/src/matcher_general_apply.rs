@@ -187,33 +187,36 @@ pub fn apply_general_hunk(
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
 ) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
-    let (shape, minus_sub, plus_raw, plus_body, minus_attrs, plus_attrs, had_semi) =
-        match &compiled.kind {
-            PatternKind::General {
-                shape,
-                minus_sub,
-                plus_raw,
-                plus_body,
-                minus_attrs,
-                plus_attrs,
-                had_semi,
-                ..
-            } => (
-                *shape,
-                minus_sub.clone(),
-                plus_raw.clone(),
-                plus_body.clone(),
-                minus_attrs.clone(),
-                plus_attrs.clone(),
-                *had_semi,
-            ),
-            _ => {
-                return Err(StructuredError::new(
-                    ErrorCode::PatternConflict,
-                    "expected generalized stmt/expr/type pattern".to_string(),
-                ))
-            }
-        };
+    let (shape, minus_sub, plus_raw, plus_body, minus_attrs, plus_attrs, had_semi) = match &compiled
+        .kind
+    {
+        PatternKind::General {
+            shape,
+            minus_sub,
+            plus_raw,
+            plus_body,
+            minus_attrs,
+            plus_attrs,
+            had_semi,
+            ..
+        } => (
+            *shape,
+            minus_sub.clone(),
+            plus_raw.clone(),
+            plus_body.clone(),
+            minus_attrs.clone(),
+            plus_attrs.clone(),
+            *had_semi,
+        ),
+        _ => return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "expected generalized stmt/expr/type pattern".to_string(),
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "general-dispatch-template",
+            "write a `let`-statement, expression, type, or 2-4-`let` sequence pair (see SPEC 18.6)",
+        ))),
+    };
     let rule = hunk.rule_name();
 
     // Attribute shape validation up front (clear errors, no guessing).
@@ -365,13 +368,21 @@ pub fn apply_general_hunk(
                     format!("invalid `let` pattern: {e}"),
                 )
                 .with_rule(&rule)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "general-let-invalid-template",
+                    "write a parseable `let` statement on the minus side (`- let x = E;`; see SPEC 18.6)",
+                ))
             })?;
             let syn::Stmt::Local(pat_local) = &pat_stmt else {
                 return Err(StructuredError::new(
                     ErrorCode::PatternConflict,
                     "general statement patterns must be `let` statements in v1",
                 )
-                .with_rule(&rule));
+                .with_rule(&rule)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "general-let-stmt-template",
+                    "write a `let` statement pattern (general statements must be `let` in v1; see SPEC 18.6)",
+                )));
             };
             let deleting = plus_raw.trim().is_empty();
             for (tgt, node) in &collector.stmts {
@@ -679,6 +690,10 @@ pub fn apply_general_hunk(
                     format!("invalid expression pattern: {e}"),
                 )
                 .with_rule(&rule)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "general-expr-invalid-template",
+                    "write a parseable expression on the minus side (see SPEC 18.6)",
+                ))
             })?;
             let deleting = plus_raw.trim().is_empty();
             for (tgt, node) in &collector.exprs {
@@ -805,6 +820,10 @@ pub fn apply_general_hunk(
                     format!("invalid type pattern: {e}"),
                 )
                 .with_rule(&rule)
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "general-type-invalid-template",
+                    "write a parseable type on the minus side (`- Vec<T>`; see SPEC 18.6)",
+                ))
             })?;
             for (tgt, node) in &collector.types {
                 if accepted
@@ -848,4 +867,182 @@ pub fn apply_general_hunk(
         }
     }
     Ok((matched, all_bindings))
+}
+
+#[cfg(test)]
+mod wi18_slice12_tests {
+    // WI-18 slice 12: the five general-apply sites carry site-specific
+    // repairs. The dispatch else-arm is defence-in-depth (dispatch routes
+    // by kind: forced with a wrong-kind `Raw` overwrite, slice-7/10/11
+    // idiom). The `syn` parse arms are defence-in-depth too (compile-time
+    // `try_general` validates first, so unparsable text never compiles to
+    // `General`): the pins compile a valid `General` shape naturally, then
+    // mutate `minus_sub` white-box to exercise the real arm.
+    use super::GeneralShape;
+    use crate::edits::TextEdit;
+
+    const LET_SHAPE: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- let x = E;\n+ let y = E;\n";
+    const SRC: &str = "fn f() {\n    let x = 1;\n}\n";
+
+    fn setup(
+        patch_text: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("general patch compiles");
+        let src = SRC.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn repair_of(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 12: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice12_general_dispatch_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = setup(LET_SHAPE);
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected generalized stmt/expr/type pattern");
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "general-dispatch-template");
+        assert!(w.contains("SPEC 18.6"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_general_invalid_let_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = setup(LET_SHAPE);
+        if let rsmpl_pattern::PatternKind::General { minus_sub, .. } = &mut compiled.kind {
+            *minus_sub = "let x = ;".to_string();
+        } else {
+            panic!("LET_SHAPE must compile to General");
+        }
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("invalid let must fail");
+        assert!(
+            err.message.starts_with("invalid `let` pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "general-let-invalid-template");
+        assert!(w.contains("`- let x = E;`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_general_non_let_stmt_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = setup(LET_SHAPE);
+        if let rsmpl_pattern::PatternKind::General {
+            minus_sub,
+            plus_raw,
+            plus_body,
+            ..
+        } = &mut compiled.kind
+        {
+            // An expression statement: parses as `syn::Stmt` but not as
+            // `Stmt::Local`. Plus sides carry no binders either so the C21
+            // binder gate (which runs first) stays silent.
+            *minus_sub = "foo(1);".to_string();
+            *plus_raw = "foo(2);".to_string();
+            *plus_body = "foo(2);".to_string();
+        } else {
+            panic!("LET_SHAPE must compile to General");
+        }
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("non-let stmt must fail");
+        assert_eq!(
+            err.message,
+            "general statement patterns must be `let` statements in v1"
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "general-let-stmt-template");
+        assert!(w.contains("`let`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_general_invalid_expr_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = setup(LET_SHAPE);
+        if let rsmpl_pattern::PatternKind::General {
+            shape, minus_sub, ..
+        } = &mut compiled.kind
+        {
+            *shape = GeneralShape::Expr;
+            *minus_sub = "foo(;".to_string();
+        } else {
+            panic!("LET_SHAPE must compile to General");
+        }
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("invalid expr must fail");
+        assert!(
+            err.message.starts_with("invalid expression pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "general-expr-invalid-template");
+        assert!(w.contains("SPEC 18.6"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_general_invalid_type_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) = setup(LET_SHAPE);
+        if let rsmpl_pattern::PatternKind::General {
+            shape, minus_sub, ..
+        } = &mut compiled.kind
+        {
+            *shape = GeneralShape::Type;
+            *minus_sub = "Vec<;".to_string();
+        } else {
+            panic!("LET_SHAPE must compile to General");
+        }
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("invalid type must fail");
+        assert!(
+            err.message.starts_with("invalid type pattern"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "general-type-invalid-template");
+        assert!(w.contains("`- Vec<T>`"), "got: {w}");
+    }
 }

@@ -427,7 +427,14 @@ mod tests {
     /// The companion runtime enumeration lives in
     /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
     /// patch per patch-input class); this test is the source gate.
-    const PATTERN_TAIL_CEILING: usize = 16;
+    /// WI-18 follow-up slice 12 moved the 16-site general/member-evo
+    /// remainder in `rsmpl_engine` (`matcher_member_evo.rs` ×5,
+    /// `matcher_general_apply.rs` ×5, `matcher_expr.rs` ×1,
+    /// `matcher_general_tails.rs` ×1, `capture.rs` ×3, `plan_dispatch.rs`
+    /// ×1) to site-specific `member-evo-*`/`general-*`/`capture-*`/
+    /// `plan-dispatch-*` template repairs (ceiling 16 -> 0; no D5 split
+    /// — largest production owner 1196).
+    const PATTERN_TAIL_CEILING: usize = 0;
 
     #[test]
     fn wi18_source_scan_every_site_carries_repair_or_allow_list() {
@@ -501,7 +508,7 @@ mod tests {
             hard_bare.join("\n")
         );
         assert!(
-            tail_bare.len() <= PATTERN_TAIL_CEILING,
+            tail_bare.is_empty(),
             "WI-18: engine-tail bare count {} exceeds ceiling {PATTERN_TAIL_CEILING} (new prose-only sites must carry with_repair):\n{}",
             tail_bare.len(),
             tail_bare.join("\n")

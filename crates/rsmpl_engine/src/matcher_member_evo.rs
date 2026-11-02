@@ -228,33 +228,38 @@ pub fn apply_field_type_hunk(
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
 ) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
-    let (struct_name, field, vis, minus_sub, plus_raw, placeholders, minus_attrs) =
-        match &compiled.kind {
-            PatternKind::FieldTypeEvolution {
-                struct_name,
-                field,
-                vis,
-                minus_sub,
-                plus_raw,
-                placeholders,
-                minus_attrs,
-                ..
-            } => (
-                struct_name.clone(),
-                field.clone(),
-                vis.clone(),
-                minus_sub.clone(),
-                plus_raw.clone(),
-                placeholders.clone(),
-                minus_attrs.clone(),
-            ),
-            _ => {
-                return Err(StructuredError::new(
-                    ErrorCode::PatternConflict,
-                    "expected field-type evolution pattern".to_string(),
-                ));
-            }
-        };
+    let (struct_name, field, vis, minus_sub, plus_raw, placeholders, minus_attrs) = match &compiled
+        .kind
+    {
+        PatternKind::FieldTypeEvolution {
+            struct_name,
+            field,
+            vis,
+            minus_sub,
+            plus_raw,
+            placeholders,
+            minus_attrs,
+            ..
+        } => (
+            struct_name.clone(),
+            field.clone(),
+            vis.clone(),
+            minus_sub.clone(),
+            plus_raw.clone(),
+            placeholders.clone(),
+            minus_attrs.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected field-type evolution pattern".to_string(),
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "member-evo-field-type-template",
+                "write a field-type evolution pair under its `struct` header (`  struct S {` context with `- x: u32` / `+ x: u64`; see SPEC 14.8)",
+            )));
+        }
+    };
     let rule = hunk.rule_name();
     let file = "";
     let pat_ty: syn::Type = syn::parse_str(&minus_sub)
@@ -361,7 +366,11 @@ pub fn apply_variant_payload_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected variant-payload evolution pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "member-evo-variant-payload-template",
+                "write a variant-payload evolution pair under its `enum` def pair (one payload slot evolves, e.g. `- A(u32)` / `+ A(u64)`; see SPEC 14.8)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -649,7 +658,11 @@ pub fn apply_field_addition_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected field-addition pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "member-evo-field-add-template",
+                "write a field-addition hunk (`struct S {` context plus one `+ field: Ty` line; see SPEC 14.8)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -783,7 +796,11 @@ pub fn apply_variant_addition_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected variant-addition pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "member-evo-variant-add-template",
+                "write a variant-addition hunk (`enum E {` context plus one `+ Variant` line; see SPEC 14.8)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -918,7 +935,11 @@ pub fn apply_match_arm_addition_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected match-arm addition pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "member-evo-arm-dispatch-template",
+                "write a match-arm addition hunk (`match <scrut> {` context plus one `+ <arm>,` line, ranged-only; see SPEC 14.8)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -1478,5 +1499,158 @@ mod arm_addition_tests {
         let patch = arm_patch(1, "  match e {", "E::C => 3,");
         let err = apply(&patch, ARM_PRE).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod wi18_slice12_tests {
+    // WI-18 slice 12: the five member-evo dispatch else-arms carry
+    // site-specific `member-evo-*-template` repairs (defence-in-depth:
+    // dispatch routes by kind, so the arms are forced with a wrong-kind
+    // `Raw` overwrite, slice-7/10/11 idiom).
+    use super::tests::apply_report;
+
+    use crate::edits::TextEdit;
+
+    const ARM_SRC: &str =
+        "enum E {\n    A,\n}\n\nfn f(e: E) -> u32 {\n    match e {\n        E::A => 1,\n    }\n}\n";
+
+    fn setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("member patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn repair_of(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 12: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    fn raw(mut compiled: rsmpl_pattern::CompiledPattern) -> rsmpl_pattern::CompiledPattern {
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        compiled
+    }
+
+    #[test]
+    fn wi18_slice12_field_type_dispatch_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evo\n  struct S {\n- old: Vec<u8>\n+ old: Box<[u8]>\n";
+        let (hunk, compiled, parsed, index, src) =
+            setup(patch, "struct S {\n    old: Vec<u8>,\n}\n");
+        let compiled = raw(compiled);
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_field_type_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected field-type evolution pattern");
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "member-evo-field-type-template");
+        assert!(w.contains("field-type evolution"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_variant_payload_dispatch_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evo\n  enum E {\n- Old(Vec<u8>)\n+ Old(Box<[u8]>)\n";
+        let (hunk, compiled, parsed, index, src) = setup(patch, "enum E {\n    Old(Vec<u8>),\n}\n");
+        let compiled = raw(compiled);
+        let mut edits = Vec::<TextEdit>::new();
+        let err =
+            super::apply_variant_payload_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected variant-payload evolution pattern");
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "member-evo-variant-payload-template");
+        assert!(w.contains("variant-payload evolution"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_field_add_dispatch_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n  struct S {\n+ b: bool,\n";
+        let (hunk, compiled, parsed, index, src) = setup(patch, "struct S {\n    a: u32,\n}\n");
+        let compiled = raw(compiled);
+        let mut edits = Vec::<TextEdit>::new();
+        let err =
+            super::apply_field_addition_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected field-addition pattern");
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "member-evo-field-add-template");
+        assert!(w.contains("field-addition"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_variant_add_dispatch_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,0 +3 @@ rule=add\n  enum E {\n+ C,\n";
+        let (hunk, compiled, parsed, index, src) = setup(patch, "enum E {\n    A,\n}\n");
+        let compiled = raw(compiled);
+        let mut edits = Vec::<TextEdit>::new();
+        let err =
+            super::apply_variant_addition_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected variant-addition pattern");
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "member-evo-variant-add-template");
+        assert!(w.contains("variant-addition"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_arm_dispatch_repair_is_specific() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,1 +6,1 @@ rule=arm\n  match e {\n+ E::C => 3,\n";
+        let (hunk, compiled, parsed, index, src) = setup(patch, ARM_SRC);
+        let compiled = raw(compiled);
+        let mut edits = Vec::<TextEdit>::new();
+        let err = super::apply_match_arm_addition_hunk(
+            &parsed, &src, &index, &hunk, &compiled, &mut edits,
+        )
+        .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected match-arm addition pattern");
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "member-evo-arm-dispatch-template");
+        assert!(w.contains("match-arm addition"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_valid_shapes_still_fire() {
+        // Repair appends only: a valid field-type pair still fires through
+        // the full apply (no `Raw` overwrite).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evo\n  struct S {\n- old: Vec<u8>\n+ old: Box<[u8]>\n";
+        let (out, _) =
+            apply_report(patch, "struct S {\n    old: Vec<u8>,\n}\n").expect("valid shape fires");
+        assert!(out.contains("old: Box<[u8]>"), "got: {out:?}");
     }
 }

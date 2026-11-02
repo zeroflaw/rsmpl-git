@@ -47,7 +47,11 @@ pub(crate) fn substitute_general_plus(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "block tail replay failed (plus `...` count does not match the absorbed tails)",
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "general-tail-replay-template",
+            "match the plus `...` count to the absorbed trailing blocks (one `...` per absorbed tail, or drop `...` to drop tails)",
+        )));
     }
     Ok(out)
 }
@@ -181,5 +185,28 @@ mod tests {
         let out = sub("if E { a(); ... }", &[""]);
         assert!(!out.contains("..."), "got: {out}");
         assert!(!out.contains("__RSMPL_TAIL_"), "got: {out}");
+    }
+
+    #[test]
+    fn wi18_slice12_tail_replay_repair_is_specific() {
+        // WI-18 slice 12: plus `...` with no absorbed tails fails with the
+        // site-specific `general-tail-replay-template` repair.
+        let err = substitute_general_plus("if E { a(); ... }", &HashMap::new(), &[], false)
+            .expect_err("slot with no tail must fail");
+        assert_eq!(
+            err.message,
+            "block tail replay failed (plus `...` count does not match the absorbed tails)"
+        );
+        let repair = err.repair.expect("WI-18 slice 12: must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("general-tail-replay-template")
+        );
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(write_instead, err.message);
+        assert!(write_instead.contains("`...`"), "got: {write_instead}");
     }
 }

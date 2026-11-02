@@ -292,7 +292,14 @@ pub(crate) fn splice_evolved_header(
     template: &str,
     rule: &str,
 ) -> Result<String, StructuredError> {
-    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let fail = |msg: String| {
+        StructuredError::new(ErrorCode::PatternConflict, msg)
+            .with_rule(rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "capture-splice-template",
+                "write an evolution-paste template the plus side spells (single-line `fn` header with `(...)` + `...`, `as` body rename, concrete signature, signature+body joint, or container header; see SPEC 20)",
+            ))
+    };
     // WI-19 slice 3: the signature+body joint form is checked before the
     // `as` and concrete arms (its spelling contains `as` plus a concrete
     // signature, which each single-purpose parser declines by ownership).
@@ -485,7 +492,14 @@ fn splice_fn_body_evolution(
     new_t: &str,
     rule: &str,
 ) -> Result<String, StructuredError> {
-    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let fail = |msg: String| {
+        StructuredError::new(ErrorCode::PatternConflict, msg)
+            .with_rule(rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "capture-evolution-parse-template",
+                "write the `as` body-evolving paste as `+ <prefix>fn <Old> as <New>(...) { ... }` over a captured `fn` item (check the cut range cites whole items); see SPEC 20",
+            ))
+    };
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
             "evolution paste captured text is not a Rust file: {e}"
@@ -769,7 +783,14 @@ fn splice_fn_full_header(
     template: &str,
     rule: &str,
 ) -> Result<String, StructuredError> {
-    let fail = |msg: String| StructuredError::new(ErrorCode::PatternConflict, msg).with_rule(rule);
+    let fail = |msg: String| {
+        StructuredError::new(ErrorCode::PatternConflict, msg)
+            .with_rule(rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "capture-concrete-parse-template",
+                "write the concrete-signature paste as `+ <prefix>fn <New>(concrete signature) { ... }` over a captured `fn` item (check the cut range cites whole items); see SPEC 20",
+            ))
+    };
     let file: syn::File = syn::parse_str(captured).map_err(|e| {
         fail(format!(
             "evolution paste captured text is not a Rust file: {e}"
@@ -1067,5 +1088,84 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("shadowed-local"), "kind named, got: {msg}");
         assert!(msg.contains("captured line 2"), "line named, got: {msg}");
+    }
+}
+
+#[cfg(test)]
+mod wi18_slice12_tests {
+    // WI-18 slice 12: the three `capture.rs` splice `fail` closures carry
+    // site-specific repairs (defence-in-depth: captured text comes from the
+    // already-parsed file, so the parse arms never fire on real input;
+    // the shared-closure repair follows the slice-10 `evo_shape::bad`
+    // precedent — one constructor-level repair per closure).
+    use super::{splice_evolved_header, splice_fn_body_evolution, splice_fn_full_header};
+
+    fn repair_of(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 12: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert_ne!(code, "capture", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice12_splice_template_repair_is_specific() {
+        let err = splice_evolved_header("fn foo() {}\n", "bogus template", "r")
+            .expect_err("unknown template must fail");
+        assert!(
+            err.message
+                .starts_with("evolution paste template must be a single-line"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "capture-splice-template");
+        assert!(w.contains("SPEC 20"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_evolution_parse_repair_is_specific() {
+        let err = splice_fn_body_evolution("not rust {{{", "", "old", "new", "r")
+            .expect_err("non-file capture must fail");
+        assert!(
+            err.message
+                .starts_with("evolution paste captured text is not a Rust file"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "capture-evolution-parse-template");
+        assert!(w.contains("`as`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice12_concrete_parse_repair_is_specific() {
+        let err = splice_fn_full_header("not rust {{{", "fn new(x: i64) -> i64 { ... }", "r")
+            .expect_err("non-file capture must fail");
+        assert!(
+            err.message
+                .starts_with("evolution paste captured text is not a Rust file"),
+            "got: {}",
+            err.message
+        );
+        let (code, w) = repair_of(&err);
+        assert_eq!(code, "capture-concrete-parse-template");
+        assert!(w.contains("concrete-signature"), "got: {w}");
     }
 }
