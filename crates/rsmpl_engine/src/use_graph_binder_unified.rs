@@ -273,6 +273,9 @@ fn rename_uses_in_fragment(text: &str, old: &str, new: &str) -> Option<String> {
         }
         fn visit_item_fn(&mut self, _node: &'ast syn::ItemFn) {}
         fn visit_macro(&mut self, _node: &'ast syn::Macro) {}
+        // Attribute interiors are opaque, never rewritten (an ident
+        // inside `#[doc = old]` never resolves to the binder).
+        fn visit_attribute(&mut self, _node: &'ast syn::Attribute) {}
         fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
             if node.qself.is_none()
                 && node.path.leading_colon.is_none()
@@ -927,6 +930,10 @@ fn follow_in_regions(
             syn::visit::visit_item_fn(self, node);
         }
         fn visit_macro(&mut self, _node: &'ast syn::Macro) {}
+        // Attribute interiors stay verbatim so the postcondition
+        // prediction agrees with the file walk (which never rewrites
+        // inside attributes either).
+        fn visit_attribute(&mut self, _node: &'ast syn::Attribute) {}
         fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
             if node.qself.is_none()
                 && node.path.leading_colon.is_none()
@@ -1242,6 +1249,40 @@ mod tests {
         );
         assert_eq!(edits.len(), 1, "got: {edits:?}");
         assert_eq!(&src[edits[0].start..edits[0].end], "total");
+    }
+
+    #[test]
+    fn closure_scope_attribute_interiors_stay_verbatim() {
+        // `#[doc = total]` / `#[total]` never resolve to the binder:
+        // only the body use rewrites.
+        let src = "fn main() {\n    let f = |total: u32| { #[doc = total] total + 1 };\n    let _ = f;\n}\n";
+        let (parsed, index) = file(src);
+        let cl = src.find("|total").unwrap();
+        let edits = scope_follow_edits(
+            &parsed,
+            src,
+            &index,
+            BinderScope::Closure,
+            "total",
+            "sum",
+            &[(cl, cl + 7)],
+        );
+        assert_eq!(edits.len(), 1, "got: {edits:?}");
+        assert_eq!(&src[edits[0].start..edits[0].end], "total");
+        assert!(
+            src[edits[0].start..].contains("total + 1"),
+            "got: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn fragment_rewrite_leaves_attribute_values_verbatim() {
+        // The postcondition prediction must agree with the file walk:
+        // attribute interiors stay verbatim while plain uses rename.
+        let frag = "{ #[doc = total] total + 1 }";
+        let out = rename_uses_in_fragment(frag, "total", "sum").expect("fragment parses");
+        assert!(out.contains("#[doc = total]"), "got: {out}");
+        assert!(out.contains("sum + 1"), "got: {out}");
     }
 
     #[test]

@@ -239,6 +239,50 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 ));
             }
         }
+        // Value idents (`#[doc = old]`, `#[foo(bar = old)]`) are
+        // equally opaque: they never resolve to the renamed item.
+        // `Meta::NameValue` values are real exprs, so their paths are
+        // collected structurally; `Meta::List` tokens are never parsed,
+        // so they are scanned as token trees. String literals
+        // (`#[doc = "old"]`, `/// old` doc comments) are `Literal`,
+        // never `Ident`, and stay out by construction.
+        match &node.meta {
+            syn::Meta::NameValue(nv) => {
+                struct ValuePaths<'o> {
+                    old: &'o str,
+                    opaque: Vec<u32>,
+                }
+                impl<'ast> Visit<'ast> for ValuePaths<'_> {
+                    fn visit_path(&mut self, node: &'ast syn::Path) {
+                        for seg in &node.segments {
+                            if seg.ident == self.old {
+                                self.opaque.push(seg.ident.span().start().line as u32);
+                            }
+                        }
+                        visit::visit_path(self, node);
+                    }
+                    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                        for line in macro_ident_lines(&node.tokens, self.old) {
+                            self.opaque.push(line);
+                        }
+                    }
+                }
+                let mut values = ValuePaths {
+                    old: self.old,
+                    opaque: Vec::new(),
+                };
+                values.visit_expr(&nv.value);
+                for line in values.opaque {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::List(list) => {
+                for line in macro_ident_lines(&list.tokens, self.old) {
+                    self.opaque.push((line, "an attribute".to_string()));
+                }
+            }
+            syn::Meta::Path(_) => {}
+        }
     }
 }
 
@@ -293,6 +337,46 @@ mod tests {
         assert_eq!(out.len(), 1, "got: {out:?}");
         assert_eq!(out[0].line, 3, "got: {out:?}");
         assert_eq!(out[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn attribute_value_ident_is_a_macro_hidden_orphan() {
+        // `#[doc = Old]` never resolves to the item: one opaque orphan
+        // at the attr line, never a use.
+        let out = orphans_for(
+            "pub struct Old;\n#[doc = Old]\nfn f() {}\n",
+            "Old",
+            "struct Old",
+        );
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert_eq!(out[0].line, 2, "got: {out:?}");
+        assert_eq!(out[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn attribute_list_form_ident_is_a_macro_hidden_orphan() {
+        // List tokens are never parsed, so they are scanned as token
+        // trees: `#[foo(Old)]` surfaces at its own line.
+        let out = orphans_for(
+            "pub struct Old;\n#[foo(Old)]\nfn f() {}\n",
+            "Old",
+            "struct Old",
+        );
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert_eq!(out[0].line, 2, "got: {out:?}");
+        assert_eq!(out[0].reason, "macro-hidden");
+    }
+
+    #[test]
+    fn attribute_string_literal_is_not_an_orphan() {
+        // `#[doc = "Old"]` and `/// Old` are literals, never idents:
+        // prose mentions of the name stay silent.
+        let out = orphans_for(
+            "pub struct Old;\n#[doc = \"Old\"]\n/// Old\nfn f() {}\n",
+            "Old",
+            "struct Old",
+        );
+        assert!(out.is_empty(), "got: {out:?}");
     }
 
     #[test]

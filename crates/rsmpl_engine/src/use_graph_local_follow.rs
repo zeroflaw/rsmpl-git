@@ -377,6 +377,10 @@ pub fn let_binder_follow_edits(
         }
         // Macro interiors stay evidence (opaque, never rewritten).
         fn visit_macro(&mut self, _node: &'ast syn::Macro) {}
+        // Attribute interiors stay evidence too (opaque, never
+        // rewritten): an ident inside `#[doc = old]` never resolves
+        // to the renamed binder, exactly like a macro interior.
+        fn visit_attribute(&mut self, _node: &'ast syn::Attribute) {}
     }
 
     let mut uses = Uses {
@@ -621,5 +625,16 @@ mod tests {
         let edits = follow_edits_for(src);
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].replacement, "total: sum");
+    }
+
+    #[test]
+    fn follow_leaves_attribute_interiors_verbatim() {
+        // Attribute idents never resolve to the binder: `#[doc = total]`
+        // and `#[total]` stay verbatim while the plain use rewrites.
+        let src = "fn main() {\n    let total = 1;\n    #[doc = total]\n    let y = total;\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 1, "got: {edits:?}");
+        assert_eq!(&src[edits[0].start..edits[0].end], "total");
+        assert!(src[..edits[0].start].contains("let y = "), "got: {edits:?}");
     }
 }

@@ -319,3 +319,65 @@ fn attr_strip_plus_rename_fails_c21() {
     let patch = "diff --git src/lib.rs\n@@ -2,2 @@ rule=r\n# attrs=strip\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
     check_c21_text(dir.path(), patch, content);
 }
+
+#[test]
+fn let_rename_leaves_attribute_value_and_reports_partial() {
+    // Attribute values never resolve to the binder: `#[doc = total]`
+    // stays verbatim while the binder and the plain use rewrite; the
+    // leftover surfaces as a `macro-hidden` orphan (never silent
+    // `verified`).
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let total = 1;\n    #[doc = total]\n    let y = total;\n    let _ = y;\n}\n",
+    );
+    let v = check_json(dir.path(), LET_SIMPLE_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    let orphans = v["rules"][0]["orphans"].as_array().unwrap();
+    assert_eq!(orphans.len(), 1, "got: {v}");
+    assert_eq!(orphans[0]["line"], serde_json::json!(3), "got: {v}");
+    assert_eq!(
+        orphans[0]["reason"],
+        serde_json::json!("macro-hidden"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), LET_SIMPLE_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let sum = 1;"), "got: {post}");
+    assert!(post.contains("#[doc = total]"), "got: {post}");
+    assert!(post.contains("let y = sum;"), "got: {post}");
+}
+
+#[test]
+fn closure_param_rename_leaves_attribute_value_and_reports_partial() {
+    // Non-let twin: the closure body use rewrites, the `#[doc = old]`
+    // value stays verbatim, and the leftover is an `off-target`
+    // orphan — uniform with the `#[old]` path twin.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let f = |total: u32| { #[doc = total] total + 1 };\n    let _ = f;\n}\n",
+    );
+    let v = check_json(dir.path(), CLOSURE_PARAM_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    let orphans = v["rules"][0]["orphans"].as_array().unwrap();
+    assert!(
+        orphans
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("off-target")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), CLOSURE_PARAM_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("|sum: u32|"), "got: {post}");
+    assert!(post.contains("#[doc = total]"), "got: {post}");
+    assert!(post.contains("sum + 1"), "got: {post}");
+}
