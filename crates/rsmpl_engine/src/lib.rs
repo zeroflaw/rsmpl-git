@@ -23,6 +23,7 @@ mod matcher_attr_delta;
 mod matcher_expr;
 mod matcher_expr_subst;
 mod matcher_fn;
+mod matcher_fn_item;
 mod matcher_general;
 mod matcher_general_apply;
 mod matcher_general_async;

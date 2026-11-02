@@ -413,6 +413,12 @@ mod tests {
     /// constructor-level repair for both evolution arms) to
     /// site-specific `dispatch-*-template` repairs (ceiling 33 -> 20;
     /// no D5 split — largest owner `matcher_item.rs` at 1216).
+    /// WI-18 follow-up slice 11 moved the 4-site fn-dispatch family in
+    /// `matcher_fn.rs` to site-specific `fn-*-template` repairs
+    /// (ceiling 20 -> 16; D5 production split first — the
+    /// item-delete/insertion tail → new sibling `matcher_fn_item.rs`,
+    /// `matcher_fn.rs` 1991 -> ~1780, `matcher_fn::` paths kept via
+    /// re-export).
     /// (`Match`/`Range`/`Parse`/`GitHunk`/`Build` or an unclassified
     /// code) fails naming file + line + code, because the filler does
     /// not cover those codes and a bare site there is a prose-only
@@ -421,7 +427,7 @@ mod tests {
     /// The companion runtime enumeration lives in
     /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
     /// patch per patch-input class); this test is the source gate.
-    const PATTERN_TAIL_CEILING: usize = 20;
+    const PATTERN_TAIL_CEILING: usize = 16;
 
     #[test]
     fn wi18_source_scan_every_site_carries_repair_or_allow_list() {

@@ -16,6 +16,12 @@ use rsmpl_pattern::{
 use crate::edits::TextEdit;
 use crate::lines::LineIndex;
 
+// WI-18 slice 11 (D5): the item-delete/insertion tail lives in
+// `matcher_fn_item`; the `matcher_fn::` paths stay stable through these
+// re-exports so existing callers are untouched.
+pub use crate::matcher_fn_item::{apply_insertion, apply_item_delete};
+pub(crate) use crate::matcher_fn_item::{delete_lines, find_item_targets, range_err};
+
 /// Whitespace-insensitive normalization for signature slot comparison.
 /// Both sides are token text; stripping all whitespace makes `pub(crate)`,
 /// `x : i32`, and `< T >` compare equal to their canonical spellings.
@@ -46,15 +52,15 @@ fn compact_slot(s: &str) -> String {
 }
 
 /// A function item with its source span lines and attribute lines.
-struct FnCandidate<'a> {
+pub(crate) struct FnCandidate<'a> {
     item: &'a syn::ItemFn,
-    start_line: u32,
-    end_line: u32,
+    pub(crate) start_line: u32,
+    pub(crate) end_line: u32,
     fn_line: u32,
     attr_start_line: u32,
 }
 
-fn collect_fns<'a>(file: &'a syn::File) -> Vec<FnCandidate<'a>> {
+pub(crate) fn collect_fns<'a>(file: &'a syn::File) -> Vec<FnCandidate<'a>> {
     let mut out = Vec::new();
     collect_from_items(&file.items, &mut out);
     out
@@ -90,7 +96,7 @@ fn candidate_of(f: &syn::ItemFn) -> FnCandidate<'_> {
 
 /// Scope filtering (SPEC 17.3). `anchor` uses the `fn` keyword line as the
 /// first concrete non-ellipsis token.
-fn in_scope(c: &FnCandidate<'_>, scope: Scope, old_start: u32, old_len: u32) -> bool {
+pub(crate) fn in_scope(c: &FnCandidate<'_>, scope: Scope, old_start: u32, old_len: u32) -> bool {
     let end = old_start + old_len.saturating_sub(1);
     match scope {
         Scope::Contained => c.start_line >= old_start && c.end_line <= end.max(old_start),
@@ -921,7 +927,11 @@ pub fn apply_fn_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected function pattern".to_string(),
-            ))
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "fn-dispatch-pattern-template",
+                "write a function rename pair (`- fn old(...)` / `+ fn new(...)`, name only differs, `...` bodies; see SPEC 14.1)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -947,7 +957,11 @@ pub fn apply_fn_hunk(
             ErrorCode::PatternConflict,
             "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)",
         )
-        .with_rule(&rule));
+        .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "fn-dispatch-body-template",
+            "write `...` bodies on both sides of a function hunk (bodies are always preserved; body evolution is not supported in v1)",
+        )));
     }
 
     // Attribute mirror gates (same contract as the general-Stmt matcher:
@@ -1208,234 +1222,6 @@ pub fn apply_fn_hunk(
         }
     }
     Ok(matched)
-}
-
-/// Find item targets (function or other items) for an item-capture hunk.
-///
-/// v0.1 matches top-level items, fns nested in inline `mod`s, and
-/// `impl`/`trait` methods (T466) by line-span containment; only functions
-/// are structurally verified elsewhere.
-pub(crate) fn find_item_targets(
-    parsed: &syn::File,
-    scope: Scope,
-    old_start: u32,
-    old_len: u32,
-) -> Vec<(u32, u32)> {
-    let mut candidates: Vec<(u32, u32)> = Vec::new();
-    for c in collect_fns(parsed) {
-        if in_scope(&c, scope, old_start, old_len) {
-            candidates.push((c.start_line, c.end_line));
-        }
-    }
-    candidates.extend(collect_non_fn_item_spans(parsed, scope, old_start, old_len));
-    collect_impl_method_spans(&parsed.items, scope, old_start, old_len, &mut candidates);
-    candidates.sort();
-    candidates.dedup();
-    candidates
-}
-
-/// Delete the single matched item for a bare `- I` hunk (SPEC 18.2).
-pub fn apply_item_delete(
-    parsed: &syn::File,
-    original: &str,
-    index: &LineIndex,
-    hunk: &RsmplHunk,
-    compiled: &CompiledPattern,
-    edits: &mut Vec<TextEdit>,
-) -> Result<usize, StructuredError> {
-    match &compiled.kind {
-        PatternKind::ItemCapture { .. } => {}
-        _ => {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "expected item capture pattern".to_string(),
-            ))
-        }
-    }
-    let rule = hunk.rule_name();
-    let old_start = hunk.header.old_start;
-    let old_len = hunk.header.old_len;
-    let candidates = find_item_targets(parsed, hunk.scope(), old_start, old_len);
-    if candidates.is_empty() {
-        return Ok(0);
-    }
-    // allow=one requires exactly one; for deletion, `many` deletes all
-    // contained items.
-    let targets: Vec<(u32, u32)> = match hunk.allow() {
-        rsmpl_patch::Allow::One => vec![candidates[0]],
-        rsmpl_patch::Allow::Many => candidates,
-    };
-    let n = targets.len();
-    for (sl, el) in targets {
-        edits.push(delete_lines(original, index, sl, el, &rule)?);
-    }
-    Ok(n)
-}
-
-/// Whole-line deletion edit from `start_line` through `end_line` (inclusive),
-/// swallowing the trailing newline.
-///
-/// To avoid leaving stray blank separator lines, the range additionally
-/// absorbs one adjacent blank line: the following blank line when one exists,
-/// otherwise one preceding blank line at EOF. Comments and code are never
-/// absorbed — only a fully blank line.
-pub(crate) fn delete_lines(
-    original: &str,
-    index: &LineIndex,
-    start_line: u32,
-    end_line: u32,
-    rule: &str,
-) -> Result<TextEdit, StructuredError> {
-    let mut start = index
-        .line_start(start_line)
-        .ok_or_else(|| range_err(rule, start_line))?;
-    // End at the start of the following line (this swallows the trailing
-    // newline); at EOF use EOF.
-    let mut end = index
-        .line_start(end_line + 1)
-        .unwrap_or_else(|| index.eof());
-    if end < original.len() {
-        // Absorb one following blank line (a lone `\n` right at `end`).
-        if original.as_bytes().get(end) == Some(&b'\n') {
-            end += 1;
-        }
-    } else if start > 0 {
-        // At EOF: absorb one preceding blank line.
-        let before = &original[..start];
-        if before.ends_with("\n\n") {
-            // Move `start` back over the blank line.
-            let trimmed = &before[..before.len() - 1];
-            if let Some(pos) = trimmed.rfind('\n') {
-                start = pos + 1;
-            } else {
-                start = 0;
-            }
-        }
-    }
-    Ok(TextEdit::new(start, end, String::new()))
-}
-
-/// Non-function item spans (struct/enum/mod/use/...) via syn item spans.
-fn collect_non_fn_item_spans(
-    parsed: &syn::File,
-    scope: Scope,
-    old_start: u32,
-    old_len: u32,
-) -> Vec<(u32, u32)> {
-    let end = old_start + old_len.saturating_sub(1);
-    let mut out = Vec::new();
-    for it in &parsed.items {
-        if matches!(it, syn::Item::Fn(_)) {
-            continue;
-        }
-        let s = it.span().start().line as u32;
-        let e = it.span().end().line as u32;
-        let inside = match scope {
-            Scope::File => true,
-            Scope::Contained => s >= old_start && e <= end.max(old_start),
-            Scope::Anchor => s >= old_start && s <= end.max(old_start),
-            Scope::Overlap => s <= end.max(old_start) && e >= old_start,
-            Scope::Exact => old_len > 0 && s == old_start && e == end,
-        };
-        if inside {
-            out.push((s, e));
-        }
-    }
-    out
-}
-
-/// Associated-function spans inside `impl`/`trait` blocks (T466): top-level
-/// and inline-`mod`-nested. `Fn`-items only — the nested-deletion trigger
-/// shape; assoc consts/types stay ordinary (no corpus trigger).
-fn collect_impl_method_spans(
-    items: &[syn::Item],
-    scope: Scope,
-    old_start: u32,
-    old_len: u32,
-    out: &mut Vec<(u32, u32)>,
-) {
-    let end = old_start + old_len.saturating_sub(1);
-    let push = |out: &mut Vec<(u32, u32)>, s: u32, e: u32| {
-        let inside = match scope {
-            Scope::File => true,
-            Scope::Contained => s >= old_start && e <= end.max(old_start),
-            Scope::Anchor => s >= old_start && s <= end.max(old_start),
-            Scope::Overlap => s <= end.max(old_start) && e >= old_start,
-            Scope::Exact => old_len > 0 && s == old_start && e == end,
-        };
-        if inside {
-            out.push((s, e));
-        }
-    };
-    for it in items {
-        match it {
-            syn::Item::Impl(imp) => {
-                for item in &imp.items {
-                    if let syn::ImplItem::Fn(m) = item {
-                        let s = m.span().start().line as u32;
-                        let e = m.span().end().line as u32;
-                        push(out, s, e);
-                    }
-                }
-            }
-            syn::Item::Trait(t) => {
-                for item in &t.items {
-                    if let syn::TraitItem::Fn(f) = item {
-                        let s = f.span().start().line as u32;
-                        let e = f.span().end().line as u32;
-                        push(out, s, e);
-                    }
-                }
-            }
-            syn::Item::Mod(m) => {
-                if let Some((_, inner)) = &m.content {
-                    collect_impl_method_spans(inner, scope, old_start, old_len, out);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Insert literal text at a zero-length anchor (SPEC 18.3, 10.5).
-pub fn apply_insertion(
-    _original: &str,
-    index: &LineIndex,
-    hunk: &RsmplHunk,
-    compiled: &CompiledPattern,
-    edits: &mut Vec<TextEdit>,
-) -> Result<usize, StructuredError> {
-    let (text, _use_name) = match &compiled.kind {
-        PatternKind::Insertion { text, use_name } => (text.clone(), use_name.clone()),
-        _ => {
-            return Err(StructuredError::new(
-                ErrorCode::PatternConflict,
-                "expected insertion pattern".to_string(),
-            ))
-        }
-    };
-    let anchor = hunk.header.old_start;
-    let pos = if anchor == 0 {
-        0
-    } else {
-        index.line_start(anchor + 1).unwrap_or_else(|| index.eof())
-    };
-    // Ensure the inserted text ends with a newline so it forms whole lines.
-    let mut ins = text;
-    if !ins.ends_with('\n') {
-        ins.push('\n');
-    }
-    edits.push(TextEdit::new(pos, pos, ins));
-    Ok(1)
-}
-
-fn range_err(rule: &str, line: u32) -> StructuredError {
-    StructuredError::new(
-        ErrorCode::RangeConflict,
-        format!("span line {line} outside file"),
-    )
-    .with_rule(rule)
-    .with_repair(StructuredError::internal_repair())
 }
 
 #[cfg(test)]
@@ -1987,5 +1773,86 @@ mod tests {
         let out = apply(patch, src).unwrap();
         assert!(out.contains("fn old(&self) -> i32"), "got: {out}");
         assert!(out.contains("fn other(&self)"));
+    }
+
+    fn wi18_fn_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("fn patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_fn_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 11: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice11_fn_dispatch_repair_is_specific() {
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_fn_setup(RENAME, "fn foo(x: i32) -> i32 {\n    x + 1\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_fn_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected function pattern");
+        let (code, w) = wi18_fn_repair(&err);
+        assert_eq!(code, "fn-dispatch-pattern-template");
+        assert!(w.contains("SPEC 14.1"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice11_fn_body_gate_repair_is_specific() {
+        // Live shape: concrete bodies fail fast at the body gate (no
+        // overwrite — this pins the real route, not a forced arm).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@ rule=evolve\n# lang=rust\n- fn foo(x: i32) -> i32 {\n-     x + 1\n- }\n+ fn bar(x: i32) -> i32 {\n+     x + 1\n+ }\n";
+        let (hunk, compiled, parsed, index, src) =
+            wi18_fn_setup(patch, "fn foo(x: i32) -> i32 {\n    x + 1\n}\n");
+        let mut edits = Vec::new();
+        let err = super::apply_fn_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("concrete body must fail");
+        assert_eq!(
+            err.message,
+            "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)"
+        );
+        let (code, w) = wi18_fn_repair(&err);
+        assert_eq!(code, "fn-dispatch-body-template");
+        assert!(w.contains("`...` bodies"), "got: {w}");
     }
 }
