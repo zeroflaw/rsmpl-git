@@ -57,7 +57,8 @@ pub fn binder_rename(kind: &PatternKind) -> Option<BinderRename> {
         .or_else(|| for_loop(kind).map(|(o, n)| (o, n, BinderScope::For)))
         .or_else(|| if_let(kind).map(|(o, n)| (o, n, BinderScope::IfLet)))
         .or_else(|| while_let(kind).map(|(o, n)| (o, n, BinderScope::WhileLet)))
-        .or_else(|| let_closure_param(kind).map(|(o, n)| (o, n, BinderScope::LetClosure)))?;
+        .or_else(|| let_closure_param(kind).map(|(o, n)| (o, n, BinderScope::LetClosure)))
+        .or_else(|| sequence_binder(kind).map(|(o, n)| (o, n, BinderScope::Let)))?;
     Some(BinderRename { old, new, scope })
 }
 
@@ -206,6 +207,72 @@ fn let_binder(kind: &PatternKind) -> Option<(String, String)> {
     }
     let minus_init = minus.init.as_ref().map(|i| render(&i.expr))?;
     let plus_init = plus.init.as_ref().map(|i| render(&i.expr))?;
+    if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
+        return None;
+    }
+    Some((old_id, new_id))
+}
+
+/// Sequence-contained plain `let` rename: K (2-4) plain `let` statements
+/// where the LAST position renames a plain single-ident binder
+/// (`let old = E;` -> `let new = E;`, same init and type annotation)
+/// and every earlier position is placeholder-normalized token-equal.
+///
+/// The rename-last restriction is the soundness gate: every other
+/// window statement precedes the binder, so its uses name the outer
+/// scope and replay verbatim (correctly left), and no in-window use
+/// can strand. Multi-delta (hetero-fusion) runs, destructuring
+/// positions, deletions, and non-final renames decline (`None`) and
+/// keep today's exempt behaviour.
+fn sequence_binder(kind: &PatternKind) -> Option<(String, String)> {
+    let (minus_sub, plus_body, placeholders) = general_parts(kind, GeneralShape::Sequence)?;
+    let ph = ph_map(placeholders);
+    if plus_body.trim().is_empty() {
+        return None;
+    }
+    let Ok(minus_block) = syn::parse_str::<syn::Block>(&format!("{{ {minus_sub} }}")) else {
+        return None;
+    };
+    let Ok(plus_block) = syn::parse_str::<syn::Block>(&format!("{{ {plus_body} }}")) else {
+        return None;
+    };
+    if !(2..=4).contains(&minus_block.stmts.len())
+        || plus_block.stmts.len() != minus_block.stmts.len()
+    {
+        return None;
+    }
+    let mut minus_locals = Vec::with_capacity(minus_block.stmts.len());
+    let mut plus_locals = Vec::with_capacity(plus_block.stmts.len());
+    for (m, p) in minus_block.stmts.iter().zip(plus_block.stmts.iter()) {
+        let (syn::Stmt::Local(m), syn::Stmt::Local(p)) = (m, p) else {
+            return None;
+        };
+        minus_locals.push(m);
+        plus_locals.push(p);
+    }
+    let (m_last, p_last) = (minus_locals.last().unwrap(), plus_locals.last().unwrap());
+    // Every earlier position must be token-equal modulo placeholders.
+    for (m, p) in minus_locals[..minus_locals.len() - 1]
+        .iter()
+        .zip(plus_locals[..plus_locals.len() - 1].iter())
+    {
+        if normalize_placeholders(&render(m), &ph) != normalize_placeholders(&render(p), &ph) {
+            return None;
+        }
+    }
+    // The final position is the plain single-binder rename (the `let`
+    // arm's discipline, minus the init-identity shortcut: inits compare
+    // placeholder-normalized, same as `let`).
+    let (old_id, old_mut) = single_ident_binder(&m_last.pat)?;
+    let (new_id, new_mut) = single_ident_binder(&p_last.pat)?;
+    if old_id == new_id || old_mut != new_mut {
+        return None;
+    }
+    if pat_ty(&m_last.pat, &ph) != pat_ty(&p_last.pat, &ph) {
+        return None;
+    }
+    let minus_init = m_last.init.as_ref().map(|i| render(&i.expr))?;
+    let plus_init = p_last.init.as_ref().map(|i| render(&i.expr))?;
     if normalize_placeholders(&minus_init, &ph) != normalize_placeholders(&plus_init, &ph) {
         return None;
     }
@@ -704,6 +771,82 @@ mod tests {
     fn two_binder_diff_vetoes() {
         assert_eq!(
             binder_rename(&expr("|total , other| __RSMPL_E0", "|sum , changed| E")),
+            None
+        );
+    }
+
+    fn seq(minus_sub: &str, plus_body: &str) -> PatternKind {
+        PatternKind::General {
+            shape: GeneralShape::Sequence,
+            minus_sub: minus_sub.to_string(),
+            plus_raw: plus_body.to_string(),
+            plus_body: plus_body.to_string(),
+            placeholders: vec![
+                ("E0".to_string(), "__RSMPL_E0".to_string()),
+                ("E1".to_string(), "__RSMPL_E1".to_string()),
+                ("E2".to_string(), "__RSMPL_E2".to_string()),
+            ],
+            literals: Vec::new(),
+            minus_attrs: Vec::new(),
+            plus_attrs: Vec::new(),
+            had_semi: false,
+        }
+    }
+
+    #[test]
+    fn sequence_final_rename_fires() {
+        assert_eq!(
+            renamed(&seq(
+                "let a = __RSMPL_E0 ;\nlet old = __RSMPL_E1 ;",
+                "let a = E0 ;\nlet new = E1 ;"
+            )),
+            Some(("old".to_string(), "new".to_string(), BinderScope::Let))
+        );
+    }
+
+    #[test]
+    fn sequence_non_final_rename_declines() {
+        // Rename-last is the soundness gate: a rename anywhere else
+        // keeps today's exempt behaviour (follow-up slice owns it).
+        assert_eq!(
+            binder_rename(&seq(
+                "let old = __RSMPL_E0 ;\nlet b = __RSMPL_E1 ;",
+                "let new = E0 ;\nlet b = E1 ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_multi_delta_declines() {
+        // Hetero-fusion runs never enter binder identity.
+        assert_eq!(
+            binder_rename(&seq(
+                "let a = __RSMPL_E0 ;\nlet old = __RSMPL_E1 ;",
+                "let a = E0 ;\nlet new = E2 ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_destructuring_declines() {
+        assert_eq!(
+            binder_rename(&seq(
+                "let a = __RSMPL_E0 ;\nlet (x , old) = __RSMPL_E1 ;",
+                "let a = E0 ;\nlet (x , new) = E1 ;"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn sequence_init_change_declines() {
+        assert_eq!(
+            binder_rename(&seq(
+                "let a = __RSMPL_E0 ;\nlet old = __RSMPL_E1 ;",
+                "let a = E0 ;\nlet new = 2 ;"
+            )),
             None
         );
     }

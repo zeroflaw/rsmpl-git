@@ -240,7 +240,14 @@ pub fn apply_sequence_hunk(
                     }
                     out.push_str(&substitute_general_plus(plus, &cx.bindings, &[], sigiled)?);
                 }
-                edits.push(TextEdit::new(wstart, wend, out));
+                let follows =
+                    sequence_binder_follows(parsed, original, index, compiled, &tgt_locals, wend);
+                if follows.is_some() {
+                    edits.push(TextEdit::new(wstart, wend, out).with_label("rename"));
+                } else {
+                    edits.push(TextEdit::new(wstart, wend, out));
+                }
+                edits.extend(follows.unwrap_or_default());
             }
             for &(s, e) in &accepted {
                 if wstart < e && s < wend && !(s <= wstart && wend <= e) {
@@ -256,6 +263,62 @@ pub fn apply_sequence_hunk(
         }
     }
     Ok((matched, all_bindings))
+}
+
+/// Sequence-contained plain-binder completion (residue slice 1): when
+/// the compiled sequence renames exactly one plain `let` binder in its
+/// final position, rewrite unshadowed post-window value uses of the old
+/// ident (`follow`), reusing the audited `let` walker verbatim (same
+/// shadow/nested-fn/macro/attribute discipline, same shorthand
+/// expansion). The window replacement above is the definition (labelled
+/// `rename`, parity with the single-`let` arm); only strictly
+/// post-window edits are kept, so follows never overlap the window.
+///
+/// Returns `None` when the pattern is not a final-position plain binder
+/// rename, or when the target's final statement does not bind `old`
+/// exactly once (fail-safe: the window still applies and `orphans`
+/// still file via `general_orphans` — today's posture, never a
+/// mis-resolved rewrite).
+fn sequence_binder_follows(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    compiled: &rsmpl_pattern::CompiledPattern,
+    tgt_locals: &[&syn::Local],
+    wend: usize,
+) -> Option<Vec<TextEdit>> {
+    if !matches!(
+        &compiled.kind,
+        rsmpl_pattern::PatternKind::General {
+            shape: rsmpl_pattern::GeneralShape::Sequence,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let b = rsmpl_pattern::binder::binder_rename(&compiled.kind)?;
+    if b.scope != rsmpl_pattern::binder::BinderScope::Let {
+        return None;
+    }
+    let last = tgt_locals.last()?;
+    let mut offs = crate::use_graph_local::pat_old_offsets(&last.pat, &b.old, original, index);
+    offs.sort_unstable();
+    offs.dedup();
+    if offs.len() != 1 {
+        return None;
+    }
+    // The renamed statement's own span is the binder range (the
+    // single-`let` arm's discipline: its init RHS names the outer scope
+    // and is never completed).
+    let (ss, se) = crate::matcher_item::span_bytes(original, index, last.span())?;
+    if original.get(offs[0]..offs[0] + b.old.len()) != Some(b.old.as_str()) {
+        return None;
+    }
+    let mut edits = crate::use_graph_local::let_binder_follow_edits(
+        parsed, original, index, ss, se, &b.old, &b.new,
+    );
+    edits.retain(|e| e.start >= wend);
+    Some(edits)
 }
 
 /// Byte + line span of a statement window (first-statement start to
@@ -435,5 +498,62 @@ mod tests {
         );
         let err = apply(&patch, TWO_BLOCKS).unwrap_err();
         assert!(err.contains("C1"), "got: {err}");
+    }
+
+    fn rename_last_patch() -> String {
+        format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let a = E0;\n- let old = E1;\n+ let a = E0;\n+ let new = E1;\n"
+        )
+    }
+
+    #[test]
+    fn sequence_final_binder_rename_completes_post_window_use() {
+        // Residue slice 1: the final-position plain rename completes
+        // post-window uses in-hunk (the definition is `rename`, the use
+        // is `follow`).
+        let src = "fn f() {\n    let a = g(1);\n    let old = g(2);\n    let c = old;\n}\n";
+        let out = apply(&rename_last_patch(), src).unwrap();
+        assert!(out.contains("let new = g(2);"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
+        assert!(!out.contains("old"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_final_binder_rename_respects_shadow() {
+        // An inner `let old` owns the uses in its block: the outer
+        // follow rewrites around it, never through it.
+        let src = "fn f() {\n    let a = g(1);\n    let old = g(2);\n    let b = old;\n    {\n        let old = 9;\n        let c = old;\n    }\n    let d = old;\n}\n";
+        let out = apply(&rename_last_patch(), src).unwrap();
+        assert!(out.contains("let new = g(2);"), "got: {out}");
+        assert!(out.contains("let b = new;"), "got: {out}");
+        assert!(out.contains("let old = 9;"), "got: {out}");
+        assert!(out.contains("let c = old;"), "got: {out}");
+        assert!(out.contains("let d = new;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_final_binder_rename_skips_macro_use() {
+        // Macro interiors never rewrite (they stay orphans via
+        // `general_orphans`); the plain use still completes.
+        let src =
+            "fn f() {\n    let a = g(1);\n    let old = g(2);\n    println!(\"{}\", old);\n    let d = old;\n}\n";
+        let out = apply(&rename_last_patch(), src).unwrap();
+        assert!(out.contains("let new = g(2);"), "got: {out}");
+        assert!(out.contains("println!(\"{}\", old);"), "got: {out}");
+        assert!(out.contains("let d = new;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_non_final_rename_applies_window_only() {
+        // Known remainder: a rename outside the final position keeps
+        // today's posture (window applies, no completion) — the next
+        // slice owns intra-window completion.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = g(2);\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let c = old;"), "got: {out}");
     }
 }

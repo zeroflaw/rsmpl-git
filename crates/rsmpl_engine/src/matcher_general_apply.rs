@@ -293,10 +293,12 @@ pub fn apply_general_hunk(
     // orphans filed; fail loud instead of `verified`. Pure permutations,
     // hole replays (`P @ sub` → `P`, `Some(x)` → `Some(P)`), and plain
     // renames through binder identity keep applying. Sequences are
-    // exempt: the raiser owns binder-renaming hetero runs there (WI-5d
-    // single-block fusion, completed by sibling hunks in the same patch),
-    // so a hunk-local veto would break the apply direction of a proven
-    // cycle; sequencing completion is follow-up work, not this gate.
+    // exempt except a final-position plain-`let` rename, which enters
+    // binder identity (completion + orphans): the raiser owns other
+    // binder-renaming hetero runs there (WI-5d single-block fusion,
+    // completed by sibling hunks in the same patch), so a hunk-local
+    // veto would break the apply direction of a proven cycle; broader
+    // sequencing completion is follow-up work, not this gate.
     if matches!(shape, GeneralShape::Stmt | GeneralShape::Expr)
         && !crate::use_graph_local::is_local_binder_rename(compiled)
     {

@@ -241,8 +241,9 @@ fn fn_param_completion_applies_and_checks_clean() {
 // header, stranded body/file uses, and still reported `verified` with no
 // orphans. Stmt + if-let pin the fail-loud gate (text and JSON), the
 // worktree stays untouched, and the single-binder twins above stay green
-// as the exemption pin. Sequences are exempt (hetero fusion owns
-// binder-renaming runs there; sequencing completion is follow-up work).
+// as the exemption pin. Sequences are exempt except a final-position
+// plain `let` rename (hetero fusion owns other binder-renaming runs
+// there; sequencing completion beyond the final position is follow-up).
 const C21_REASON: &str = "general template rewrites bound binder idents without binder identity";
 
 fn check_c21_text(dir: &std::path::Path, patch: &str, content: &str) {
@@ -380,4 +381,118 @@ fn closure_param_rename_leaves_attribute_value_and_reports_partial() {
     assert!(post.contains("|sum: u32|"), "got: {post}");
     assert!(post.contains("#[doc = total]"), "got: {post}");
     assert!(post.contains("sum + 1"), "got: {post}");
+}
+
+// Sequence-contained plain renames (residue slice 1): a final-position
+// `let old` -> `let new` completes post-window uses in-hunk and reports
+// `verified`; shadowed/macro post-window uses file orphans and cap at
+// `partial`; a non-final rename keeps the old posture (pinned
+// remainder for the next slice).
+const SEQ_RENAME_LAST_PATCH: &str =
+    "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let a = E0;\n- let old = E1;\n+ let a = E0;\n+ let new = E1;\n";
+
+#[test]
+fn sequence_final_rename_completes_and_checks_clean() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let a = 1;\n    let old = 2;\n    let c = old + 1;\n    let _ = (a, c);\n}\n",
+    );
+    let v = check_json(dir.path(), SEQ_RENAME_LAST_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), SEQ_RENAME_LAST_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = new + 1;"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_final_rename_shadowed_reports_partial() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let a = 1;\n    let old = 2;\n    let b = old;\n    {\n        let old = 9;\n        let c = old;\n        let _ = c;\n    }\n    let d = old;\n    let _ = (a, b, d);\n}\n",
+    );
+    let v = check_json(dir.path(), SEQ_RENAME_LAST_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert!(
+        v["rules"][0]["orphans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("shadowed")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), SEQ_RENAME_LAST_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let b = new;"), "got: {post}");
+    assert!(post.contains("let old = 9;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+    assert!(post.contains("let d = new;"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_final_rename_macro_reports_partial() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let a = 1;\n    let old = 2;\n    println!(\"{}\", old);\n    let d = old;\n    let _ = (a, d);\n}\n",
+    );
+    let v = check_json(dir.path(), SEQ_RENAME_LAST_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert!(
+        v["rules"][0]["orphans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("macro-hidden")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), SEQ_RENAME_LAST_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("println!(\"{}\", old);"), "got: {post}");
+    assert!(post.contains("let d = new;"), "got: {post}");
+    // No `cargo_check`: the `macro-hidden` leftover use dangles by
+    // design (the attribute-value partial twin pins the same posture).
+}
+
+#[test]
+fn sequence_non_final_rename_applies_window_only() {
+    // Known remainder: a rename outside the final position keeps
+    // today's posture (window applies, no completion) — the next slice
+    // owns intra-window completion.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 1;\n    let b = 2;\n    let c = old;\n    let _ = (b, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 1;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+    // No `cargo_check`: the stranded `let c = old` names a binder that
+    // no longer exists — the pinned remainder for the next slice.
 }

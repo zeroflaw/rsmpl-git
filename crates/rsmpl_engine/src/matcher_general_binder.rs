@@ -22,10 +22,12 @@
 //!
 //! Plain bare-ident renames keep today's behavior through binder
 //! identity (completion + orphans). Sequences are exempt at the call
-//! site: the raiser owns binder-renaming hetero runs there (WI-5d
-//! single-block fusion, completed by sibling hunks in the same patch —
-//! c48a6e6 pins the shape), so a hunk-local veto would break the apply
-//! direction of a proven cycle; sequencing completion is follow-up work,
+//! site except a final-position plain-`let` rename, which enters
+//! binder identity (residue slice 1): the raiser owns other
+//! binder-renaming hetero runs there (WI-5d single-block fusion,
+//! completed by sibling hunks in the same patch — c48a6e6 pins the
+//! shape), so a hunk-local veto would break the apply direction of a
+//! proven cycle; broader sequencing completion is follow-up work,
 //! not this gate. Unparseable sides never veto (downstream gates own
 //! them).
 
@@ -444,11 +446,22 @@ mod tests {
     fn sequence_flags_for_follow_up() {
         // Sequences report through the same pure function but the C21
         // call site exempts them: hetero fusion owns binder-renaming runs
-        // there and sequencing completion is follow-up work.
+        // there, and a final-position plain-`let` rename completes via
+        // binder identity instead of vetoing. Broader sequencing
+        // completion is follow-up work.
         assert!(unclaimed_binder_rewrite(
             GeneralShape::Sequence,
             "let a = __RSMPL_E0 ;\nlet (x , old) = __RSMPL_F0 ;",
             "let a = E ;\nlet (x , new) = F ;",
+            &holes()
+        ));
+        // The final-position plain rename flags here too (the pure
+        // predicate is binder-identity-blind); it applies because the
+        // call site exempts sequences and completes via `sequence_binder`.
+        assert!(unclaimed_binder_rewrite(
+            GeneralShape::Sequence,
+            "let a = __RSMPL_E0 ;\nlet old = __RSMPL_F0 ;",
+            "let a = E ;\nlet new = F ;",
             &holes()
         ));
     }
