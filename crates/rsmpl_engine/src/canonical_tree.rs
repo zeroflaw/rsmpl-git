@@ -34,6 +34,8 @@ use rsmpl_patch::{
     canonicalize_with_spans_parsed, parse_patch, Directive, Hunk, MetavarKind, ParseError,
 };
 
+use crate::single_site_eq::{post_tree_key, unify_single_site_verbatim_to_literal};
+
 /// Canonicalize `patch_text` against the pre-image tree `pre`
 /// (repo-relative path → file text).
 ///
@@ -50,6 +52,10 @@ pub fn canonicalize_with_tree(
     pre: &HashMap<String, String>,
 ) -> Result<String, ParseError> {
     let mut patch = parse_patch(patch_text)?;
+    // WI-1s1 raw snapshot: site evidence falls back to the raw spelling
+    // when a normalization below drops a declaration the engine needs
+    // (the rewrite itself is verified before it is kept).
+    let raw_patch = patch.clone();
     // WI-1b: spell-normalize first so the apply below (hence the site
     // spans) reflects the concrete form both legs share.
     normalize_symbol_spelling(&mut patch);
@@ -70,13 +76,38 @@ pub fn canonicalize_with_tree(
         if sec.is_rename() {
             let old_rel = rsmpl_patch::stripped_path(&sec.old_path);
             if let Some(old_text) = pre.get(&old_rel).cloned() {
-                files.insert(sec.target_path.clone(), old_text);
+                files.insert(sec.target_path.clone(), old_text.clone());
                 continue;
             }
         }
         files.insert(sec.target_path.clone(), String::new());
     }
+    // WI-1s0 verification base: the seeded pre-tree, so the unified
+    // patch below can re-prove the identical post-tree from scratch.
+    let seeded = files.clone();
+    // WI-1s1 raw site evidence: the spelling normalizations above may
+    // drop declarations the engine needs in some positions (an
+    // undeclared diet hole applies in `let`-init but not in
+    // array-element position), so a leg that applies raw but not
+    // normalized still contributes its site evidence to the gate. The
+    // rewrite itself is verified before it is kept.
+    let mut raw_files = seeded.clone();
+    let mut raw_spans: HashMap<(String, String), Vec<(u32, u32)>> = HashMap::new();
+    let raw_post: Option<HashMap<String, String>> =
+        match crate::apply_patch_to_tree(&mut raw_files, &raw_patch) {
+            Ok(raw_report) => {
+                for entry in &raw_report.rules {
+                    raw_spans
+                        .entry((entry.file.clone(), entry.rule.clone()))
+                        .or_default()
+                        .extend(entry.spans.iter().copied());
+                }
+                Some(raw_files)
+            }
+            Err(_) => None,
+        };
     let report = crate::apply_patch_to_tree(&mut files, &patch).ok();
+    let applied = report.is_some();
     // Fallback on apply failure (zero-match, overlap, unparseable
     // target): empty spans keep authored ranges while the spelling
     // normalization above still applies — comparison never hard-fails
@@ -90,19 +121,50 @@ pub fn canonicalize_with_tree(
                 .extend(entry.spans.iter().copied());
         }
     }
+    // WI-1s1 single-site instantiation equality (verbatim family, D17):
+    // rewrite pure single-pair hunks that prove exactly one line site
+    // to their instantiated literal pair, then keep the rewrite only
+    // when re-applying the unified patch rebuilds the identical
+    // post-tree (same key). Over-wide templates (two line sites) and
+    // unclassifiable shapes fail the gate and stay byte-identical, so
+    // comparison never heals a real divergence. Runs when either apply
+    // proves a post-tree; the literal lines come from that post-tree.
+    if applied || raw_post.is_some() {
+        let post: &HashMap<String, String> = if applied {
+            &files
+        } else {
+            raw_post.as_ref().expect("WI-1s1: raw post proves the gate")
+        };
+        let snapshot = patch.clone();
+        let mut unified_spans = spans.clone();
+        unify_single_site_verbatim_to_literal(
+            &mut patch,
+            pre,
+            post,
+            &mut unified_spans,
+            &raw_spans,
+        );
+        let mut check = seeded;
+        let same = crate::apply_patch_to_tree(&mut check, &patch).is_ok()
+            && post_tree_key(&check) == post_tree_key(post);
+        if same {
+            spans = unified_spans;
+        } else {
+            patch = snapshot;
+        }
+    }
     Ok(canonicalize_with_spans_parsed(patch, &spans))
 }
 
 /// WI-1s0 instantiation-proof key (IMPROVE.md D17 premise).
 ///
-/// Applies `patch_text` to a clone of `pre` and returns a deterministic
-/// key of the full post-tree (sorted `path + NUL + text` joined), so key
-/// equality means byte-identical post-trees. Returns `None` when the
-/// patch fails to parse or apply — never panics, mirroring the fallback
-/// posture of [`canonicalize_with_tree`]. Comparison-only scaffolding:
-/// no caller changes canonical output in this slice; WI-1s1 wires the
-/// exactly-one-hit guard plus this key into equality.
-#[allow(dead_code)] // WI-1s1 wires this into equality; tests own it until then.
+/// Applies `patch_text` to a clone of `pre` and returns the
+/// [`post_tree_key`] of the full post-tree, so key equality means
+/// byte-identical post-trees. Returns `None` when the patch fails to
+/// parse or apply — never panics, mirroring the fallback posture of
+/// [`canonicalize_with_tree`]. Premise pin for the WI-1s1 equality
+/// (which verifies through the same key); exercised by tests.
+#[allow(dead_code)] // WI-1s1 verifies through `post_tree_key` directly; tests own this helper.
 pub(crate) fn single_site_post_key(
     pre: &HashMap<String, String>,
     patch_text: &str,
@@ -115,16 +177,7 @@ pub(crate) fn single_site_post_key(
         }
     }
     crate::apply_patch_to_tree(&mut files, &patch).ok()?;
-    let mut keys: Vec<(&String, &String)> = files.iter().collect();
-    keys.sort_by(|a, b| a.0.cmp(b.0));
-    let mut out = String::new();
-    for (path, text) in keys {
-        out.push_str(path);
-        out.push('\0');
-        out.push_str(text);
-        out.push('\0');
-    }
-    Some(out)
+    Some(post_tree_key(&files))
 }
 
 /// WI-1b spelling unification (SPEC D.5, SPEC 19.3): rewrite each
@@ -784,7 +837,8 @@ fn concrete_path_for(path: &str) -> String {
 }
 
 /// True when `text` holds `name` as a bare token outside backticks.
-fn has_bare_token(text: &str, name: &str) -> bool {
+/// Shared with `single_site_eq` (the WI-1s1 leftover-hole gate).
+pub(crate) fn has_bare_token(text: &str, name: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
     let mut in_backtick = false;
@@ -1272,9 +1326,12 @@ mod tests {
         let c = canonicalize_with_tree(inferred, &p).unwrap();
         assert_eq!(a, b, "undeclared:\n{a}\ndeclared:\n{b}");
         assert_eq!(a, c, "undeclared:\n{a}\ninferred:\n{c}");
+        // WI-1s1: the single-site agreement instantiates to the
+        // literal pair (D17) — the diet spelling agreement above still
+        // holds, now via the shared instantiation.
         assert!(
-            a.contains("- let Some(P0) = E0;\n+ let Some(P0) = E0.unwrap_or(0);\n"),
-            "diet form:\n{a}"
+            a.contains("- let Some(v) = o;\n+ let Some(v) = o.unwrap_or(0);\n"),
+            "literal form:\n{a}"
         );
     }
 
@@ -1425,15 +1482,17 @@ mod tests {
     #[test]
     fn wi8b_method_hole_diet_unifies() {
         // WI-8b N1+L1 (fixtures 11/78): declared `Receiver`/`Arg` vs
-        // inferred `Receiver`/`E0` over the same single site share one
-        // tree-aware form (diet body, no decls, no default lang line).
+        // inferred `Receiver`/`E0` over the same single site — WI-1s1
+        // instantiates the agreement to the literal pair (D17). The
+        // diet agreement still holds on legs the gate declines (the
+        // multi-site twins and the verification-reverted shapes).
         let p = pre(&[("src/lib.rs", M2F_PRE)]);
         let a = canonicalize_with_tree(&authored_m2f_patch(), &p).unwrap();
         let b = canonicalize_with_tree(&inferred_m2f_patch(), &p).unwrap();
         assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
         assert!(
-            a.contains("- Receiver.old_method(E0)\n+ new_function(Receiver, E0)\n"),
-            "diet form:\n{a}"
+            a.contains("- client.old_method(x)\n+ new_function(client, x)\n"),
+            "literal form:\n{a}"
         );
         assert!(!a.contains("# expr"), "decls dropped:\n{a}");
         assert!(!a.contains("# lang"), "default lang dropped:\n{a}");
@@ -1441,14 +1500,18 @@ mod tests {
 
     #[test]
     fn wi8b_general_expr_hole_diet_unifies() {
-        // WI-8b N1+L1 (fixture 79): declared `E` vs inferred `E0`.
+        // WI-8b N1+L1 (fixture 79): declared `E` vs inferred `E0` —
+        // WI-1s1 instantiates the agreement to the literal pair (D17).
         let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# scope=file\n# lang=rust\n# expr E\n- E + 1\n+ E + 2\n";
         let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- E0 + 1\n+ E0 + 2\n";
         let p = pre(&[("src/lib.rs", "fn m() {\n    tasty + 1;\n}\n")]);
         let a = canonicalize_with_tree(authored, &p).unwrap();
         let b = canonicalize_with_tree(inferred, &p).unwrap();
         assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
-        assert!(a.contains("- E0 + 1\n+ E0 + 2\n"), "diet form:\n{a}");
+        assert!(
+            a.contains("- tasty + 1\n+ tasty + 2\n"),
+            "literal form:\n{a}"
+        );
     }
 
     #[test]
@@ -1597,5 +1660,128 @@ mod tests {
             "diff --git src/lib.rs\n@@ -1,1 @@ rule=nope\n# sweep\n- missing_fn(E0)\n+ missing_fn(E1)\n"
         )
         .is_none());
+    }
+
+    #[test]
+    fn wi1s1_verbatim_holed_let_unifies() {
+        // WI-1s1 (63-style): holed `let` template vs literal single over
+        // one line share one tree-aware form (the instantiated literal).
+        let p = pre(&[("src/lib.rs", "fn f() {\n    let buf = [7u8; 8];\n}\n")]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=repeat_hole\n# scope=file\n# expr E\n- let buf = [E; 8];\n+ let buf = [E; 16];\n";
+        let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- let buf = [7u8; 8];\n+ let buf = [7u8; 16];\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- let buf = [7u8; 8];\n+ let buf = [7u8; 16];\n"),
+            "literal diet:\n{a}"
+        );
+        assert!(!a.contains("# expr"), "decl dropped:\n{a}");
+        assert!(!a.contains("# scope"), "locality dropped:\n{a}");
+    }
+
+    #[test]
+    fn wi1s1_multi_subsite_line_unifies_at_line_granularity() {
+        // WI-1s1 (47-style): one template matching two call subsites in
+        // one line vs the literal whole-line single — one distinct line
+        // span is one site (D17), so both spellings share one form.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn use_it(x: i32) -> i32 {\n    x\n}\nfn f(a: i32, b: i32) -> i32 {\n    use_it(a) + use_it(b)\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -4,2 @@ rule=wrap_clone\n# allow=many\n- use_it(E0)\n+ use_it(E0.clone())\n";
+        let inferred = "diff --git src/lib.rs\n@@ -5,1 @@ rule=r1\n- use_it(a) + use_it(b)\n+ use_it(a.clone()) + use_it(b.clone())\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("@@ -5,1 @@ rule=r1\n- use_it(a) + use_it(b)\n"),
+            "diet single:\n{a}"
+        );
+        assert!(!a.contains("# allow"), "locality dropped:\n{a}");
+    }
+
+    #[test]
+    fn wi1s1_undeclared_pat_and_control_unify() {
+        // WI-1s1 (49-style): declaration-free holed struct-pat sweep vs
+        // the literal single (bare holes infer per SPEC 15.8).
+        let p = pre(&[(
+            "src/lib.rs",
+            "struct S {\n    f: i32,\n    g: i32,\n}\nfn f(e: S) -> i32 {\n    let S { f: a, g: b } = e;\n    a + b\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -6,1 @@ rule=swap_fields\n# sweep\n- let S { f: P, g: Q } = E;\n+ let S { f: Q, g: P } = E;\n";
+        let inferred = "diff --git src/lib.rs\n@@ -6,1 @@ rule=r1\n- let S { f: a, g: b } = e;\n+ let S { f: b, g: a } = e;\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        // WI-1s1 (65-style): control-ish `let`-with-`match` template vs
+        // the literal single.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn f(o: Option<i32>) -> i32 {\n    let v = match o { Some(v) => 1, _ => 2 };\n    v\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -2,1 @@ rule=arm_bump\n# lang=rust\n# pat P\n# expr E\n- match E { Some(P) => 1, _ => 2 }\n+ match E { Some(P) => 9, _ => 2 }\n";
+        let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- let v = match o { Some(v) => 1, _ => 2 };\n+ let v = match o { Some(v) => 9, _ => 2 };\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+    }
+
+    #[test]
+    fn wi1s1_wildcard_unifies() {
+        // WI-1s1 (83-style): infer-wildcard sweep vs literal single.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn f() {\n    let v = 1 + 2;\n    let _ = v;\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=infer_wild\n# scope=file\n# allow=many\n- let v = _;\n+ let v = 0;\n";
+        let inferred =
+            "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- let v = 1 + 2;\n+ let v = 0;\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- let v = 1 + 2;\n+ let v = 0;\n"),
+            "literal:\n{a}"
+        );
+    }
+
+    #[test]
+    fn wi1s1_overwide_template_stays_divergent() {
+        // WI-1s1 negative control: the template proves two line sites
+        // while the literal proves one — different site sets never
+        // equate, even though each leg applies cleanly on its own.
+        let p = pre(&[("src/lib.rs", "fn m() {\n    foo(1);\n    foo(2);\n}\n")]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- foo(1)\n+ bar(1)\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_ne!(
+            a, b,
+            "over-wide template must stay divergent:\n{a}\nvs\n{b}"
+        );
+        assert!(a.contains("# allow=many"), "template stays multi:\n{a}");
+    }
+
+    #[test]
+    fn wi1s1_symbol_single_instantiates() {
+        // WI-1s1 after WI-1b: the symbol spelling normalizes to the
+        // concrete diet, then the single site instantiates to the
+        // literal pair both legs share (D17). Symbol hunks with
+        // `# follow=uses` (kept fallback) or error shapes never enter
+        // — the gate only sees the locality + hole directives WI-1b
+        // leaves behind.
+        let p = pre(&[("src/lib.rs", "fn m() {\n    crate::old_api(1);\n}\n")]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n- Old(E)\n+ New(E)\n";
+        let inferred =
+            "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- crate::old_api(1)\n+ crate::new_api(1)\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- crate::old_api(1)\n+ crate::new_api(1)\n"),
+            "literal form:\n{a}"
+        );
+        assert!(!a.contains("# symbol"), "symbols dropped:\n{a}");
     }
 }

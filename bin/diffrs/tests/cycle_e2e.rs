@@ -242,13 +242,18 @@ fn commit_all(dir: &Path, what: &str) {
 /// sweep vs inferred ranged spellings of the same sites, WI-1b unifies
 /// authored `# symbol` hunks vs inferred concrete paths, and WI-8 unifies
 /// authored sweep singles vs inferred precision singles (plus stale-cited
-/// vs actual-cited singles) over the same site, and WI-8b unifies
+/// vs actual-cited singles) over the same site, WI-8b unifies
 /// template-diet spellings over the same site (default `# lang=rust`
 /// dropped, declared `# expr` holes diet-renamed, framed fn pure-rename
-/// pairs contracted to the bare diet), and WI-9 unifies authored
+/// pairs contracted to the bare diet), WI-9 unifies authored
 /// ranged plain-`fn` follows (default `allow == one`) vs inferred
 /// sweep follows over the same def + call sites (tight actual +
-/// `# allow=many` on both legs, comparison-only).
+/// `# allow=many` on both legs, comparison-only), and WI-1s1 unifies
+/// single-site templated spellings vs their instantiated literal
+/// singles over the same line site and post text (D17: verbatim,
+/// holed, symbol, type, const-block, and general-expr families alike —
+/// whichever leg proves exactly one line site instantiates to the
+/// shared literal pair).
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
@@ -322,6 +327,24 @@ const CYCLE_OK: &[&str] = &[
     "84-diet-some-single",
     "98-pat-sweep-single",
     "107-sequence-single",
+    "47-call-arg-wrap",
+    "49-struct-pat-let",
+    "63-repeat-hole",
+    "64-struct-reorder",
+    "65-match-arm",
+    "66-for-continue",
+    "67-closure-bump",
+    "83-infer-single",
+    "118-repeat-hole-many-single",
+    "119-match-arm-many-single",
+    "94-return-single",
+    "95-verbatim-call-single",
+    "96-verbatim-unary-single",
+    "08-symbol-fallback",
+    "104-symbol-single",
+    "18-general-expr",
+    "69-typehole-path",
+    "82-const-block-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -345,10 +368,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single insertion anchor re-infers ordinary",
     ),
     (
-        "08-symbol-fallback",
-        "t375: single qualified call re-infers ordinary (qualified detector is WI-3)",
-    ),
-    (
         "09-token-tree",
         "t375: single macro invocation re-infers ordinary (macro detector is WI-3)",
     ),
@@ -369,10 +388,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)",
     ),
     (
-        "18-general-expr",
-        "t375: single general-expr re-infers ordinary",
-    ),
-    (
         "19-trait-rename",
         "t375: single trait method re-infers ordinary",
     ),
@@ -390,14 +405,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "47-call-arg-wrap",
-        "verbatim-single (WI-6s1): single-line arg-wrap re-infers as a literal verbatim single; the authored wrap template and the literal single diverge canonically (wrap N=1 is later WI-6 work)",
-    ),
-    (
-        "49-struct-pat-let",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let S { f: a, g: b } = e;` → `let S { f: b, g: a } = e;`); the authored holed struct-pat swap and the literal single diverge canonically (holed pat-swap template is WI-7 slice 2 work)",
-    ),
-    (
         "52-macro-verbatim",
         "hetero: let-verbatim macro sweep re-infers as sub-line call sweep (different semantic shape; tree legs still close)",
     ),
@@ -411,30 +418,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "63-repeat-hole",
-        "verbatim-single (WI-6s2): re-infers as the literal verbatim single (`let buf = [7u8; 8];` → `[7u8; 16];`); the authored holed `[E; 8]`→`[E; 16]` sweep and the literal single diverge canonically (holed len-delta template is WI-7 repeat-family work)",
-    ),
-    (
-        "64-struct-reorder",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let S { g: 1, f: v } = s;` → `let S { f: 1, g: v } = s;`); the authored holed struct-pat swap and the literal single diverge canonically (holed pat-swap template is WI-7 slice 2 work)",
-    ),
-    (
-        "65-match-arm",
-        "verbatim-single (WI-6s1): match-arm line re-infers literally; the authored control template and the literal single diverge canonically (control N=1 is a later WI-6 slice)",
-    ),
-    (
-        "66-for-continue",
-        "verbatim-single (WI-6s1): for-continue line re-infers literally; the authored control template and the literal single diverge canonically (control N=1 is a later WI-6 slice)",
-    ),
-    (
-        "67-closure-bump",
-        "verbatim-single (WI-6s1): closure-bump line re-infers literally; the authored control template and the literal single diverge canonically (control N=1 is a later WI-6 slice)",
-    ),
-    (
-        "69-typehole-path",
-        "t375: single-site type-hole path rewrite re-infers ordinary",
-    ),
-    (
         "75-macro-verbatim-single",
         "t375: single-site macro-verbatim rewrite re-infers ordinary",
     ),
@@ -444,30 +427,10 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "82-const-block-single",
-        "t375: single-site const-block rewrite re-infers ordinary",
-    ),
-    (
-        "83-infer-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = 1 + 2;` → `let v = 0;`); the authored infer-wildcard sweep (`let v = _;` → `let v = 0;`) and the literal single diverge canonically (holed infer template is WI-7 slice 2 work)",
-    ),
-    (
         "86-token-tree-single",
         "t375: single-site token-tree arg rewrite re-infers ordinary",
     ),
 
-    (
-        "94-return-single",
-        "t375: single-site return rewrite re-infers as a holed single; the authored verbatim sweep spelling and the holed diet single diverge canonically (canonicalization territory, not a detector gap)",
-    ),
-    (
-        "95-verbatim-call-single",
-        "holed-single (WI-6s1): re-infers as the holed call_sweep single (unchanged this slice — ordering pin); the authored verbatim sweep spelling and the holed diet single diverge canonically (canonicalization territory, not a detector gap)",
-    ),
-    (
-        "96-verbatim-unary-single",
-        "holed-single (WI-6s1): re-infers as the holed method single (unchanged this slice — ordering pin); the authored verbatim sweep spelling and the holed diet single diverge canonically (canonicalization territory, not a detector gap)",
-    ),
     (
         "97-macro-sweep-single",
         "t375: single-site macro-sweep rewrite re-infers ordinary",
@@ -475,10 +438,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "102-use-rename-single",
         "t375: single-site use-rename rewrite re-infers ordinary",
-    ),
-    (
-        "104-symbol-single",
-        "t375: single-site symbol rewrite re-infers ordinary",
     ),
 
     (
@@ -492,14 +451,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "117-type-rewrite-single",
         "t375: single-site type rewrite re-infers ordinary",
-    ),
-    (
-        "118-repeat-hole-many-single",
-        "verbatim-single (WI-6s2): re-infers as the literal verbatim single (`let buf = [7u8; 8];` → `[7u8; 16];`, `tiny` untouched); the authored holed allow-many `[E; 8]`→`[E; 16]` sweep and the literal single diverge canonically (holed len-delta template is WI-7 repeat-family work)",
-    ),
-    (
-        "119-match-arm-many-single",
-        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = match o { Some(v) => 1, _ => 2 };` → `… => 9 …`, second fn untouched); the authored allow-many match-arm template and the literal single diverge canonically (control N=1 templated single is later WI-6 work)",
     ),
 ];
 

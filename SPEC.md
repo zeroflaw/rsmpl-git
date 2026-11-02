@@ -9789,7 +9789,7 @@ cycle must still be tree-lossless).
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes under the defined
-single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
+single-site equality above (`01`, `04`, `06`, `09`–`11`, `13`,
 `19`, `21`, `22` — definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
 return-carrying/vis-carrying fn singles still need their slice-2

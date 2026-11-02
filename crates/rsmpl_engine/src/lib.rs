@@ -58,6 +58,7 @@ mod postcheck_move_evo;
 mod postcheck_namehole;
 mod postcheck_synth;
 mod postcheck_use;
+mod single_site_eq;
 mod suggest;
 mod use_graph;
 mod use_graph_anchor;
