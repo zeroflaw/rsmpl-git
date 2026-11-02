@@ -22,7 +22,11 @@ pub fn validate_quoting(text: &str) -> Result<(), StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!("unbalanced backtick quoting in pattern `{text}`"),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote-validate-unbalanced-template",
+            "close every backtick (`` `E` `` needs its closing backtick; odd backtick count means a stray `` ` `` somewhere in the pattern)",
+        )));
     }
     if text.contains("r#`") {
         return Err(StructuredError::new(
@@ -30,7 +34,11 @@ pub fn validate_quoting(text: &str) -> Result<(), StructuredError> {
             format!(
                 "invalid raw-identifier quoting `r#` + backtick in `{text}` (use `` `r#...` ``)"
             ),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote-raw-split-template",
+            "write `` `r#type` `` (backticks outside the whole raw identifier), never `r#` + backtick (SPEC 15.4)",
+        )));
     }
     // Each quoted section must hold exactly one lexical token.
     for (inner, _) in quoted_sections(text)? {
@@ -53,6 +61,10 @@ pub fn strip_literal_quotes(text: &str) -> Result<(String, Vec<LiteralToken>), S
                     ErrorCode::PatternConflict,
                     format!("unbalanced backtick quoting in pattern `{text}`"),
                 )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "quote-strip-unbalanced-template",
+                    "close every backtick (`` `E` `` needs its closing backtick; odd backtick count means a stray `` ` `` somewhere in the pattern)",
+                ))
             })?;
             let inner = &text[i + 1..i + 1 + rel];
             literals.push(LiteralToken {
@@ -87,6 +99,10 @@ pub fn mask_literal_spans(text: &str) -> Result<(String, Vec<(String, String)>),
                     ErrorCode::PatternConflict,
                     format!("unbalanced backtick quoting in pattern `{text}`"),
                 )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "quote-mask-unbalanced-template",
+                    "close every backtick (`` `E` `` needs its closing backtick; odd backtick count means a stray `` ` `` somewhere in the pattern)",
+                ))
             })?;
             let inner = &rest[..rel];
             let sent = format!("__RSMPLQLIT{n}Q");
@@ -122,6 +138,10 @@ fn quoted_sections(text: &str) -> Result<Vec<(String, usize)>, StructuredError> 
                     ErrorCode::PatternConflict,
                     format!("unbalanced backtick quoting in pattern `{text}`"),
                 )
+                .with_repair(StructuredError::fix_pattern_repair(
+                    "quote-sections-unbalanced-template",
+                    "close every backtick (`` `E` `` needs its closing backtick; odd backtick count means a stray `` ` `` somewhere in the pattern)",
+                ))
             })?;
             out.push((text[i + 1..i + 1 + rel].to_string(), i));
             i += 1 + rel + 1;
@@ -139,13 +159,21 @@ fn validate_single_token(inner: &str) -> Result<(), StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             "empty backtick quote ```` in pattern".to_string(),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote-empty-template",
+            "write one token between the backticks (```` `` ```` is empty); e.g. `` `E` ``",
+        )));
     }
     if inner.contains(char::is_whitespace) {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!("backtick quote must hold a single token, got `{inner}`"),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote-single-token-template",
+            "a backtick quote holds exactly one token with no whitespace (`` `E` ``, `` `r#type` ``, `'a`); split multi-token text or drop the quotes",
+        )));
     }
     // Lifetimes/labels start with `'`.
     let body = inner.strip_prefix('\'').unwrap_or(inner);
@@ -158,7 +186,11 @@ fn validate_single_token(inner: &str) -> Result<(), StructuredError> {
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 format!("invalid raw identifier in backtick quote `{inner}`"),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "quote-raw-ident-template",
+                "write `` `r#ident` `` with `r#` + letter/`_` + alphanumerics/`_` (e.g. `` `r#type` ``)",
+            )));
         }
         return Ok(());
     }
@@ -169,13 +201,21 @@ fn validate_single_token(inner: &str) -> Result<(), StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!("invalid literal token in backtick quote `{inner}`"),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote-literal-first-template",
+            "start the literal with a letter or `_` (e.g. `` `E` ``, `` `_x` ``)",
+        )));
     }
     if !body.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!("invalid literal token in backtick quote `{inner}`"),
-        ));
+        )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "quote-literal-rest-template",
+            "use only alphanumerics or `_` after the first char (e.g. `` `E1` ``)",
+        )));
     }
     Ok(())
 }
@@ -316,12 +356,16 @@ mod tests {
 
     #[test]
     fn split_raw_ident_rejected() {
-        assert!(validate_quoting("r#`type`").is_err());
+        let err = validate_quoting("r#`type`").expect_err("split raw ident must fail");
+        assert_eq!(repair_code(&err), "quote-raw-split-template");
+        assert_ne!(repair_template(&err), GENERIC_FILLER);
     }
 
     #[test]
     fn unbalanced_rejected() {
-        assert!(validate_quoting("`E").is_err());
+        let err = validate_quoting("`E").expect_err("unbalanced must fail");
+        assert_eq!(repair_code(&err), "quote-validate-unbalanced-template");
+        assert_ne!(repair_template(&err), GENERIC_FILLER);
     }
 
     #[test]
@@ -370,5 +414,103 @@ mod tests {
         assert_eq!(char_col_to_byte(line, usize::MAX), line.len());
         // A 4-byte emoji counts as one column too.
         assert_eq!(char_col_to_byte("a\u{1f600}b", 2), 5);
+    }
+
+    // WI-18 follow-up slice 5: every bare `PatternConflict` site in this
+    // file carries a site-specific `quote-*-template` repair (never the
+    // generic filler). Helpers read the machine payload directly.
+    const GENERIC_FILLER: &str =
+        "rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk";
+
+    fn repair_code(err: &StructuredError) -> String {
+        err.repair
+            .as_ref()
+            .expect("WI-18 slice 5: must carry repair")
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string()
+    }
+
+    fn repair_template(err: &StructuredError) -> String {
+        err.repair
+            .as_ref()
+            .expect("WI-18 slice 5: must carry repair")
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string()
+    }
+
+    #[test]
+    fn wi18_slice5_empty_quote_template_is_specific() {
+        let err = validate_quoting("foo(````)").expect_err("empty quote must fail");
+        assert_eq!(repair_code(&err), "quote-empty-template");
+        let w = repair_template(&err);
+        assert!(w.contains("`` `E` ``"), "got: {w}");
+        assert_ne!(w, GENERIC_FILLER);
+    }
+
+    #[test]
+    fn wi18_slice5_single_token_template_is_specific() {
+        let err = validate_quoting("`foo bar`").expect_err("multi-token quote must fail");
+        assert_eq!(repair_code(&err), "quote-single-token-template");
+        let w = repair_template(&err);
+        assert!(w.contains("exactly one token"), "got: {w}");
+        assert_ne!(w, GENERIC_FILLER);
+    }
+
+    #[test]
+    fn wi18_slice5_raw_ident_template_is_specific() {
+        let err = validate_quoting("`r#1bad`").expect_err("bad raw ident must fail");
+        assert_eq!(repair_code(&err), "quote-raw-ident-template");
+        let w = repair_template(&err);
+        assert!(w.contains("`` `r#ident` ``"), "got: {w}");
+        assert_ne!(w, GENERIC_FILLER);
+    }
+
+    #[test]
+    fn wi18_slice5_literal_first_template_is_specific() {
+        let err = validate_quoting("`1bad`").expect_err("bad first char must fail");
+        assert_eq!(repair_code(&err), "quote-literal-first-template");
+        let w = repair_template(&err);
+        assert!(w.contains("letter or `_`"), "got: {w}");
+        assert_ne!(w, GENERIC_FILLER);
+    }
+
+    #[test]
+    fn wi18_slice5_literal_rest_template_is_specific() {
+        let err = validate_quoting("`E-1`").expect_err("bad rest char must fail");
+        assert_eq!(repair_code(&err), "quote-literal-rest-template");
+        let w = repair_template(&err);
+        assert!(w.contains("alphanumerics"), "got: {w}");
+        assert_ne!(w, GENERIC_FILLER);
+    }
+
+    #[test]
+    fn wi18_slice5_sections_unbalanced_template_is_specific() {
+        // `quoted_sections` is the private section scanner behind
+        // `validate_quoting`; pinned directly so the repair at the scan
+        // site itself is proved, not just the `validate` entry gate.
+        let err = quoted_sections("`E").expect_err("unbalanced sections must fail");
+        assert_eq!(repair_code(&err), "quote-sections-unbalanced-template");
+        assert_ne!(repair_template(&err), GENERIC_FILLER);
+    }
+
+    #[test]
+    fn wi18_slice5_strip_and_mask_route_through_validate() {
+        // Defence-in-depth: `strip_literal_quotes` / `mask_literal_spans`
+        // validate first, so a public unbalanced input surfaces the
+        // `validate` repair; the inner strip/mask repairs (same spelling,
+        // layer-distinct codes) are covered by the WI-18 source-scan gate
+        // + mutation check rather than a runtime pin (provably
+        // unreachable: both re-scan byte-identically after validation).
+        let strip_err = strip_literal_quotes("`E").expect_err("unbalanced strip must fail");
+        assert_eq!(
+            repair_code(&strip_err),
+            "quote-validate-unbalanced-template"
+        );
+        let mask_err = mask_literal_spans("`E").expect_err("unbalanced mask must fail");
+        assert_eq!(repair_code(&mask_err), "quote-validate-unbalanced-template");
     }
 }
