@@ -472,6 +472,32 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "129-subhunk-partition-fires" {
+        // WI-4 sub-hunk partition: one native hunk, two detector classes
+        // (call rewrite + general-expression rewrite) — each contiguous
+        // run raises under its own rule, in document order, and the
+        // harness checks the tree legs (--check + lowered git apply).
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            2,
+            "both runs must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- foo(E0)\n"),
+            "call run must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- E0 + 1\n"),
+            "expr run must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "partition must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-field-rename-fires" {
         // WI-9b: 1 field definition + 5 use lines compress to the
         // definition hunk with `# follow=uses`; the harness checks the

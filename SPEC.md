@@ -7654,11 +7654,34 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   section emits the claimed hunks as semantic per-pair hunks and keeps
   the rest ordinary verbatim in the same file section (hunk ranges are
   disjoint, so mixing is sound under Section 10.6). A single mixed
-  native hunk never splits — it stays ordinary whole, owned by the
-  per-hunk fallback (WI-19c permanent non-goal: no sub-hunk split, so
-  fixture `12`'s header+`let` mixed hunk stays ordinary by decision).
+  native hunk splits per the WI-4 sub-hunk law below; what remains a
+  non-goal is splitting a single pair across two semantics, regrouping
+  non-adjacent same-class pairs, and splitting container-joint shapes.
    Guard is the scaled precision guard (semantic ≤ ordinary
    + 16 × claimed pairs). Detector name `item_rename`.
+ - Sub-hunk partition (WI-4): a single balanced native hunk with N ≥ 2
+   pairs whose whole-hunk detectors decline splits at detector-class
+   boundaries. Maximal contiguous runs of one single-pair classification
+   (the detector the shared chain picks for the pair alone, proven
+   without reserving rules) are each offered to the shared chain —
+   whole multi first, then per-pair singles, all-or-nothing per run —
+   while runs that decline stay ordinary verbatim in place (document
+   order preserved, never reordered; hunk ranges are disjoint, so mixing
+   is sound under Section 10.6). An all-unproven run may still split
+   into two firing multi halves (bounded split-search, both halves ≥ 2
+   pairs, no recursion). An interleaved key (A B A) vetoes the whole
+   hunk (order is never manufactured); duplicate minus lines veto
+   (verbatim territory); duplicate emitted minus patterns veto (terse
+   shapes would overlap-match); any suppressed-callee mention vetoes
+   (WI-4a suppression posture); a `struct`/`enum` rename beside a member
+   line of that same container vetoes, proven by the carrier
+   exactly-one-container law (WI-5/WI-21 joint territory is never
+   split). Totality is the D13 composed scratch-apply (the emission
+   applied to a `pre` clone must reproduce the native post tree
+   byte-identically) plus the scaled precision guard (semantic ≤
+   ordinary + 16 × claimed pairs). `None` pre-image stays ordinary.
+   Detector names are the firing groups' own (provenance one entry per
+   semantic hunk); diffrs fixture `129-subhunk-partition-fires`.
    Stranded-use veto (WI-5 slice 2a): when a native hunk holds both an
    evolution pair (any `definition_evolution` shape) and the rename's
    use while the definition sits in another hunk, the whole section
@@ -9243,7 +9266,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(127), all example benches (32 applyrs, 47 diffrs), plus the history_e2e pins. Out of scope
+(128), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
@@ -9255,12 +9278,13 @@ single-site equality above (`01`, `04`, `06`, `08`–`11`, `13`, `18`,
 the WI-19 precision guard wherever the single-pair gates admit them;
 return-carrying/vis-carrying fn singles still need their slice-2
 detectors); heterogeneous sites no template fires on stay
-  ordinary (`12` header+let mixed single block — v1 fuses pure let
-  runs only (WI-5d `single_block`); mixed runs stay ordinary as a
-  permanent non-goal — no sub-hunk partition and no header+body joint
-  shape (WI-19c decision: hunk atomicity, a single mixed native hunk
-  never splits), so the mixed re-diff stays mixed by construction
-  (WI-5d-follow probe: 0/2473); `14` divergent single-file renames whose
+  ordinary (interleaved same-class groups — A B A line order stays
+  ordinary, order is never manufactured; container-joint residue without
+  uses, e.g. the first hunk of `99-partition-partial-mixed` — and no
+  header+body joint shape in a single pair. Mixed hunks whose runs all
+  prove now split per WI-4 (diffrs fixture `129-subhunk-partition-fires`),
+  so only the narrowed residue re-diffs mixed by construction (WI-5d
+  `single_block` still fuses pure let runs only); `14` divergent single-file renames whose
   deltas never share one intent — struct/enum/const/mod/nested-`Helper`/
   self-ty-`impl`/trait/trait-side-`impl` re-infer as WI-19c precision
   singles (8 semantic + 1 ordinary under partial partition) while the

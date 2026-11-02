@@ -1401,7 +1401,20 @@ fn compress_section_per_hunk(
                 compressed_any = true;
                 out.push_str(&body);
             }
-            None => out.push_str(hunk),
+            // WI-4 sub-hunk partition: the whole hunk declines but its
+            // contiguous same-class runs may still raise per-group, the
+            // rest staying ordinary verbatim in place (hunk atomicity is
+            // kept per run, never per line reordered).
+            None => {
+                if let Some(frag) = super::subhunk::try_subhunk_partition(
+                    hunk, path, file_old, used_rules, prov, suppressed,
+                ) {
+                    compressed_any = true;
+                    out.push_str(&frag);
+                } else {
+                    out.push_str(hunk);
+                }
+            }
         }
     }
     if compressed_any {
@@ -1614,6 +1627,10 @@ mod tests {
         // One hunk, three pairs: two renames plus one ordinary edit — the
         // edit vetoes partition, the chain declines hetero pairs, and the
         // per-hunk fallback declines the mixed hunk: fully ordinary.
+        // WI-4 sub-hunk keeps this pin only via the pre-image: the
+        // top-level `let` makes it unparseable, so every single declines
+        // and no run proves. Valid-Rust mixed hunks now split per run
+        // (see the `subhunk` tests and diffrs fixture `129`).
         // WI-19 partial keeps this posture: a single mixed hunk never
         // splits (pinned at the function level below too).
         let pre = "const OLD_A: usize = 1001;\nconst OLD_B: usize = 1002;\nlet x = 1;\n";

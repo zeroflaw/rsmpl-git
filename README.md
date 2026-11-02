@@ -177,7 +177,7 @@ context would be larger, so these are lower bounds.)
 | 03-move (same-file reorder, cut+paste) | 1857 B / 89 ln | 106 B / 9 ln | 94% |
 | 04-peel (6 call sites, 2 peel hunks) | 1006 B / 22 ln | 425 B / 18 ln | 58% |
 | 05-stranded (3 sites, stranded join + insertion) | 349 B / 15 ln | 196 B / 11 ln | 44% |
-| 06-literal-cross-hunk (2 sites, section driver) | 679 B / 19 ln | 464 B / 17 ln | 32% |
+| 06-literal-cross-hunk (1 mixed hunk → 2 per-pair singles, WI-4) | 679 B / 19 ln | 380 B / 18 ln | 44% |
 | 07-ref-strip (2 sites, ref-strip sweep) | 212 B / 8 ln | 90 B / 5 ln | 58% |
 | 08-slot-sweep (2 fns, slot sweep) | 540 B / 9 ln | 146 B / 7 ln | 73% |
 | 09-arg-add (3 sites, arg-add sweep + hetero ordinary) | 489 B / 18 ln | 295 B / 13 ln | 40% |
@@ -187,7 +187,7 @@ context would be larger, so these are lower bounds.)
 | 13-verbatim-return (2 sites, Return-arm verbatim sweep) | 266 B / 9 ln | 146 B / 7 ln | 45% |
 | 14-verbatim-struct-field (2 sites, field-label verbatim sweep) | 281 B / 9 ln | 127 B / 7 ln | 55% |
 | 15-verbatim-unary (2 sites, Unary-arm verbatim sweep) | 219 B / 9 ln | 123 B / 7 ln | 44% |
-| 16-call-literal (2 sites, literal sweep + hetero ordinary) | 548 B / 16 ln | 361 B / 13 ln | 34% |
+| 16-call-literal (1 mixed hunk → 2 per-pair singles, WI-4) | 548 B / 16 ln | 309 B / 14 ln | 44% |
 | 17-macro-veto (6 sites, nested `env!` interior sweep + enclosing `format!` sweep) | 1208 B / 24 ln | 464 B / 20 ln | 62% |
 | 18-macro-invocation-veto (4 hetero assert sites + pure addition, hetero interior sweep + insertion tail) | 694 B / 21 ln | 224 B / 13 ln | 68% |
 | 19-ref-strip-scale (5 sites, chained-receiver ref-strip sweep) | 436 B / 14 ln | 86 B / 5 ln | 80% |
@@ -219,6 +219,7 @@ context would be larger, so these are lower bounds.)
 | 45-fn-joint-rename (rename+return-type joint: fn def + 2 call sites, 1 hunk with `# follow=uses`, WI-4a) | 194 B / 11 ln | 123 B / 6 ln | 37% |
 | 46-fn-joint-arg-add (rename+param-add joint: fn def + 2 arg-adding call sites, 2 hunks under one shared rule, WI-4b) | 194 B / 11 ln | 153 B / 9 ln | 21% |
 | 47-joint-impl-rename (trait+self-type double-delta joint: trait def + struct def + composed `impl` header, 2 hunks under one shared rule, WI-3) | 267 B / 11 ln | 184 B / 11 ln | 31% |
+| 48-mixed-hunk-partition (2 multi runs — call sweep + general-expr sweep in one hunk, WI-4) | 214 B / 12 ln | 158 B / 11 ln | 26% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

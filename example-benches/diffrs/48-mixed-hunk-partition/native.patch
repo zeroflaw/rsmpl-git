@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,4 +2,4 @@ fn first() {
+-    foo(alpha);
+-    foo(beta);
+-    y + 1;
+-    z + 1;
++    bar(alpha);
++    bar(beta);
++    y + 2;
++    z + 2;

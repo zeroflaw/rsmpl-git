@@ -768,13 +768,24 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
             !semantic.contains("+    make_call(\"alpha\", first_count, \"100644\");"),
             "rewritten lines must be consumed, got: {semantic}"
         );
+        // WI-4 sub-hunk partition: hetero-trailing b.rs pairs raise as
+        // per-pair literal singles (each concrete trailing literal proves
+        // at n=1 via tuple-keyed totality) instead of staying ordinary.
         assert!(
-            semantic.contains("-    make_call(\"gamma\", third_count, true);"),
-            "hetero-trailing minus lines must stay ordinary, got: {semantic}"
+            semantic.contains("- make_call(E0, E1, true)"),
+            "hetero pair must raise as single, got: {semantic}"
         );
         assert!(
-            semantic.contains("+    make_call(\"delta\", fourth_count, symlink);"),
-            "hetero-trailing plus lines must stay ordinary, got: {semantic}"
+            semantic.contains("+ make_call(E0, E1, \"120000\")"),
+            "hetero pair must raise as single, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- make_call(E0, E1, false)"),
+            "hetero pair must raise as single, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ make_call(E0, E1, symlink)"),
+            "hetero pair must raise as single, got: {semantic}"
         );
         assert!(
             semantic.len() < native_input.len(),
@@ -789,7 +800,8 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
         // cross-hunk section driver; the addition stays ordinary
         // in place. WI-5d: hetero-trailing b.rs is family-uniform
         // (same `make_call` callee — literal-sweep territory, whose
-        // hetero-trailing veto stands), so it stays ordinary.
+        // hetero-trailing multi veto stands), so the multi stays ordinary
+        // while WI-4 raises each pair as a single below.
         assert!(
             semantic.contains("rule=r1"),
             "literal cross-hunk sweep must fire, got: {semantic}"
@@ -814,13 +826,24 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
             semantic.contains("+    let cached = extra();"),
             "pure-addition leftover must stay ordinary, got: {semantic}"
         );
+        // WI-4 sub-hunk partition: hetero-trailing b.rs pairs raise as
+        // per-pair literal singles (the bench-06 shape), each concrete
+        // trailing literal proving at n=1.
         assert!(
-            semantic.contains("-    let c = make_call(\"gamma\", third_count, true);"),
-            "hetero-trailing minus lines must stay ordinary, got: {semantic}"
+            semantic.contains("- make_call(E0, E1, true)"),
+            "hetero pair must raise as single, got: {semantic}"
         );
         assert!(
-            semantic.contains("+    let d = make_call(\"delta\", fourth_count, symlink);"),
-            "hetero-trailing plus lines must stay ordinary, got: {semantic}"
+            semantic.contains("+ make_call(E0, E1, \"120000\")"),
+            "hetero pair must raise as single, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- make_call(E0, E1, false)"),
+            "hetero pair must raise as single, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ make_call(E0, E1, symlink)"),
+            "hetero pair must raise as single, got: {semantic}"
         );
         assert!(
             semantic.len() < native_input.len(),

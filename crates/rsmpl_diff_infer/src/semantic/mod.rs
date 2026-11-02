@@ -65,6 +65,7 @@ mod repeat;
 pub(crate) mod shape;
 mod single_block;
 mod slot;
+mod subhunk;
 pub(crate) mod subline;
 mod trait_methods;
 mod verbatim;

@@ -1,0 +1,11 @@
+diff --git src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,2 @@ rule=r1
+# allow=many
+- foo(E0)
++ bar(E0)
+@@ -4,2 @@ rule=r2
+# allow=many
+- E0 + 1
++ E0 + 2
