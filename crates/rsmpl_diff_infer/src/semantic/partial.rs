@@ -649,6 +649,18 @@ mod tests {
     }
 
     #[test]
+    fn two_same_kind_deletions_never_cross_kind() {
+        // WI-21 slice 5: two same-kind deletions partition (slice-5 law)
+        // and must never trip the slice-4 suppression gate — otherwise
+        // the rename single they partition into would be wrongly
+        // suppressed to wholly ordinary.
+        let two_fields = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -4 +3,0 @@\n-    z: u32,\n@@ -6,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        assert!(!section_has_cross_kind_deletion(two_fields));
+        let two_variants = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -4 +3,0 @@\n-    C,\n@@ -6,1 +4,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
+        assert!(!section_has_cross_kind_deletion(two_variants));
+    }
+
+    #[test]
     fn cross_kind_deletion_suppresses_end_to_end() {
         // WI-21 slice 4 headline: the chain gate turns the section wholly
         // ordinary with the stranded delta named in declined provenance.

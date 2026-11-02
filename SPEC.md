@@ -2463,9 +2463,13 @@ lowered diff is the observable truth as always (Section D.2).
     as `orphans` of the deletion hunk (`off-target` when anchored,
     `shadowed`/`second-hop`/`macro-hidden` per the member follow law,
     capping at `partial`); uses the native deletes or rewrites fail the
-    probe and the joint declines. Unrelated same-named idents are not
-    anchored uses and fire `verified`. Two evolutions,
-    two additions, an addition of another container, bare renames,
+     probe and the joint declines. Unrelated same-named idents are not
+     anchored uses and fire `verified`. Two deletions and
+     attr+deletion combos never joint-fire (slice 5): distant deletions
+     partition (the rename/attr joint still fires alone, deletions ride
+     the ordinary remainder), adjacent multi-deletion hunks stay wholly
+     ordinary via the shape-B trap. Two evolutions,
+     two additions, an addition of another container, bare renames,
     and alias/const shapes never joint-fire (only
     multi-addition and cross-file-member joints stay out: a member in
     another file than its container cannot joint by the container law).
@@ -8007,9 +8011,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     of the deleted field the native leaves untouched surface as
     `off-target`/`shadowed`/`second-hop`/`macro-hidden` orphans of the
     deletion hunk (capping at `partial`); uses the native
-    deletes/rewrites fail the probe and the joint declines. Two
-    deletions, and attr+deletion combos stay
-    ordinary (slice 5). Cross-kind members (WI-21 slice 4): a field-shaped
+     deletes/rewrites fail the probe and the joint declines. Two
+     deletions and attr+deletion combos never joint-fire (slice 5,
+     probed): distant deletions partition — the rename/attr joint
+     still fires alone with the deletions riding one ordinary
+     remainder hunk (stranded lines in remainder sites) — while
+     adjacent multi-deletion hunks stay wholly ordinary via the
+     shape-B trap. Cross-kind members (WI-21 slice 4): a field-shaped
     deletion under an `enum` rename, or a variant-shaped deletion under a
     `struct` rename, vetoes the joint AND suppresses the bare rename single —
     the section stays wholly ordinary with the stranded delta named in declined
@@ -8025,8 +8033,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     T375; diffrs fixture `143-enum-rename-variant-delete-fires`. Same
     orphan law as the struct half (a rewritten `Old::B` → `New::B`
     pair rides as a claimable rename use; the dangling `New::B`
-    orphans). Two deletions and attr+deletion
-    combos stay ordinary (slice 5; cross-kind suppression above).
+     orphans). Two deletions and attr+deletion combos never
+     joint-fire: same partition law as the struct half (slice 5;
+     cross-kind suppression above).
     Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
     the enum half of the same law — a def hunk holding the `enum`
     rename plus exactly one attached variant-evolution pair (tuple

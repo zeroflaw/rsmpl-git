@@ -1021,6 +1021,140 @@ mod tests {
         );
     }
 
+    fn infer_prov(
+        section: &str,
+        pre: &str,
+    ) -> (Option<String>, Vec<super::super::prov::HunkProvenance>) {
+        let mut prov = Vec::new();
+        let out = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&section.to_string()),
+            &std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]),
+            &mut prov,
+        );
+        (out, prov)
+    }
+
+    #[test]
+    fn two_distant_deletions_partition_with_named_remainder() {
+        // WI-21 slice 5: no two-deletion joint fires — the rename single
+        // still partitions alone (the addition precedent,
+        // `two_additions_decline`) and both deletions ride one ordinary
+        // remainder hunk whose provenance names the stranded lines.
+        // A composed two-deletion joint would cost >= the partition
+        // (one extra context + `rule=` line per deletion hunk, or a new
+        // two-line deletion hunk kind for byte-parity at best), so the
+        // composition stays declined under strict T375.
+        let pre = "struct Old {\n    x: u32,\n    y: u32,\n    z: u32,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -4 +3,0 @@\n-    z: u32,\n@@ -6,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let (out, prov) = infer_prov(section, pre);
+        let out = out.expect("rename single must still partition alone");
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "no joint may share the rule, got:\n{out}"
+        );
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+        assert!(out.contains("+ struct New"), "got:\n{out}");
+        let rem = prov
+            .iter()
+            .find(|p| p.detector == "ordinary")
+            .expect("partition must carry a remainder ordinary entry");
+        assert!(
+            rem.sites.contains(&3) && rem.sites.contains(&4),
+            "stranded deletions named, got: {rem:?}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("partition applies");
+        assert_eq!(
+            files["f.rs"], "struct New {\n    x: u32,\n}\nfn f(s: New) {\n}\n",
+            "partition round-trips byte-identical"
+        );
+    }
+
+    #[test]
+    fn two_distant_variant_deletions_partition_with_named_remainder() {
+        // WI-21 slice 5, enum twin of the struct pin above.
+        let pre = "enum Old {\n    A,\n    B,\n    C,\n}\nfn f(v: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -4 +3,0 @@\n-    C,\n@@ -6,1 +4,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
+        let (out, prov) = infer_prov(section, pre);
+        let out = out.expect("rename single must still partition alone");
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "no joint may share the rule, got:\n{out}"
+        );
+        let rem = prov
+            .iter()
+            .find(|p| p.detector == "ordinary")
+            .expect("partition must carry a remainder ordinary entry");
+        assert!(
+            rem.sites.contains(&3) && rem.sites.contains(&4),
+            "stranded variants named, got: {rem:?}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("partition applies");
+        assert_eq!(
+            files["f.rs"], "enum New {\n    A,\n}\nfn f(v: New) {\n}\n",
+            "partition round-trips byte-identical"
+        );
+    }
+
+    #[test]
+    fn attr_deletion_combo_partitions_with_named_remainder() {
+        // WI-21 slice 5: def attr-delta + member deletion never forms a
+        // 3-part joint — the attr joint fires alone and the deletion
+        // rides the ordinary remainder with its line named. Composing
+        // the deletion into the shared rule would add a hunk for
+        // equal-or-more bytes, so the composition stays declined.
+        let pre =
+            "#[derive(Debug)]\nstruct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-#[derive(Debug)]\n-struct Old {\n+#[derive(Debug, Clone)]\n+struct New {\n@@ -4 +3,0 @@\n-    y: u32,\n@@ -6,1 +5,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let (out, prov) = infer_prov(section, pre);
+        let out = out.expect("attr joint must still partition alone");
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "no joint may share the rule, got:\n{out}"
+        );
+        assert!(out.contains("- #[derive(Debug)]"), "got:\n{out}");
+        assert!(out.contains("+ #[derive(Debug, Clone)]"), "got:\n{out}");
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+        assert!(out.contains("+ struct New"), "got:\n{out}");
+        let rem = prov
+            .iter()
+            .find(|p| p.detector == "ordinary")
+            .expect("partition must carry a remainder ordinary entry");
+        assert!(
+            rem.sites.contains(&4),
+            "stranded deletion named, got: {rem:?}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("partition applies");
+        assert_eq!(
+            files["f.rs"],
+            "#[derive(Debug, Clone)]\nstruct New {\n    x: u32,\n}\nfn f(s: New) {\n}\n",
+            "partition round-trips byte-identical"
+        );
+    }
+
+    #[test]
+    fn two_adjacent_deletions_stay_wholly_ordinary() {
+        // WI-21 slice 5: def + two deletions merged in one (3-minus,
+        // 1-plus) hunk never partitions — the shape-B trap holds, so no
+        // rename single can strand the deletions. Wholly ordinary.
+        let pre = "struct Old {\n    y: u32,\n    z: u32,\n    x: u32,\n}\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1 @@\n-struct Old {\n-    y: u32,\n-    z: u32,\n+struct New {\n@@ -6,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let out = infer(section, pre);
+        assert!(
+            out.is_none() || !out.as_ref().unwrap().contains("rule="),
+            "adjacent two-deletion hunk stays wholly ordinary, got:\n{}",
+            out.unwrap_or_default()
+        );
+    }
+
     #[test]
     fn cross_kind_shape_b_suppresses() {
         // WI-21 slice 4: adjacent shape-B cross-kind (def + variant
