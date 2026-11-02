@@ -7030,8 +7030,9 @@ prints one JSON object to stdout:
   `"applied": true`). With `--check` it materializes the in-memory
   post-images into a temp copy of `--repo` (tree copied minus `.git`,
   `target`, `.history`; symlinks recreated, never followed) and runs
-  `cargo check --quiet` there; the worktree stays byte-identical and
-  failure exits 2 with `"applied": false`. When the report carries
+  `cargo check --quiet` there — under `--check`, verifies in a temp copy
+  and reports `applied: false` on failure; the worktree stays
+  byte-identical and failure exits 2 with `"applied": false`. When the report carries
   `orphans`, the reason appends the first orphan `file:line` entries
   in brackets. Success reports `"build": "pass"` inside `checked`.
   Empty lowerings skip verification. Any other `--verify` value is an

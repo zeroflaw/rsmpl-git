@@ -84,9 +84,12 @@ struct Cli {
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
 
+    // SPEC D.2 is normative for `--verify build`; keep the sentence below
+    // verbatim in agreement with SPEC D.2 (WI-17 single story).
     /// Extra verification after a successful apply: only `build` is
-    /// accepted (`cargo check --quiet` in `--repo`). Never runs under
-    /// `--check`, never by default (SPEC D.2).
+    /// accepted (`cargo check --quiet` in `--repo`). Under `--check`,
+    /// verifies in a temp copy and reports `applied: false` on failure
+    /// (SPEC D.2); never by default.
     #[arg(long, value_name = "MODE")]
     verify: Option<String>,
 

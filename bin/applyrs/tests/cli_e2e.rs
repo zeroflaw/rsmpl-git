@@ -1612,3 +1612,25 @@ fn output_path_is_cwd_relative_not_repo_joined() {
         "output must not land in --repo"
     );
 }
+
+#[test]
+fn verify_help_states_temp_copy_contract() {
+    // WI-17: `--help`, SPEC D.2, and behaviour tell one story — under
+    // `--check`, `--verify build` verifies in a temp copy and reports
+    // `applied: false` on failure. This pin fails if the sentence drifts.
+    let out = Command::new(binary()).arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        help.contains("Under `--check`,"),
+        "help must carry the temp-copy sentence, got: {help}"
+    );
+    assert!(
+        help.contains("verifies in a temp copy and reports `applied: false` on failure"),
+        "help must carry the verbatim agreement sentence, got: {help}"
+    );
+    assert!(
+        !help.contains("Never runs under"),
+        "stale F13 wording must be gone, got: {help}"
+    );
+}
