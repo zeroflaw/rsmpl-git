@@ -512,15 +512,18 @@ pub(crate) fn push_ordinary_for_section(
 /// for a mixed emission (semantic `rule=` hunks plus verbatim ordinary
 /// remainder hunks in one file section — per-hunk fallback mixes, WI-19
 /// partial-partition mixes, subhunk mixes). `sites` are the original
-/// section's changed old-side lines minus the union claimed by every
-/// emitted `rule=` range (`covered_sites` per rule; anchor-only move
-/// pastes cover `[]`, so they never shrink the remainder). Empty
-/// remainder, wholly-semantic emissions (no native hunk), rule-free
-/// emissions (unreachable on the `Some` path — guarded), or empty
-/// `declined` (nothing tried) all stay silent — the same silences as
-/// [`push_ordinary_prov`]. Chain-level `declined` (deduped) is carried
-/// as-is; per-run losing-decline detail stays with the P3 subhunk-inner
-/// item, which threads the real vec through the composite drivers.
+/// section's changed old-side lines minus the union of the already-
+/// committed semantic prov sites for the emitted rules (run-scoped, so
+/// context-carrying bodies with `...` spans never over-claim remainder
+/// lines; anchor-only move pastes cover `[]`, so they never shrink the
+/// remainder; rules with no committed entry fall back to `covered_sites`
+/// per rule). Empty remainder, wholly-semantic emissions (no native
+/// hunk), rule-free emissions (unreachable on the `Some` path —
+/// guarded), or empty `declined` (nothing tried) all stay silent — the
+/// same silences as [`push_ordinary_prov`]. Chain-level `declined`
+/// (deduped) is carried as-is; inner subhunk/verbatim classification
+/// probes stay on a throwaway by design (the whole-hunk chain attempt
+/// already records per-family evidence).
 pub(crate) fn push_partial_ordinary_prov(
     prov: &mut Vec<HunkProvenance>,
     semantic: &str,
@@ -540,9 +543,32 @@ pub(crate) fn push_partial_ordinary_prov(
         return;
     }
     let ranges = emitted_hunk_ranges(semantic);
+    // Claimed sites come from the already-committed semantic prov entries
+    // (run-scoped `changed`), never from emitted-range intersection:
+    // context-carrying bodies (`...` spans, e.g. the method `sig_evolution`
+    // hunk) would otherwise over-claim remainder lines as covered. Inner
+    // subhunk/verbatim classification probes stay on a throwaway by design
+    // (the whole-hunk chain attempt already records per-family evidence).
+    // Rules with no committed entry (unit-called helper) fall back to
+    // `covered_sites`, preserving today's behavior.
     let mut claimed: Vec<usize> = Vec::new();
     for (rule, _, _) in &ranges {
-        for site in covered_sites(&ranges, rule, &changed) {
+        let mut from_prov: Vec<usize> = Vec::new();
+        for p in prov.iter() {
+            if p.rule == *rule && p.file == path {
+                for s in &p.sites {
+                    if !from_prov.contains(s) {
+                        from_prov.push(*s);
+                    }
+                }
+            }
+        }
+        let sites = if from_prov.is_empty() {
+            covered_sites(&ranges, rule, &changed)
+        } else {
+            from_prov
+        };
+        for site in sites {
             if !claimed.contains(&site) {
                 claimed.push(site);
             }
@@ -870,5 +896,52 @@ mod tests {
         assert!(!has_native_hunk(
             "diff --git f.rs\nold mode 100644\nnew mode 100755\n"
         ));
+    }
+    #[test]
+    fn partial_claims_prov_sites_not_range_span() {
+        // WI-15 P3 residue: context-carrying bodies (`...` spans — the
+        // method `sig_evolution` hunk) must not over-claim remainder
+        // lines. Claimed sites come from the committed prov entry
+        // (`[2]`), so the remainder is `[3]`. (Line 1 is avoided:
+        // `@@ -1,1 @@` is sweep-dummy-shaped and over-covers by
+        // construction — filed separately.)
+        let original = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,2 +2,2 @@\n-    fn alpha(x: i32) {\n-        1\n+    pub fn alpha(x: i32) {\n+        2\n";
+        let semantic = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,3 @@ rule=r1\n  impl Svc {\n      ...\n-     fn alpha(...) {\n+     pub fn alpha(...) {\n          ...\n      }\n  }\n@@ -3,1 +3,1 @@\n-        1\n+        2\n";
+        let mut prov = vec![HunkProvenance {
+            rule: "r1".to_string(),
+            file: "f.rs".to_string(),
+            detector: "sig_evolution",
+            sites: vec![2],
+            ..Default::default()
+        }];
+        push_partial_ordinary_prov(
+            &mut prov,
+            semantic,
+            original,
+            "f.rs",
+            &declined(&[("call_sweep", "no-match")]),
+            Some("pre"),
+        );
+        assert_eq!(prov.len(), 2, "got: {prov:?}");
+        assert_eq!(prov[1].detector, "ordinary");
+        assert_eq!(prov[1].sites, vec![3], "remainder only, got: {prov:?}");
+    }
+    #[test]
+    fn partial_falls_back_without_committed_entry() {
+        // Unit-called helper with an empty prov keeps today's behavior:
+        // a rule with no committed entry falls back to `covered_sites`.
+        let original = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let semantic = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 @@ rule=r1\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let mut prov = Vec::new();
+        push_partial_ordinary_prov(
+            &mut prov,
+            semantic,
+            original,
+            "f.rs",
+            &declined(&[("call_sweep", "no-match")]),
+            Some("pre"),
+        );
+        assert_eq!(prov.len(), 1, "got: {prov:?}");
+        assert_eq!(prov[0].sites, vec![4], "got: {prov:?}");
     }
 }

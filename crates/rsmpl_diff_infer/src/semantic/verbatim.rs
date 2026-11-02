@@ -482,6 +482,9 @@ pub(crate) fn try_verbatim_sweep(
             .filter(|(j, _, _)| *j == i)
             .map(|(_, _, p)| p.as_str())
             .collect();
+        // Leftover bodies retry the standard chain on a throwaway by design
+        // (WI-15: fallback-identical retry — its declines would duplicate
+        // the per-hunk fallback's own attempt; the driver attributes).
         if let Some((body, detector)) = compress_balanced_pair_body(
             &ms,
             &ps,

@@ -311,3 +311,79 @@ fn wi15_partial_section_gains_remainder_ordinary_entry() {
         "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
     );
 }
+
+#[test]
+fn wi15_partial_subhunk_mix_reports_context_exact_remainder() {
+    // WI-15 P3 residue: a balanced single-hunk section whose method-vis
+    // pair raises via the subhunk partition (context-carrying
+    // `sig_evolution` body) plus an ordinary literal remainder reports
+    // two entries — semantic sites `[2]` plus one remainder ordinary
+    // entry with sites `[3]` only (range-span intersection would
+    // over-claim `[2, 3]` and stay silent). Inner classification probes
+    // stay on a throwaway by design; `declined` here is the section's
+    // chain-level evidence.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "impl Svc {\n    fn alpha(x: i32) {\n        1\n    }\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "impl Svc {\n    pub fn alpha(x: i32) {\n        2\n    }\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 2, "got: {v}");
+    let sem = hunks
+        .iter()
+        .find(|e| e["detector"] != serde_json::json!("ordinary"))
+        .expect("one semantic entry");
+    let ord = hunks
+        .iter()
+        .find(|e| e["detector"] == serde_json::json!("ordinary"))
+        .expect("one remainder ordinary entry");
+    assert_eq!(
+        sem["detector"],
+        serde_json::json!("sig_evolution"),
+        "got: {v}"
+    );
+    assert!(sem.get("declined").is_none(), "got: {v}");
+    assert_eq!(sem["sites"], serde_json::json!([2]), "got: {v}");
+    assert_eq!(ord["rule"], serde_json::json!(""), "got: {v}");
+    assert_eq!(ord["sites"], serde_json::json!([3]), "got: {v}");
+    assert_eq!(ord["totality"], serde_json::json!("pre-image"), "got: {v}");
+    let declined = ord["declined"].as_array().unwrap();
+    assert!(!declined.is_empty(), "got: {v}");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let patch = v["patch"].as_str().unwrap();
+    let overhead = stdout.len() - patch.len();
+    let h = hunks.len();
+    let t: usize = hunks
+        .iter()
+        .map(|e| e["sites"].as_array().map(|a| a.len()).unwrap_or(0))
+        .sum();
+    let d: usize = hunks
+        .iter()
+        .map(|e| {
+            e.get("declined")
+                .and_then(|a| a.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
+        .sum();
+    let budget = 150 + 190 * h + 10 * t + 75 * d;
+    assert!(
+        overhead <= budget,
+        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
+    );
+}

@@ -23,6 +23,11 @@
 //! reproduce the native post tree byte-identically) plus the scaled
 //! precision guard (`emission <= hunk + 16 * claimed_pairs`, the WI-19
 //! partial-partition posture).
+//!
+//! Evidence posture (WI-15): the single-pair/run classification probes
+//! below pass a throwaway declined vec by design — they are speculative
+//! offers, not chain attempts. The whole-hunk attempt that precedes the
+//! split already runs on the caller's vec and owns per-family evidence.
 
 use super::prov::push_section_prov;
 use super::{HunkProvenance, PRECISION_GUARD};
@@ -982,5 +987,29 @@ mod tests {
         );
         assert!(out.contains(hdr), "filter header verbatim, got:\n{out}");
         assert_eq!(applied(&pre_map(&pre), &out), native_post(&pre, hunk));
+    }
+    #[test]
+    fn partition_takes_no_declined_by_construction() {
+        // WI-15 P3: the partition driver takes no `declined` vec — the
+        // single-pair/run classification probes are speculative offers
+        // on a throwaway, not chain attempts (the whole-hunk attempt
+        // that precedes the split already owns per-family evidence).
+        // Pinned by signature: no caller vec can be polluted.
+        let pre = "fn m() {\n    foo(alpha);\n    y + 1;\n}\n";
+        let hunk =
+            "@@ -2,2 +2,2 @@\n-    foo(alpha);\n-    y + 1;\n+    bar(alpha);\n+    y + 2;\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = try_subhunk_partition(
+            hunk,
+            "f.rs",
+            Some(pre),
+            &mut used,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("two-class hunk must split");
+        assert_eq!(out.matches("rule=").count(), 2, "got:\n{out}");
+        assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
     }
 }
