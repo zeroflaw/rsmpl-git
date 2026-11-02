@@ -24,6 +24,7 @@ mod matcher_fn;
 mod matcher_general;
 mod matcher_general_apply;
 mod matcher_general_async;
+mod matcher_general_binder;
 mod matcher_general_ctrl;
 mod matcher_general_tails;
 mod matcher_impl;

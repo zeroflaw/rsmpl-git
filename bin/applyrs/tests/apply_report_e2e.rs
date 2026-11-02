@@ -160,13 +160,17 @@ fn mirrored_attrs_preserve_target_indent() {
 fn strip_with_mirrored_minus_drops_attrs() {
     // T154: `# attrs=strip` skips the mirror gate — the envelope is
     // dropped at rewrite instead of failing with "or use `# attrs=strip`".
+    // C21: the strip hunk carries no binder change (plain `x` → `x`);
+    // a strip + rename combo (`let x` → `let y`) rewrites bound idents
+    // without binder identity and fails at the C21 gate instead (pinned
+    // in binder_unified_e2e).
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
         "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n",
     );
-    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# attrs=strip\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# attrs=strip\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let x = E;\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert!(
         out.status.success(),
@@ -174,7 +178,7 @@ fn strip_with_mirrored_minus_drops_attrs() {
         String::from_utf8_lossy(&out.stderr)
     );
     let text = read(dir.path(), "src/lib.rs");
-    assert_eq!(text, "fn f() {\n    let y = 1;\n}\n", "got: {text:?}");
+    assert_eq!(text, "fn f() {\n    let x = 1;\n}\n", "got: {text:?}");
 }
 
 #[test]

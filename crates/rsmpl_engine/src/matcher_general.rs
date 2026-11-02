@@ -519,16 +519,19 @@ mod tests {
         // WI-10b: Preserve delta over `let` statements — add inserts above
         // the `let` (existing attrs preserved, already-plus sites skip),
         // same-length text swaps in place, remove deletes the lines.
-        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(clippy::x)]\n+ let y = E;\n";
+        // C21: the delta carries no binder change (a delta + rename combo
+        // rewrites a binding the machinery cannot track and fails at the
+        // C21 gate instead — pinned at the end of this test).
+        let add = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(clippy::x)]\n+ let x = E;\n";
         let out = apply(add, "fn f() {\n    let x = 1;\n}\n").unwrap();
         assert_eq!(
-            out, "fn f() {\n    #[allow(clippy::x)]\n    let y = 1;\n}\n",
+            out, "fn f() {\n    #[allow(clippy::x)]\n    let x = 1;\n}\n",
             "got: {out:?}"
         );
         // Unrelated existing attrs survive; the delta lands below them.
         let out = apply(add, "fn f() {\n    #[keep]\n    let x = 1;\n}\n").unwrap();
         assert_eq!(
-            out, "fn f() {\n    #[keep]\n    #[allow(clippy::x)]\n    let y = 1;\n}\n",
+            out, "fn f() {\n    #[keep]\n    #[allow(clippy::x)]\n    let x = 1;\n}\n",
             "got: {out:?}"
         );
         // Already-plus site has nothing to do: no match, not a duplicate.
@@ -538,23 +541,29 @@ mod tests {
         )
         .is_err());
         // Replace (same length, differing text).
-        let rep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ #[deny(y)]\n+ let y = E;\n";
+        let rep = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ #[deny(y)]\n+ let x = E;\n";
         let out = apply(rep, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
         assert_eq!(
-            out, "fn f() {\n    #[deny(y)]\n    let y = 1;\n}\n",
+            out, "fn f() {\n    #[deny(y)]\n    let x = 1;\n}\n",
             "got: {out:?}"
         );
         // Remove (minus N, plus empty) deletes the line, keeps the stmt.
-        let rem = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
+        let rem = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let x = E;\n";
         let out = apply(rem, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
-        assert_eq!(out, "fn f() {\n    let y = 1;\n}\n", "got: {out:?}");
+        assert_eq!(out, "fn f() {\n    let x = 1;\n}\n", "got: {out:?}");
         // Col-0 `let`: attr insert at the line start shares its point with
         // the body edit start — boundary-touch, never an overlap.
         let out = apply(add, "fn f() {\nlet x = 1;\n}\n").unwrap();
         assert_eq!(
-            out, "fn f() {\n#[allow(clippy::x)]\nlet y = 1;\n}\n",
+            out, "fn f() {\n#[allow(clippy::x)]\nlet x = 1;\n}\n",
             "got: {out:?}"
         );
+        // C21: delta + rename vetoes — the combined hunk rewrites bound
+        // `x` to `y` with no binder identity, stranding uses with no
+        // orphans. Split the rename into its own hunk instead.
+        let add_rename = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=r\n# lang=rust\n# sweep\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(clippy::x)]\n+ let y = E;\n";
+        let err = apply(add_rename, "fn f() {\n    let x = 1;\n}\n").unwrap_err();
+        assert!(err.contains("C21"), "got: {err}");
     }
 
     #[test]
@@ -583,14 +592,17 @@ mod tests {
         // attrs are eligibility-ignored and the envelope is dropped at
         // rewrite, not rejected with a self-contradicting "use strip"
         // suggestion. Target indent survives like the preserve path.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=strip\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
+        // C21: the strip hunk carries no binder change (strip + rename
+        // rewrites a binding with no identity and fails at the C21 gate
+        // — pinned in binder_unified_e2e).
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=strip\n# stmt S\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let x = E;\n";
         let out = apply(patch, "fn f() {\n    #[allow(x)]\n    let x = 1;\n}\n").unwrap();
-        assert_eq!(out, "fn f() {\n    let y = 1;\n}\n", "got: {out:?}");
+        assert_eq!(out, "fn f() {\n    let x = 1;\n}\n", "got: {out:?}");
         // Eligibility ignores pattern attrs under strip (fn parity), so an
         // unattributed target still rewrites.
         let bare_file = patch.replace("@@ -1,4 +1,4 @@", "@@ -1,3 +1,3 @@");
         let out2 = apply(&bare_file, "fn f() {\n    let x = 1;\n}\n").unwrap();
-        assert_eq!(out2, "fn f() {\n    let y = 1;\n}\n", "got: {out2:?}");
+        assert_eq!(out2, "fn f() {\n    let x = 1;\n}\n", "got: {out2:?}");
         // Writing attributes the minus side omitted stays rejected under
         // strip: adding attrs while stripping is ambiguous.
         let plus_only = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# attrs=strip\n# stmt S\n# expr E\n- let x = E;\n+ #[allow(x)]\n+ let y = E;\n";

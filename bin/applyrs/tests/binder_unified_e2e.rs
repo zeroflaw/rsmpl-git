@@ -235,3 +235,87 @@ fn fn_param_completion_applies_and_checks_clean() {
     assert!(post.contains("sum + 1"), "got: {post}");
     cargo_check(dir.path());
 }
+
+// C21: a Stmt/Expr general template that rewrites bound binder idents
+// without binder identity never applies — the old shape rewrote the
+// header, stranded body/file uses, and still reported `verified` with no
+// orphans. Stmt + if-let pin the fail-loud gate (text and JSON), the
+// worktree stays untouched, and the single-binder twins above stay green
+// as the exemption pin. Sequences are exempt (hetero fusion owns
+// binder-renaming runs there; sequencing completion is follow-up work).
+const C21_REASON: &str = "general template rewrites bound binder idents without binder identity";
+
+fn check_c21_text(dir: &std::path::Path, patch: &str, content: &str) {
+    let out = run_stdin(dir, patch, &["--check"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
+    assert!(stderr.contains("rule: r"), "got: {stderr}");
+    assert!(stderr.contains("file: src/lib.rs"), "got: {stderr}");
+    assert!(stderr.contains(C21_REASON), "got: {stderr}");
+    assert!(stderr.contains("C21"), "got: {stderr}");
+    let got = read(dir, "src/lib.rs");
+    assert_eq!(got, content, "worktree must be untouched");
+}
+
+fn check_c21_json(dir: &std::path::Path, patch: &str, content: &str) {
+    let out = run_stdin(dir, patch, &["--format", "json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("RSMPL_PATTERN_CONFLICT")
+    );
+    assert_eq!(v["error"]["rule"], serde_json::json!("r"));
+    assert_eq!(v["error"]["reason"], serde_json::json!("general template rewrites bound binder idents without binder identity; v1 general templates never own binder renames (C21)"));
+    assert_eq!(
+        v["error"]["repair"]["code"],
+        serde_json::json!("C21"),
+        "got: {v}"
+    );
+    let got = read(dir, "src/lib.rs");
+    assert_eq!(got, content, "worktree must be untouched");
+}
+
+#[test]
+fn destructuring_let_rewrite_fails_c21() {
+    let dir = init_repo();
+    let content = "pub fn run() {\n    let (a, old) = (1, 2);\n    let y = old + 1;\n    let _ = (a, y);\n}\n";
+    cargo_crate(dir.path(), content);
+    let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# expr E\n- let (a, old) = E;\n+ let (a, new) = E;\n";
+    check_c21_text(dir.path(), patch, content);
+    check_c21_json(dir.path(), patch, content);
+}
+
+#[test]
+fn destructuring_if_let_rewrite_fails_c21() {
+    let dir = init_repo();
+    let content = "pub fn run(opt: Option<u32>) {\n    if let Some(old) = opt { println!(\"{}\", old); }\n}\n";
+    cargo_crate(dir.path(), content);
+    let patch = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r\n# expr E\n- if let Some(old) = E { ... }\n+ if let Some(new) = E { ... }\n";
+    check_c21_text(dir.path(), patch, content);
+    check_c21_json(dir.path(), patch, content);
+}
+
+#[test]
+fn attr_strip_plus_rename_fails_c21() {
+    // Attr envelopes break binder identity (minus/plus attrs differ),
+    // so strip + rename was the same hole in disguise: strip-only
+    // hunks still apply (no binder change), the combo fails at C21.
+    let dir = init_repo();
+    let content = "pub fn run() {\n    #[allow(x)]\n    let x = 1;\n}\n";
+    cargo_crate(dir.path(), content);
+    let patch = "diff --git src/lib.rs\n@@ -2,2 @@ rule=r\n# attrs=strip\n# expr E\n- #[allow(x)]\n- let x = E;\n+ let y = E;\n";
+    check_c21_text(dir.path(), patch, content);
+}

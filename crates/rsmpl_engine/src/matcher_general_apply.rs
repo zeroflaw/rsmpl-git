@@ -286,6 +286,42 @@ pub fn apply_general_hunk(
         _ => HashMap::new(),
     };
 
+    // C21: general Stmt/Expr templates never own binder renames the
+    // binder machinery cannot track. A bound-ident change that invents a
+    // binder (rename/add/concretion) — or drops one with no hole replay
+    // — would rewrite the header while stranding body/file uses with no
+    // orphans filed; fail loud instead of `verified`. Pure permutations,
+    // hole replays (`P @ sub` → `P`, `Some(x)` → `Some(P)`), and plain
+    // renames through binder identity keep applying. Sequences are
+    // exempt: the raiser owns binder-renaming hetero runs there (WI-5d
+    // single-block fusion, completed by sibling hunks in the same patch),
+    // so a hunk-local veto would break the apply direction of a proven
+    // cycle; sequencing completion is follow-up work, not this gate.
+    if matches!(shape, GeneralShape::Stmt | GeneralShape::Expr)
+        && !crate::use_graph_local::is_local_binder_rename(compiled)
+    {
+        let placeholders: Vec<(String, String)> = match &compiled.kind {
+            PatternKind::General { placeholders, .. } => placeholders.clone(),
+            _ => Vec::new(),
+        };
+        if crate::matcher_general_binder::unclaimed_binder_rewrite(
+            shape,
+            &minus_sub,
+            &plus_body,
+            &placeholders,
+        ) {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "general template rewrites bound binder idents without binder identity; v1 general templates never own binder renames (C21)",
+            )
+            .with_rule(&rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "C21",
+                "rewrite as a single-binder hunk (plain `- let old = E;` / `+ let new = E;` and friends, SPEC 14.8) or use an ordinary hunk",
+            )));
+        }
+    }
+
     // Parse the substituted minus pattern and collect candidates.
     let mut collector = Collector {
         index,
