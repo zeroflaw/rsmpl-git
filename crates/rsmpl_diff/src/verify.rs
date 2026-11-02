@@ -380,6 +380,8 @@ fn apply_section(
 
 /// Apply one hunk body (header + content lines) at original coordinates
 /// plus the running `delta` from previous hunks; returns the new delta.
+/// A pure-insertion anchor (`-N,0`) sits *after* original line N (top-insert
+/// `-0,0` sits at the top), mirroring the engine's `old_start + 1` cursor.
 fn apply_hunk(
     section: &str,
     file: &mut LineFile,
@@ -389,8 +391,14 @@ fn apply_hunk(
     let err = |what: String| section_error(section, &what);
     let (old_start, old_len, new_len) =
         parse_hunk_header(&hunk[0]).ok_or_else(|| err("bad hunk header".to_string()))?;
-    let start_i = if old_start == 0 {
-        // New-file first hunk (`@@ -0,0 ...`): insert at the top.
+    let start_i = if old_len == 0 {
+        // Pure insertion after original line `old_start`
+        // (`-0,0` inserts at the top, delta-aware for later hunks).
+        old_start as i64 + delta
+    } else if old_start == 0 {
+        // Unreachable for well-formed non-empty hunks (`-0,N>0` has no
+        // old lines to start at); keep the top anchor so the underflow
+        // guard below owns the verdict.
         0i64
     } else {
         old_start as i64 - 1 + delta
@@ -669,5 +677,60 @@ mod tests {
         let report = verify(&pre, raw, "").unwrap();
         assert!(report.verified);
         assert_eq!(report.files_compared, 0);
+    }
+
+    #[test]
+    fn pure_insertion_after_line_one_verifies() {
+        // `-1,0` anchors *after* line 1 (git: insert `X` between `a`,`b`).
+        // Pre-fix this anchored before line 1 and false-negatived.
+        let pre = pre(&[("f.txt", "a\nb\nc\n")]);
+        let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,0 +2 @@ a\n+X\n";
+        let rsmpl = "diff --git f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,0 +2 @@ a\n+X\n";
+        let report = verify(&pre, raw, rsmpl).unwrap();
+        assert!(report.verified, "got: {report:?}");
+        assert_eq!(report.files_compared, 1);
+    }
+
+    #[test]
+    fn pure_append_after_last_line_verifies() {
+        let pre = pre(&[("f.txt", "a\nb\nc\n")]);
+        let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -3,0 +4 @@ c\n+X\n";
+        let rsmpl = "diff --git f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -3,0 +4 @@ c\n+X\n";
+        let report = verify(&pre, raw, rsmpl).unwrap();
+        assert!(report.verified, "got: {report:?}");
+    }
+
+    #[test]
+    fn pure_top_insertion_verifies() {
+        let pre = pre(&[("f.txt", "a\nb\nc\n")]);
+        let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1 @@\n+X\n";
+        let rsmpl = "diff --git f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1 @@\n+X\n";
+        let report = verify(&pre, raw, rsmpl).unwrap();
+        assert!(report.verified, "got: {report:?}");
+    }
+
+    #[test]
+    fn modify_plus_later_insertion_uses_running_delta() {
+        // First hunk rewrites line 1 (delta 0); the pure insertion after
+        // original line 5 must land after it in post coordinates.
+        let pre = pre(&[("f.txt", "a\nb\nc\nd\ne\nf\n")]);
+        let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+A\n@@ -5,0 +6 @@ e\n+X\n";
+        let rsmpl = "diff --git f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+A\n@@ -5,0 +6 @@ e\n+X\n";
+        let report = verify(&pre, raw, rsmpl).unwrap();
+        assert!(report.verified, "got: {report:?}");
+    }
+
+    #[test]
+    fn missing_insertion_still_diverges_at_inserted_line() {
+        // The fix must not mask divergence: a raise missing the inserted
+        // line fails naming that line.
+        let pre = pre(&[("f.txt", "a\nb\nc\n")]);
+        let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,0 +2 @@ a\n+X\n";
+        let partial = "diff --git f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n a\n";
+        let report = verify(&pre, raw, partial).unwrap();
+        assert!(!report.verified, "must diverge: {report:?}");
+        let div = report.first_divergence.expect("must name divergence");
+        assert_eq!(div.line, 2, "got: {div:?}");
+        assert_eq!(div.want, "X");
     }
 }
