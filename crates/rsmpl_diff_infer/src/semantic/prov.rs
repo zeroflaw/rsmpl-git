@@ -508,6 +508,65 @@ pub(crate) fn push_ordinary_for_section(
     );
 }
 
+/// WI-15 (partially-compressed sections): one remainder ordinary entry
+/// for a mixed emission (semantic `rule=` hunks plus verbatim ordinary
+/// remainder hunks in one file section — per-hunk fallback mixes, WI-19
+/// partial-partition mixes, subhunk mixes). `sites` are the original
+/// section's changed old-side lines minus the union claimed by every
+/// emitted `rule=` range (`covered_sites` per rule; anchor-only move
+/// pastes cover `[]`, so they never shrink the remainder). Empty
+/// remainder, wholly-semantic emissions (no native hunk), rule-free
+/// emissions (unreachable on the `Some` path — guarded), or empty
+/// `declined` (nothing tried) all stay silent — the same silences as
+/// [`push_ordinary_prov`]. Chain-level `declined` (deduped) is carried
+/// as-is; per-run losing-decline detail stays with the P3 subhunk-inner
+/// item, which threads the real vec through the composite drivers.
+pub(crate) fn push_partial_ordinary_prov(
+    prov: &mut Vec<HunkProvenance>,
+    semantic: &str,
+    original: &str,
+    path: &str,
+    declined: &[HunkDeclined],
+    file_old: Option<&str>,
+) {
+    if declined.is_empty() {
+        return;
+    }
+    if !has_native_hunk(semantic) || !has_semantic_hunk(semantic) {
+        return;
+    }
+    let changed = crate::totality::changed_old_lines(original);
+    if changed.is_empty() {
+        return;
+    }
+    let ranges = emitted_hunk_ranges(semantic);
+    let mut claimed: Vec<usize> = Vec::new();
+    for (rule, _, _) in &ranges {
+        for site in covered_sites(&ranges, rule, &changed) {
+            if !claimed.contains(&site) {
+                claimed.push(site);
+            }
+        }
+    }
+    let remainder: Vec<usize> = changed
+        .into_iter()
+        .filter(|l| !claimed.contains(l))
+        .collect();
+    if remainder.is_empty() {
+        return;
+    }
+    push_ordinary_prov(prov, path, declined, &remainder, file_old, semantic);
+}
+
+/// WI-15 (partial): true when `section` holds at least one semantic hunk
+/// (an `@@` header carrying `rule=`). Mixed emissions hold both this and
+/// [`has_native_hunk`]; wholly-semantic emissions hold only this.
+pub(crate) fn has_semantic_hunk(section: &str) -> bool {
+    section
+        .lines()
+        .any(|l| l.starts_with("@@") && l.contains("rule="))
+}
+
 /// WI-7a: swap a whole-section detector's collapsed `diff --git` header
 /// for the original rename prelude (byte-exact: `similarity index`,
 /// `rename from/to`, modes, `---`/`+++`). The detector body (from the
@@ -704,6 +763,80 @@ mod tests {
             "got: {:?}",
             e.declined
         );
+    }
+
+    #[test]
+    fn partial_mixed_emission_gains_remainder_entry() {
+        // WI-15 partial: a mixed emission (one semantic hunk claiming
+        // line 2, one verbatim remainder hunk on line 4) gains exactly
+        // one remainder ordinary entry with the remainder site only.
+        // (Line 1 is avoided: `@@ -1,1 @@` is sweep-dummy-shaped, so a
+        // ranged claim there over-covers by construction — filed
+        // separately, this pin stays off the ambiguity.)
+        let original = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2 +2 @@\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let semantic = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 @@ rule=r1\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let mut prov = Vec::new();
+        push_partial_ordinary_prov(
+            &mut prov,
+            semantic,
+            original,
+            "f.rs",
+            &declined(&[("call_sweep", "no-match"), ("verbatim", "no-match")]),
+            Some("pre"),
+        );
+        assert_eq!(prov.len(), 1, "got: {prov:?}");
+        let e = &prov[0];
+        assert_eq!(e.detector, "ordinary");
+        assert_eq!(e.rule, "");
+        assert_eq!(e.sites, vec![4], "remainder only, got: {prov:?}");
+        assert!(e.sites_exact);
+        assert_eq!(e.saved_bytes, 0);
+        assert_eq!(
+            e.declined,
+            declined(&[("call_sweep", "no-match"), ("verbatim", "no-match")])
+        );
+        assert!(has_semantic_hunk(semantic));
+        assert!(has_native_hunk(semantic));
+    }
+
+    #[test]
+    fn partial_helper_stays_silent_without_remainder_or_tries() {
+        // Wholly-semantic emissions, wholly-ordinary callers (guarded),
+        // fully-claimed sweep dummies, and empty declined lists stay
+        // silent — no spurious remainder entry.
+        let mut prov = Vec::new();
+        push_partial_ordinary_prov(
+            &mut prov,
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n",
+            "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n",
+            "f.rs",
+            &declined(&[("call_sweep", "no-match")]),
+            Some("pre"),
+        );
+        assert!(prov.is_empty(), "wholly-semantic stays silent: {prov:?}");
+        // Empty declined (nothing tried) stays silent even when mixed.
+        push_partial_ordinary_prov(
+            &mut prov,
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n-x\n@@ -2,1 @@\n-y\n+z\n",
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@\n-x\n+y\n@@ -2,1 @@\n-y\n+z\n",
+            "f.rs",
+            &[],
+            Some("pre"),
+        );
+        assert!(prov.is_empty(), "untried stays silent: {prov:?}");
+        // Sweep dummy claims everything — no remainder to explain.
+        push_partial_ordinary_prov(
+            &mut prov,
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n",
+            "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n",
+            "f.rs",
+            &declined(&[("call_sweep", "no-match")]),
+            Some("pre"),
+        );
+        assert!(prov.is_empty(), "fully-claimed stays silent: {prov:?}");
+        assert!(!has_semantic_hunk(
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@\n-x\n+y\n"
+        ));
     }
 
     #[test]

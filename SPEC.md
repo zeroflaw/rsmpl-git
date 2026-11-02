@@ -7583,8 +7583,10 @@ section's `declined` list (`member_rename`, `assoc_rename`, and
 appearing there under their chain meaning). There is deliberately no
 patch-level `declined` key — a pre-pass decline is the absence of a
 semantic entry, by design; partially-compressed sections (semantic plus ordinary
-remainder) carry no ordinary entry — the remainder's declined list
-is WI-4 residue. Sections nothing tried (headers-only, non-`.rs`)
+remainder in one emitted file section) carry one remainder ordinary entry —
+`sites` are the original section's changed lines minus those claimed by the
+emitted `rule=` ranges, `declined` is the section's chain-level list (deduped;
+per-run losing-decline detail stays with the subhunk-inner item). Sections nothing tried (headers-only, non-`.rs`)
 stay silent passthrough, as do pre-pass-emitted sections with no
 native hunk (already semantic). `version` is `4` — unified with `applyrs` via the
 single `rsmpl_patch::REPORT_VERSION` constant (WI-20; `v2`/`v3`

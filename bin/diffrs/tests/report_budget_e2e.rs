@@ -218,3 +218,96 @@ fn wi15_ordinary_section_names_declined_detectors() {
         "overhead {overhead} B exceeds budget {budget} B (D={d}): {v}"
     );
 }
+
+#[test]
+fn wi15_partial_section_gains_remainder_ordinary_entry() {
+    // WI-15 partial: a section holding one firing hunk (const rename)
+    // plus one ordinary hunk (comment edit) emits two entries — one
+    // semantic plus one remainder `detector: "ordinary"` whose `sites`
+    // name only the remainder line and whose `declined` list is the
+    // section's chain-level evidence. Semantic entries never carry
+    // `declined`; per-run losing-decline detail stays with the
+    // subhunk-inner follow-up (chain-level here, by design).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn header() {}\nconst OLD_CONST_VALUE_WITH_LONG_NAME_AAA: usize = 1001;\nfn m() {\n    // hello\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn header() {}\nconst NEW_CONST_VALUE_WITH_LONG_NAME_AAA: usize = 1001;\nfn m() {\n    // hello world\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 2, "got: {v}");
+    let sem = hunks
+        .iter()
+        .find(|e| e["detector"] != serde_json::json!("ordinary"))
+        .expect("one semantic entry");
+    let ord = hunks
+        .iter()
+        .find(|e| e["detector"] == serde_json::json!("ordinary"))
+        .expect("one remainder ordinary entry");
+    assert_eq!(
+        sem["detector"],
+        serde_json::json!("item_rename"),
+        "got: {v}"
+    );
+    assert!(sem.get("declined").is_none(), "got: {v}");
+    assert_eq!(sem["sites"], serde_json::json!([2]), "got: {v}");
+    assert_eq!(ord["rule"], serde_json::json!(""), "got: {v}");
+    assert_eq!(ord["saved_bytes"], serde_json::json!(0), "got: {v}");
+    assert_eq!(ord["sites"], serde_json::json!([4]), "got: {v}");
+    assert_eq!(ord["totality"], serde_json::json!("pre-image"), "got: {v}");
+    let declined = ord["declined"].as_array().unwrap();
+    assert!(!declined.is_empty(), "got: {v}");
+    let names: Vec<&str> = declined
+        .iter()
+        .map(|d| d["detector"].as_str().unwrap())
+        .collect();
+    for prepass in [
+        "move",
+        "item_intent",
+        "item_joint_impl",
+        "fn_joint",
+        "mod_rename",
+    ] {
+        assert!(
+            !names.contains(&prepass),
+            "pre-pass {prepass} leaked into remainder declined: {names:?}"
+        );
+    }
+    // WI-15 budget over both entries.
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let patch = v["patch"].as_str().unwrap();
+    let overhead = stdout.len() - patch.len();
+    let h = hunks.len();
+    let t: usize = hunks
+        .iter()
+        .map(|e| e["sites"].as_array().map(|a| a.len()).unwrap_or(0))
+        .sum();
+    let d: usize = hunks
+        .iter()
+        .map(|e| {
+            e.get("declined")
+                .and_then(|a| a.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
+        .sum();
+    let budget = 150 + 190 * h + 10 * t + 75 * d;
+    assert!(
+        overhead <= budget,
+        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
+    );
+}

@@ -372,6 +372,24 @@ pub fn infer_semantic_with_provenance(
         ) {
             Some(semantic) => {
                 compressed_any = true;
+                // WI-15 (partial): mixed emissions (semantic + ordinary
+                // remainder) gain one remainder ordinary entry with the
+                // section's chain-level `declined` list; wholly-semantic
+                // emissions stay silent via the helper's gates.
+                if let Some(header) = section.lines().next() {
+                    if let Some(rest) = header.strip_prefix("diff --git ") {
+                        if let Some(path) = crate::b_side_path(rest) {
+                            prov::push_partial_ordinary_prov(
+                                prov,
+                                &semantic,
+                                section,
+                                &path,
+                                &declined,
+                                pre.get(&path).map(String::as_str),
+                            );
+                        }
+                    }
+                }
                 out.push_str(&semantic);
             }
             // WI-15c: wholly-ordinary sections explain themselves via
