@@ -5867,6 +5867,20 @@ overlap is a defensive backstop, but even it carries the `overlap`
 next action). Everything else is machine-applicable by
 construction.
 
+WI-18 source gate: `rsmpl_patch::errors` tests enumerate every
+`StructuredError::new` site in production code (`crates/*/src`,
+`bin/*/src`). Non-filler codes (`Match`/`Range`/`Parse`/`GitHunk`/
+`Build`) must carry a site-level `with_repair` — the filler does not
+cover those codes, so a bare site there is a prose-only failure.
+`Pattern`/`Symbol`/`Capture` bare sites are the engine-tail class
+(`fill_generic_repair` at the `apply_inner` boundary keys one
+concrete template per class and never echoes the English reason);
+their count is ceiling-pinned so the class never grows without an
+explicit site-level repair. `IoConflict` bare sites are the
+environmental allow-list. The runtime companion is
+`wi3_repair_complete_e2e.rs` (one failing patch per patch-input
+class).
+
 ---
 
 ### 25.10 Build conflict

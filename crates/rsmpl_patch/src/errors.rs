@@ -360,4 +360,189 @@ mod tests {
             "bare render must stay silent"
         );
     }
+
+    /// WI-18: source-scan repair gate — no new prose-only failure ships.
+    ///
+    /// Every `StructuredError::new` site in production code
+    /// (`crates/*/src`, `bin/*/src`, before `#[cfg(test)]`) must carry a
+    /// machine repair or join a named class. `IoConflict` bare sites are
+    /// the environmental allow-list (SPEC 25.9/D.2 permit `null`: no
+    /// patch spelling fixes them). `PatternConflict`/`SymbolConflict`/
+    /// `CaptureConflict` bare sites are the engine-tail class
+    /// (`rsmpl_engine::validate::fill_generic_repair`, applied at the
+    /// `apply_inner` boundary, keys one concrete template per class and
+    /// never echoes prose, so they are never null at runtime); the tail
+    /// count is pinned by `PATTERN_TAIL_CEILING` so the class never
+    /// grows without an explicit site-level repair. Any other bare site
+    /// (`Match`/`Range`/`Parse`/`GitHunk`/`Build` or an unclassified
+    /// code) fails naming file + line + code, because the filler does
+    /// not cover those codes and a bare site there is a prose-only
+    /// failure the agent cannot act on.
+    ///
+    /// The companion runtime enumeration lives in
+    /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
+    /// patch per patch-input class); this test is the source gate.
+    const PATTERN_TAIL_CEILING: usize = 96;
+
+    #[test]
+    fn wi18_source_scan_every_site_carries_repair_or_allow_list() {
+        let root = workspace_root();
+        let mut with_repair_per_code: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut io_allow_list = 0usize;
+        let mut tail_bare: Vec<String> = Vec::new();
+        let mut hard_bare: Vec<String> = Vec::new();
+        for dir in ["crates", "bin"] {
+            let base = root.join(dir);
+            let mut stack = vec![base];
+            while let Some(top) = stack.pop() {
+                let entries = std::fs::read_dir(&top)
+                    .unwrap_or_else(|e| panic!("WI-18 scan cannot read {}: {e}", top.display()));
+                for entry in entries {
+                    let path = entry.expect("dir entry").path();
+                    if path.is_dir() {
+                        // Production sources only: `src` trees (integration
+                        // tests under `tests/` assert runtime behavior and
+                        // construct bare errors on purpose).
+                        let under_src = top.components().any(|c| c.as_os_str() == "src");
+                        if path.file_name().is_some_and(|n| n == "src")
+                            || top.ends_with(dir)
+                            || under_src
+                        {
+                            stack.push(path);
+                        }
+                        continue;
+                    }
+                    if path.extension().is_none_or(|e| e != "rs") {
+                        continue;
+                    }
+                    scan_file(
+                        &path,
+                        &root,
+                        &mut with_repair_per_code,
+                        &mut io_allow_list,
+                        &mut tail_bare,
+                        &mut hard_bare,
+                    );
+                }
+            }
+        }
+        assert!(
+            !with_repair_per_code.is_empty(),
+            "WI-18 scan found no with_repair sites (walk broken?)"
+        );
+        for code in [
+            "PatternConflict",
+            "SymbolConflict",
+            "CaptureConflict",
+            "MatchConflict",
+            "RangeConflict",
+            "ParseConflict",
+            "GitHunkConflict",
+            "BuildConflict",
+        ] {
+            assert!(
+                with_repair_per_code.get(code).copied().unwrap_or(0) > 0,
+                "WI-18 scan: no with_repair site for {code} (gate vacuous?)"
+            );
+        }
+        assert!(
+            io_allow_list > 0,
+            "WI-18 scan: IO allow-list empty (walk broken or allow-list stale?)"
+        );
+        assert!(
+            hard_bare.is_empty(),
+            "WI-18: bare non-tail sites without with_repair (add with_repair at the site, never a central patch-up):\n{}",
+            hard_bare.join("\n")
+        );
+        assert!(
+            tail_bare.len() <= PATTERN_TAIL_CEILING,
+            "WI-18: engine-tail bare count {} exceeds ceiling {PATTERN_TAIL_CEILING} (new prose-only sites must carry with_repair):\n{}",
+            tail_bare.len(),
+            tail_bare.join("\n")
+        );
+    }
+
+    fn workspace_root() -> std::path::PathBuf {
+        // `CARGO_MANIFEST_DIR` is `crates/rsmpl_patch`; the workspace root
+        // holds both `crates/` and `bin/`.
+        let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            if dir.join("crates").is_dir() && dir.join("bin").is_dir() {
+                return dir;
+            }
+            if !dir.pop() {
+                panic!("WI-18 scan cannot locate the workspace root");
+            }
+        }
+    }
+
+    fn scan_file(
+        path: &std::path::Path,
+        root: &std::path::Path,
+        with_repair_per_code: &mut std::collections::HashMap<String, usize>,
+        io_allow_list: &mut usize,
+        tail_bare: &mut Vec<String>,
+        hard_bare: &mut Vec<String>,
+    ) {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("WI-18 scan cannot read {}: {e}", path.display()));
+        // Production part only: unit tests construct bare errors on
+        // purpose (shape pins, null-render pins).
+        let prod = text.split("#[cfg(test)]").next().unwrap_or(&text);
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        let mut rest = prod;
+        // Byte offset of `rest` within `prod` for line numbers.
+        let mut base: usize = 0;
+        while let Some(idx) = rest.find("StructuredError::new(") {
+            let abs = base + idx;
+            let line = prod[..abs].lines().count().max(1);
+            let after = &prod[abs..];
+            let code = code_token(after);
+            // The chained `.with_repair` always follows within the same
+            // expression; bound the window at the next construction so
+            // a neighboring site's repair never credits this one.
+            let window = &after[..after.len().min(1800)];
+            let bound = match window[1..].find("StructuredError::new(") {
+                Some(n) => &window[..n + 1],
+                None => window,
+            };
+            let has_repair = bound.contains(".with_repair");
+            let short = short_code(&code);
+            if has_repair {
+                *with_repair_per_code.entry(short.clone()).or_insert(0) += 1;
+            } else if short == "IoConflict" {
+                *io_allow_list += 1;
+            } else if short == "PatternConflict"
+                || short == "SymbolConflict"
+                || short == "CaptureConflict"
+            {
+                tail_bare.push(format!("{rel}:{line} ({short})"));
+            } else {
+                hard_bare.push(format!("{rel}:{line} ({short})"));
+            }
+            rest = &after["StructuredError::new(".len()..];
+            base = abs + "StructuredError::new(".len();
+        }
+    }
+
+    fn code_token(after: &str) -> String {
+        // `after` starts at `StructuredError::new(`; the first argument
+        // is the code (`ErrorCode::X`, `rsmpl_patch::ErrorCode::X`,
+        // `code`, or a literal for helpers — never a string).
+        let open = after.find('(').unwrap_or(0);
+        let tail = after[open + 1..].trim_start();
+        let end = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+            .unwrap_or(tail.len());
+        tail[..end].to_string()
+    }
+
+    fn short_code(code: &str) -> String {
+        code.rsplit("::").next().unwrap_or(code).to_string()
+    }
 }
