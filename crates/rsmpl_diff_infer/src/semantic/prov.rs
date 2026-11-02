@@ -229,24 +229,66 @@ pub(crate) fn emitted_hunk_ranges(emitted: &str) -> Vec<(String, usize, usize)> 
         .collect()
 }
 
+/// WI-15 partial: true when `emitted` carries a file-scope directive for
+/// `rule` (`# sweep` or `# scope=file`, SPEC 17.3 / SPEC 9.3). The `(1,1)`
+/// old range is a dummy iff file scope is present — a ranged single-line
+/// claim at line 1 shares the `(1,1)` shape but carries no file-scope
+/// directive, so range alone cannot tell them apart. `# allow=many`
+/// alone is never file scope.
+pub(crate) fn rule_is_file_scope(emitted: &str, rule: &str) -> bool {
+    let mut cur_rule: Option<String> = None;
+    let mut cur_scope = false;
+    let mut scoped: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for line in emitted.lines() {
+        if line.starts_with("@@") {
+            if let Some(r) = cur_rule.take() {
+                scoped.insert(r, cur_scope);
+            }
+            cur_scope = false;
+            cur_rule = line
+                .split("rule=")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+                .filter(|r| !r.is_empty())
+                .map(str::to_string);
+        } else if cur_rule.is_some() {
+            let t = line.trim();
+            if t == "# sweep"
+                || t.starts_with("# sweep ")
+                || t.starts_with("# sweep\t")
+                || t == "# scope=file"
+                || t.starts_with("# scope=file ")
+                || t.starts_with("# scope=file\t")
+            {
+                cur_scope = true;
+            }
+        }
+    }
+    if let Some(r) = cur_rule.take() {
+        scoped.insert(r, cur_scope);
+    }
+    scoped.get(rule).copied().unwrap_or(false)
+}
 /// WI-2: sites for one emitted hunk — the section's changed old-side
 /// lines covered by the hunk's emitted old-side range (`changed` whole
-/// when the hunk is a sweep dummy or its header is missing). Covering,
-/// never understating: the emission range always spans the detector's
-/// own sites, so every true site survives the intersection.
+/// when the hunk is a file-scope sweep dummy or its header is missing).
+/// Covering, never understating: the emission range always spans the
+/// detector's own sites, so every true site survives the intersection.
+/// A `(1,1)` range covers everything only when `is_sweep` proves the
+/// block carries `# sweep` / `# scope=file` (SPEC 17.3); a ranged
+/// single-line claim at line 1 shares the shape and intersects.
 pub(crate) fn covered_sites(
     ranges: &[(String, usize, usize)],
     rule: &str,
     changed: &[usize],
+    is_sweep: bool,
 ) -> Vec<usize> {
     match ranges.iter().find(|(r, _, _)| r == rule) {
-        // File-scope sweep dummy (`@@ -1,1 @@` + `# sweep`, SPEC 17.3):
+        // File-scope sweep dummy (`@@ -1,1 @@` + file scope, SPEC 17.3):
         // the emitted range covers the whole file by construction, so
-        // every changed line is a site. A ranged hunk always spans its
-        // own sites, so an exact (1,1) range over changed lines outside
-        // [1,1] can only be a dummy — never a ranged under-report
-        // (WI-2 sweep triage: verbatim r7 cited zero sites).
-        Some((_, 1, 1)) => changed.to_vec(),
+        // every changed line is a site (WI-2 sweep triage: verbatim r7
+        // cited zero sites).
+        Some((_, 1, 1)) if is_sweep => changed.to_vec(),
         Some((_, start, len)) if *start >= 1 => {
             let end = start.saturating_add(len.saturating_sub(1));
             changed
@@ -298,10 +340,12 @@ pub(crate) fn commit_prov(
     let proven = file_old.is_some();
     for (rule, detector) in present.into_iter() {
         let parsed = ranges.iter().any(|(hr, _, _)| hr == &rule);
+        let is_sweep = rule_is_file_scope(final_text, &rule);
         let is_dummy = ranges
             .iter()
-            .any(|(hr, s, l)| hr == &rule && *s == 1 && *l == 1);
-        let sites = covered_sites(&ranges, &rule, changed);
+            .any(|(hr, s, l)| hr == &rule && *s == 1 && *l == 1)
+            && is_sweep;
+        let sites = covered_sites(&ranges, &rule, changed, is_sweep);
         // Exact when the emitted range parsed and either pre-image
         // totality backs the coverage or there is nothing covered to
         // overstate (anchor-only move pastes report `[]`).
@@ -564,7 +608,7 @@ pub(crate) fn push_partial_ordinary_prov(
             }
         }
         let sites = if from_prov.is_empty() {
-            covered_sites(&ranges, rule, &changed)
+            covered_sites(&ranges, rule, &changed, rule_is_file_scope(semantic, rule))
         } else {
             from_prov
         };
@@ -675,19 +719,51 @@ mod tests {
 
     #[test]
     fn sweep_dummy_covers_whole_changed() {
-        // WI-2 sweep triage: a file-scope sweep dummy (`@@ -1,1 @@`)
-        // cites every changed line (verbatim r7 cited none).
+        // WI-2 sweep triage: a file-scope sweep dummy (`@@ -1,1 @@` +
+        // file scope) cites every changed line (verbatim r7 cited none).
         let ranges = vec![("r7".to_string(), 1, 1)];
         assert_eq!(
-            covered_sites(&ranges, "r7", &[297, 342, 396]),
+            covered_sites(&ranges, "r7", &[297, 342, 396], true),
             vec![297, 342, 396]
         );
         // Ranged hunks still intersect.
         let ranges = vec![("r1".to_string(), 290, 10)];
-        assert_eq!(covered_sites(&ranges, "r1", &[297, 342, 396]), vec![297]);
+        assert_eq!(
+            covered_sites(&ranges, "r1", &[297, 342, 396], false),
+            vec![297]
+        );
         // Missing headers fall back to whole changed.
         let ranges: Vec<(String, usize, usize)> = vec![];
-        assert_eq!(covered_sites(&ranges, "r9", &[5]), vec![5]);
+        assert_eq!(covered_sites(&ranges, "r9", &[5], false), vec![5]);
+        assert_eq!(covered_sites(&ranges, "r9", &[5], true), vec![5]);
+    }
+    #[test]
+    fn ranged_one_one_claims_line_one_only() {
+        // WI-15 partial residue: a `(1,1)` range without file scope is a
+        // ranged single-line claim at line 1, not a dummy — it intersects
+        // instead of covering the whole changed set.
+        let ranges = vec![("r1".to_string(), 1, 1)];
+        assert_eq!(covered_sites(&ranges, "r1", &[1, 4], false), vec![1]);
+        assert_eq!(
+            covered_sites(&ranges, "r1", &[4], false),
+            Vec::<usize>::new()
+        );
+        assert_eq!(covered_sites(&ranges, "r1", &[1, 4], true), vec![1, 4]);
+    }
+    #[test]
+    fn rule_is_file_scope_reads_body_not_range() {
+        // Body-aware dummy detection: the range alone never proves file
+        // scope — only `# sweep` / `# scope=file` in the rule's block.
+        let sweep = "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- a\n+ b\n";
+        let scope =
+            "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n# allow=many\n# scope=file\n- a\n+ b\n";
+        let ranged = "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n# allow=many\n- a\n+ b\n";
+        let plain = "diff --git a/f.rs b/f.rs\n@@ -1,1 @@ rule=r1\n- a\n+ b\n";
+        assert!(rule_is_file_scope(sweep, "r1"));
+        assert!(rule_is_file_scope(scope, "r1"));
+        assert!(!rule_is_file_scope(ranged, "r1"));
+        assert!(!rule_is_file_scope(plain, "r1"));
+        assert!(!rule_is_file_scope(sweep, "r9"));
     }
 
     #[test]
@@ -943,5 +1019,38 @@ mod tests {
         );
         assert_eq!(prov.len(), 1, "got: {prov:?}");
         assert_eq!(prov[0].sites, vec![4], "got: {prov:?}");
+    }
+    #[test]
+    fn partial_line_one_ranged_claims_only_line_one() {
+        // WI-15 partial residue (`covered_sites` `(1,1)` ambiguity): a
+        // ranged `(1,1)` claim at line 1 (no `# sweep`) covers only line
+        // 1, so a mixed section with a line-4 remainder gains exactly one
+        // remainder ordinary entry; the `# sweep` twin covers everything
+        // and stays silent.
+        let original = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let ranged = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 @@ rule=r1\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let sweep = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 @@ rule=r1\n# sweep\n-const OLD_A: usize = 1001;\n+const NEW_A: usize = 1001;\n@@ -4 +4 @@\n-    // hi\n+    // bye\n";
+        let mut prov = Vec::new();
+        push_partial_ordinary_prov(
+            &mut prov,
+            ranged,
+            original,
+            "f.rs",
+            &declined(&[("call_sweep", "no-match")]),
+            Some("pre"),
+        );
+        assert_eq!(prov.len(), 1, "ranged (1,1) leaves a remainder: {prov:?}");
+        assert_eq!(prov[0].detector, "ordinary");
+        assert_eq!(prov[0].sites, vec![4], "remainder only, got: {prov:?}");
+        let mut prov = Vec::new();
+        push_partial_ordinary_prov(
+            &mut prov,
+            sweep,
+            original,
+            "f.rs",
+            &declined(&[("call_sweep", "no-match")]),
+            Some("pre"),
+        );
+        assert!(prov.is_empty(), "sweep dummy claims all: {prov:?}");
     }
 }
