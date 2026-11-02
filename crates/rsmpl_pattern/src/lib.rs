@@ -31,7 +31,10 @@ mod terse_fn;
 mod use_rename;
 
 pub use expr_pattern::{try_parse_expr, ArgPat, ExprPattern, ExprPatternKind, PlaceholderMaps};
-pub use fn_pattern::{parse_fn_pattern, FnPattern, GenericPat, NamePat, RetPat, VisPat, WherePat};
+pub use fn_pattern::{
+    parse_fn_pattern, try_parse_fn_body_joint, FnBodyJoint, FnPattern, GenericPat, NamePat, RetPat,
+    VisPat, WherePat,
+};
 pub use item_rename::{
     canonical_vis_prefix, parse_side as parse_item_rename_side, ItemKind, ItemRenameSide,
 };

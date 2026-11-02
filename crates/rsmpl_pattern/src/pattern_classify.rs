@@ -564,6 +564,35 @@ pub(crate) fn classify(
         // WI-5: the name-hole list lives beside the slot metas (diet `N`
         // plus any `# ident` declaration).
         let ident_metas = table.ident_slot_metas();
+        // WI-20 slice 1: a header pair plus one body-expression line pair
+        // rides one hunk; the full text never parses as a bare fn
+        // (trailing tokens), so split before failing. Falls through to
+        // the single-shape parse for every other shape.
+        if let Some(joint) = crate::fn_pattern::try_parse_fn_body_joint(
+            m,
+            p,
+            &vis_metas,
+            &qual_metas,
+            &gen_metas,
+            &where_metas,
+            &type_metas,
+            &ident_metas,
+            hunk.returns_none(),
+        ) {
+            let minus_name = match &joint.minus.name {
+                crate::fn_pattern::NamePat::Concrete(n) => n.clone(),
+                crate::fn_pattern::NamePat::Meta(n) => format!("${n}"),
+            };
+            let plus_name = match &joint.plus.name {
+                crate::fn_pattern::NamePat::Concrete(n) => n.clone(),
+                crate::fn_pattern::NamePat::Meta(n) => format!("${n}"),
+            };
+            return Ok(PatternKind::Fn {
+                minus_name,
+                plus_name,
+                vis_meta: None,
+            });
+        }
         let minus_fn = parse_fn_pattern(
             &first_fn_block(m),
             &vis_metas,

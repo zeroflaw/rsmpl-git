@@ -21,6 +21,9 @@ use crate::lines::LineIndex;
 // re-exports so existing callers are untouched.
 pub use crate::matcher_fn_item::{apply_insertion, apply_item_delete};
 pub(crate) use crate::matcher_fn_item::{delete_lines, find_item_targets, range_err};
+// WI-20 slice 1 (D5): the rename+single-expr-body joint application
+// lives in `matcher_fn_body`.
+pub(crate) use crate::matcher_fn_body::apply_fn_body_joint;
 
 /// Whitespace-insensitive normalization for signature slot comparison.
 /// Both sides are token text; stripping all whitespace makes `pub(crate)`,
@@ -53,7 +56,7 @@ fn compact_slot(s: &str) -> String {
 
 /// A function item with its source span lines and attribute lines.
 pub(crate) struct FnCandidate<'a> {
-    item: &'a syn::ItemFn,
+    pub(crate) item: &'a syn::ItemFn,
     pub(crate) start_line: u32,
     pub(crate) end_line: u32,
     fn_line: u32,
@@ -107,7 +110,7 @@ pub(crate) fn in_scope(c: &FnCandidate<'_>, scope: Scope, old_start: u32, old_le
     }
 }
 
-fn check_attrs(
+pub(crate) fn check_attrs(
     c: &FnCandidate<'_>,
     policy: AttrsPolicy,
     pattern_attrs: &[String],
@@ -936,7 +939,15 @@ pub fn apply_fn_hunk(
     };
     let rule = hunk.rule_name();
     let file = "";
-    let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
+    let (vis, qual, gen, wh, ty) = slot_metas(compiled);
+    let ident = compiled.table.ident_slot_metas();
+    let full_minus: String = hunk
+        .lines
+        .iter()
+        .filter(|l| l.is_removal() || l.is_context())
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let full_plus: String = hunk
         .lines
         .iter()
@@ -944,8 +955,34 @@ pub fn apply_fn_hunk(
         .map(|l| l.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let (vis, qual, gen, wh, ty) = slot_metas(compiled);
-    let ident = compiled.table.ident_slot_metas();
+    // WI-20 slice 1: header pair + one body-expression line pair in one
+    // hunk. Split before the single-shape parse (which would fail on the
+    // trailing body lines).
+    if let Some(joint) = rsmpl_pattern::try_parse_fn_body_joint(
+        &full_minus,
+        &full_plus,
+        &vis,
+        &qual,
+        &gen,
+        &wh,
+        &ty,
+        &ident,
+        hunk.returns_none(),
+    ) {
+        return apply_fn_body_joint(
+            parsed,
+            original,
+            index,
+            hunk,
+            &joint,
+            &minus_name,
+            &plus_name,
+            &rule,
+            file,
+            edits,
+        );
+    }
+    let minus_pat = minus_fn_pattern(hunk, compiled).map_err(|e| e.with_rule(&rule))?;
     let plus_pat =
         rsmpl_pattern::parse_fn_pattern(&full_plus, &vis, &qual, &gen, &wh, &ty, &ident, false)
             .map_err(|e| e.with_rule(&rule))?;
@@ -1854,5 +1891,68 @@ mod tests {
         let (code, w) = wi18_fn_repair(&err);
         assert_eq!(code, "fn-dispatch-body-template");
         assert!(w.contains("`...` bodies"), "got: {w}");
+    }
+
+    const JOINT_PRE: &str =
+        "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+
+    fn joint_patch() -> String {
+        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- x + 1\n+ x + 2\n"
+            .to_string()
+    }
+
+    #[test]
+    fn wi20_joint_body_rename_applies_scoped() {
+        let out = apply(&joint_patch(), JOINT_PRE).expect("joint must apply");
+        assert_eq!(
+            out, "fn bar(x: i32) -> i32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "joint must rename header, body line, and follow calls"
+        );
+    }
+
+    #[test]
+    fn wi20_joint_body_absent_fails_loud() {
+        let patch = joint_patch().replace("- x + 1\n", "- x + 9\n");
+        let err = apply(&patch, JOINT_PRE).expect_err("absent body must fail");
+        assert!(err.contains("not found in the file"), "got: {err}");
+        assert!(err.contains("fn-joint-body-absent-template"), "got: {err}");
+    }
+
+    #[test]
+    fn wi20_joint_body_multi_fails_loud() {
+        let pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn other() {\n    x + 1\n}\nfn m() {\n    foo(1);\n}\n";
+        let err = apply(&joint_patch(), pre).expect_err("twin body must fail");
+        assert!(err.contains("matches 2 lines"), "got: {err}");
+        assert!(err.contains("fn-joint-body-multi-template"), "got: {err}");
+    }
+
+    #[test]
+    fn wi20_joint_body_outside_fails_loud() {
+        let pre = "fn foo(x: i32) -> i32 {\n    y\n}\nfn other() {\n    x + 1\n}\nfn m() {\n    foo(1);\n}\n";
+        let err = apply(&joint_patch(), pre).expect_err("outside body must fail");
+        assert!(
+            err.contains("outside the renamed function body"),
+            "got: {err}"
+        );
+        assert!(err.contains("fn-joint-body-outside-template"), "got: {err}");
+    }
+
+    #[test]
+    fn wi20_joint_body_non_expr_stays_on_trailing_gate() {
+        // A `let`-statement body delta is not the general-expr slice:
+        // the helper declines and the single-shape parse fails loud.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n";
+        let err = apply(patch, JOINT_PRE).expect_err("non-expr body must fail");
+        assert!(err.contains("trailing tokens"), "got: {err}");
+    }
+
+    #[test]
+    fn wi20_joint_body_slot_evolution_stays_on_trailing_gate() {
+        // Rename+slot-evolution+body is two evolutions: the helper
+        // declines (headers not rename-only) and the single-shape parse
+        // fails loud — never a silent partial rename.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: u32) -> i32 { ... }\n- x + 1\n+ x + 2\n";
+        let err = apply(patch, JOINT_PRE).expect_err("slot+body must fail");
+        assert!(err.contains("trailing tokens"), "got: {err}");
     }
 }

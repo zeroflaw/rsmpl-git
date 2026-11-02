@@ -9,7 +9,7 @@
 //! (`rebuild_workspace_b` in `fn_joint_ws`) places them at the def file
 //! and the call file as two sections sharing one rule.
 
-use super::fn_joint::{Fire, Joint};
+use super::fn_joint_types::{Fire, Joint};
 
 /// The def hunk of a joint emission (the only hunk for Joint-A, which
 /// rides `# follow=uses`; the header pair for Joint-B).
@@ -21,6 +21,17 @@ pub(crate) fn def_hunk_text(rule: &str, fire: &Fire) -> String {
             out.push_str("# follow=uses\n");
             out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
             out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
+        }
+        Joint::Body {
+            body_minus,
+            body_plus,
+        } => {
+            out.push_str("# sweep\n");
+            out.push_str("# follow=uses\n");
+            out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
+            out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
+            out.push_str(&format!("- {body_minus}\n"));
+            out.push_str(&format!("+ {body_plus}\n"));
         }
         Joint::B1 { .. } => {
             out.push_str("# sweep\n");
@@ -50,7 +61,7 @@ pub(crate) fn def_hunk_text(rule: &str, fire: &Fire) -> String {
 /// whose calls ride the follow). WI-4f emits it at the call file.
 pub(crate) fn call_hunk_text(rule: &str, fire: &Fire) -> Option<String> {
     let (call_minus, call_plus) = match &fire.joint {
-        Joint::A => return None,
+        Joint::A | Joint::Body { .. } => return None,
         Joint::B1 {
             call_minus,
             call_plus,

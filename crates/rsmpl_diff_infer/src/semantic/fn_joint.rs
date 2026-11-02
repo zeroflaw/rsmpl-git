@@ -37,71 +37,7 @@ use super::generalized::parse_sig_slots;
 use super::item_intent::{count_kind_defs, probe_reproduces, Pair};
 use super::unique_rule;
 
-/// One paired hunk inside a section.
-pub(crate) struct HunkPairs {
-    pub(crate) minuses: Vec<String>,
-    pub(crate) pluses: Vec<String>,
-    pub(crate) balanced: bool,
-    pub(crate) sites: Vec<usize>,
-}
-
-/// One flattened native pair at its old-side site.
-#[derive(Clone)]
-pub(crate) struct FlatPair {
-    pub(crate) sec: usize,
-    pub(crate) hunk: usize,
-    pub(crate) minus: String,
-    pub(crate) plus: String,
-    pub(crate) site: usize,
-}
-
-/// The whole-patch pre-pass outcome: rebuilt sections, the definition
-/// path and rule for provenance (both empty on suppress-only), and the
-/// suppressed `(path, old-name)` set.
-type JointOutcome = (Vec<String>, String, String, HashSet<(String, String)>);
-
-/// Which joint shape fired.
-pub(crate) enum Joint {
-    /// WI-4a: header pair + callee-only calls → one follow hunk.
-    A,
-    /// WI-4b B1: header pair (params evolve, return preserved) +
-    /// uniform arg-add call template → shared-rule two-hunk, no follow
-    /// (a follow would overlap the call hunk's sites).
-    B1 {
-        call_minus: String,
-        call_plus: String,
-    },
-    /// WI-4b B2: attr add/remove + rename header + uniform callee-only
-    /// call template → shared-rule two-hunk, no follow.
-    B2 {
-        attr_line: String,
-        attr_add: bool,
-        head_site: usize,
-        call_minus: String,
-        call_plus: String,
-    },
-}
-
-/// A validated fire payload: the def pair plus its call claims, all in
-/// one file. Joint-A claims ride one follow hunk; Joint-B claims ride
-/// the shared-rule two-hunk composition (def hunk + call-template hunk
-/// under one rule name).
-pub(crate) struct Fire {
-    pub(crate) old: String,
-    pub(crate) new: String,
-    pub(crate) def_minus: String,
-    pub(crate) def_plus: String,
-    pub(crate) claims: Vec<FlatPair>,
-    pub(crate) claimed_secs: Vec<usize>,
-    pub(crate) joint: Joint,
-    /// WI-4f-next leftover native hunk texts per section (verbatim, in
-    /// original hunk order). Empty on pure-section fires (byte-identical
-    /// path).
-    pub(crate) leftover: HashMap<usize, Vec<String>>,
-    /// WI-4f-next claimed native hunk bytes (hunk texts only, no `diff`
-    /// header). Used for T375 only when `leftover` is nonempty.
-    pub(crate) claimed_hunk_bytes: usize,
-}
+use super::fn_joint_types::{Fire, FlatPair, HunkPairs, Joint, JointOutcome};
 
 /// Whole-patch fn-joint pre-pass: returns the rebuilt section list plus
 /// the definition path and rule for provenance, and the suppressed
@@ -182,7 +118,7 @@ pub(crate) fn try_fn_joint_intent(
                 let rule = unique_rule(used_rules, &format!("rename_{}_to_{}", f.old, f.new));
                 let emission = super::fn_joint_emit::emit(path, &rule, &f);
                 let probed = match &f.joint {
-                    Joint::A | Joint::B1 { .. } => {
+                    Joint::A | Joint::B1 { .. } | Joint::Body { .. } => {
                         let pairs: Vec<Pair> = f
                             .claims
                             .iter()
@@ -295,7 +231,7 @@ pub(crate) fn try_fn_joint_intent(
                     // def file, call template at the single call file,
                     // one rule) — the single-section emission below only
                     // serves Joint-A.
-                    if !matches!(f.joint, Joint::A) {
+                    if !matches!(f.joint, Joint::A | Joint::Body { .. }) {
                         return match super::fn_joint_ws::rebuild_workspace_b(
                             super::fn_joint_ws::WsBRebuild {
                                 sections,
@@ -566,6 +502,23 @@ fn joint_candidate(
     if count_kind_defs(pre, std::slice::from_ref(&probe_pair), "fn", &old) != 1 {
         return Candidate::None;
     }
+    // WI-20 slice 1: rename+single-expr-body joint fires here; any other
+    // shape falls through to the Joint-A/B path (which suppresses the
+    // fragmented fallback as today).
+    if let Some(def_idx) = def {
+        if let Some(fire) = super::fn_joint_body::try_body_joint(
+            &flat,
+            def_idx,
+            hunk_texts,
+            !unbalanced_hunks.is_empty(),
+            &old,
+            &new,
+        ) {
+            return Candidate::Ready(fire);
+        }
+    }
+    // Any veto from here on suppresses: the file holds a joint shape
+    // the raiser cannot prove, and the fragmented fallback (ordinary
     // Any veto from here on suppresses: the file holds a joint shape
     // the raiser cannot prove, and the fragmented fallback (ordinary
     // def + rename-claiming sweep) must not stand in for it.
@@ -1290,31 +1243,37 @@ mod tests {
         );
     }
     #[test]
-    fn body_delta_vetoes_to_wholly_ordinary() {
-        // F4b: rename+body-literal must not fragment into ordinary def +
-        // rename-claiming sweep — the whole section stays ordinary.
+    fn body_delta_fires_as_single_expr_joint() {
+        // WI-20 slice 1: rename + single general-expr body line +
+        // callee-only calls raises to the single follow hunk carrying
+        // the header `...` pair plus the body pair lines (was F4b
+        // wholly-ordinary veto before the body slot joined the intent).
         let pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
         let sections = vec![section(
             "src.rs",
             "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+fn bar(x: i32) -> i32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
         let pre = pre_map(&[("src.rs", pre)]);
-        let mut used = Vec::new();
-        let out = try_fn_joint_intent(&sections, &pre, &mut used);
-        let Some((rewritten, _, rule, suppressed)) = out else {
-            panic!("body-delta joint must suppress, not decline silently");
-        };
-        assert!(rule.is_empty(), "suppress-only carries no rule");
-        assert_eq!(rewritten, sections, "suppress-only leaves bytes identical");
-        assert_eq!(
-            suppressed,
-            HashSet::from([("src.rs".to_string(), "foo".to_string())])
-        );
-        // End to end: no semantic hunk at all (the sweep is suppressed).
-        let full = infer_semantic_with_pre_images(&sections, &pre);
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("body joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
         assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "body veto must stay wholly ordinary"
+            out.contains("- fn foo(x: i32) -> i32 { ... }"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("+ fn bar(x: i32) -> i32 { ... }"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("- x + 1"), "got:\n{out}");
+        assert!(out.contains("+ x + 2"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "body joint must round-trip byte-identical"
         );
     }
 
@@ -1323,7 +1282,8 @@ mod tests {
         // WI-4 residue (WI-5 owns the composition): rename+attr-*change*
         // (balanced `#[inline]` → `#[inline(never)]` hunk) must not
         // fragment into ordinary def + rename-claiming sweep — the whole
-        // section stays ordinary, like the F4b body-delta veto above.
+        // section stays ordinary (the old F4b body-delta veto fired as a
+        // joint since WI-20 slice 1; attr-change still has no joint).
         let pre =
             "#[inline]\nfn foo(x: i32) -> i32 {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
         let sections = vec![section(

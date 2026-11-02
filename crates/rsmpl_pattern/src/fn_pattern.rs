@@ -742,6 +742,142 @@ pub fn parse_fn_pattern(
     })
 }
 
+/// WI-20 slice 1: rename+single-expr-body joint shape (SPEC 14.7).
+///
+/// A one-hunk joint carries the fn header pair in the proven single-line
+/// `{ ... }` form plus exactly one extra `-`/`+` body line pair (a
+/// whole-line general expression, e.g. `- x + 1` / `+ x + 2`). The body
+/// pair applies only inside the renamed definition's body (engine
+/// span-scoped `body` edit); a second in-body hit or any out-of-body hit
+/// is a hard match conflict, never a sweep.
+///
+/// `minus_raw`/`plus_raw` are the removal-only / addition-only texts (no
+/// context lines in the canonical shape). Returns `None` for every other
+/// shape (including attr-carrying headers and slot-evolving headers —
+/// those stay on the existing error/suppress paths), so callers fall back
+/// to the single-shape parse and its established errors.
+pub struct FnBodyJoint {
+    pub minus: FnPattern,
+    pub plus: FnPattern,
+    pub body_minus: String,
+    pub body_plus: String,
+}
+
+/// Whitespace-insensitive concrete-slot equality for the joint header
+/// gate (the engine compares slots the same way against target text).
+fn joint_slot_eq(a: &str, b: &str) -> bool {
+    a.split_whitespace().collect::<Vec<_>>().join(" ")
+        == b.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn joint_slots_equal_except_name(minus: &FnPattern, plus: &FnPattern) -> bool {
+    let vis_eq = match (&minus.visibility, &plus.visibility) {
+        (VisPat::Absent, VisPat::Absent) => true,
+        (VisPat::Concrete(a), VisPat::Concrete(b)) => joint_slot_eq(a, b),
+        (VisPat::Meta(a), VisPat::Meta(b)) => a == b,
+        _ => false,
+    };
+    let gen_eq = match (&minus.generics, &plus.generics) {
+        (GenericPat::Absent, GenericPat::Absent) => true,
+        (GenericPat::Concrete(a), GenericPat::Concrete(b)) => joint_slot_eq(a, b),
+        (GenericPat::Meta(a), GenericPat::Meta(b)) => a == b,
+        (GenericPat::Any, GenericPat::Any) => true,
+        _ => false,
+    };
+    let ret_eq = match (&minus.ret, &plus.ret) {
+        (RetPat::Any, RetPat::Any) => true,
+        (RetPat::Absent, RetPat::Absent) => true,
+        (RetPat::Concrete(a), RetPat::Concrete(b)) => joint_slot_eq(a, b),
+        (RetPat::Meta(a), RetPat::Meta(b)) => a == b,
+        _ => false,
+    };
+    let wh_eq = match (&minus.where_clause, &plus.where_clause) {
+        (WherePat::Absent, WherePat::Absent) => true,
+        (WherePat::Concrete(a), WherePat::Concrete(b)) => joint_slot_eq(a, b),
+        (WherePat::Meta(a), WherePat::Meta(b)) => a == b,
+        (WherePat::Any, WherePat::Any) => true,
+        _ => false,
+    };
+    let params_eq = minus.params_ellipsis == plus.params_ellipsis
+        && match (&minus.params_text, &plus.params_text) {
+            (None, None) => true,
+            (Some(a), Some(b)) => joint_slot_eq(a, b),
+            _ => false,
+        };
+    vis_eq
+        && minus.qualifiers == plus.qualifiers
+        && minus.qualifier_meta == plus.qualifier_meta
+        && gen_eq
+        && params_eq
+        && ret_eq
+        && wh_eq
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn try_parse_fn_body_joint(
+    minus_raw: &str,
+    plus_raw: &str,
+    vis: &[String],
+    qual: &[String],
+    gen: &[String],
+    wh: &[String],
+    ty: &[String],
+    ident: &[String],
+    returns_none: bool,
+) -> Option<FnBodyJoint> {
+    let minus_lines: Vec<&str> = minus_raw.lines().collect();
+    let plus_lines: Vec<&str> = plus_raw.lines().collect();
+    if minus_lines.len() != 2 || plus_lines.len() != 2 {
+        return None;
+    }
+    // Header first, body second (the canonical emission order).
+    let (hm, bm) = (minus_lines[0], minus_lines[1]);
+    let (hp, bp) = (plus_lines[0], plus_lines[1]);
+    if !hm.contains("fn ") || !hp.contains("fn ") {
+        return None;
+    }
+    if bm.contains("fn ") || bp.contains("fn ") {
+        return None;
+    }
+    let minus = parse_fn_pattern(hm, vis, qual, gen, wh, ty, ident, returns_none).ok()?;
+    let plus = parse_fn_pattern(hp, vis, qual, gen, wh, ty, ident, false).ok()?;
+    // Rename-only headers: `{ ... }` bodies, no written attributes, every
+    // other slot equal.
+    if !minus.body_ellipsis || !plus.body_ellipsis {
+        return None;
+    }
+    if !minus.attrs_written.is_empty() || !plus.attrs_written.is_empty() {
+        return None;
+    }
+    if !joint_slots_equal_except_name(&minus, &plus) {
+        return None;
+    }
+    let names_differ = match (&minus.name, &plus.name) {
+        (NamePat::Concrete(a), NamePat::Concrete(b)) => a != b,
+        _ => false,
+    };
+    if !names_differ {
+        return None;
+    }
+    // One whole-line general expression each side, differing text.
+    let (bm_t, bp_t) = (bm.trim(), bp.trim());
+    if bm_t.is_empty() || bp_t.is_empty() || bm_t == bp_t {
+        return None;
+    }
+    if syn::parse_str::<syn::Expr>(bm_t).is_err() {
+        return None;
+    }
+    if syn::parse_str::<syn::Expr>(bp_t).is_err() {
+        return None;
+    }
+    Some(FnBodyJoint {
+        minus,
+        plus,
+        body_minus: bm_t.to_string(),
+        body_plus: bp_t.to_string(),
+    })
+}
+
 /// Minimal tokenizer keeping multi-char tokens (`...`, `->`, `::`) intact.
 fn tokenize_pattern(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -1197,5 +1333,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(w.where_clause, WherePat::Meta("W".into()));
+    }
+
+    #[test]
+    fn wi20_body_joint_fires_on_header_plus_expr() {
+        let joint = try_parse_fn_body_joint(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: i32) -> i32 { ... }\nx + 2",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .expect("header+expr joint must parse");
+        assert_eq!(joint.body_minus, "x + 1");
+        assert_eq!(joint.body_plus, "x + 2");
+        assert!(joint.minus.body_ellipsis && joint.plus.body_ellipsis);
+    }
+
+    #[test]
+    fn wi20_body_joint_declines() {
+        let no = |m: &str, p: &str| {
+            try_parse_fn_body_joint(m, p, &[], &[], &[], &[], &[], &[], false).is_none()
+        };
+        // Single-shape headers (no body pair) are not joints.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }",
+            "fn bar(x: i32) -> i32 { ... }"
+        ));
+        // Slot evolution is not the rename-only slice.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: u32) -> i32 { ... }\nx + 2"
+        ));
+        // Two body pairs are not the single-expr slice.
+        assert!(no(
+            "fn foo(x: i32) { ... }\nlet y = x + 1;\ny * 2",
+            "fn bar(x: i32) { ... }\nlet y = x + 2;\ny * 3"
+        ));
+        // `let`-statement bodies never parse as expressions.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }\nlet y = 1;",
+            "fn bar(x: i32) -> i32 { ... }\nlet y = 2;"
+        ));
+        // Identical body text is no delta.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: i32) -> i32 { ... }\nx + 1"
+        ));
+        // Attribute headers stay on the existing paths.
+        assert!(no(
+            "#[inline]\nfn foo(x: i32) -> i32 { ... }\nx + 1",
+            "#[inline]\nfn bar(x: i32) -> i32 { ... }\nx + 2"
+        ));
     }
 }

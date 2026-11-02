@@ -2205,11 +2205,23 @@ A function hunk whose `-` and `+` sides differ in more than the name evolves eac
 | parameters | `...` matches any; concrete (incl. `()`) requires normalized equality; mixing `...` with other tokens on either side is a pattern error | `...` preserves; concrete replaces the parenthesized list |
 | return type | `...`-shorthand (no `->`) matches any; absent (via `# returns=none`) requires none; concrete requires normalized equality; `-> ...` is a pattern error (omit `->` for any) | `+` with no `->` preserves, except minus-concrete/`+`-omitted deletes `-> T`; concrete inserts after `)` or replaces `-> T` |
 | where clause | absent requires none; concrete requires normalized equality of the predicates; `W` matches any; predicates containing `...` are a pattern error | insert before `{` / replace / delete (minus-concrete/`+`-omitted) |
-| body | must be exactly `...` (or `;`) on both sides; mixing `...` with other tokens is a pattern error | always preserved; any concrete body is a pattern error |
+| body | must be exactly `...` (or `;`) on both sides; mixing `...` with other tokens is a pattern error | always preserved, except one joint body pair (see below); any other concrete body is a pattern error |
 
 Trailing commas are ignored when comparing parameter lists and `where` predicates: a rustfmt-canonical multi-line target (`x: i32,`, `T: Clone,`) matches the single-line pattern spelling (`x: i32`, `T: Clone`), and a comma-only slot difference never emits an edit — the target text is preserved.
 
- The five slot/body/param misuses above fail fast with `RSMPL_PATTERN_CONFLICT`, engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout):
+A rename+single-expr-body joint (WI-20) is the one body exception: a hunk carrying the header pair in the single-line `{ ... }` form plus exactly one extra `-`/`+` body line pair (both sides parse as `syn::Expr`, e.g. `- x + 1` / `+ x + 2`) rewrites the header plus that one whole line inside the renamed definition's body only (indent preserved, `body`-labelled edit). The body minus must occur exactly once in the file as a whole line inside the renamed body; zero, multiple, or out-of-body hits fail loud (`RSMPL_MATCH_CONFLICT`, never a sweep). Slot-evolving headers, attribute deltas, `let`/multi-line bodies, and twin in-body hits stay on the existing error paths.
+
+```diff
+@@ -1,2 @@ rule=r1
+# sweep
+# follow=uses
+- fn foo(x: i32) -> i32 { ... }
++ fn bar(x: i32) -> i32 { ... }
+- x + 1
++ x + 2
+```
+
+The five slot/body/param misuses above fail fast with `RSMPL_PATTERN_CONFLICT`, engine-verbatim (all exit 2; all carry `rule:`/`file:`; text omits the null `range:`/`suggestion:` lines, JSON carries explicit `range: null` / `suggestion: null`; suggestion is null throughout):
  ```text
  `...` in a function parameter list must stand alone: write `(...)` to match any parameters or fully-concrete parameters (SPEC 14.7)
  `...` is not supported as a return type in v0.1: omit `->` to match any return type or write a concrete type (SPEC 14.7)
@@ -7807,6 +7819,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   off-diff same-name uses fail the unchanged leg) plus twin-definition
   vetoes and the T375 byte-win guard. Cross-file trait/type/impl groups
   stay ordinary (WI-12).
+- Rename+single-expr-body joint (WI-20, detector `fn_joint`): a rename-only header plus exactly one body line pair (both sides one `syn::Expr`, differing text) plus callee-only calls raises to the single follow hunk carrying the header `...` pair plus the raw body pair lines (`- x + 1` / `+ x + 2`); the engine applies the body pair span-scoped inside the renamed body (`body`-labelled edit, hard `RSMPL_MATCH_CONFLICT` on zero/multiple/out-of-body hits, never a sweep). Slot-evolving headers, attr deltas, `let`/multi-line bodies, and twin in-body hits suppress as today; totality is the same scratch-apply probe plus the byte-win guard.
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
   return slot delta (a pure rename is `item_intent`'s, never joint)
@@ -7824,7 +7837,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   claiming otherwise would fail its own probe). Totality is the same
   scratch-apply probe plus the unique-definition guard and the
   byte-win guard. Claim-then-veto suppresses instead of fragmenting:
-  a joint shape that fails any fire gate (body/attr delta, arg-delta
+  a joint shape that fails any fire gate (non-single-expr body delta,
+  attr delta, arg-delta
   calls, generics/where delta, vis/qual deltas the `item_intent`
   vis/qual joint declines, twin defs, probe or byte-win fail)
   suppresses its old callee name for each involved file, so the call

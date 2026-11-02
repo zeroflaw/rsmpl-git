@@ -805,13 +805,36 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
-    } else if name == "119-fn-joint-body-stays-ordinary" {
-        // WI-4a veto: rename+body-literal stays wholly ordinary — the
-        // fragmented fallback (ordinary def + rename-claiming call
-        // sweep) is suppressed, so no `rule=` hunk may appear.
+    } else if name == "119-fn-joint-body-fires" {
+        // WI-20 slice 1: rename + single general-expr body line +
+        // callee-only calls raises to the single follow hunk carrying
+        // the header `...` pair plus the body pair lines (was the F4b
+        // wholly-ordinary veto before the body slot joined the intent).
         assert!(
-            !semantic.contains("rule="),
-            "body veto must stay wholly ordinary, got: {semantic}"
+            semantic.contains("# follow=uses"),
+            "body joint must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- fn foo(x: i32) -> i32 { ... }"),
+            "joint header minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ fn bar(x: i32) -> i32 { ... }"),
+            "joint header plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- x + 1"),
+            "body minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ x + 2"),
+            "body plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
         );
     } else if name == "120-fn-joint-arg-add-fires" {
         // WI-4b B1: rename+param-add with uniform arg-adding calls
