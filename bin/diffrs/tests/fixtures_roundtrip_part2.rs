@@ -1354,6 +1354,35 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "137-multiline-abstract-move-fires" {
+        // WI-19 slice 1: a rename+vis abstract move whose headers span
+        // multiple lines raises as the single-line abstract template
+        // (the template erases the header shape; trailing header lines
+        // ride byte-verbatim). The harness checks the tree legs.
+        assert!(
+            semantic.contains("# bind="),
+            "multiline move cut must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# use="),
+            "multiline move paste must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ pub fn bar(...) { ... }"),
+            "paste must carry the evolved header, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn foo("),
+            "minus lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "multiline move must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
+        assert!(context.is_empty(), "zero-context, got: {context:?}");
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on

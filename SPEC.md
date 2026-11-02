@@ -9211,8 +9211,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    gate: no outside line to double-claim).
       Everything else (other item kinds, attr deltas, signature+body
       combos, vis+body combos, non-`fn` self-references, shadowed-body
-      renames the pairing scanner disagrees with, multi-line `fn`
-      headers) stays ordinary.
+      renames the pairing scanner disagrees with, multi-line headers
+      in concrete-signature (sig-evolved) moves) stays ordinary:
+      abstract and body-evolving multi-line headers fire (diffrs
+      fixture `137-multiline-abstract-move-fires`).
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -9543,7 +9545,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(137), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(138), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

@@ -716,6 +716,25 @@ mod tests {
     }
 
     #[test]
+    fn multiline_header_abstract_pair_fires() {
+        // WI-19 slice 1: a rename+vis pair whose headers span multiple
+        // lines pairs through the abstract finder (the template erases
+        // the header shape; trailing lines ride verbatim).
+        let minus = "fn old(\n    x: i32,\n) -> i32 {\n    let y = x + 1;\n    y * 2\n}";
+        let plus_body: Vec<String> =
+            "pub fn new(\n    x: i32,\n) -> i32 {\n    let y = x + 1;\n    y * 2\n}"
+                .lines()
+                .map(|l| format!("+{l}"))
+                .collect();
+        let hits = find_evolved_hits(minus, &plus_body);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        let (first, last, prefix, name) = &hits[0];
+        assert_eq!((*first, *last), (0, 5));
+        assert_eq!(prefix, "pub ");
+        assert_eq!(name, "new");
+    }
+
+    #[test]
     fn name_only_evolve_fires() {
         let minus = item_fn(&format!("fn old(x: i32) -> i32 {BODY}"));
         let plus = item_fn(&format!("fn new(x: i32) -> i32 {BODY}"));
