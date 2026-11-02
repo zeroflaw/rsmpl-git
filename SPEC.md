@@ -7544,18 +7544,20 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   Item rename+vis/qual joint (WI-5 slice 1, same detector): a
   top-level `fn` definition pair differing in the name plus exactly
   one of {visibility, qualifier-list} (`pub fn foo` →
-  `pub(crate) fn bar`, `fn foo` → `async fn bar`;
-  generics/params/return/`where` token-equal) joined with at least one
-  claimable use from the pure arm's domain (call-callee lines,
-  `use`-tail deltas) emits the follow hunk with the concrete evolved
-  terse pair (`- pub fn foo` / `+ pub(crate) fn bar` — never a `V`/`Q`
-  hole: the intent proved one concrete evolution, and the engine lowers
-  rename+vis/qual simultaneously). Two evolving slots,
-  `extern "ABI"` qualifiers, self-referential vis (`pub(in old)`),
-  indented (method) headers, `;` decls, multi-line headers, twin
-  definitions (counted over every vis/qual spelling of `fn old`),
-  unbalanced sections, and missing pre-images veto the whole intent
-  (the joint probe doubles as the uniqueness guard). Bare-item
+  `pub(crate) fn bar`, `fn foo` → `async fn bar`, `fn foo` →
+  `extern "C" fn bar`; generics/params/return/`where` token-equal)
+  joined with at least one claimable use from the pure arm's domain
+  (call-callee lines, `use`-tail deltas) emits the follow hunk with
+  the concrete evolved terse pair (`- pub fn foo` /
+  `+ pub(crate) fn bar` — never a `V`/`Q` hole: the intent proved one
+  concrete evolution, and the engine lowers rename+vis/qual
+  simultaneously). Qualifiers span `const`/`async`/`unsafe`/
+  `extern ["ABI"]` (WI-5-R1). Two evolving slots, unknown future
+  qualifier tokens, self-referential vis (`pub(in old)`), indented
+  (method) headers, `;` decls, multi-line headers, twin definitions
+  (counted over every vis/qual spelling of `fn old`), unbalanced
+  sections, and missing pre-images veto the whole intent (the joint
+  probe doubles as the uniqueness guard). Bare-item
   (`struct`/`enum`/`trait`/`type`/`const`/`static`/`mod`)
   rename+vis/qual joints stay ordinary (future slice: `ItemRename` is
   rename-only — pattern and engine work).
@@ -9289,7 +9291,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(130), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(131), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

@@ -11,9 +11,10 @@
 //! Only the `fn` arm lands here: `ItemRename` rejects prefix deltas at
 //! pattern compile (`item rename prefixes differ`), and `matcher_item`
 //! only replaces the ident span, so bare-item rename+vis/qual joints
-//! need engine prefix-evolution support first (WI-5-R2). Qualifier
-//! tokens beyond `const`/`async`/`unsafe` (`extern "ABI"`, …) stay
-//! ordinary (WI-5-R1); multi-line headers stay ordinary (WI-5-R3).
+//! need engine prefix-evolution support first (WI-5-R2). Unknown
+//! qualifier tokens beyond `const`/`async`/`unsafe`/`extern ["ABI"]`
+//! stay ordinary (future-qualifier residue); multi-line headers stay
+//! ordinary (WI-5-R3).
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,7 +35,7 @@ pub(crate) struct FnVisqualJoint {
 /// header slot ({vis} xor {qualifier-list}): `Some` when both lines are
 /// column-0 `{`-terminated headers whose names differ with all other
 /// slots token-equal, else `None`. Two evolving slots, any
-/// generics/params/return/`where` delta, `extern` qualifiers,
+/// generics/params/return/`where` delta, unknown qualifier tokens,
 /// self-referential vis, indented (method) headers, `;` decls, and
 /// multi-line headers all decline (never a partial claim).
 pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVisqualJoint> {
@@ -74,7 +75,8 @@ pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVis
     let (old_vis, old_qual) = split_vis_qual_prefix(&old_prefix)?;
     let (new_vis, new_qual) = split_vis_qual_prefix(&new_prefix)?;
     // Both vis spellings stay in the WI-1 closed set; qualifier tokens
-    // stay inside `const`/`async`/`unsafe` (`extern "ABI"` declines).
+    // stay inside `const`/`async`/`unsafe`/`extern ["ABI"]` (unknown
+    // future qualifiers decline).
     if !is_fn_vis_prefix(&old_vis) || !is_fn_vis_prefix(&new_vis) {
         return None;
     }
@@ -162,12 +164,31 @@ fn split_vis_qual_prefix(raw: &str) -> Option<(String, String)> {
     Some((vis, rest.to_string()))
 }
 
-/// True when every whitespace-separated qualifier token is a known
-/// single-token qualifier (`const`/`async`/`unsafe`, empty included);
-/// `extern "ABI"` and anything else decline.
+/// True when every qualifier token is engine-supported: `const` /
+/// `async` / `unsafe`, bare `extern`, or `extern "ABI"` (any single
+/// double-quoted literal, `""` included). Anything else — future
+/// qualifier tokens, unclosed literals — declines.
 fn qual_tokens_ok(qual: &str) -> bool {
-    qual.split_whitespace()
-        .all(|tok| matches!(tok, "const" | "async" | "unsafe"))
+    let mut toks = qual.split_whitespace().peekable();
+    while let Some(tok) = toks.next() {
+        if matches!(tok, "const" | "async" | "unsafe") {
+            continue;
+        }
+        if tok == "extern" {
+            if let Some(next) = toks.peek() {
+                if next.starts_with('"') {
+                    let lit = toks.next().unwrap();
+                    if lit.len() < 2 || !lit.ends_with('"') {
+                        return false;
+                    }
+                    continue;
+                }
+            }
+            continue;
+        }
+        return false;
+    }
+    true
 }
 
 /// WI-1 closed vis set the terse `fn` rename accepts (SPEC 14.1 diet
@@ -360,10 +381,55 @@ mod tests {
     }
 
     #[test]
-    fn extern_and_unknown_qual_decline() {
-        assert!(joint("fn foo() {", "extern \"C\" fn bar() {").is_none());
+    fn extern_qual_fires() {
+        // Qualifier-addition is the one evolving slot.
+        let j =
+            joint("fn foo() {", "extern \"C\" fn bar() {").expect("extern-add joint must classify");
+        assert_eq!(j.old_prefix, "");
+        assert_eq!(j.new_prefix, "extern \"C\" ");
+        // Preserved `extern "C"` with a pure rename is the pure path.
+        assert!(joint("extern \"C\" fn foo() {", "extern \"C\" fn bar() {").is_none());
+        // An ABI change is the same one qual slot evolving.
+        let a = joint("extern \"C\" fn foo() {", "extern \"system\" fn bar() {")
+            .expect("ABI-change joint must classify");
+        assert_eq!(a.old_prefix, "extern \"C\" ");
+        assert_eq!(a.new_prefix, "extern \"system\" ");
+        // Preserved extern qual with vis evolution is the vis slot.
+        let v = joint(
+            "extern \"C\" fn foo() {",
+            "pub(crate) extern \"C\" fn bar() {",
+        )
+        .expect("vis joint with preserved extern must classify");
+        assert_eq!(v.old_prefix, "extern \"C\" ");
+        assert_eq!(v.new_prefix, "pub(crate) extern \"C\" ");
+        // Bare `extern` behaves the same.
+        assert!(joint("fn foo() {", "extern fn bar() {").is_some());
+        // Vis AND extern-qual evolving is two slots, never one joint.
+        assert!(joint("fn foo() {", "pub extern \"C\" fn bar() {").is_none());
         // Preserved `const` with a pure rename is the pure path.
         assert!(joint("const fn foo() {", "const fn bar() {").is_none());
+    }
+    #[test]
+    fn unknown_qual_still_declines() {
+        assert!(joint("gen fn foo() {", "gen fn bar() {").is_none());
+        assert!(joint("fn foo() {", "gen fn bar() {").is_none());
+        // Unclosed ABI literal is malformed, never a joint.
+        assert!(joint("fn foo() {", "extern \"C fn bar() {").is_none());
+        // A bare quoted token without `extern` is never a qualifier.
+        assert!(joint("fn foo() {", "\"C\" fn bar() {").is_none());
+    }
+    #[test]
+    fn qual_tokenizer_matrix() {
+        assert!(super::qual_tokens_ok(""));
+        assert!(super::qual_tokens_ok("async "));
+        assert!(super::qual_tokens_ok("extern \"C\" "));
+        assert!(super::qual_tokens_ok("extern"));
+        assert!(super::qual_tokens_ok("extern \"\""));
+        assert!(super::qual_tokens_ok("const async unsafe extern \"C\""));
+        assert!(!super::qual_tokens_ok("gen"));
+        assert!(!super::qual_tokens_ok("async gen"));
+        assert!(!super::qual_tokens_ok("extern \"C"));
+        assert!(!super::qual_tokens_ok("\"C\""));
     }
 
     #[test]
@@ -416,7 +482,7 @@ mod tests {
         let pre: HashMap<String, String> = HashMap::from([
             (
                 "a.rs".to_string(),
-                "async fn foo() {\n}\nfn other() {\n}\n".to_string(),
+                "async fn foo() {\n}\nextern \"C\" fn other() {\n}\n".to_string(),
             ),
             ("b.rs".to_string(), "fn foo() {\n}\n".to_string()),
         ]);
@@ -450,6 +516,31 @@ mod tests {
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("emission must apply");
         assert!(
             files["a.rs"].contains("pub(crate) fn bar(x: i32) -> i32 {"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(
+            files["a.rs"].contains("let a = bar(1);"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(!files["a.rs"].contains("foo"), "got: {}", files["a.rs"]);
+    }
+    #[test]
+    fn extern_emission_applies_jointly() {
+        let pre: HashMap<String, String> = HashMap::from([(
+            "a.rs".to_string(),
+            "extern \"C\" fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n}\n"
+                .to_string(),
+        )]);
+        let emission = joint_emit("a.rs", "r1", "extern \"C\" ", "foo", "extern \"C\" ", "bar");
+        assert!(emission.contains("- extern \"C\" fn foo\n"));
+        assert!(emission.contains("+ extern \"C\" fn bar\n"));
+        let parsed = rsmpl_patch::parse_patch(&emission).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("emission must apply");
+        assert!(
+            files["a.rs"].contains("extern \"C\" fn bar(x: i32) -> i32 {"),
             "got: {}",
             files["a.rs"]
         );
