@@ -1764,6 +1764,46 @@ mod tests {
     }
 
     #[test]
+    fn wi1s2_uppercase_head_stays_conservative_divergent() {
+        // WI-1s2: the uppercase-head conservative-divergence pin. The
+        // raiser backticks uppercase callees (probed: a single
+        // `Old(1)` → `New(1)` site re-diffs as `` `Old`(E0) `` /
+        // `` `New`(E0) ``). An authored backticked literal single over
+        // the same site applies and rebuilds the identical post-tree
+        // (tree legs close), yet the legs stay canonically distinct:
+        // the shared plain-literal representative (`Old(1)` /
+        // `New(1)`) does not apply — bare uppercase heads infer as
+        // holes, so the plus side fails `PatternConflict` (unbound
+        // `New`) — and each leg reverts to its snapshot. Divergence
+        // by construction, never healed into equality.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn Old(x: i32) -> i32 { x }\nfn New(x: i32) -> i32 { x + 1 }\nfn m() -> i32 {\n    Old(1)\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n- `Old`(1)\n+ `New`(1)\n";
+        let inferred = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n- `Old`(E0)\n+ `New`(E0)\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_ne!(
+            a, b,
+            "uppercase-head spellings stay divergent:\n{a}\nvs\n{b}"
+        );
+        // Tree legs close: one site, one post-tree on both legs.
+        let ka = single_site_post_key(&p, authored).expect("authored applies");
+        let kb = single_site_post_key(&p, inferred).expect("inferred applies");
+        assert_eq!(ka, kb, "same single site, same post-tree");
+        // The plain representative is no pattern at all here.
+        assert!(
+            single_site_post_key(
+                &p,
+                "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n- Old(1)\n+ New(1)\n"
+            )
+            .is_none(),
+            "bare uppercase heads infer as holes — plain literal never applies"
+        );
+    }
+
+    #[test]
     fn wi1s1_symbol_single_instantiates() {
         // WI-1s1 after WI-1b: the symbol spelling normalizes to the
         // concrete diet, then the single site instantiates to the

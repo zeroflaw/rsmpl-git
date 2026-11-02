@@ -9773,13 +9773,23 @@ stripping is deliberate. Equalities per origin close the contract:
   where an anchored general template and a bare literal prove the
   same site set, `S′` is the anchored spelling and an authored bare
   form re-diffs to it (like terse→sweep normalisation).
-- Semantic → native → semantic, single-site under the WI-19 guards
-  (defined equality, not an exclusion): sweep singles stay ordinary
-  under strict T375 while definition-shape singles re-infer under the
-  precision guard — either way the tree legs hold and one further
-  iteration is a fixed point (`S″ == S′` byte-identical); no canonical
-  equality is owed where the inferred side is deliberately ordinary
-  or precision-shaped against a differently-spelled authoring.
+- Semantic → native → semantic, single-site (literal-instantiation
+  equality, D17): at exactly one distinct line site, an authored
+  templated, holed, or symbol spelling and the inferred literal or
+  holed diet single compare equal iff both instantiate to the same
+  literal pair — the trimmed pre/post lines at that site
+  (expression shapes terminator-stripped per the raiser precedent,
+  statement shapes whole) — with locality and hole declarations
+  dropped, and a unified-patch re-apply rebuilds the identical
+  post-tree (multi-subsite lines unify at line granularity: one
+  distinct line span is one site). Over-wide templates (two line
+  sites vs a one-line literal), hetero multi-site shapes (e.g. a
+  two-site let-verbatim macro sweep vs a sub-line call sweep), and
+  uppercase-head spellings whose plain-literal representative does
+  not apply (bare uppercase heads infer as holes) stay canonically
+  divergent with their reasons named; the tree legs still hold and
+  one further iteration is a fixed point (`S″ == S′`
+  byte-identical).
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
 (144), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
@@ -9788,9 +9798,9 @@ non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
-bugs in the cycle itself): single-site shapes under the defined
-single-site equality above (`01`, `04`, `06`, `09`–`11`, `13`,
-`19`, `21`, `22` — definition-shape singles among them fire under
+bugs in the cycle itself): single-site shapes the raiser
+deliberately leaves ordinary (`04`, `06`, `09`, `10`, `13`,
+`19`, `22` — definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
 return-carrying/vis-carrying fn singles still need their slice-2
 detectors); heterogeneous sites no template fires on stay

@@ -406,7 +406,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "52-macro-verbatim",
-        "hetero: let-verbatim macro sweep re-infers as sub-line call sweep (different semantic shape; tree legs still close)",
+        "hetero by design (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close",
     ),
     (
         "55-infer-wildcard",
