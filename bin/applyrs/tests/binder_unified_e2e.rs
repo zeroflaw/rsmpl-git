@@ -879,3 +879,220 @@ fn sequence_sibling_scope_new_still_verifies() {
     assert!(post.contains("let c = new;"), "got: {post}");
     cargo_check(dir.path());
 }
+
+#[test]
+fn single_let_outer_new_before_reports_capture_risk() {
+    // Single-`let` parity with the sequence guard: a pre-existing `new`
+    // binder in the renamed statement's own scope declines follow — the
+    // definition renames, the post-binder use strands `off-target`, and
+    // the colliding definition surfaces as `capture-risk` (`partial`).
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let new = 0;\n    let old = 2;\n    let c = old;\n    let _ = (new, c);\n}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E;\n+ let new = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([
+            {
+                "file": "src/lib.rs",
+                "line": 2,
+                "reason": "capture-risk",
+                "text": "let new = 0;",
+            },
+            {
+                "file": "src/lib.rs",
+                "line": 4,
+                "reason": "off-target",
+                "text": "let c = old;",
+            },
+        ]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 0;"), "got: {post}");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+}
+
+#[test]
+fn single_let_outer_new_after_reports_capture_risk() {
+    // A later same-level `let new` double-binds the scope: same decline
+    // and `capture-risk` at the later definition.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 2;\n    let c = old;\n    let new = 9;\n    let _ = (c, new);\n}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E;\n+ let new = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([
+            {
+                "file": "src/lib.rs",
+                "line": 3,
+                "reason": "off-target",
+                "text": "let c = old;",
+            },
+            {
+                "file": "src/lib.rs",
+                "line": 4,
+                "reason": "capture-risk",
+                "text": "let new = 9;",
+            },
+        ]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+    assert!(post.contains("let new = 9;"), "got: {post}");
+}
+
+#[test]
+fn single_let_fn_param_new_reports_capture_risk() {
+    // A `new` fn param owns the whole body scope: same decline, with the
+    // signature line named as the colliding definition.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run(new: u32) {\n    let old = 2;\n    let c = old;\n    let _ = (new, c);\n}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E;\n+ let new = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([
+            {
+                "file": "src/lib.rs",
+                "line": 1,
+                "reason": "capture-risk",
+                "text": "pub fn run(new: u32) {",
+            },
+            {
+                "file": "src/lib.rs",
+                "line": 3,
+                "reason": "off-target",
+                "text": "let c = old;",
+            },
+        ]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+}
+
+#[test]
+fn single_let_destructuring_outer_new_reports_capture_risk() {
+    // The single-leaf destructuring twin shares `BinderScope::Let`, so it
+    // shares the guard and the `capture-risk` evidence.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let new = 0;\n    let (a, old) = (1, 2);\n    let c = old;\n    let _ = (new, a, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let (a, old) = E;\n+ let (a, new) = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([
+            {
+                "file": "src/lib.rs",
+                "line": 2,
+                "reason": "capture-risk",
+                "text": "let new = 0;",
+            },
+            {
+                "file": "src/lib.rs",
+                "line": 4,
+                "reason": "off-target",
+                "text": "let c = old;",
+            },
+        ]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 0;"), "got: {post}");
+    assert!(post.contains("let (a, new) = (1, 2);"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+}
+
+#[test]
+fn single_let_no_outer_new_still_verifies() {
+    // No pre-existing `new`: byte-identical behaviour (`verified` +
+    // follow, no new orphans).
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 2;\n    let c = old;\n    let _ = c;\n}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E;\n+ let new = E;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn closure_param_outer_new_still_verifies() {
+    // Non-collision control: a renamed closure param shadows an outer
+    // `let new` only inside the closure body, so outer uses never rebind
+    // and no `capture-risk` fires (`verified` + body follow).
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let new = 0;\n    let f = |old: u32| old + 1;\n    let _ = (f, new);\n}\n",
+    );
+    let patch =
+        "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- |old: u32| E\n+ |new: u32| E\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("|new: u32| new + 1"), "got: {post}");
+    assert!(post.contains("let new = 0;"), "got: {post}");
+    cargo_check(dir.path());
+}

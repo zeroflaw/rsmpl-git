@@ -865,8 +865,10 @@ pub(crate) fn let_binder_orphans(
     // otherwise keep the legacy whole-window cover (fail-safe).
     let mut narrowed: Option<(Vec<Span>, Vec<Span>)> = None;
     // Slice 3 remainder: per-window outer `new` definitions for the
-    // `capture-risk` audit below (sequence rename-once only; the binder's
-    // `new` name comes from the compiled pattern, not the orphan `old`).
+    // `capture-risk` audit below (sequence rename-once only, plus the
+    // Stmt single-`let` parity: plain + single-leaf destructuring; the
+    // binder's `new` name comes from the compiled pattern, not the
+    // orphan `old`).
     let mut capture_windows: Vec<(usize, usize)> = Vec::new();
     let mut capture_new: Option<String> = None;
     if let rsmpl_pattern::PatternKind::General {
@@ -902,6 +904,26 @@ pub(crate) fn let_binder_orphans(
                         capture_windows = windows;
                         capture_new = Some(b.new);
                     }
+                }
+            }
+        }
+    }
+    // Stmt single-`let` parity: the rename statement spans are already
+    // the def cover (no narrowing needed); audit each for a pre-existing
+    // `new` binder in its own scope, exactly like the sequence windows.
+    if capture_windows.is_empty()
+        && crate::use_graph_local::let_binder_rename(&compiled.kind).is_some()
+    {
+        let windows: Vec<(usize, usize)> = hunk_edits
+            .iter()
+            .filter(|e| e.label != Some("follow"))
+            .map(|e| (e.start, e.end))
+            .collect();
+        if !windows.is_empty() {
+            if let Some(b) = rsmpl_pattern::binder::binder_rename(&compiled.kind) {
+                if b.scope == rsmpl_pattern::binder::BinderScope::Let {
+                    capture_windows = windows;
+                    capture_new = Some(b.new);
                 }
             }
         }
@@ -1621,5 +1643,92 @@ mod tests {
         let src =
             "fn f() {\n    let old = g(1);\n    let b = h();\n    fn inner() { let new = 1; }\n}\n";
         assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    fn stmt_let_compiled() -> rsmpl_pattern::CompiledPattern {
+        // Single-`let` rename `let old = E;` -> `let new = E;`
+        // (same shape the Stmt follow arm completes).
+        rsmpl_pattern::CompiledPattern {
+            kind: rsmpl_pattern::PatternKind::General {
+                shape: rsmpl_pattern::GeneralShape::Stmt,
+                minus_sub: "let old = __RSMPL_E0;".to_string(),
+                plus_raw: "let new = E;".to_string(),
+                plus_body: "let new = E;".to_string(),
+                placeholders: vec![("E".to_string(), "__RSMPL_E0".to_string())],
+                literals: Vec::new(),
+                minus_attrs: Vec::new(),
+                plus_attrs: Vec::new(),
+                had_semi: false,
+            },
+            table: Default::default(),
+            minus_bindings: Default::default(),
+            plus_bindings: Default::default(),
+            unbound_plus: Vec::new(),
+            repeated: Vec::new(),
+            root: None,
+        }
+    }
+
+    fn stmt_let_orphans(src: &str) -> Vec<crate::OrphanReport> {
+        // One non-`follow` rename edit (the declined-follow posture: the
+        // definition applies, the follow arm stays home).
+        let parsed: syn::File = syn::parse_str(src).expect("test src parses");
+        let index = LineIndex::new(src);
+        let stmt_start = src.find("let old").expect("binder stmt present");
+        let stmt_end = src[stmt_start..].find(';').expect("stmt ends") + stmt_start + 1;
+        let mut states = std::collections::HashMap::new();
+        states.insert(
+            "src/main.rs".to_string(),
+            crate::lines::FileState {
+                original: src.to_string(),
+                index,
+                parsed: Some(parsed),
+            },
+        );
+        let mut file_edits = std::collections::HashMap::new();
+        file_edits.insert(
+            "src/main.rs".to_string(),
+            vec![crate::edits::TextEdit {
+                start: stmt_start,
+                end: stmt_end,
+                replacement: "let new = 1;".to_string(),
+                label: None,
+            }],
+        );
+        let compiled = stmt_let_compiled();
+        super::let_binder_orphans(&states, &file_edits, "src/main.rs", 0, "old", &compiled)
+    }
+
+    #[test]
+    fn stmt_single_let_outer_new_reports_capture_risk() {
+        // Stmt parity with the sequence guard: the outer `let new`
+        // surfaces as `capture-risk` while the stranded post-binder use
+        // stays `off-target`.
+        let src = "fn main() {\n    let new = 0;\n    let old = 1;\n    let c = old;\n}\n";
+        let orphans = stmt_let_orphans(src);
+        assert_eq!(orphans.len(), 2, "got: {orphans:?}");
+        assert!(
+            orphans
+                .iter()
+                .any(|o| o.line == 2 && o.reason == "capture-risk" && o.text == "let new = 0;"),
+            "got: {orphans:?}"
+        );
+        assert!(
+            orphans
+                .iter()
+                .any(|o| o.line == 4 && o.reason == "off-target"),
+            "got: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn stmt_single_let_no_outer_new_has_no_capture_risk() {
+        // Without a pre-existing `new` the orphan side stays exactly as
+        // before (one stranded use, no `capture-risk`).
+        let src = "fn main() {\n    let old = 1;\n    let c = old;\n}\n";
+        let orphans = stmt_let_orphans(src);
+        assert_eq!(orphans.len(), 1, "got: {orphans:?}");
+        assert_eq!(orphans[0].line, 3, "got: {orphans:?}");
+        assert_eq!(orphans[0].reason, "off-target", "got: {orphans:?}");
     }
 }

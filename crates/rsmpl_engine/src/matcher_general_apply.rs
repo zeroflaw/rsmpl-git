@@ -601,9 +601,26 @@ pub fn apply_general_hunk(
                         edits.push(
                             TextEdit::new(node.start, node.end, replacement).with_label("rename"),
                         );
-                        edits.extend(crate::use_graph_local::let_binder_follow_edits(
-                            parsed, original, index, node.start, node.end, &old, &new,
-                        ));
+                        // Single-`let` outer-`new` capture audit (parity
+                        // with the sequence rename-once guard): a
+                        // pre-existing `new` binder in the renamed
+                        // statement's own scope collides either way, so
+                        // decline follow (definition applies verbatim,
+                        // post-binder uses strand as orphans).
+                        match crate::use_graph_local_orphan::enclosing_new_binder_defs(
+                            parsed,
+                            original,
+                            index,
+                            &new,
+                            (node.start, node.end),
+                        ) {
+                            Some(v) if v.is_empty() => {
+                                edits.extend(crate::use_graph_local::let_binder_follow_edits(
+                                    parsed, original, index, node.start, node.end, &old, &new,
+                                ));
+                            }
+                            _ => {}
+                        }
                     } else if let Some(b) = rsmpl_pattern::binder::binder_rename(&compiled.kind) {
                         // WI-3: only `LetClosure` reaches the Stmt arm
                         // besides `Let`. Binder-ident emission plus
