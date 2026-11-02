@@ -1607,7 +1607,10 @@ fn keyed_repairs_never_echo_the_reason() {
         ),
         // infer declared-kind gate (WI-18 slice 8: was the generic-fallback
         // example; now carries `infer-declared-kind-template`).
-        format!("{head}@@ -1,1 +1,1 @@ rule=x\n# expr T\n- Vec<T>\n+ Box<[T]>\n"),
+        format!("{head}@@ -1,1 @@ rule=x\n# expr T\n- Vec<T>\n+ Box<[T]>\n"),
+        // v1 block-comment gate (WI-18 slice 9: was the generic-fallback
+        // example; now carries `frontier-block-comment-template`).
+        format!("{head}@@ -1,1 @@ rule=x\n- /* c */ foo(E)\n+ /* c */ bar(E)\n"),
     ];
     let codes = [
         "fn-pattern",
@@ -1615,6 +1618,7 @@ fn keyed_repairs_never_echo_the_reason() {
         "pattern",
         "pattern",
         "infer-declared-kind-template",
+        "frontier-block-comment-template",
     ];
     for (patch, code) in patches.iter().zip(codes) {
         let err = compile(&hunk_of(patch)).unwrap_err();
@@ -1634,21 +1638,14 @@ fn keyed_repairs_never_echo_the_reason() {
         assert!(!write_instead.is_empty(), "got: {patch:?}");
         assert_ne!(write_instead, err.message, "echoes reason: {patch:?}");
     }
-    // The fallback template is the WI-2b generic filler text (pinned on a
-    // still-bare tail site: the v1 block-comment gate in `pattern_general`).
-    let filler_patch =
-        format!("{head}@@ -1,1 +1,1 @@ rule=x\n- /* c */ foo(E)\n+ /* c */ bar(E)\n");
-    let err = compile(&hunk_of(&filler_patch)).unwrap_err();
-    let repair = err.repair.expect("fallback must carry repair");
-    assert_eq!(
-        repair["code"].as_str(),
-        Some("pattern"),
-        "got: {filler_patch:?}"
-    );
-    assert_eq!(
-        repair["write_instead"].as_str(),
-        Some("rewrite the pattern to a supported shape (see SPEC 18.6) or use an ordinary hunk"),
-    );
+    // The generic fallback stays pinned by loop entries 3-4 (the item
+    // concrete-shape and use metavariable gates, which carry no
+    // gate-specific repair): they assert `code: "pattern"` with the
+    // WI-2b filler text. (WI-18 slice 9: the previous filler example —
+    // the v1 block-comment gate — is now loop entry 6 with its own
+    // `frontier-block-comment-template`.) The apply-boundary generic
+    // fallback is pinned separately by `validate.rs`
+    // `fill_generic_repair` tests.
 }
 
 #[test]

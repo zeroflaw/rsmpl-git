@@ -435,7 +435,12 @@ fn split_variant(line: &str) -> Option<(String, String)> {
 }
 
 fn joint_err(msg: impl Into<String>) -> StructuredError {
-    StructuredError::new(rsmpl_patch::ErrorCode::PatternConflict, msg.into())
+    StructuredError::new(rsmpl_patch::ErrorCode::PatternConflict, msg.into()).with_repair(
+        StructuredError::fix_pattern_repair(
+            "frontier-joint-template",
+            "write a concrete Rust expression for a discriminant (`A = EXPR`) or a concrete Rust type for a payload (`A(u32)`, `B { x: u32 }`) — joint pairs take no metavariables",
+        ),
+    )
 }
 
 /// Bare `struct Name` (optional `pub…` vis, optional trailing `;`).
@@ -625,7 +630,12 @@ fn find_field_colon(t: &str) -> Option<usize> {
 }
 
 fn field_err(msg: impl Into<String>) -> StructuredError {
-    StructuredError::new(rsmpl_patch::ErrorCode::PatternConflict, msg.into())
+    StructuredError::new(rsmpl_patch::ErrorCode::PatternConflict, msg.into()).with_repair(
+        StructuredError::fix_pattern_repair(
+            "frontier-field-template",
+            "write a concrete Rust type on both sides of the field pair (`- x: u32` / `+ x: u64`, same name both sides) — joint pairs take no metavariables",
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -750,5 +760,46 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    /// WI-18 slice 9: the joint constructors carry site-specific repairs
+    /// covering every call site (discriminant-expr / payload-type /
+    /// field-type parse failures name their shape in `reason`).
+    #[test]
+    fn wi18_frontier_joint_constructor_repair() {
+        let err = joint_err("joint variant payload type does not parse as a Rust type");
+        assert!(
+            err.to_string().contains("does not parse as a Rust type"),
+            "got: {err}"
+        );
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-joint-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
+        assert!(w.contains("concrete Rust"), "got: {w}");
+    }
+
+    /// WI-18 slice 9: the field constructor carries its own repair.
+    #[test]
+    fn wi18_frontier_field_constructor_repair() {
+        let err = field_err("joint field type does not parse as a Rust type");
+        assert!(err.to_string().contains("joint field type"), "got: {err}");
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-field-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
+        assert!(w.contains("same name both sides"), "got: {w}");
     }
 }

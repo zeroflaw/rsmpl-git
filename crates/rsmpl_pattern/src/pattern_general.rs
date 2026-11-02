@@ -146,7 +146,11 @@ pub(crate) fn try_general(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "block comments (`/* ... */`) are not supported in patterns in v1 (mirror doc comments with `#[doc = \"...\"]` or use an ordinary hunk)",
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "frontier-block-comment-template",
+                "replace the `/* ... */` comment with a `#[doc = \"...\"]` line above the pattern, or move the change to an ordinary hunk",
+            )));
         }
     }
     // Mask backtick literals so substitution cannot mistake them for
@@ -264,6 +268,10 @@ pub(crate) fn try_general(
                         ErrorCode::PatternConflict,
                         format!("invalid expression pattern: {e}"),
                     )
+                    .with_repair(StructuredError::fix_pattern_repair(
+                        "frontier-ellipsis-expr-template",
+                        "write a valid Rust expression around the `...` tail (check parens/operators), or move the tail to a `let` pattern",
+                    ))
                 })?;
                 check_general_ellipsis_expr(&pat_expr, &plus_rest, table)?;
             }
@@ -779,4 +787,56 @@ pub fn split_leading_attrs(text: &str) -> (Vec<String>, String) {
         }
     }
     (attrs, lines[idx..].join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_table() -> MetavarTable {
+        MetavarTable::from_directives(&[]).unwrap()
+    }
+
+    /// WI-18 slice 9: the block-comment gate carries its own repair.
+    #[test]
+    fn wi18_frontier_block_comment_repair() {
+        let err =
+            try_general("/* c */ foo(E)", "/* c */ bar(E)", &empty_table(), None).unwrap_err();
+        assert!(err.to_string().contains("block comments"), "got: {err}");
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-block-comment-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
+        assert!(w.contains("#[doc"), "got: {w}");
+    }
+
+    /// WI-18 slice 9: `...` expression tails stay in the keyed C1 family
+    /// (the `invalid expression pattern` map_err arm above is defensive —
+    /// it re-parses the same string the `is_ok` gate just accepted — so
+    /// the reachable assertion is that ellipsis-expr shapes never go
+    /// bare: they compile or fail with a `fix_pattern` repair).
+    #[test]
+    fn wi18_frontier_ellipsis_expr_never_bare() {
+        let r = try_general("foo(x, ...)", "bar(x, ...)", &empty_table(), None);
+        match r {
+            Ok(_) => {}
+            Err(e) => {
+                let repair = e.repair.expect("ellipsis-expr failure must carry repair");
+                assert_eq!(
+                    repair.get("action").and_then(|v| v.as_str()),
+                    Some("fix_pattern")
+                );
+            }
+        }
+        // The site-specific arm itself is covered by the source gate +
+        // mutation check (deleting its `with_repair` exceeds the ceiling).
+        let probe: Result<syn::Expr, _> = syn::parse_str("foo(+");
+        assert!(probe.is_err());
+    }
 }

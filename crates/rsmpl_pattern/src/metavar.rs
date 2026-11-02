@@ -34,7 +34,11 @@ impl MetavarTable {
                                         prev.as_str(),
                                         kind.as_str()
                                     ),
-                                ));
+                                )
+                                .with_repair(StructuredError::fix_pattern_repair(
+                                    "frontier-declared-kind-template",
+                                    "declare the hole once with one kind (keep one `# KIND NAME` line and drop the other, or rename one side's hole; SPEC 15.8 agreement)",
+                                )));
                             }
                         }
                         t.kinds.insert(n.clone(), *kind);
@@ -45,12 +49,16 @@ impl MetavarTable {
                     if let Some(prev) = t.kinds.get(name) {
                         if *prev != MetavarKind::Symbol {
                             return Err(StructuredError::new(
-                                ErrorCode::PatternConflict,
-                                format!(
-                                    "metavariable `{name}` declared twice with different kinds ({} vs symbol)",
-                                    prev.as_str(),
-                                ),
-                            ));
+                                    ErrorCode::PatternConflict,
+                                    format!(
+                                        "metavariable `{name}` declared twice with different kinds ({} vs symbol)",
+                                        prev.as_str(),
+                                    ),
+                                )
+                                .with_repair(StructuredError::fix_pattern_repair(
+                                    "frontier-symbol-kind-template",
+                                    "declare the hole once (a `# symbol` name cannot also be a `# expr`/`# type`/… hole — rename one side; SPEC 15.8)",
+                                )));
                         }
                     }
                     t.kinds.insert(name.clone(), MetavarKind::Symbol);
@@ -177,5 +185,72 @@ mod tests {
         t.sigiled = true;
         assert!(t.bound_in_text("old($E)").contains("E"));
         assert!(!t.bound_in_text("old(E)").contains("E"));
+    }
+
+    /// WI-18 slice 9: duplicate-kind gates carry site-specific repairs.
+    #[test]
+    fn wi18_frontier_declared_kind_repair() {
+        let dirs = vec![
+            Directive::MetaVar {
+                kind: MetavarKind::Expr,
+                names: vec!["E".to_string()],
+            },
+            Directive::MetaVar {
+                kind: MetavarKind::Type,
+                names: vec!["E".to_string()],
+            },
+        ];
+        let err = MetavarTable::from_directives(&dirs).unwrap_err();
+        assert_eq!(err.code, ErrorCode::PatternConflict);
+        assert!(
+            err.message
+                .contains("declared twice with different kinds (expr vs type)"),
+            "unexpected: {}",
+            err.message
+        );
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-declared-kind-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
+        assert!(w.contains("declare the hole once"), "got: {w}");
+    }
+
+    /// WI-18 slice 9: symbol-kind conflict carries its own repair.
+    #[test]
+    fn wi18_frontier_symbol_kind_repair() {
+        let dirs = vec![
+            Directive::MetaVar {
+                kind: MetavarKind::Expr,
+                names: vec!["E".to_string()],
+            },
+            Directive::Symbol {
+                name: "E".to_string(),
+                path: "crate::x".to_string(),
+            },
+        ];
+        let err = MetavarTable::from_directives(&dirs).unwrap_err();
+        assert_eq!(err.code, ErrorCode::PatternConflict);
+        assert!(
+            err.message.contains("(expr vs symbol)"),
+            "unexpected: {}",
+            err.message
+        );
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-symbol-kind-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
+        assert!(w.contains("declare the hole once"), "got: {w}");
     }
 }

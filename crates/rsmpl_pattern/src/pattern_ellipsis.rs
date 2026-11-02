@@ -40,7 +40,11 @@ pub(crate) fn validate_ellipsis_positions(minus: &str, plus: &str) -> Result<(),
                         return Err(StructuredError::new(
                             ErrorCode::PatternConflict,
                             format!("`...` must be a standalone wildcard, got `{line}`"),
-                        ));
+                        )
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "frontier-ellipsis-adjacent-template",
+                            "write `...` as a standalone token (surround with whitespace or delimiters, e.g. `foo(..., E)` instead of `foo...bar`)",
+                        )));
                     }
                     i += 3;
                 } else {
@@ -325,4 +329,36 @@ pub(crate) fn check_general_ellipsis_expr(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WI-18 slice 9: identifier-adjacent `...` carries its own repair.
+    #[test]
+    fn wi18_frontier_ellipsis_adjacent_repair() {
+        let err = validate_ellipsis_positions("foo...bar", "foo...bar").unwrap_err();
+        assert!(
+            err.to_string().contains("must be a standalone wildcard"),
+            "got: {err}"
+        );
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-ellipsis-adjacent-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
+        assert!(w.contains("standalone token"), "got: {w}");
+    }
+
+    /// Standalone `...` (whitespace/delimiter separated) still passes.
+    #[test]
+    fn wi18_frontier_ellipsis_standalone_control() {
+        assert!(validate_ellipsis_positions("foo(..., E)", "bar(..., E)").is_ok());
+    }
 }

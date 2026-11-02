@@ -399,6 +399,12 @@ mod tests {
     /// (ceiling 46 -> 41), with a D5 production split first (the
     /// call/general-fallback pass → new sibling `infer_call.rs`;
     /// `infer.rs` 1766 -> ~1260).
+    /// WI-18 follow-up slice 9 moved the 8-site pattern-frontier family
+    /// in `rsmpl_pattern` (metavar duplicate-kind ×2, ellipsis-adjacent
+    /// ×1, expr-pattern ×1, general block-comment + ellipsis-expr ×2,
+    /// item-joint constructors ×2) to site-specific
+    /// `frontier-*-template` repairs (ceiling 41 -> 33; no D5 split —
+    /// all owners well under 1600).
     /// (`Match`/`Range`/`Parse`/`GitHunk`/`Build` or an unclassified
     /// code) fails naming file + line + code, because the filler does
     /// not cover those codes and a bare site there is a prose-only
@@ -407,7 +413,7 @@ mod tests {
     /// The companion runtime enumeration lives in
     /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
     /// patch per patch-input class); this test is the source gate.
-    const PATTERN_TAIL_CEILING: usize = 41;
+    const PATTERN_TAIL_CEILING: usize = 33;
 
     #[test]
     fn wi18_source_scan_every_site_carries_repair_or_allow_list() {

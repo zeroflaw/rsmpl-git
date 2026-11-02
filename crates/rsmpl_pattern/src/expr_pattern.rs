@@ -293,6 +293,10 @@ pub fn try_parse_expr(text: &str) -> Result<syn::Expr, StructuredError> {
             ErrorCode::PatternConflict,
             format!("invalid expression pattern `{text}`: {e}"),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "frontier-expr-pattern-template",
+            "write a valid Rust expression pattern (check parens, operators, and statement-vs-expression shape; see SPEC 18.6)",
+        ))
     })
 }
 
@@ -791,6 +795,28 @@ mod tests {
     #[test]
     fn parses_concrete_expr() {
         assert!(try_parse_expr("foo(x)").is_ok());
+    }
+
+    /// WI-18 slice 9: unparsable expression text carries its own repair
+    /// (defence-in-depth: the only production caller discards the error,
+    /// but the ceiling counts the site either way).
+    #[test]
+    fn wi18_frontier_expr_pattern_repair() {
+        let err = try_parse_expr("foo(+").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid expression pattern"),
+            "got: {err}"
+        );
+        let repair = err.repair.expect("must carry repair");
+        assert_eq!(
+            repair.get("code").and_then(|v| v.as_str()),
+            Some("frontier-expr-pattern-template")
+        );
+        let w = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str");
+        assert_ne!(w, err.message);
     }
 
     #[test]
