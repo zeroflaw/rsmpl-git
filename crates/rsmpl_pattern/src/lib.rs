@@ -16,6 +16,7 @@ mod metavar;
 mod pattern;
 mod pattern_assoc;
 mod pattern_classify;
+mod pattern_classify_item;
 mod pattern_def_evo;
 mod pattern_ellipsis;
 mod pattern_evolution;
