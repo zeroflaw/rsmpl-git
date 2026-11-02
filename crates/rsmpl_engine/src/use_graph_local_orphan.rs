@@ -12,6 +12,158 @@ use crate::lines::{FileState, LineIndex};
 use crate::use_graph_local::{format_capture_spans, orphan_line_text};
 use crate::use_graph_orphan::collect_orphans;
 
+/// WI-13: modelled shadow ranges for same-name binders outside the
+/// `let` / closure-param family: `(binder_def, construct_scope_end)`
+/// for `for` / `if let` / `while let` patterns, match-arm patterns, and
+/// fn-param patterns (raw and unfiltered — callers apply their scope
+/// filters). Single source for the orphan scan below and the
+/// `let`-binder follow walk: both sides must agree on which uses name
+/// an inner binder, or completion and evidence disagree and an
+/// unshadowed outer use strands as `off-target`.
+pub(crate) fn extra_binder_shadow_ranges(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    old: &str,
+) -> Vec<(usize, usize)> {
+    use syn::visit::Visit;
+    struct Grab<'a> {
+        original: &'a str,
+        index: &'a LineIndex,
+        old: &'a str,
+        out: Vec<(usize, usize)>,
+    }
+    impl<'ast> Visit<'ast> for Grab<'_> {
+        fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+            use syn::spanned::Spanned;
+            let defs = crate::use_graph_local::pat_old_offsets(
+                &node.pat,
+                self.old,
+                self.original,
+                self.index,
+            );
+            if !defs.is_empty() {
+                if let Some((_, bend)) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.body.span())
+                {
+                    for d in defs {
+                        self.out.push((d, bend));
+                    }
+                }
+            }
+            syn::visit::visit_expr_for_loop(self, node);
+        }
+        fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+            use syn::spanned::Spanned;
+            if let syn::Expr::Let(let_) = &*node.cond {
+                let defs = crate::use_graph_local::pat_old_offsets(
+                    &let_.pat,
+                    self.old,
+                    self.original,
+                    self.index,
+                );
+                if !defs.is_empty() {
+                    if let Some((_, tend)) = crate::matcher_item::span_bytes(
+                        self.original,
+                        self.index,
+                        node.then_branch.span(),
+                    ) {
+                        for d in defs {
+                            self.out.push((d, tend));
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr_if(self, node);
+        }
+        fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+            use syn::spanned::Spanned;
+            if let syn::Expr::Let(let_) = &*node.cond {
+                let defs = crate::use_graph_local::pat_old_offsets(
+                    &let_.pat,
+                    self.old,
+                    self.original,
+                    self.index,
+                );
+                if !defs.is_empty() {
+                    if let Some((_, bend)) =
+                        crate::matcher_item::span_bytes(self.original, self.index, node.body.span())
+                    {
+                        for d in defs {
+                            self.out.push((d, bend));
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr_while(self, node);
+        }
+        fn visit_arm(&mut self, node: &'ast syn::Arm) {
+            use syn::spanned::Spanned;
+            let defs = crate::use_graph_local::pat_old_offsets(
+                &node.pat,
+                self.old,
+                self.original,
+                self.index,
+            );
+            if !defs.is_empty() {
+                let mut end: Option<usize> = None;
+                if let Some((_, be)) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.body.span())
+                {
+                    end = Some(be);
+                }
+                if let Some((_, guard)) = &node.guard {
+                    if let Some((_, ge)) =
+                        crate::matcher_item::span_bytes(self.original, self.index, guard.span())
+                    {
+                        end = Some(end.map_or(ge, |e| e.max(ge)));
+                    }
+                }
+                if let Some(e) = end {
+                    for d in defs {
+                        self.out.push((d, e));
+                    }
+                }
+            }
+            syn::visit::visit_arm(self, node);
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            use syn::spanned::Spanned;
+            let mut param_defs = Vec::new();
+            for arg in &node.sig.inputs {
+                if let syn::FnArg::Typed(t) = arg {
+                    param_defs.extend(crate::use_graph_local::pat_old_offsets(
+                        &t.pat,
+                        self.old,
+                        self.original,
+                        self.index,
+                    ));
+                }
+            }
+            if !param_defs.is_empty() {
+                if let Some((_, bend)) =
+                    crate::matcher_item::span_bytes(self.original, self.index, node.block.span())
+                {
+                    for d in param_defs {
+                        self.out.push((d, bend));
+                    }
+                }
+            }
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+    let mut grab = Grab {
+        original,
+        index,
+        old,
+        out: Vec::new(),
+    };
+    grab.visit_file(parsed);
+    grab.out.sort_unstable();
+    grab.out.dedup();
+    grab.out
+}
+
 /// WI-2a post-binder orphan scan for `let`-binder renames (same file
 /// only: locals can never dangle cross-file; uses before the binder
 /// statement end name the outer scope, including the binder's own init
@@ -102,10 +254,6 @@ pub(crate) fn let_binder_orphans(
         let_defs: Vec<usize>,
         closure_params: Vec<usize>,
         all_pats: Vec<usize>,
-        /// WI-2b unmodelled-binder shadows: (binder def, scope end) for
-        /// `for` / `if let` / `while let` / match-arm / fn-param `old`
-        /// binders (collected raw, filtered like `inner_lets` below).
-        extra_shadows: Vec<(usize, usize)>,
     }
     impl<'ast> syn::visit::Visit<'ast> for ScopeGate<'_> {
         fn visit_block(&mut self, node: &'ast syn::Block) {
@@ -123,29 +271,6 @@ pub(crate) fn let_binder_orphans(
                 crate::matcher_item::span_bytes(self.original, self.index, node.span())
             {
                 self.item_fns.push((a, b));
-            }
-            // Fn-param `old` governs the fn body (nested fns excluded
-            // downstream; outer pre-binder params excluded by the
-            // post-binder filter below).
-            let mut param_defs = Vec::new();
-            for arg in &node.sig.inputs {
-                if let syn::FnArg::Typed(t) = arg {
-                    param_defs.extend(crate::use_graph_local::pat_old_offsets(
-                        &t.pat,
-                        self.old,
-                        self.original,
-                        self.index,
-                    ));
-                }
-            }
-            if !param_defs.is_empty() {
-                if let Some((_, bend)) =
-                    crate::matcher_item::span_bytes(self.original, self.index, node.block.span())
-                {
-                    for d in param_defs {
-                        self.extra_shadows.push((d, bend));
-                    }
-                }
             }
             syn::visit::visit_item_fn(self, node);
         }
@@ -187,99 +312,6 @@ pub(crate) fn let_binder_orphans(
             }
             syn::visit::visit_local(self, node);
         }
-        fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
-            use syn::spanned::Spanned;
-            let defs = crate::use_graph_local::pat_old_offsets(
-                &node.pat,
-                self.old,
-                self.original,
-                self.index,
-            );
-            if !defs.is_empty() {
-                if let Some((_, bend)) =
-                    crate::matcher_item::span_bytes(self.original, self.index, node.body.span())
-                {
-                    for d in defs {
-                        self.extra_shadows.push((d, bend));
-                    }
-                }
-            }
-            syn::visit::visit_expr_for_loop(self, node);
-        }
-        fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
-            use syn::spanned::Spanned;
-            if let syn::Expr::Let(let_) = &*node.cond {
-                let defs = crate::use_graph_local::pat_old_offsets(
-                    &let_.pat,
-                    self.old,
-                    self.original,
-                    self.index,
-                );
-                if !defs.is_empty() {
-                    if let Some((_, tend)) = crate::matcher_item::span_bytes(
-                        self.original,
-                        self.index,
-                        node.then_branch.span(),
-                    ) {
-                        for d in defs {
-                            self.extra_shadows.push((d, tend));
-                        }
-                    }
-                }
-            }
-            syn::visit::visit_expr_if(self, node);
-        }
-        fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
-            use syn::spanned::Spanned;
-            if let syn::Expr::Let(let_) = &*node.cond {
-                let defs = crate::use_graph_local::pat_old_offsets(
-                    &let_.pat,
-                    self.old,
-                    self.original,
-                    self.index,
-                );
-                if !defs.is_empty() {
-                    if let Some((_, bend)) =
-                        crate::matcher_item::span_bytes(self.original, self.index, node.body.span())
-                    {
-                        for d in defs {
-                            self.extra_shadows.push((d, bend));
-                        }
-                    }
-                }
-            }
-            syn::visit::visit_expr_while(self, node);
-        }
-        fn visit_arm(&mut self, node: &'ast syn::Arm) {
-            use syn::spanned::Spanned;
-            let defs = crate::use_graph_local::pat_old_offsets(
-                &node.pat,
-                self.old,
-                self.original,
-                self.index,
-            );
-            if !defs.is_empty() {
-                let mut end: Option<usize> = None;
-                if let Some((_, be)) =
-                    crate::matcher_item::span_bytes(self.original, self.index, node.body.span())
-                {
-                    end = Some(be);
-                }
-                if let Some((_, guard)) = &node.guard {
-                    if let Some((_, ge)) =
-                        crate::matcher_item::span_bytes(self.original, self.index, guard.span())
-                    {
-                        end = Some(end.map_or(ge, |e| e.max(ge)));
-                    }
-                }
-                if let Some(e) = end {
-                    for d in defs {
-                        self.extra_shadows.push((d, e));
-                    }
-                }
-            }
-            syn::visit::visit_arm(self, node);
-        }
         fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
             if node.ident == self.old {
                 let sp = node.ident.span();
@@ -306,7 +338,6 @@ pub(crate) fn let_binder_orphans(
         let_defs: Vec::new(),
         closure_params: Vec::new(),
         all_pats: Vec::new(),
-        extra_shadows: Vec::new(),
     };
     {
         use syn::visit::Visit;
@@ -385,7 +416,7 @@ pub(crate) fn let_binder_orphans(
                 && !is_outer_def(*o)
         })
         .collect();
-    let mut extra: Vec<(usize, usize)> = gate.extra_shadows.to_vec();
+    let mut extra: Vec<(usize, usize)> = extra_binder_shadow_ranges(parsed, original, index, old);
     extra.sort_unstable();
     extra.dedup();
     let extra: Vec<(usize, usize)> = extra

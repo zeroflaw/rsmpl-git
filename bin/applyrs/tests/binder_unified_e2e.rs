@@ -126,6 +126,74 @@ fn let_wrapped_closure_shadowed_reports_partial() {
 const CLOSURE_PARAM_PATCH: &str =
     "diff --git src/lib.rs\n@@ -2,1 @@ rule=rename_closure\n- |total: u32| E\n+ |sum: u32| E\n";
 
+// WI-13: field/method receivers headed by the binder and captures in
+// nested closures are binder uses — they complete and report
+// `verified`.
+const LET_RENAME_PATCH: &str =
+    "diff --git src/lib.rs\n@@ -2,1 @@ rule=rename_let\n- let total = make();\n+ let sum = make();\n";
+
+#[test]
+fn let_field_method_and_nested_capture_complete_clean() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "struct S { field: u32 }\nimpl S { fn method(&self) -> u32 { self.field } }\nfn make() -> S { S { field: 0 } }\npub fn run() {\n    let total = make();\n    let x = total.field;\n    let y = total.method();\n    let f = || { let g = || total.field + 1; g() };\n    let _ = (x, y, f);\n}\n",
+    );
+    let v = check_json(dir.path(), LET_RENAME_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), LET_RENAME_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let sum = make();"), "got: {post}");
+    assert!(post.contains("sum.field"), "got: {post}");
+    assert!(!post.contains("total.field"), "got: {post}");
+    assert!(post.contains("sum.method()"), "got: {post}");
+    assert!(post.contains("|| sum.field + 1"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+// WI-13: a shadowing `for` binder governs only the loop body — the
+// outer use after the loop rewrites; the in-body use stays a
+// `shadowed` orphan (so the run is `partial`, never `verified`).
+const LET_SIMPLE_PATCH: &str =
+    "diff --git src/lib.rs\n@@ -2,1 @@ rule=rename_let\n- let total = 1;\n+ let sum = 1;\n";
+
+#[test]
+fn let_for_shadow_after_use_rewrites_shadowed_stays() {
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let total = 1;\n    for total in 0..3 { let x = total; }\n    let y = total;\n}\n",
+    );
+    let v = check_json(dir.path(), LET_SIMPLE_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    let orphans = v["rules"][0]["orphans"].as_array().unwrap();
+    assert!(
+        !orphans.is_empty()
+            && orphans
+                .iter()
+                .all(|o| o["reason"] == serde_json::json!("shadowed")),
+        "got: {v}"
+    );
+    assert!(
+        !orphans
+            .iter()
+            .any(|o| o["reason"] == serde_json::json!("off-target")),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), LET_SIMPLE_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let y = sum;"), "got: {post}");
+    assert!(post.contains("for total in"), "got: {post}");
+}
+
 #[test]
 fn closure_param_completion_applies_and_checks_clean() {
     let dir = init_repo();

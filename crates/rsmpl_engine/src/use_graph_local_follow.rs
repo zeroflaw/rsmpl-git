@@ -180,14 +180,33 @@ pub fn let_binder_follow_edits(
         .filter(|o| *o > binder_end && within(enc, *o) && !in_excluded(*o) && !is_outer(*o))
         .collect();
 
-    // Unhandled same-name binders (for-loop pats, match arms, fn params
-    // outside nested fns, …) veto completion — safe downgrade instead of
-    // a mis-resolved rewrite.
+    // WI-13: modelled shadows for same-name binders outside the
+    // `let` / closure-param family (`for` / `if let` / `while let` /
+    // match-arm / fn-param defs with their construct scope ends — the
+    // same ranges the orphan scan labels `shadowed`). Uses inside these
+    // ranges name the inner binder and stay orphans; uses outside them
+    // name the outer binder and rewrite below. Filters mirror the
+    // orphan side exactly (post-binder, in-block, outside nested-fn /
+    // macro interiors, never the outer def itself).
+    let extra: Vec<(usize, usize)> =
+        crate::use_graph_local_orphan::extra_binder_shadow_ranges(parsed, original, index, old)
+            .into_iter()
+            .filter(|(d, _)| {
+                *d > binder_end && within(enc, *d) && !in_excluded(*d) && !is_outer(*d)
+            })
+            .collect();
+    let extra_defs: Vec<usize> = extra.iter().map(|(d, _)| *d).collect();
+
+    // Residual fail-safe: a post-binder same-name binder covered by no
+    // modelled range (unmodellable syntax the shadow walks cannot see)
+    // still vetoes completion — safe downgrade instead of a
+    // mis-resolved rewrite. All six binder kinds are modelled, so this
+    // is unreachable via current syntax; it stays as insurance.
     for o in &scopes.all_pats {
         if *o <= binder_end || !within(enc, *o) || is_outer(*o) || in_excluded(*o) {
             continue;
         }
-        if inner_lets.contains(o) || inner_closure_params.contains(o) {
+        if inner_lets.contains(o) || inner_closure_params.contains(o) || extra_defs.contains(o) {
             continue;
         }
         return Vec::new();
@@ -232,6 +251,14 @@ pub fn let_binder_follow_edits(
             shadows.push((*d, c.1));
         } else {
             shadows.push((*d, enc.1));
+        }
+    }
+    // WI-13 modelled shadows: unmodelled-binder defs already carry
+    // their construct scope end (never widened — uses past the
+    // construct resume the outer binder and must rewrite).
+    for (d, e) in &extra {
+        if *e > *d {
+            shadows.push((*d, *e));
         }
     }
 
@@ -465,9 +492,87 @@ mod tests {
     }
 
     #[test]
-    fn follow_aborts_on_for_loop_shadow() {
+    fn follow_for_shadow_with_no_outer_use_stays_empty() {
+        // Every post-binder use sits inside the shadowing loop body, so
+        // no follow edit fires (the use stays a `shadowed` orphan).
         let src = "fn main() {\n    let total = 1;\n    for total in 0..3 {\n        let x = total;\n    }\n}\n";
         assert!(follow_edits_for(src).is_empty());
+    }
+
+    #[test]
+    fn follow_for_shadow_rewrites_outer_use_after_loop() {
+        // WI-13: the shadowing `for total` governs only the loop body —
+        // the outer use after the loop still names the outer binder and
+        // rewrites; the in-body use stays for the inner binder.
+        let src = "fn main() {\n    let total = 1;\n    for total in 0..3 {\n        let x = total;\n    }\n    let y = total;\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 1, "got: {edits:?}");
+        assert_eq!(&src[edits[0].start..edits[0].end], "total");
+        assert!(src[..edits[0].start].contains("for total"));
+    }
+
+    #[test]
+    fn follow_match_arm_shadow_rewrites_outer_use_after_match() {
+        // WI-13: the shadowing arm binder governs only its arm guard +
+        // body — the outer use after the `match` rewrites.
+        let src = "fn main() {\n    let total = 1;\n    let v = match 1 { total => total + 1, _ => 0 };\n    let y = total;\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 1, "got: {edits:?}");
+        assert_eq!(&src[edits[0].start..edits[0].end], "total");
+        assert!(src[..edits[0].start].contains("match 1"));
+    }
+
+    #[test]
+    fn follow_if_let_shadow_rewrites_outer_use_after_if() {
+        // WI-13: the shadowing `if let total` governs only the
+        // then-branch — the outer use after the whole `if` rewrites.
+        let src = "fn main() {\n    let total = 1;\n    if let total = Some(1) { let x = total; } else { let y = 0; }\n    let z = total;\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 1, "got: {edits:?}");
+        assert_eq!(&src[edits[0].start..edits[0].end], "total");
+        assert!(src[..edits[0].start].contains("if let total"));
+    }
+
+    #[test]
+    fn follow_while_let_shadow_rewrites_outer_use_after_loop() {
+        // WI-13: the shadowing `while let total` governs only the loop
+        // body — the outer use after the loop rewrites.
+        let src = "fn main() {\n    let total = check();\n    while let total = Some(1) { let x = total; break; }\n    let z = total;\n}\n";
+        let parsed: syn::File = syn::parse_str(src).unwrap();
+        let index = crate::lines::LineIndex::new(src);
+        let stmt_start = src.find("let total").unwrap();
+        let stmt_end = src[stmt_start..].find(';').unwrap() + stmt_start + 1;
+        let edits =
+            let_binder_follow_edits(&parsed, src, &index, stmt_start, stmt_end, "total", "sum");
+        assert_eq!(edits.len(), 1, "got: {edits:?}");
+        assert_eq!(&src[edits[0].start..edits[0].end], "total");
+        assert!(src[..edits[0].start].contains("while let total"));
+    }
+
+    #[test]
+    fn follow_field_and_method_receivers_rewrite() {
+        // WI-13: uses through a field / method receiver headed by the
+        // binder are binder uses and rewrite in-hunk.
+        let src = "fn main() {\n    let total = make();\n    let x = total.field;\n    let y = total.method();\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 2, "got: {edits:?}");
+        for e in &edits {
+            assert_eq!(e.replacement, "sum");
+            assert_eq!(&src[e.start..e.end], "total");
+        }
+    }
+
+    #[test]
+    fn follow_nested_closure_capture_rewrites() {
+        // WI-13: a capture inside a doubly-nested closure still names
+        // the outer binder and rewrites.
+        let src = "fn main() {\n    let total = 1;\n    let f = || { let g = || total + 1; g() };\n    let h = total;\n}\n";
+        let edits = follow_edits_for(src);
+        assert_eq!(edits.len(), 2, "got: {edits:?}");
+        for e in &edits {
+            assert_eq!(e.replacement, "sum");
+            assert_eq!(&src[e.start..e.end], "total");
+        }
     }
 
     #[test]
