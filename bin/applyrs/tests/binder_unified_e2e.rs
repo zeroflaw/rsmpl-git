@@ -766,3 +766,116 @@ fn sequence_substitution_hole_macro_surfaces_macro_hidden() {
     assert!(post.contains("let new = g(1);"), "got: {post}");
     assert!(post.contains("let c = new;"), "got: {post}");
 }
+
+#[test]
+fn sequence_outer_scope_new_before_reports_capture_risk() {
+    // Slice 3 remainder: a pre-existing `new` binder in the window's own
+    // scope declines the follow arm — the window renames, the post-window
+    // use strands `off-target`, and the colliding definition surfaces as
+    // `capture-risk` (`partial`, still builds: the rename shadows
+    // legally, but the agent must resolve the twin binders by hand).
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let new = 0;\n    let old = 2;\n    let b = 3;\n    let c = old;\n    let _ = (new, b, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([
+            {
+                "file": "src/lib.rs",
+                "line": 2,
+                "reason": "capture-risk",
+                "text": "let new = 0;",
+            },
+            {
+                "file": "src/lib.rs",
+                "line": 5,
+                "reason": "off-target",
+                "text": "let c = old;",
+            },
+        ]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 0;"), "got: {post}");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+    // No `cargo_check`: the stranded post-window use dangles by design
+    // (the arm declined; the spelled-`old` partial twin pins the same
+    // posture).
+}
+
+#[test]
+fn sequence_outer_scope_new_after_reports_capture_risk() {
+    // A later same-level `let new` double-binds the scope: same decline
+    // and `capture-risk` at the later definition.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 2;\n    let b = 3;\n    let c = old;\n    let new = 9;\n    let _ = (b, c, new);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([
+            {
+                "file": "src/lib.rs",
+                "line": 4,
+                "reason": "off-target",
+                "text": "let c = old;",
+            },
+            {
+                "file": "src/lib.rs",
+                "line": 5,
+                "reason": "capture-risk",
+                "text": "let new = 9;",
+            },
+        ]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = old;"), "got: {post}");
+    assert!(post.contains("let new = 9;"), "got: {post}");
+    // No `cargo_check`: the stranded post-window use dangles by design
+    // (same posture as the before-window twin above).
+}
+
+#[test]
+fn sequence_sibling_scope_new_still_verifies() {
+    // A `new` binder in a descendant scope never collides: the arm still
+    // fires, post-window completes, `verified`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = 2;\n    let b = 3;\n    let _sib = { let new = 1; new };\n    let c = old;\n    let _ = (b, c);\n}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = 2;"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+    cargo_check(dir.path());
+}

@@ -334,6 +334,23 @@ fn sequence_binder_follows(
         }
     }
     let idx = hit?;
+    // Scope-wide `new` audit (slice 3 remainder): a pre-existing `new`
+    // binder in the window's own scope (same level or outer) collides
+    // with the rename either way — the renamed definition shadows it
+    // (silently rebinding its later uses) or it double-binds the scope.
+    // Decline the arm like the window-local guard: the window still
+    // applies verbatim, post-window uses strand as orphans.
+    let (ws, _) = crate::matcher_item::span_bytes(original, index, tgt_locals[0].span())?;
+    match crate::use_graph_local_orphan::enclosing_new_binder_defs(
+        parsed,
+        original,
+        index,
+        &b.new,
+        (ws, wend),
+    ) {
+        Some(v) if v.is_empty() => {}
+        _ => return None,
+    }
     // The renamed statement's own span is the binder range (the
     // single-`let` arm's discipline: its init RHS names the outer scope
     // and is never completed).
@@ -711,5 +728,46 @@ mod tests {
         let out = apply(&patch, src).unwrap();
         assert!(out.contains("let new = g(1);"), "got: {out}");
         assert!(out.contains("let c = old;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_outer_scope_new_declines_follow() {
+        // Slice 3 remainder: a pre-existing `new` binder in the window's
+        // own scope declines the follow arm — the window renames but the
+        // post-window use strands (the orphan scan owns the `partial`).
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let new = 0;\n    let old = g(1);\n    let b = h();\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let c = old;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_outer_scope_new_after_window_declines_follow() {
+        // A later same-level `let new` double-binds the scope: same
+        // decline, post-window strands.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n    let c = old;\n    let new = 9;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let c = old;"), "got: {out}");
+        assert!(out.contains("let new = 9;"), "got: {out}");
+    }
+
+    #[test]
+    fn sequence_sibling_scope_new_still_completes() {
+        // A `new` binder in a descendant scope never collides: the arm
+        // still fires and post-window completes.
+        let patch = format!(
+            "{HEAD}@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = E1;\n+ let new = E0;\n+ let b = E1;\n"
+        );
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n    { let new = 1; }\n    let c = old;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let new = g(1);"), "got: {out}");
+        assert!(out.contains("let c = new;"), "got: {out}");
     }
 }

@@ -167,6 +167,231 @@ pub(crate) fn extra_binder_shadow_ranges(
     grab.out
 }
 
+/// Outer-scope `new` capture audit (slice 3 remainder): byte offsets of
+/// `new`-binding pattern definitions that share a scope with `window`
+/// (the target window of a sequence rename-once `old` → `new` hunk).
+///
+/// A pre-existing `new` binder in the window's own scope collides with
+/// the rename either way: an earlier same-level/outer `let new` is
+/// shadowed by the renamed definition (silently rebinding its later
+/// uses), a later one double-binds the scope. Either case makes rewritten
+/// post-window uses resolve under a shadowing twin, so the follow arm
+/// declines and the definitions surface as `capture-risk` orphans.
+///
+/// Scope rule: only definitions whose innermost `Block` contains the whole
+/// window count (same-level `let`s and outer-scope `let`s / fn params).
+/// Definitions in descendant scopes (sibling inner blocks) never collide
+/// with window-level uses and are skipped, as are nested-`fn` and macro
+/// interiors (different scopes, like the follow walk). The window range
+/// itself is excluded (window-local `new` stays owned by the
+/// `sequence_binder_follows` pat guard). `for` / `if let` / `while let` /
+/// match-arm / closure-param `new` binders govern sub-scopes the follow
+/// walk already shadow-models, so they are known-skipped, not flagged; any
+/// other same-scope `new` binder (unmodellable syntax) is flagged as
+/// residual insurance.
+///
+/// Returns `None` when the enclosing block cannot be mapped (fail-safe:
+/// callers decline the arm and skip `capture-risk`, never proceed).
+pub(crate) fn enclosing_new_binder_defs(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    new: &str,
+    window: (usize, usize),
+) -> Option<Vec<usize>> {
+    use syn::visit::Visit;
+    struct Scopes<'a> {
+        original: &'a str,
+        index: &'a LineIndex,
+        new: &'a str,
+        blocks: Vec<(usize, usize)>,
+        item_fns: Vec<(usize, usize)>,
+        macros: Vec<(usize, usize)>,
+        let_defs: Vec<usize>,
+        sub_defs: Vec<usize>,
+        all_pats: Vec<usize>,
+        fn_param_defs: Vec<(usize, usize, usize)>,
+    }
+    impl<'ast> Visit<'ast> for Scopes<'_> {
+        fn visit_block(&mut self, node: &'ast syn::Block) {
+            use syn::spanned::Spanned;
+            if let Some((a, b)) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            {
+                self.blocks.push((a, b));
+            }
+            syn::visit::visit_block(self, node);
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            use syn::spanned::Spanned;
+            if let Some((a, b)) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            {
+                self.item_fns.push((a, b));
+                for arg in &node.sig.inputs {
+                    if let syn::FnArg::Typed(t) = arg {
+                        for off in crate::use_graph_local::pat_old_offsets(
+                            &t.pat,
+                            self.new,
+                            self.original,
+                            self.index,
+                        ) {
+                            self.fn_param_defs.push((off, a, b));
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_item_fn(self, node);
+        }
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            use syn::spanned::Spanned;
+            if let Some((a, b)) =
+                crate::matcher_item::span_bytes(self.original, self.index, node.span())
+            {
+                self.macros.push((a, b));
+            }
+        }
+        fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+            for off in node.inputs.iter().flat_map(|inp| {
+                crate::use_graph_local::pat_old_offsets(inp, self.new, self.original, self.index)
+            }) {
+                self.sub_defs.push(off);
+            }
+            syn::visit::visit_expr_closure(self, node);
+        }
+        fn visit_local(&mut self, node: &'ast syn::Local) {
+            for off in crate::use_graph_local::pat_old_offsets(
+                &node.pat,
+                self.new,
+                self.original,
+                self.index,
+            ) {
+                self.let_defs.push(off);
+            }
+            syn::visit::visit_local(self, node);
+        }
+        fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+            if node.ident == self.new {
+                let sp = node.ident.span();
+                if let (Some(a), Some(b)) = (
+                    self.index.offset(sp.start().line as u32, sp.start().column),
+                    self.index.offset(sp.end().line as u32, sp.end().column),
+                ) {
+                    if self.original.get(a..b) == Some(self.new) {
+                        self.all_pats.push(a);
+                    }
+                }
+            }
+            syn::visit::visit_pat_ident(self, node);
+        }
+    }
+    let mut scopes = Scopes {
+        original,
+        index,
+        new,
+        blocks: Vec::new(),
+        item_fns: Vec::new(),
+        macros: Vec::new(),
+        let_defs: Vec::new(),
+        sub_defs: Vec::new(),
+        all_pats: Vec::new(),
+        fn_param_defs: Vec::new(),
+    };
+    scopes.visit_file(parsed);
+    // Smallest block containing the whole window is the window's scope.
+    let mut enclosing: Option<(usize, usize)> = None;
+    for b in &scopes.blocks {
+        if b.0 <= window.0 && window.1 <= b.1 {
+            let narrower = match enclosing {
+                None => true,
+                Some(e) => (b.1 - b.0) < (e.1 - e.0),
+            };
+            if narrower {
+                enclosing = Some(*b);
+            }
+        }
+    }
+    let enc = enclosing?;
+    let nested: Vec<(usize, usize)> = scopes
+        .item_fns
+        .iter()
+        .copied()
+        .filter(|r| enc.0 <= r.0 && r.1 <= enc.1)
+        .collect();
+    let in_window = |o: usize| window.0 <= o && o < window.1;
+    let in_nested = |o: usize| nested.iter().any(|r| r.0 <= o && o < r.1);
+    let in_macro = |o: usize| scopes.macros.iter().any(|r| r.0 <= o && o < r.1);
+    // Innermost block containing `o`; `None` means no block maps the
+    // offset (signature-level: only fn params live there, handled
+    // separately — other offsets treat as outer scope, flag direction).
+    let inner_block = |o: usize| -> Option<(usize, usize)> {
+        let mut best: Option<(usize, usize)> = None;
+        for b in &scopes.blocks {
+            if b.0 <= o && o < b.1 {
+                let narrower = match best {
+                    None => true,
+                    Some(e) => (b.1 - b.0) < (e.1 - e.0),
+                };
+                if narrower {
+                    best = Some(*b);
+                }
+            }
+        }
+        best
+    };
+    // Same-scope collision: the def's innermost block contains the whole
+    // window scope (same level or outer). Descendant scopes never collide
+    // with window-level uses.
+    let collides = |o: usize| match inner_block(o) {
+        Some(inner) => inner.0 <= enc.0 && enc.1 <= inner.1,
+        None => true,
+    };
+    let mut flagged: Vec<usize> = Vec::new();
+    for o in &scopes.let_defs {
+        if in_window(*o) || in_nested(*o) || in_macro(*o) {
+            continue;
+        }
+        if collides(*o) {
+            flagged.push(*o);
+        }
+    }
+    for (o, fa, fb) in scopes.fn_param_defs.iter() {
+        if *fa <= window.0 && window.1 <= *fb {
+            flagged.push(*o);
+        }
+    }
+    // Known sub-scope binders (closure params + construct-scoped binders
+    // the follow walk already shadow-models): never flagged, but they own
+    // their offsets so the residual below does not claim them.
+    let mut known_sub: Vec<usize> = scopes.sub_defs;
+    known_sub.extend(
+        extra_binder_shadow_ranges(parsed, original, index, new)
+            .into_iter()
+            .map(|(d, _)| d),
+    );
+    known_sub.sort_unstable();
+    known_sub.dedup();
+    scopes.all_pats.sort_unstable();
+    scopes.all_pats.dedup();
+    scopes.let_defs.sort_unstable();
+    scopes.let_defs.dedup();
+    let fn_defs: Vec<usize> = scopes.fn_param_defs.iter().map(|(o, _, _)| *o).collect();
+    for o in &scopes.all_pats {
+        if in_window(*o) || in_nested(*o) || in_macro(*o) {
+            continue;
+        }
+        if scopes.let_defs.contains(o) || fn_defs.contains(o) || known_sub.contains(o) {
+            continue;
+        }
+        if collides(*o) {
+            flagged.push(*o);
+        }
+    }
+    flagged.sort_unstable();
+    flagged.dedup();
+    Some(flagged)
+}
+
 /// Sequence-window orphan cover (residue slice 3 + hole precision):
 /// map the pattern-side rename/substitution positions onto one applied
 /// target window.
@@ -639,6 +864,11 @@ pub(crate) fn let_binder_orphans(
     // onto its def + substitution spans. All windows must map exactly;
     // otherwise keep the legacy whole-window cover (fail-safe).
     let mut narrowed: Option<(Vec<Span>, Vec<Span>)> = None;
+    // Slice 3 remainder: per-window outer `new` definitions for the
+    // `capture-risk` audit below (sequence rename-once only; the binder's
+    // `new` name comes from the compiled pattern, not the orphan `old`).
+    let mut capture_windows: Vec<(usize, usize)> = Vec::new();
+    let mut capture_new: Option<String> = None;
     if let rsmpl_pattern::PatternKind::General {
         shape: rsmpl_pattern::GeneralShape::Sequence,
         ..
@@ -653,7 +883,7 @@ pub(crate) fn let_binder_orphans(
             let mut defs: Vec<(usize, usize)> = Vec::new();
             let mut extras: Vec<(usize, usize)> = Vec::new();
             let mut ok = true;
-            for w in windows {
+            for w in windows.iter().copied() {
                 match sequence_window_cover(&compiled.kind, w, parsed, original, index, old) {
                     Some((d, e)) => {
                         defs.push(d);
@@ -667,6 +897,12 @@ pub(crate) fn let_binder_orphans(
             }
             if ok {
                 narrowed = Some((defs, extras));
+                if let Some(b) = rsmpl_pattern::binder::binder_rename(&compiled.kind) {
+                    if b.scope == rsmpl_pattern::binder::BinderScope::Let {
+                        capture_windows = windows;
+                        capture_new = Some(b.new);
+                    }
+                }
             }
         }
     }
@@ -1215,6 +1451,28 @@ pub(crate) fn let_binder_orphans(
             o.reason = "shadowed".to_string();
         }
     }
+    // Slice 3 remainder: outer-scope `new` capture audit. A pre-existing
+    // `new` binder in the window's own scope collides with the rename, so
+    // each such definition surfaces as a `capture-risk` orphan (pushed
+    // after the retain gates above — outer definitions before the binder
+    // must not be dropped by the post-binder line gate; they are already
+    // scope-gated by the helper). Non-empty output caps at `partial` via
+    // the existing orphans-nonempty downgrade; no postcheck plumbing.
+    if let Some(new) = capture_new {
+        for w in &capture_windows {
+            if let Some(defs) = enclosing_new_binder_defs(parsed, original, index, &new, *w) {
+                for d in defs {
+                    let line = index.line_of(d);
+                    out.push(crate::OrphanReport {
+                        file: path.to_string(),
+                        line,
+                        text: crate::use_graph_local::orphan_line_text(original, index, line),
+                        reason: "capture-risk".to_string(),
+                    });
+                }
+            }
+        }
+    }
     out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     out.dedup_by(|a, b| a.file == b.file && a.line == b.line);
     out
@@ -1271,5 +1529,97 @@ mod tests {
     #[test]
     fn mismatch_falls_back_none() {
         assert!(excluded("f (old)", "g (old)", "old").is_none());
+    }
+
+    fn outer_new_lines(src: &str, new: &str, wstart_line: u32, wend_line: u32) -> Vec<u32> {
+        // `capture-risk` helper unit probe: the window is the 1-based
+        // closed line range `[wstart_line, wend_line]` (whole lines —
+        // unit-level stand-in for the statement byte span).
+        let parsed: syn::File = syn::parse_str(src).expect("test src parses");
+        let index = LineIndex::new(src);
+        let ws = index.line_start(wstart_line).expect("window start maps");
+        let we = index.line_start(wend_line + 1).unwrap_or(src.len());
+        let out = super::enclosing_new_binder_defs(&parsed, src, &index, new, (ws, we))
+            .expect("window maps to an enclosing block");
+        let mut lines: Vec<u32> = out.iter().map(|o| index.line_of(*o)).collect();
+        lines.sort_unstable();
+        lines
+    }
+
+    #[test]
+    fn outer_let_before_window_flagged() {
+        let src = "fn f() {\n    let new = 0;\n    let old = g(1);\n    let b = h();\n    let c = old;\n}\n";
+        assert_eq!(outer_new_lines(src, "new", 3, 4), vec![2]);
+    }
+
+    #[test]
+    fn outer_let_after_window_flagged() {
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n    let c = old;\n    let new = 9;\n}\n";
+        assert_eq!(outer_new_lines(src, "new", 2, 3), vec![5]);
+    }
+
+    #[test]
+    fn no_outer_new_is_empty() {
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n    let c = old;\n}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    #[test]
+    fn sibling_block_new_not_flagged() {
+        // A `new` binder in a descendant scope never collides with
+        // window-level uses.
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n    { let new = 1; }\n    let c = old;\n}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    #[test]
+    fn outer_block_new_flagged_for_nested_window() {
+        // The window sits in an `if` body; the outer-block `let new`
+        // shares the use scope.
+        let src = "fn f(c: bool) {\n    let new = 0;\n    if c {\n        let old = g(1);\n        let b = h();\n    }\n}\n";
+        assert_eq!(outer_new_lines(src, "new", 4, 5), vec![2]);
+    }
+
+    #[test]
+    fn fn_param_new_flagged() {
+        let src = "fn f(new: u32) {\n    let old = g(1);\n    let b = h();\n}\n";
+        assert_eq!(outer_new_lines(src, "new", 2, 3), vec![1]);
+    }
+
+    #[test]
+    fn other_fn_param_new_not_flagged() {
+        // A `new` param on a different function is another scope.
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n}\nfn g(new: u32) {}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    #[test]
+    fn for_loop_new_not_flagged() {
+        // Construct-scoped `new` binders are already shadow-modelled by
+        // the follow walk; they never collide at window level.
+        let src = "fn f() {\n    let old = g(1);\n    let b = h();\n    for new in 0..3 { let x = new; }\n}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    #[test]
+    fn closure_param_new_not_flagged() {
+        let src =
+            "fn f() {\n    let old = g(1);\n    let b = h();\n    let g = |new: u32| new;\n}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    #[test]
+    fn window_local_new_excluded() {
+        // `new` bound inside the window itself stays owned by the
+        // `sequence_binder_follows` pat guard, never by this helper.
+        let src = "fn f() {\n    let old = g(1);\n    let new = h();\n}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
+    }
+
+    #[test]
+    fn nested_fn_let_new_not_flagged() {
+        let src =
+            "fn f() {\n    let old = g(1);\n    let b = h();\n    fn inner() { let new = 1; }\n}\n";
+        assert!(outer_new_lines(src, "new", 2, 3).is_empty());
     }
 }
