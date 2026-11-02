@@ -484,7 +484,7 @@ fn scratch_single_reproduces(
 /// end with `{` (definitions, trait defaults) or `;` (trait
 /// declarations), both parse as fn-shaped, and they differ in exactly
 /// the fn ident. Returns (old, new, terminator).
-fn trait_rename_pair(old_line: &str, new_line: &str) -> Option<(String, String, char)> {
+pub(crate) fn trait_rename_pair(old_line: &str, new_line: &str) -> Option<(String, String, char)> {
     let o = old_line.trim();
     let p = new_line.trim();
     if o.is_empty() || p.is_empty() {
@@ -527,7 +527,7 @@ fn is_method_shaped(trimmed: &str, term: char) -> bool {
 
 /// True when 1-based `site` lies in a `trait` block (top-level and
 /// inline-mod items).
-fn in_trait_block(pre: &str, site: usize) -> bool {
+pub(crate) fn in_trait_block(pre: &str, site: usize) -> bool {
     let Ok(file) = syn::parse_str::<syn::File>(pre) else {
         return false;
     };
@@ -557,7 +557,7 @@ fn in_trait_block(pre: &str, site: usize) -> bool {
 
 /// True when 1-based `site` lies in an `impl` block (top-level and
 /// inline-mod items).
-fn in_impl_block(pre: &str, site: usize) -> bool {
+pub(crate) fn in_impl_block(pre: &str, site: usize) -> bool {
     let Ok(file) = syn::parse_str::<syn::File>(pre) else {
         return false;
     };
@@ -588,7 +588,7 @@ fn in_impl_block(pre: &str, site: usize) -> bool {
 /// (`trait_.is_none()`), top-level and inline-mod items, smallest
 /// enclosing span wins. WI-22 (D9): inherent defs never share a
 /// trait-method intent with a trait declaration.
-fn site_in_inherent_impl(pre: &str, site: usize) -> bool {
+pub(crate) fn site_in_inherent_impl(pre: &str, site: usize) -> bool {
     use syn::spanned::Spanned;
     let Ok(file) = syn::parse_str::<syn::File>(pre) else {
         return false;
@@ -620,7 +620,7 @@ fn site_in_inherent_impl(pre: &str, site: usize) -> bool {
 }
 /// Trait ident for the smallest enclosing `trait` block at 1-based `site`
 /// (top-level and inline-mod items). `None` outside every trait block.
-fn trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
+pub(crate) fn trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
     use syn::spanned::Spanned;
     let file: syn::File = syn::parse_str(pre).ok()?;
     fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, String)>) {
@@ -650,7 +650,7 @@ fn trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
 /// Last-segment trait tail for the smallest enclosing `impl <Trait> for`
 /// block at 1-based `site`. `None` for inherent impls or outside blocks.
 /// Last-segment discipline (D8): `crate::T` proves `T`.
-fn impl_trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
+pub(crate) fn impl_trait_ident_for_site(pre: &str, site: usize) -> Option<String> {
     use syn::spanned::Spanned;
     let file: syn::File = syn::parse_str(pre).ok()?;
     fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, String)>) {

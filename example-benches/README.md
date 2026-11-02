@@ -96,7 +96,7 @@ counts in the JSON report).
 | 36-log-message (4 sites, log/message `"old-msg"` → `"new-msg"`, 1 hunk) | 422 B / 15 ln | 79 B / 5 ln | 81% |
 | 37-bound-sweep (4 hetero-named fns gain `T: Clone`, `N` hole, 1 hunk, WI-9) | 577 B / 15 ln | 121 B / 7 ln | 79% |
 | 38-derive-migration (4 hetero structs gain `Clone`, `N` hole, 1 hunk, WI-10b) | 359 B / 15 ln | 116 B / 7 ln | 68% |
-| 39-assoc-rename (trait decl + 2 impl decls + 7 `::Item` uses, 1 hunk with `# follow=uses`, WI-3) | 849 B / 30 ln | 109 B / 7 ln | 87% |
+| 39-assoc-rename (trait decl + 2 impl decls + 8 `::Item` uses across 2 files, 3 hunks sharing one rule with `# follow=uses`, WI-3 + WI-12) | 912 B / 33 ln | 308 B / 18 ln | 66% |
 | 40-cross-file-struct-rename (struct def + 7 type/impl uses across 2 files, 1 hunk with `# follow=uses`, WI-15a) | 467 B / 24 ln | 83 B / 6 ln | 82% |
 | 41-cross-file-field-rename (field def + 4 anchored uses across 2 files, 1 hunk with `# follow=uses`, WI-15b) | 1176 B / 21 ln | 155 B / 7 ln | 87% |
 | 42-mod-rename (mod def + 4 `old::` path uses across 2 files, 1 hunk with `# follow=uses`, WI-15c) | 555 B / 20 ln | 83 B / 6 ln | 85% |

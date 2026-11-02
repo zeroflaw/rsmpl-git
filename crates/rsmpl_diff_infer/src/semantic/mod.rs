@@ -18,6 +18,7 @@ mod calls;
 pub(crate) mod carrier;
 pub(crate) mod chain;
 pub(crate) mod control_template;
+mod cross_sweep;
 pub(crate) mod definition_addition;
 pub(crate) mod definition_arm_follow;
 pub(crate) mod definition_evolution;
@@ -344,6 +345,11 @@ pub fn infer_semantic_with_provenance(
             }
             None => sections,
         };
+    // WI-12 cross-file assoc/trait-method intents (commits inside).
+    let cross_fired =
+        cross_sweep::try_cross_intents(sections, pre, &mut used_rules, prov, &mut compressed_any);
+    let cross_owned = cross_fired.unwrap_or_else(|| sections.to_vec());
+    let sections: &[String] = &cross_owned;
     for section in sections {
         match chain::compress_section(section, &mut used_rules, pre, prov, &joint_suppressed) {
             Some(semantic) => {

@@ -21,11 +21,11 @@
 use super::unique_rule;
 
 /// One classified associated-item definition rename pair.
-struct AssocDef {
+pub(crate) struct AssocDef {
     /// `true` for `type`, `false` for `const`.
-    is_type: bool,
-    old: String,
-    new: String,
+    pub(crate) is_type: bool,
+    pub(crate) old: String,
+    pub(crate) new: String,
 }
 
 /// Whole-section assoc rename: K ≥ 1 definition pairs in trait/impl
@@ -195,7 +195,7 @@ pub(crate) fn try_assoc_rename(
 /// A `-`/`+` line pair as an assoc definition rename: both sides parse
 /// as the same `type`/`const` assoc shape, names differ, and the
 /// normalized remainder is equal. Trailing `,` tolerated.
-fn parse_assoc_def_pair(minus: &str, plus: &str) -> Option<AssocDef> {
+pub(crate) fn parse_assoc_def_pair(minus: &str, plus: &str) -> Option<AssocDef> {
     let m = minus.trim().trim_end_matches(',').trim();
     let p = plus.trim().trim_end_matches(',').trim();
     if m.is_empty() || p.is_empty() {
@@ -304,7 +304,7 @@ fn norm(t: &impl quote::ToTokens) -> String {
 /// Verbatim header line plus span of the trait/impl block enclosing
 /// 1-based `site` (top-level and inline-mod items), or `None` when the
 /// site names no block.
-fn enclosing_block(pre: &str, site: usize) -> Option<(String, usize, usize)> {
+pub(crate) fn enclosing_block(pre: &str, site: usize) -> Option<(String, usize, usize)> {
     let file: syn::File = syn::parse_str(pre).ok()?;
     let mut blocks: Vec<(usize, usize)> = Vec::new();
     fn walk(items: &[syn::Item], blocks: &mut Vec<(usize, usize)>) {
@@ -364,7 +364,7 @@ fn is_block_header_line(trimmed: &str) -> bool {
 
 /// The trait named by a block header: `trait Tr` → `Tr`,
 /// `impl Tr for S` → `Tr`, inherent `impl S` → `None`.
-fn block_trait_name(header: &str) -> Option<String> {
+pub(crate) fn block_trait_name(header: &str) -> Option<String> {
     let item: syn::Item = syn::parse_str(&format!("{header}}}")).ok()?;
     match item {
         syn::Item::Trait(t) => Some(t.ident.to_string()),
@@ -400,7 +400,7 @@ fn contains_ident(haystack: &str, needle: &str) -> bool {
 
 /// True when `haystack` holds `::needle` with an ident boundary after
 /// the name (assoc use tails are always path tails).
-fn contains_path_tail(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_path_tail(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }

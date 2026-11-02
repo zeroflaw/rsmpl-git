@@ -1,7 +1,5 @@
-trait Tr {
-    type Item;
-    fn make() -> Self::Item;
-}
+mod a;
+use a::Tr;
 
 struct S;
 

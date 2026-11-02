@@ -1,7 +1,5 @@
-trait Tr {
-    type Output;
-    fn make() -> Self::Output;
-}
+mod a;
+use a::Tr;
 
 struct S;
 

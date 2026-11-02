@@ -1324,5 +1324,66 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "100-cross-file-assoc-fires" {
+        // WI-12: trait decl + impl def + `::Item` uses across files join
+        // one shared-rule intent (one section per def file, follow on
+        // the document-first hunk); the harness checks the tree legs
+        // (--check + lowered git apply).
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            2,
+            "one intent in two def files must raise, got: {semantic}"
+        );
+        assert_eq!(
+            semantic.matches("# follow=uses").count(),
+            1,
+            "follow exactly once, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- type Item;"),
+            "trait decl pair must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("-    type Item = u8;") || semantic.contains("- type Item = u8;"),
+            "impl def pair must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn f() -> S::Item"),
+            "use lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "cross-file intent must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
+    } else if name == "101-cross-file-trait-method-fires" {
+        // WI-12: trait decl + trait-`impl` def + anchored call across
+        // files join the single trait-block hunk + follow (the follow
+        // owns every remote def and call); the harness checks the tree
+        // legs (--check + lowered git apply).
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            1,
+            "one single-hunk intent must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# follow=uses"),
+            "intent must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("fn walk"),
+            "renamed method must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-    fn run(&self);"),
+            "decl lines must be consumed, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "cross-file intent must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     }
 }
