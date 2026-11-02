@@ -7554,12 +7554,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   `+ pub(crate) fn bar` — never a `V`/`Q` hole: the intent proved one
   concrete evolution, and the engine lowers rename+vis/qual
   simultaneously). Qualifiers span `const`/`async`/`unsafe`/
-  `extern ["ABI"]` (WI-5-R1). Two evolving slots, unknown future
+  `extern ["ABI"]` (WI-5-R1). Multi-line headers classify on their
+  first line (WI-5-R3): same one-slot law with the post-name first-line
+  tails token-equal instead of the full signature slots (the joint probe
+  owns the remainder lines). Two evolving slots, unknown future
   qualifier tokens, self-referential vis (`pub(in old)`), indented
-  (method) headers, `;` decls, multi-line headers, twin definitions
-  (counted over every vis/qual spelling of `fn old`), unbalanced
-  sections, and missing pre-images veto the whole intent (the joint
-  probe doubles as the uniqueness guard). Bare-item rename+vis joint
+  (method) headers, `;` decls, reflowed headers (brace parity mixed),
+  signature deltas on later header lines, twin definitions (counted over
+  every vis/qual spelling of `fn old`, single-line or first-line),
+  unbalanced sections, and missing pre-images veto the whole intent (the
+  joint probe doubles as the uniqueness guard). Bare-item rename+vis joint
   (WI-5-R2, same detector; `struct`/`enum`/`trait`/`union`/`type`/
   `const`/`static`): a definition pair differing in the name plus
   exactly one closed-set vis step (`pub struct Old` →
@@ -7573,8 +7577,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   joints decline (WI-15c owns mod intents); same-name vis evolution,
   vis+attribute double slots, unknown vis, self-referential vis, and
   suffix (generics/`where`/body-shape) deltas stay ordinary (multi-line
-  bare headers classify on their first line when the suffix is token-equal;
-  WI-5-R3 still owns multi-line `fn` headers).
+  bare headers classify on their first line when the suffix is token-equal,
+  like their `fn` twins).
 - Joint `impl Trait for Type` raising (WI-3, WI-3b, detector `item_joint_impl`):
   exactly one `trait` definition rename pair plus exactly one self-type
   definition rename pair (`struct`/`enum`/`union`/`type` alias with equal
@@ -9305,7 +9309,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(132), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(133), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

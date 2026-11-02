@@ -13,8 +13,8 @@
 //! only replaces the ident span, so bare-item rename+vis/qual joints
 //! need engine prefix-evolution support first (WI-5-R2). Unknown
 //! qualifier tokens beyond `const`/`async`/`unsafe`/`extern ["ABI"]`
-//! stay ordinary (future-qualifier residue); multi-line headers stay
-//! ordinary (WI-5-R3).
+//! stay ordinary (future-qualifier residue); multi-line headers classify
+//! on their first line under the same one-slot law (WI-5-R3).
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,12 +32,17 @@ pub(crate) struct FnVisqualJoint {
 }
 
 /// Classify a native pair as a `fn` rename + exactly one evolving
-/// header slot ({vis} xor {qualifier-list}): `Some` when both lines are
-/// column-0 `{`-terminated headers whose names differ with all other
-/// slots token-equal, else `None`. Two evolving slots, any
-/// generics/params/return/`where` delta, unknown qualifier tokens,
-/// self-referential vis, indented (method) headers, `;` decls, and
-/// multi-line headers all decline (never a partial claim).
+/// header slot ({vis} xor {qualifier-list}): `Some` when both lines name
+/// differing column-0 `fn`s with all other slots token-equal, else `None`.
+/// Single-line `{`-terminated headers compare full signature slots;
+/// multi-line headers (WI-5-R3) classify on their first line — the pure
+/// arm already raises `split_delta` first-lines, so the joint takes the
+/// same law with the vis/qual evolution, and the post-name first-line
+/// tails must be token-equal (the D13 joint probe owns the remainder
+/// lines). Two evolving slots, any generics/params/return/`where` delta,
+/// unknown qualifier tokens, self-referential vis, indented (method)
+/// headers, `;` decls, reflowed headers (brace parity mixed), and twin
+/// definitions all decline (never a partial claim).
 pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVisqualJoint> {
     if minus.trim_end() == plus.trim_end() {
         return None;
@@ -45,6 +50,29 @@ pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVis
     // WI-19c posture: indented `fn` lines are methods, never intents.
     if minus.starts_with([' ', '\t']) || plus.starts_with([' ', '\t']) {
         return None;
+    }
+    let m_brace = minus.contains('{');
+    let p_brace = plus.contains('{');
+    if m_brace != p_brace {
+        // Reflowed header (one side wrapped, the other not), never a joint.
+        return None;
+    }
+    if !m_brace {
+        // WI-5-R3 fragment law: braceless first lines (`fn old(` …). `;`
+        // decls are never a def first line; the tails after the name
+        // stand in for the slot-equality checks on the visible fragment.
+        if minus.contains(';') || plus.contains(';') {
+            return None;
+        }
+        let (old_prefix, old, old_tail) = split_fn_needle(minus.trim_end())?;
+        let (new_prefix, new, new_tail) = split_fn_needle(plus.trim_end())?;
+        if old.is_empty() || new.is_empty() || old == new {
+            return None;
+        }
+        if norm(&old_tail) != norm(&new_tail) {
+            return None;
+        }
+        return finish_fn_visqual_joint(old_prefix, new_prefix, old, new);
     }
     let m = header_slots(minus)?;
     let p = header_slots(plus)?;
@@ -55,6 +83,8 @@ pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVis
     let qual_diff = norm(&m.qual) != norm(&p.qual);
     // Exactly one evolving slot: zero is the pure-rename path (never
     // claimed here), two vetoes to the signature domain / ordinary.
+    // (Checked again inside `finish_fn_visqual_joint` on the raw
+    // prefixes; the slot compare here is the cheap structural gate.)
     if vis_diff == qual_diff {
         return None;
     }
@@ -72,8 +102,28 @@ pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVis
     }
     let old_prefix = raw_fn_prefix(minus.trim_end(), &m.name)?;
     let new_prefix = raw_fn_prefix(plus.trim_end(), &p.name)?;
+    finish_fn_visqual_joint(old_prefix, new_prefix, m.name, p.name)
+}
+
+/// Shared one-slot law over raw header prefixes: exactly one of {vis,
+/// qualifier-list} evolves (zero is the pure-rename path, never claimed
+/// here; two vetoes to the signature domain / ordinary); both vis
+/// spellings stay in the WI-1 closed set, qualifier tokens stay inside
+/// `const`/`async`/`unsafe`/`extern ["ABI"]`, and self-referential vis
+/// (`pub(in old)`) vetoes (WI-4 domain). The caller proved the remaining
+/// slots token-equal (slot compare on `{`-headers, tail compare on
+/// first-line fragments).
+fn finish_fn_visqual_joint(
+    old_prefix: String,
+    new_prefix: String,
+    old: String,
+    new: String,
+) -> Option<FnVisqualJoint> {
     let (old_vis, old_qual) = split_vis_qual_prefix(&old_prefix)?;
     let (new_vis, new_qual) = split_vis_qual_prefix(&new_prefix)?;
+    if (norm(&old_vis) != norm(&new_vis)) == (norm(&old_qual) != norm(&new_qual)) {
+        return None;
+    }
     // Both vis spellings stay in the WI-1 closed set; qualifier tokens
     // stay inside `const`/`async`/`unsafe`/`extern ["ABI"]` (unknown
     // future qualifiers decline).
@@ -85,18 +135,18 @@ pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVis
     }
     // Self-referential vis (`pub(in old)`) is an evolution, never this
     // joint (WI-4 domain): either name inside either prefix vetoes.
-    if contains_ident(&old_prefix, &m.name)
-        || contains_ident(&old_prefix, &p.name)
-        || contains_ident(&new_prefix, &m.name)
-        || contains_ident(&new_prefix, &p.name)
+    if contains_ident(&old_prefix, &old)
+        || contains_ident(&old_prefix, &new)
+        || contains_ident(&new_prefix, &old)
+        || contains_ident(&new_prefix, &new)
     {
         return None;
     }
     Some(FnVisqualJoint {
         old_prefix,
         new_prefix,
-        old: m.name,
-        new: p.name,
+        old,
+        new,
     })
 }
 
@@ -132,6 +182,33 @@ fn raw_fn_prefix(line: &str, name: &str) -> Option<String> {
                 .is_none_or(|c| !super::is_ident_char(c));
         if before_ok && after_ok {
             return Some(line[..pos].to_string());
+        }
+        search = pos + 1;
+    }
+    None
+}
+
+/// Split a braceless first line at its `fn name` needle (WI-5-R3):
+/// the first `fn` keyword preceded by start/whitespace and followed by
+/// whitespace, with its ident name. Returns (raw prefix, name, tail).
+/// The whitespace-before law keeps macro-paren text (`!(fn old(`) and
+/// path text from ever splitting; the caller validates the prefix.
+fn split_fn_needle(line: &str) -> Option<(String, String, String)> {
+    let mut search = 0;
+    while let Some(rel) = line[search..].find("fn") {
+        let pos = search + rel;
+        let before_ok = pos == 0
+            || line[..pos]
+                .chars()
+                .next_back()
+                .is_none_or(|c| c == ' ' || c == '\t');
+        let after_kw = &line[pos + 2..];
+        if before_ok && after_kw.starts_with([' ', '\t']) {
+            let ident = after_kw.trim_start();
+            let len = super::ident_len(ident)?;
+            let name = &ident[..len];
+            let tail = &ident[len..];
+            return Some((line[..pos].to_string(), name.to_string(), tail.to_string()));
         }
         search = pos + 1;
     }
@@ -252,7 +329,10 @@ fn norm(s: &str) -> String {
 /// Count column-0 `fn`-header definitions of `old` across the involved
 /// pre-images (any vis/qual spelling — `split_item` misses
 /// qualifier-bearing headers, so the joint path cannot reuse the
-/// `count_kind_defs` twin veto). Exactly one must exist.
+/// `count_kind_defs` twin veto). Single-line `{`-headers count via
+/// `header_slots`; multi-line headers (WI-5-R3) count via their braceless
+/// first line (same needle the classifier claims; comment/attribute/
+/// string openers never count). Exactly one must exist.
 pub(crate) fn count_fn_defs(
     pre: &HashMap<String, String>,
     pairs: &[super::item_intent::Pair],
@@ -273,6 +353,12 @@ pub(crate) fn count_fn_defs(
                     if slots.name == old {
                         count += 1;
                     }
+                } else if !line.contains('{')
+                    && !line.contains(';')
+                    && !line.starts_with(['/', '*', '#', '"'])
+                    && split_fn_needle(line).is_some_and(|(_, name, _)| name == old)
+                {
+                    count += 1;
                 }
             }
         }
@@ -438,10 +524,11 @@ mod tests {
     }
 
     #[test]
-    fn pure_rename_declines() {
-        assert!(joint("fn foo() {", "fn bar() {").is_none());
-        assert!(joint("pub fn foo() {", "pub fn bar() {").is_none());
-        assert!(joint("fn foo() {", "fn foo() {").is_none());
+    fn method_and_decl_shapes_decline() {
+        assert!(joint("    fn foo() {", "    fn bar() {").is_none());
+        assert!(joint("\tasync fn foo() {", "\tasync fn bar() {").is_none());
+        assert!(joint("fn foo();", "fn bar();").is_none());
+        assert!(joint("    pub fn foo(", "    pub(crate) fn bar(").is_none());
     }
 
     #[test]
@@ -517,11 +604,58 @@ mod tests {
     }
 
     #[test]
-    fn method_and_decl_shapes_decline() {
-        assert!(joint("    fn foo() {", "    fn bar() {").is_none());
-        assert!(joint("\tasync fn foo() {", "\tasync fn bar() {").is_none());
-        assert!(joint("fn foo();", "fn bar();").is_none());
-        assert!(joint("pub fn foo(", "pub(crate) fn bar(").is_none());
+    fn multiline_first_line_vis_joint_fires() {
+        // WI-5-R3: multi-line headers classify on their first line under
+        // the same one-slot law; the D13 probe owns the remainder lines.
+        let j =
+            joint("pub fn foo(", "pub(crate) fn bar(").expect("multi-line vis joint must classify");
+        assert_eq!(j.old_prefix, "pub ");
+        assert_eq!(j.new_prefix, "pub(crate) ");
+        assert_eq!((j.old.as_str(), j.new.as_str()), ("foo", "bar"));
+        // Vis removal / qualifier addition on first lines.
+        let r =
+            joint("pub(crate) fn foo(", "fn bar(").expect("multi-line vis removal must classify");
+        assert_eq!(
+            (r.old_prefix.as_str(), r.new_prefix.as_str()),
+            ("pub(crate) ", "")
+        );
+        let q = joint("fn foo(", "async fn bar(").expect("multi-line qual joint must classify");
+        assert_eq!(
+            (q.old_prefix.as_str(), q.new_prefix.as_str()),
+            ("", "async ")
+        );
+        // Generic first-line tails compare token-equal.
+        assert!(joint("pub fn foo<T>(", "pub(crate) fn bar<T>(").is_some());
+        // Preserved qualifiers with vis evolution fire.
+        let v = joint("pub async fn foo(", "pub(crate) async fn bar(")
+            .expect("multi-line vis joint with preserved qual must classify");
+        assert_eq!(
+            (v.old_prefix.as_str(), v.new_prefix.as_str()),
+            ("pub async ", "pub(crate) async ")
+        );
+    }
+
+    #[test]
+    fn multiline_first_line_vetoes() {
+        // Pure renames belong to `split_delta`, never here.
+        assert!(joint("pub fn foo(", "pub fn bar(").is_none());
+        assert!(joint("fn foo(", "fn bar(").is_none());
+        // First-line tail deltas are a second slot.
+        assert!(joint("pub fn foo(", "pub(crate) fn bar<T>(").is_none());
+        assert!(joint("pub fn foo<T>(", "pub(crate) fn bar<T, U>(").is_none());
+        // Reflowed headers (brace parity mixed) are never a joint.
+        assert!(joint("pub fn foo() {", "pub(crate) fn bar(").is_none());
+        assert!(joint("pub fn foo(", "pub(crate) fn bar() {").is_none());
+        // `;` decls are never a def first line.
+        assert!(joint("pub fn foo(", "pub(crate) fn bar();").is_none());
+        assert!(joint("fn foo();", "async fn bar();").is_none());
+        // Same-name, self-ref, unknown-qual, and method postures carry over.
+        assert!(joint("pub fn foo(", "pub(crate) fn foo(").is_none());
+        assert!(joint("pub(in foo) fn foo(", "pub(in foo) fn bar(").is_none());
+        assert!(joint("fn foo(", "gen fn bar(").is_none());
+        assert!(joint("    pub fn foo(", "    pub(crate) fn bar(").is_none());
+        // Vis AND qual evolving is two slots, even on first lines.
+        assert!(joint("fn foo(", "pub(crate) async fn bar(").is_none());
     }
 
     #[test]
@@ -582,6 +716,53 @@ mod tests {
         )]);
         let pairs_m = vec![pair("c.rs")];
         assert_eq!(count_fn_defs(&pre_m, &pairs_m, "foo"), 0);
+        // WI-5-R3: multi-line first lines count; comments, decls, and
+        // braceless non-headers never count.
+        let pre_f: HashMap<String, String> = HashMap::from([(
+            "d.rs".to_string(),
+            "pub fn foo(\n    x: i32,\n) -> i32 {\n    x\n}\n// fn foo(\nfn decl();\n".to_string(),
+        )]);
+        let pairs_f = vec![pair("d.rs")];
+        assert_eq!(count_fn_defs(&pre_f, &pairs_f, "foo"), 1);
+        // A multi-line twin vetoes like a single-line twin.
+        let pre_t: HashMap<String, String> = HashMap::from([
+            (
+                "d.rs".to_string(),
+                "pub fn foo(\n    x: i32,\n) -> i32 {\n    x\n}\n".to_string(),
+            ),
+            (
+                "e.rs".to_string(),
+                "async fn foo(\n    x: i32,\n) {\n}\n".to_string(),
+            ),
+        ]);
+        let pairs_t = vec![pair("d.rs"), pair("e.rs")];
+        assert_eq!(count_fn_defs(&pre_t, &pairs_t, "foo"), 2);
+    }
+
+    #[test]
+    fn multiline_emission_applies_jointly() {
+        // WI-5-R3: the unchanged terse emission lowers onto multi-line
+        // headers — vis + name rewrite, signature lines byte-verbatim.
+        let pre: HashMap<String, String> = HashMap::from([(
+            "a.rs".to_string(),
+            "pub fn foo(\n    x: i32,\n) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n}\n"
+                .to_string(),
+        )]);
+        let emission = joint_emit("a.rs", "r1", "pub ", "foo", "pub(crate) ", "bar");
+        let parsed = rsmpl_patch::parse_patch(&emission).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("emission must apply");
+        assert!(
+            files["a.rs"].contains("pub(crate) fn bar(\n    x: i32,\n) -> i32 {"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(
+            files["a.rs"].contains("let a = bar(1);"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(!files["a.rs"].contains("foo"), "got: {}", files["a.rs"]);
     }
 
     #[test]
