@@ -26,12 +26,15 @@ use syn::spanned::Spanned;
 /// both varying across sites (hence the `P0`/`E0` holes). Emits one
 /// `# allow=many` hunk (tight original range, SPEC D.5) with diet
 /// inferred holes — no `# pat`/`# expr` declarations (SPEC 15.8).
-/// WI-14 slice 4: the same class inside one-line `fn` frames
-/// (`fn f0() { let x = E; }` → `fn f0() { let x: T = E; }`) raises to
-/// the identical bare hunk (D14: no frame text emitted) via the `fn`
-/// Stmt rung — the only frame rung whose outer is never itself a
-/// `Stmt::Local`, so the bare emission cannot match an outer `let`
-/// first. `let`-outer frames (`let g = || { … };`) stay ordinary by
+/// WI-14 slice 4 + arm/branch residue: the same class inside
+/// one-line `fn` frames (`fn f0() { let x = E; }` →
+/// `fn f0() { let x: T = E; }`), match-arm blocks
+/// (`1 => { let a = E; a },`), and `if`/`else` branches
+/// (`if c { let a = E; a } else { … }`) raises to the identical bare
+/// hunk (D14: no frame text emitted) via one `Stmt` rung — each rung's
+/// outer (fn/arm/branch) is never itself a `Stmt::Local`, so the bare
+/// emission cannot match an outer `let` first. `let`-outer frames
+/// (`let g = || { … };`, `let r = if … { let … };`) stay ordinary by
 /// construction (unwrapping them would over-match the outer `let`).
 pub(crate) fn try_let_sweep(
     minuses: &[&str],
@@ -467,10 +470,9 @@ mod tests {
     }
 
     #[test]
-    fn framed_let_type_add_arm_block_stays_ordinary() {
-        // Named residue: block-arm frames (`1 => { let a = …; a },`)
-        // are not offered the Stmt rung (fn rung only, this slice), so
-        // the section stays ordinary.
+    fn framed_let_type_add_arm_block_fires() {
+        // WI-14 slice-4 residue: block-arm frames raise through the
+        // arm Stmt rung to the identical bare hunk.
         let raw = section(
             "f.rs",
             "@@ -3,3 +3,3 @@\n fn m() {\n-        1 => { let a = foo(1); a },\n-        2 => { let b = foo(2); b },\n-        _ => { let c = foo(3); c },\n+        1 => { let a: u32 = foo(1); a },\n+        2 => { let b: u32 = foo(2); b },\n+        _ => { let c: u32 = foo(3); c },\n }\n",
@@ -478,6 +480,76 @@ mod tests {
         let pre = pre_map(&[(
             "f.rs",
             "fn m(x: i32) -> i32 {\n    match x {\n        1 => { let a = foo(1); a },\n        2 => { let b = foo(2); b },\n        _ => { let c = foo(3); c },\n    }\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let P0 = E0;\n"), "got: {out}");
+        assert!(out.contains("+ let P0: u32 = E0;\n"), "got: {out}");
+        assert!(!out.contains("=>"), "no frame text in emission, got: {out}");
+    }
+
+    #[test]
+    fn framed_let_type_add_arm_two_lets_stay_ordinary() {
+        // Ambiguous inner: two lets in one arm block decline.
+        let raw = section(
+            "f.rs",
+            "@@ -3,2 +3,2 @@\n fn m() {\n-        1 => { let a = foo(1); let b = foo(2); a },\n-        2 => { let c = foo(3); let d = foo(4); c },\n+        1 => { let a: u32 = foo(1); let b = foo(2); a },\n+        2 => { let c: u32 = foo(3); let d = foo(4); c },\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m(x: i32) -> i32 {\n    match x {\n        1 => { let a = foo(1); let b = foo(2); a },\n        2 => { let c = foo(3); let d = foo(4); c },\n    }\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_branch_fires() {
+        // WI-14 slice-4 residue: whole-line `if` branches raise through
+        // the branch Stmt rung.
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n fn m() {\n-    if c { let a = foo(1); a } else { 0 }\n-    if c { let b = foo(2); b } else { 0 }\n-    if c { let c0 = foo(3); c0 } else { 0 }\n+    if c { let a: u32 = foo(1); a } else { 0 }\n+    if c { let b: u32 = foo(2); b } else { 0 }\n+    if c { let c0: u32 = foo(3); c0 } else { 0 }\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m(c: bool) -> i32 {\n    if c { let a = foo(1); a } else { 0 }\n    if c { let b = foo(2); b } else { 0 }\n    if c { let c0 = foo(3); c0 } else { 0 }\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let P0 = E0;\n"), "got: {out}");
+        assert!(out.contains("+ let P0: u32 = E0;\n"), "got: {out}");
+        assert!(
+            !out.contains("if c"),
+            "no frame text in emission, got: {out}"
+        );
+    }
+
+    #[test]
+    fn framed_let_type_add_branch_let_outer_stays_ordinary() {
+        // Over-match boundary: `let r = if … { let … };` unwrapped to
+        // the inner `let` would match the outer `let r` first.
+        let raw = section(
+            "f.rs",
+            "@@ -2,3 +2,3 @@\n fn m() {\n-    let r0 = if c { let a = foo(1); a } else { 0 };\n-    let r1 = if d { let b = foo(2); b } else { 0 };\n-    let r2 = if e { let c0 = foo(3); c0 } else { 0 };\n+    let r0 = if c { let a: u32 = foo(1); a } else { 0 };\n+    let r1 = if d { let b: u32 = foo(2); b } else { 0 };\n+    let r2 = if e { let c0: u32 = foo(3); c0 } else { 0 };\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m(c: bool, d: bool, e: bool) -> i32 {\n    let r0 = if c { let a = foo(1); a } else { 0 };\n    let r1 = if d { let b = foo(2); b } else { 0 };\n    let r2 = if e { let c0 = foo(3); c0 } else { 0 };\n    r0 + r1 + r2\n}\n",
+        )]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn framed_let_type_add_mixed_rung_stays_ordinary() {
+        // All-or-nothing per rung: one `fn`-frame pair plus two arm
+        // pairs decline (neither rung owns the mixed class).
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn f0() { let x = foo(1); }\n+fn f0() { let x: u32 = foo(1); }\n@@ -4,2 +4,2 @@\n-        1 => { let a = foo(2); a },\n-        2 => { let b = foo(3); b },\n+        1 => { let a: u32 = foo(2); a },\n+        2 => { let b: u32 = foo(3); b },\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn f0() { let x = foo(1); }\nfn m(x: i32) -> i32 {\n    match x {\n        1 => { let a = foo(2); a },\n        2 => { let b = foo(3); b },\n    }\n}\n",
         )]);
         assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
     }

@@ -28,16 +28,37 @@ pub(crate) fn fn_frame_inner(line: &str) -> Option<syn::Expr> {
     single_stmt_expr(fn_frame_stmt_inner(line)?)
 }
 
+/// Single-`Local` qualification shared by the arm/branch `Stmt`
+/// rungs: the block holds exactly one `let` statement (single-let
+/// `[let]` and let+tail `[let, tail]` both qualify; two-`let` blocks
+/// decline as ambiguous). Any non-`let` companions stay frame text
+/// proved by `frame_holds` at the call site.
+fn single_local_in_block(stmts: &[syn::Stmt]) -> Option<syn::Stmt> {
+    let mut found: Option<syn::Stmt> = None;
+    for stmt in stmts {
+        if matches!(stmt, syn::Stmt::Local(_)) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(stmt.clone());
+        }
+    }
+    found
+}
+
 /// Unwrap a single-statement one-line `fn` frame to its inner
 /// statement, or `None` when the line is not such a frame. Statement
 /// detectors (WI-14 slice 4: `let`-type-add) need the statement
 /// itself — the expression rung above degrades a `let` to its init,
 /// which is the wrong domain for a `Stmt` template. Only the `fn`
-/// rung is offered: a `let`-outer frame (`let g = || { … };`) is
-/// itself a `Stmt::Local`, so unwrapping it would hand the engine a
-/// bare `let` template that matches the outer `let` first
-/// (outermost-wins) instead of the inner sites — raising it would
-/// over-match by construction.
+/// rung was offered at first; arm/branch rungs below join under the
+/// same law: a `let`-outer frame (`let g = || { … };`,
+/// `let r = if … { let … };`) is itself a `Stmt::Local`, so
+/// unwrapping it would hand the engine a bare `let` template that
+/// matches the outer `let` first (outermost-wins) instead of the
+/// inner sites — raising it would over-match by construction. Whole-
+/// line `Stmt::Local` lines therefore decline every `Stmt` rung
+/// except the own-line detector itself.
 pub(crate) fn fn_frame_stmt_inner(line: &str) -> Option<syn::Stmt> {
     let text = line.trim();
     if text.is_empty() {
@@ -166,6 +187,108 @@ fn arm_frame_inner(line: &str) -> Option<syn::Expr> {
     }
 }
 
+/// Stmt rung for `match` arms (WI-14 slice-4 residue): the `let`
+/// statement inside a one-line arm block (`1 => { let a = …; a },`,
+/// `1 => { let a = …; },`). Exactly-one-`Local` qualification (see
+/// `single_local_in_block`); whole-line `Stmt::Local` lines decline
+/// (own-line/`let`-outer law above); non-block arm bodies hold no
+/// `let` and decline; macro tails decline via the `Expr` parse.
+pub(crate) fn arm_frame_stmt_inner(line: &str) -> Option<syn::Stmt> {
+    if let Ok(syn::Stmt::Local(_)) = syn::parse_str::<syn::Stmt>(line.trim()) {
+        return None;
+    }
+    let at = line.find("=>")?;
+    let (head, tail) = line.split_at(at);
+    if head.trim().is_empty() {
+        return None;
+    }
+    let tail = tail[2..].trim();
+    if tail.is_empty() {
+        return None;
+    }
+    let tail = super::strip_one_terminator(tail)?;
+    let tail = tail.trim();
+    if tail.is_empty() {
+        return None;
+    }
+    let expr: syn::Expr = syn::parse_str(tail).ok()?;
+    match expr {
+        syn::Expr::Block(block) => single_local_in_block(&block.block.stmts),
+        _ => None,
+    }
+}
+
+/// Stmt rung for `if`/`else` branches (WI-14 slice-4 residue): the
+/// `let` statement inside a one-line branch body
+/// (`if c { let a = …; a }`, `} else { let a = …; a }`). Head must
+/// name `if`/`else` as a word; the tail statement list is wrapped as
+/// `fn __probe() { <tail> }` so multi-statement bodies parse;
+/// exactly-one-`Local` qualification; whole-line `Stmt::Local` lines
+/// (`let r = if … { let … };`) decline by the `let`-outer law.
+pub(crate) fn branch_frame_stmt_inner(line: &str) -> Option<syn::Stmt> {
+    if let Ok(syn::Stmt::Local(_)) = syn::parse_str::<syn::Stmt>(line.trim()) {
+        return None;
+    }
+    // Whole-line `if … { … } else { … }`: the outer is an `if`
+    // expression statement (never a `Stmt::Local`), so the
+    // exactly-one-`Local` across the then/else blocks qualifies under
+    // the same law as the `fn` rung. `else if` chains decline (rare,
+    // stay ordinary).
+    if let Ok(syn::Stmt::Expr(syn::Expr::If(expr_if), _)) = syn::parse_str::<syn::Stmt>(line.trim())
+    {
+        let mut found: Option<syn::Stmt> = None;
+        let mut count = 0;
+        for stmt in &expr_if.then_branch.stmts {
+            if matches!(stmt, syn::Stmt::Local(_)) {
+                count += 1;
+                found = Some(stmt.clone());
+            }
+        }
+        match &expr_if.else_branch {
+            None => {}
+            Some((_, else_expr)) => match &**else_expr {
+                syn::Expr::Block(block) => {
+                    for stmt in &block.block.stmts {
+                        if matches!(stmt, syn::Stmt::Local(_)) {
+                            count += 1;
+                            found = Some(stmt.clone());
+                        }
+                    }
+                }
+                // `else if …` chains hold their lets a level down —
+                // stay ordinary rather than guess which level fires.
+                _ => return None,
+            },
+        }
+        if count == 1 {
+            return found;
+        }
+        // A whole-line `if` that parsed but holds zero or several
+        // lets owns the line — do not fall through to the fragment
+        // path (it would mis-strip the two-block tail).
+        return None;
+    }
+    let at = line.find('{')?;
+    let (head, tail) = line.split_at(at);
+    let is_branch = head
+        .split(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
+        .any(|w| w == "if" || w == "else");
+    if !is_branch {
+        return None;
+    }
+    let mut tail = tail[1..].trim();
+    if tail.is_empty() {
+        return None;
+    }
+    tail = super::strip_one_terminator(tail)?.trim();
+    let tail = tail.strip_suffix('}').map(str::trim).unwrap_or(tail);
+    if tail.is_empty() {
+        return None;
+    }
+    let item: syn::ItemFn = syn::parse_str(&format!("fn __probe() {{ {tail} }}")).ok()?;
+    single_local_in_block(&item.block.stmts)
+}
+
 /// Rung 4: a one-line `if`/`else` branch body — the text after the
 /// first `{` when the head names `if` or `else` as a word (so struct
 /// literals and closures never strip), minus one trailing `}` plus one
@@ -205,8 +328,8 @@ fn branch_frame_inner(line: &str) -> Option<syn::Expr> {
 #[cfg(test)]
 mod tests {
     use super::{
-        arm_frame_inner, branch_frame_inner, fn_frame_inner, fn_frame_stmt_inner, frame_inner,
-        let_frame_inner,
+        arm_frame_inner, arm_frame_stmt_inner, branch_frame_inner, branch_frame_stmt_inner,
+        fn_frame_inner, fn_frame_stmt_inner, frame_inner, let_frame_inner,
     };
     use std::collections::HashMap;
 
@@ -292,6 +415,65 @@ mod tests {
         assert!(fn_frame_stmt_inner("    let x = foo(1);").is_none());
         assert!(fn_frame_stmt_inner("fn m() {").is_none());
         assert!(fn_frame_stmt_inner("").is_none());
+    }
+
+    #[test]
+    fn stmt_rung_arm_unwraps_single_let() {
+        // WI-14 slice-4 residue: arm blocks with exactly one `let`
+        // qualify (let+tail and single-let); the outer is an arm, never
+        // a `Stmt::Local`, so the bare emission cannot match outward.
+        let stmt =
+            arm_frame_stmt_inner("        1 => { let a = foo(1); a },").expect("must unwrap");
+        assert!(matches!(stmt, syn::Stmt::Local(_)));
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&stmt).to_string(),
+            "let a = foo (1) ;"
+        );
+        let stmt = arm_frame_stmt_inner("        1 => { let a = foo(1); },").expect("single-let");
+        assert!(matches!(stmt, syn::Stmt::Local(_)));
+        // Two lets are ambiguous — decline.
+        assert!(
+            arm_frame_stmt_inner("        1 => { let a = foo(1); let b = foo(2); a },").is_none()
+        );
+        // Non-block arm bodies hold no `let`.
+        assert!(arm_frame_stmt_inner("        1 => foo(1),").is_none());
+        // Whole-line locals decline (own-line/`let`-outer law).
+        assert!(arm_frame_stmt_inner("    let x = foo(1);").is_none());
+        assert!(arm_frame_stmt_inner("=> foo(1),").is_none());
+        assert!(arm_frame_stmt_inner("").is_none());
+    }
+
+    #[test]
+    fn stmt_rung_branch_unwraps_single_let() {
+        // WI-14 slice-4 residue: whole-line `if` with one let across
+        // then/else, plus `} else { … }` fragments.
+        let stmt = branch_frame_stmt_inner("    if c { let a = foo(1); a } else { 0 }")
+            .expect("must unwrap");
+        assert!(matches!(stmt, syn::Stmt::Local(_)));
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&stmt).to_string(),
+            "let a = foo (1) ;"
+        );
+        let stmt =
+            branch_frame_stmt_inner("    } else { let a = foo(1); a }").expect("fragment unwraps");
+        assert!(matches!(stmt, syn::Stmt::Local(_)));
+        // `let`-outer wrappers decline (would over-match the outer).
+        assert!(
+            branch_frame_stmt_inner("    let r = if c { let a = foo(1); a } else { 0 };").is_none()
+        );
+        // Two lets across then+else are ambiguous.
+        assert!(branch_frame_stmt_inner(
+            "    if c { let a = foo(1); a } else { let b = foo(2); b }"
+        )
+        .is_none());
+        // `else if` chains stay ordinary.
+        assert!(
+            branch_frame_stmt_inner("    if c { let a = foo(1); a } else if d { foo(2) }")
+                .is_none()
+        );
+        // Non-branch heads never strip.
+        assert!(branch_frame_stmt_inner("    Foo { x: foo(1) }").is_none());
+        assert!(branch_frame_stmt_inner("").is_none());
     }
 
     #[test]
