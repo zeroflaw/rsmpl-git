@@ -389,7 +389,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "49-struct-pat-let",
-        "t375: single-site struct-pat swap re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let S { f: a, g: b } = e;` → `let S { f: b, g: a } = e;`); the authored holed struct-pat swap and the literal single diverge canonically (holed pat-swap template is WI-7 slice 2 work)",
     ),
     (
         "52-macro-verbatim",
@@ -410,7 +410,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "64-struct-reorder",
-        "t375: single-site struct-reorder re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let S { g: 1, f: v } = s;` → `let S { f: 1, g: v } = s;`); the authored holed struct-pat swap and the literal single diverge canonically (holed pat-swap template is WI-7 slice 2 work)",
     ),
     (
         "65-match-arm",
@@ -430,11 +430,11 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "72-tuple-pat-single",
-        "t375: single-site tuple-pat swap re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let (x, y) = t;` → `let (y, x) = t;`); the authored holed tuple-pat swap and the literal single diverge canonically (holed pat-swap template is WI-7 slice 2 work)",
     ),
     (
         "73-some-unwrap-single",
-        "t375: single-site some-unwrap rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let Some(v) = o;` → `let Some(v) = o.unwrap_or(0);`, same native leg as 84); the authored holed some-unwrap sweep and the literal single diverge canonically (holed unwrap template is WI-7 slice 2 work)",
     ),
     (
         "75-macro-verbatim-single",
@@ -446,20 +446,16 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "80-raw-addr-flip",
-        "verbatim-single (WI-6s2): moved to CYCLE_OK (kept here as a tombstone until the harness re-pins — DELETE this entry)",
-    ),
-    (
         "82-const-block-single",
         "t375: single-site const-block rewrite re-infers ordinary",
     ),
     (
         "83-infer-single",
-        "t375: single-site infer-wildcard rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = 1 + 2;` → `let v = 0;`); the authored infer-wildcard sweep (`let v = _;` → `let v = 0;`) and the literal single diverge canonically (holed infer template is WI-7 slice 2 work)",
     ),
     (
         "84-diet-some-single",
-        "t375: single-site diet some-unwrap rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let Some(v) = o;` → `let Some(v) = o.unwrap_or(0);`, same native leg as 73); the authored diet some-unwrap sweep and the literal single diverge canonically (holed unwrap template is WI-7 slice 2 work)",
     ),
     (
         "86-token-tree-single",
@@ -484,7 +480,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "98-pat-sweep-single",
-        "t375: single-site pat-sweep rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let a: i32 = 0;` → `let a: i32 = 0.wrapping_add(1);`); the authored holed pat-sweep (`P: T = E` → `P: T = E.wrapping_add(1)`) and the literal single diverge canonically (holed wrap-add template is WI-7 slice 2 work)",
     ),
 
     (
@@ -498,11 +494,11 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "106-repeat-fold-single",
-        "t375: single-site repeat-fold rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = Box::new(Box::new(x));` → `let v = x;`); the authored `# repeat` fold template (`Box::new(E0)` → `E0`) and the literal single diverge canonically (repeat-fold N=1 templated single is WI-7 slice 1 work)",
     ),
     (
         "107-sequence-single",
-        "t375: single-site sequence rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): hetero pair re-infers as two literal verbatim singles (`rule=r1` type-add + `rule=r2` wrap-add, WI-4 hetero-fusion partition); the authored single hetero holed sequence and the two literal singles diverge canonically in shape (holed sequence template is WI-7 slice 2 work)",
     ),
 
     (
@@ -523,7 +519,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "119-match-arm-many-single",
-        "t375: single-site match-arm rewrite re-infers ordinary",
+        "verbatim-single (WI-6s1): re-infers as the literal verbatim single (`let v = match o { Some(v) => 1, _ => 2 };` → `… => 9 …`, second fn untouched); the authored allow-many match-arm template and the literal single diverge canonically (control N=1 templated single is later WI-6 work)",
     ),
 ];
 
