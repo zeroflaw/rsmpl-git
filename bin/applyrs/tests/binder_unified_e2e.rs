@@ -697,3 +697,72 @@ fn sequence_multi_substitution_completes_and_checks_clean() {
     assert!(!post.contains("old"), "got: {post}");
     cargo_check(dir.path());
 }
+
+#[test]
+fn sequence_substitution_hole_block_surfaces_shadowed() {
+    // Hole-hides-shadow precision: the hole-bound block keeps its inner
+    // binder uses; they surface as `shadowed` instead of staying
+    // silent, post-window still completes, `partial`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = g(1);\n    let b = f(old, { let old = 1; old });\n    let c = old;\n    let _ = (b, c);\n}\npub fn g(x: i32) -> i32 { x }\npub fn f(x: i32, y: i32) -> i32 { x + y }\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = f(old, E1);\n+ let new = E0;\n+ let b = f(new, E1);\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([{
+            "file": "src/lib.rs",
+            "line": 3,
+            "reason": "shadowed",
+            "text": "let b = f(old, { let old = 1; old });",
+        }]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = g(1);"), "got: {post}");
+    assert!(
+        post.contains("let b = f(new, { let old = 1; old });"),
+        "got: {post}"
+    );
+    assert!(post.contains("let c = new;"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn sequence_substitution_hole_macro_surfaces_macro_hidden() {
+    // Hole-bound macro interior likewise surfaces instead of hiding.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub fn run() {\n    let old = g(1);\n    let b = f(old, foo!(old));\n    let c = old;\n    let _ = (b, c);\n}\npub fn g(x: i32) -> i32 { x }\npub fn f(x: i32, y: i32) -> i32 { x + y }\nmacro_rules! foo { ($x:expr) => { $x } }\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r\n# sweep\n- let old = E0;\n- let b = f(old, E1);\n+ let new = E0;\n+ let b = f(new, E1);\n";
+    let v = check_json(dir.path(), patch);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("partial"),
+        "got: {v}"
+    );
+    assert_eq!(
+        v["rules"][0]["orphans"],
+        serde_json::json!([{
+            "file": "src/lib.rs",
+            "line": 3,
+            "reason": "macro-hidden",
+            "text": "let b = f(old, foo!(old));",
+        }]),
+        "got: {v}"
+    );
+    apply_patch(dir.path(), patch);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("let new = g(1);"), "got: {post}");
+    assert!(post.contains("let c = new;"), "got: {post}");
+}

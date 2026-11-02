@@ -167,19 +167,20 @@ pub(crate) fn extra_binder_shadow_ranges(
     grab.out
 }
 
-/// Sequence-window orphan cover (residue slice 3): map the
-/// pattern-side rename/substitution positions onto one applied target
-/// window.
+/// Sequence-window orphan cover (residue slice 3 + hole precision):
+/// map the pattern-side rename/substitution positions onto one applied
+/// target window.
 ///
 /// Returns the def span plus extra exclusion spans (authored
-/// substitution statements, whose old uses the plus side rewrote
-/// verbatim), or `None` when the window cannot be mapped exactly
-/// (fail-safe: the caller keeps today's whole-window cover).
-/// Substitution statements are excluded wholesale: their old mentions
-/// are proven swapped by the pattern round-trip over a structurally
-/// matched target, so no true leftover hides there — except old idents
-/// nested inside a hole-bound subtree (shadow/macro interiors smuggled
-/// through `E1`), which stay silent (pinned remainder).
+/// substitution inits, whose directly-spelled old uses the plus side
+/// rewrote verbatim), or `None` when the window cannot be mapped
+/// exactly (fail-safe: the caller keeps today's whole-window cover).
+/// Exclusion is per occurrence via a parallel minus/target structural
+/// walk: hole-bound subtrees (minus side a `__RSMPL_*` placeholder)
+/// contribute zero spans, so old idents smuggled through `E1`
+/// (shadow/macro interiors) surface with existing reasons instead of
+/// staying silent. Unmappable shapes fall back to the whole-statement
+/// span (today's behaviour, no regression).
 pub(crate) fn sequence_window_cover(
     kind: &rsmpl_pattern::PatternKind,
     window: (usize, usize),
@@ -277,9 +278,322 @@ pub(crate) fn sequence_window_cover(
     let def = spans[idx];
     let mut extra: Vec<(usize, usize)> = Vec::new();
     for j in subs {
-        extra.push(spans[j]);
+        match substitution_excluded_spans(
+            &minus_local_at(minus_sub, j),
+            &run[j],
+            original,
+            index,
+            old,
+        ) {
+            Some(v) if !v.is_empty() => extra.extend(v),
+            Some(_) => {}
+            None => extra.push(spans[j]),
+        }
     }
     Some((def, extra))
+}
+
+/// Pattern-side minus `Local` at position `j` (re-parsed from
+/// `minus_sub`; the caller already validated K and the index).
+fn minus_local_at(minus_sub: &str, j: usize) -> syn::Local {
+    let minus_block =
+        syn::parse_str::<syn::Block>(&format!("{{ {minus_sub} }}")).expect("checked minus block");
+    match minus_block.stmts[j].clone() {
+        syn::Stmt::Local(l) => l,
+        _ => unreachable!("checked plain lets"),
+    }
+}
+
+/// Per-occurrence exclusion for one authored substitution position:
+/// byte spans of directly-spelled `old` uses the minus side proves
+/// swapped. Hole-bound subtrees contribute nothing (their olds stay
+/// visible); structural mismatch yields `None` (whole-statement
+/// fallback).
+fn substitution_excluded_spans(
+    minus_local: &syn::Local,
+    target_local: &syn::Local,
+    original: &str,
+    index: &LineIndex,
+    old: &str,
+) -> Option<Vec<Span>> {
+    if render_tt(&minus_local.pat) != render_tt(&target_local.pat) {
+        return None;
+    }
+    let m_init = minus_local.init.as_ref().map(|i| &*i.expr)?;
+    let t_init = target_local.init.as_ref().map(|i| &*i.expr)?;
+    collect_expr(m_init, t_init, original, index, old)
+}
+
+fn is_placeholder_ident(s: &str) -> bool {
+    s.starts_with("__RSMPL_")
+}
+
+fn is_placeholder_expr(e: &syn::Expr) -> bool {
+    if let syn::Expr::Path(p) = e {
+        if p.qself.is_none()
+            && p.path.segments.len() == 1
+            && matches!(p.path.segments[0].arguments, syn::PathArguments::None)
+        {
+            return is_placeholder_ident(&p.path.segments[0].ident.to_string());
+        }
+    }
+    false
+}
+
+fn is_old_ident_expr(e: &syn::Expr, old: &str) -> bool {
+    if let syn::Expr::Path(p) = e {
+        if p.qself.is_none()
+            && p.path.leading_colon.is_none()
+            && p.path.segments.len() == 1
+            && matches!(p.path.segments[0].arguments, syn::PathArguments::None)
+        {
+            return p.path.segments[0].ident == old;
+        }
+    }
+    false
+}
+
+fn render_tt<T: quote::ToTokens>(n: &T) -> String {
+    quote::quote!(#n).to_string()
+}
+
+/// Ident-bounded `old` spans inside `[start, end)`.
+fn old_spans_in_range(start: usize, end: usize, original: &str, old: &str) -> Vec<Span> {
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let mut out = Vec::new();
+    if old.is_empty() || end <= start || end > original.len() {
+        return out;
+    }
+    let hay = &original.as_bytes()[start..end];
+    let needle = old.as_bytes();
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if &hay[i..i + needle.len()] == needle {
+            let prev_ok = i == 0 || !is_ident_byte(hay[i - 1]);
+            let next_ok = i + needle.len() == hay.len() || !is_ident_byte(hay[i + needle.len()]);
+            if prev_ok && next_ok {
+                out.push((start + i, start + i + needle.len()));
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn target_expr_span(e: &syn::Expr, original: &str, index: &LineIndex) -> Option<Span> {
+    use syn::spanned::Spanned;
+    crate::matcher_item::span_bytes(original, index, e.span())
+}
+
+/// Parallel minus/target walk over a substitution init. `Some` carries
+/// the directly-spelled swapped spans (hole subtrees empty); `None`
+/// asks the caller to fall back wholesale.
+fn collect_expr(
+    m: &syn::Expr,
+    t: &syn::Expr,
+    original: &str,
+    index: &LineIndex,
+    old: &str,
+) -> Option<Vec<Span>> {
+    if is_placeholder_expr(m) {
+        return Some(Vec::new());
+    }
+    if is_old_ident_expr(m, old) {
+        if is_old_ident_expr(t, old) {
+            return target_expr_span(t, original, index).map(|s| vec![s]);
+        }
+        return None;
+    }
+    match (m, t) {
+        (syn::Expr::Path(a), syn::Expr::Path(b)) => {
+            if render_tt(a) == render_tt(b) {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        }
+        (syn::Expr::Lit(a), syn::Expr::Lit(b)) => {
+            if render_tt(a) == render_tt(b) {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        }
+        (syn::Expr::Binary(a), syn::Expr::Binary(b)) => {
+            if render_tt(&a.op) != render_tt(&b.op) {
+                return None;
+            }
+            let mut out = collect_expr(&a.left, &b.left, original, index, old)?;
+            out.extend(collect_expr(&a.right, &b.right, original, index, old)?);
+            Some(out)
+        }
+        (syn::Expr::Unary(a), syn::Expr::Unary(b)) => {
+            if render_tt(&a.op) != render_tt(&b.op) {
+                return None;
+            }
+            collect_expr(&a.expr, &b.expr, original, index, old)
+        }
+        (syn::Expr::Paren(a), syn::Expr::Paren(b)) => {
+            collect_expr(&a.expr, &b.expr, original, index, old)
+        }
+        (syn::Expr::Group(a), syn::Expr::Group(b)) => {
+            collect_expr(&a.expr, &b.expr, original, index, old)
+        }
+        (syn::Expr::Reference(a), syn::Expr::Reference(b)) => {
+            if render_tt(&a.mutability) != render_tt(&b.mutability) {
+                return None;
+            }
+            collect_expr(&a.expr, &b.expr, original, index, old)
+        }
+        (syn::Expr::Cast(a), syn::Expr::Cast(b)) => {
+            if render_tt(&a.ty) != render_tt(&b.ty) {
+                return None;
+            }
+            collect_expr(&a.expr, &b.expr, original, index, old)
+        }
+        (syn::Expr::Assign(a), syn::Expr::Assign(b)) => {
+            let mut out = collect_expr(&a.left, &b.left, original, index, old)?;
+            out.extend(collect_expr(&a.right, &b.right, original, index, old)?);
+            Some(out)
+        }
+        (syn::Expr::Call(a), syn::Expr::Call(b)) => {
+            if a.args.len() != b.args.len() {
+                return None;
+            }
+            let mut out = collect_expr(&a.func, &b.func, original, index, old)?;
+            for (x, y) in a.args.iter().zip(b.args.iter()) {
+                out.extend(collect_expr(x, y, original, index, old)?);
+            }
+            Some(out)
+        }
+        (syn::Expr::MethodCall(a), syn::Expr::MethodCall(b)) => {
+            if a.method != b.method || a.args.len() != b.args.len() {
+                return None;
+            }
+            let mut out = collect_expr(&a.receiver, &b.receiver, original, index, old)?;
+            for (x, y) in a.args.iter().zip(b.args.iter()) {
+                out.extend(collect_expr(x, y, original, index, old)?);
+            }
+            Some(out)
+        }
+        (syn::Expr::Field(a), syn::Expr::Field(b)) => {
+            if render_tt(&a.member) != render_tt(&b.member) {
+                return None;
+            }
+            collect_expr(&a.base, &b.base, original, index, old)
+        }
+        (syn::Expr::Index(a), syn::Expr::Index(b)) => {
+            let mut out = collect_expr(&a.expr, &b.expr, original, index, old)?;
+            out.extend(collect_expr(&a.index, &b.index, original, index, old)?);
+            Some(out)
+        }
+        (syn::Expr::Array(a), syn::Expr::Array(b)) => {
+            if a.elems.len() != b.elems.len() {
+                return None;
+            }
+            let mut out = Vec::new();
+            for (x, y) in a.elems.iter().zip(b.elems.iter()) {
+                out.extend(collect_expr(x, y, original, index, old)?);
+            }
+            Some(out)
+        }
+        (syn::Expr::Tuple(a), syn::Expr::Tuple(b)) => {
+            if a.elems.len() != b.elems.len() {
+                return None;
+            }
+            let mut out = Vec::new();
+            for (x, y) in a.elems.iter().zip(b.elems.iter()) {
+                out.extend(collect_expr(x, y, original, index, old)?);
+            }
+            Some(out)
+        }
+        (syn::Expr::Struct(a), syn::Expr::Struct(b)) => {
+            if render_tt(&a.path) != render_tt(&b.path)
+                || a.fields.len() != b.fields.len()
+                || render_tt(&a.rest) != render_tt(&b.rest)
+            {
+                return None;
+            }
+            let mut out = Vec::new();
+            for (x, y) in a.fields.iter().zip(b.fields.iter()) {
+                if render_tt(&x.member) != render_tt(&y.member) {
+                    return None;
+                }
+                out.extend(collect_expr(&x.expr, &y.expr, original, index, old)?);
+            }
+            Some(out)
+        }
+        (syn::Expr::Block(a), syn::Expr::Block(b)) => {
+            if render_tt(&a.label) != render_tt(&b.label)
+                || a.block.stmts.len() != b.block.stmts.len()
+            {
+                return None;
+            }
+            let mut out = Vec::new();
+            for (x, y) in a.block.stmts.iter().zip(b.block.stmts.iter()) {
+                out.extend(collect_stmt(x, y, original, index, old)?);
+            }
+            Some(out)
+        }
+        (syn::Expr::Macro(a), syn::Expr::Macro(b)) => {
+            if render_tt(&a.mac.path) != render_tt(&b.mac.path) {
+                return None;
+            }
+            let m_toks = render_tt(&a.mac.tokens);
+            if m_toks.contains("__RSMPL_") {
+                return Some(Vec::new());
+            }
+            if render_tt(&a.mac.tokens) != render_tt(&b.mac.tokens) {
+                return None;
+            }
+            use syn::spanned::Spanned;
+            if let Some((ts, te)) = crate::matcher_item::span_bytes(original, index, t.span()) {
+                return Some(old_spans_in_range(ts, te, original, old));
+            }
+            None
+        }
+        _ => {
+            if render_tt(m) == render_tt(t) {
+                use syn::spanned::Spanned;
+                if let Some((s, e)) = crate::matcher_item::span_bytes(original, index, t.span()) {
+                    return Some(old_spans_in_range(s, e, original, old));
+                }
+                return Some(Vec::new());
+            }
+            None
+        }
+    }
+}
+
+fn collect_stmt(
+    m: &syn::Stmt,
+    t: &syn::Stmt,
+    original: &str,
+    index: &LineIndex,
+    old: &str,
+) -> Option<Vec<Span>> {
+    match (m, t) {
+        (syn::Stmt::Local(a), syn::Stmt::Local(b)) => {
+            if render_tt(&a.pat) != render_tt(&b.pat) {
+                return None;
+            }
+            match (&a.init, &b.init) {
+                (Some(x), Some(y)) => collect_expr(&x.expr, &y.expr, original, index, old),
+                (None, None) => Some(Vec::new()),
+                _ => None,
+            }
+        }
+        (syn::Stmt::Expr(a, _), syn::Stmt::Expr(b, _)) => collect_expr(a, b, original, index, old),
+        _ => {
+            if render_tt(m) == render_tt(t) {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// WI-2a post-binder orphan scan for `let`-binder renames (same file
@@ -904,4 +1218,58 @@ pub(crate) fn let_binder_orphans(
     out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     out.dedup_by(|a, b| a.file == b.file && a.line == b.line);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lines::LineIndex;
+
+    fn excluded(minus_init: &str, target_init: &str, old: &str) -> Option<Vec<(usize, usize)>> {
+        let m: syn::Local = syn::parse_str::<syn::Stmt>(&format!("let b = {minus_init};"))
+            .ok()
+            .and_then(|s| match s {
+                syn::Stmt::Local(l) => Some(l),
+                _ => None,
+            })?;
+        let t: syn::Local = syn::parse_str::<syn::Stmt>(&format!("let b = {target_init};"))
+            .ok()
+            .and_then(|s| match s {
+                syn::Stmt::Local(l) => Some(l),
+                _ => None,
+            })?;
+        let original = format!("fn f() {{\n    let b = {target_init};\n}}\n");
+        let index = LineIndex::new(&original);
+        super::substitution_excluded_spans(&m, &t, &original, &index, old)
+    }
+
+    #[test]
+    fn hole_block_surfaces_zero_spans() {
+        // `E1` binds the whole block: nothing excluded, the inner
+        // shadowed use stays visible to the orphan scan.
+        let out = excluded(
+            "f (old , __RSMPL_E1)",
+            "f (old , { let old = 1 ; old })",
+            "old",
+        )
+        .expect("mappable");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+    }
+
+    #[test]
+    fn hole_macro_surfaces_zero_for_hole_subtree() {
+        let out =
+            excluded("f (old , __RSMPL_E1)", "f (old , foo ! (old))", "old").expect("mappable");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+    }
+
+    #[test]
+    fn concrete_call_excludes_direct_old() {
+        let out = excluded("f (old)", "f (old)", "old").expect("mappable");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+    }
+
+    #[test]
+    fn mismatch_falls_back_none() {
+        assert!(excluded("f (old)", "g (old)", "old").is_none());
+    }
 }
