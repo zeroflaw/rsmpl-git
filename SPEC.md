@@ -2458,11 +2458,13 @@ lowered diff is the observable truth as always (Section D.2).
     the def change (two minus, one plus) — plus claimable uses raises to
     a shared-rule two-hunk emission (the field-deletion hunk naming the
     old container, then the terse rename follow hunk), proved by the one
-    multi-file full-post probe (D13) under strict T375. The deleted field
-    must have no live uses anywhere in the pre tree (exactly one
-    whole-word hit — its declaration); any other use declines the joint
-    (orphan-with-`partial` duty is a later slice, never a silent
-    stranding). Two evolutions,
+    multi-file full-post probe (D13) under strict T375. Untouched live
+    uses never block the joint: uses the native leaves in place surface
+    as `orphans` of the deletion hunk (`off-target` when anchored,
+    `shadowed`/`second-hop`/`macro-hidden` per the member follow law,
+    capping at `partial`); uses the native deletes or rewrites fail the
+    probe and the joint declines. Unrelated same-named idents are not
+    anchored uses and fire `verified`. Two evolutions,
     two additions, an addition of another container, bare renames,
     cross-kind members, and alias/const shapes never joint-fire (only
     multi-addition and cross-file-member joints stay out: a member in
@@ -2473,10 +2475,10 @@ lowered diff is the observable truth as always (Section D.2).
     `- B = 3,`, distant `@@ -N +M,0 @@` or adjacent to the def change
     as a (two-minus, one-plus) hunk) in the same file and section plus
     claimable uses raises to the same shared-rule two-hunk shape with
-    the `enum Old {` context. The deleted variant must have no live
-    uses anywhere in the pre tree (exactly one whole-word hit — its
-    declaration); any other use declines the joint (orphan-with-`partial`
-    duty is a later slice, never a silent stranding).
+    the `enum Old {` context. Same untouched-use law as the struct
+    half (a rewritten `Old::B` → `New::B` pair rides as a claimable
+    rename use; the dangling `New::B` orphans at `partial`; untouched
+    `Old::B` spellings fail the probe because the follow rewrites them).
   Joint `impl Trait for Type` (WI-3): a `trait` rename pair plus a
   `struct`/`enum`/`union` self-type rename pair ride as two authored
   follow hunks sharing one rule id (trait hunk first); the composed
@@ -7990,30 +7992,34 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     variant); a member in another file than its container cannot joint
     (container law non-goal). Field-addition joints raise per
     2b-next2b-first, variant-addition joints per 2b-next2b-next.
-    Struct rename + field-deletion joint (WI-21 slice 1): a def hunk
-    holding the `struct` rename plus exactly one attached field-deletion
-    line (same file/section — either a distant pure-deletion hunk or a
-    hunk adjacent to the def change; the holder's pre-image carrier is
-    the renamed struct; the deleted field has no live uses anywhere in
-    the pre tree) plus claimable uses raises as a shared-rule two-hunk
-    emission (the field-deletion hunk naming the old container, then the
-    terse rename follow hunk), proved by the one multi-file full-post
-    probe (D13) under strict T375; diffrs fixture
-    `142-struct-rename-field-delete-fires`. Two deletions, live-use
-    deletions, cross-kind members, and attr+deletion combos stay ordinary
-    (later slices).
-    Enum rename + variant-deletion joint (WI-21 slice 2): a def hunk
-    holding the `enum` rename plus exactly one attached variant-deletion
-    line (same file/section — either a distant pure-deletion hunk or a
-    hunk adjacent to the def change; the holder's pre-image carrier is
-    the renamed enum; the deleted variant has no live uses anywhere in
-    the pre tree) plus claimable uses raises as a shared-rule two-hunk
-    emission (the variant-deletion hunk naming the old container, then
-    the terse rename follow hunk), proved by the one multi-file
-    full-post probe (D13) under strict T375; diffrs fixture
-    `143-enum-rename-variant-delete-fires`. Two deletions, live-use
-    deletions, cross-kind members, and attr+deletion combos stay ordinary
-    (later slices).
+    Struct rename + field-deletion joint (WI-21 slices 1 + 3): a def
+    hunk holding the `struct` rename plus exactly one attached
+    field-deletion line (same file/section — either a distant
+    pure-deletion hunk or a hunk adjacent to the def change; the
+    holder's pre-image carrier is the renamed struct) plus claimable
+    uses raises as a shared-rule two-hunk emission (the field-deletion
+    hunk naming the old container, then the terse rename follow hunk),
+    proved by the one multi-file full-post probe (D13) under strict
+    T375; diffrs fixture `142-struct-rename-field-delete-fires`. Uses
+    of the deleted field the native leaves untouched surface as
+    `off-target`/`shadowed`/`second-hop`/`macro-hidden` orphans of the
+    deletion hunk (capping at `partial`); uses the native
+    deletes/rewrites fail the probe and the joint declines. Two
+    deletions, cross-kind members, and attr+deletion combos stay
+    ordinary (later slices).
+    Enum rename + variant-deletion joint (WI-21 slices 2 + 3): a def
+    hunk holding the `enum` rename plus exactly one attached
+    variant-deletion line (same file/section — either a distant
+    pure-deletion hunk or a hunk adjacent to the def change; the
+    holder's pre-image carrier is the renamed enum) plus claimable uses
+    raises as a shared-rule two-hunk emission (the variant-deletion
+    hunk naming the old container, then the terse rename follow hunk),
+    proved by the one multi-file full-post probe (D13) under strict
+    T375; diffrs fixture `143-enum-rename-variant-delete-fires`. Same
+    orphan law as the struct half (a rewritten `Old::B` → `New::B`
+    pair rides as a claimable rename use; the dangling `New::B`
+    orphans). Two deletions, cross-kind members, and attr+deletion
+    combos stay ordinary (later slices).
     Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
     the enum half of the same law — a def hunk holding the `enum`
     rename plus exactly one attached variant-evolution pair (tuple

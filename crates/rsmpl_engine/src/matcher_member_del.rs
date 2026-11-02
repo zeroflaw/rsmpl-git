@@ -1,4 +1,4 @@
-//! Struct-field + enum-variant deletion (WI-21 slices 1–2).
+//! Struct-field + enum-variant deletion (WI-21 slices 1–3).
 //!
 //! D5 sibling of `matcher_member_evo` (1656 lines, over the 1600 gate):
 //! the `FieldDeletion` lowering (`struct S {` context + one `- field`

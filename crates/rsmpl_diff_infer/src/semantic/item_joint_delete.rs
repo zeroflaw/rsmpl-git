@@ -1,15 +1,12 @@
-//! WI-21 slices 1–2: struct rename + field-deletion / enum rename +
+//! WI-21 slices 1–3: struct rename + field-deletion / enum rename +
 //! variant-deletion joints.
 //!
 //! The detection branch lives in the item-intent pre-pass (it owns the
 //! pair/hunk tables); this module holds the pure helpers so the intent
 //! file stays under the D5 line gate: the shape-A/shape-B classifiers,
 //! the same-container carrier checks (the deletion's pre-image carrier is
-//! the renamed container), the live-use honesty gates (any other
-//! word-boundary use of the deleted member anywhere in the pre tree
-//! declines — orphan-with-`partial` duty is a later slice, never a
-//! silent stranding), the shared-rule two-hunk emissions (deletion hunk
-//! first, rename follow hunk second — both match against original
+//! the renamed container), the shared-rule two-hunk emissions (deletion
+//! hunk first, rename follow hunk second — both match against original
 //! coordinates, so order is reader convention, not engine requirement),
 //! and the multi-file D13 probe (reused from the addition joint — the
 //! probe is shape-agnostic: composed emission vs claimed native
@@ -26,11 +23,19 @@
 //! emission; decline falls back to today's posture (partition for A,
 //! ordinary for B).
 //!
-//! Single deletion, no live uses, single-file only: struct and enum arms
-//! are disjoint by kind (field vs variant parsing); two deletions,
-//! deletion with live member uses (future `partial`-with-orphans slice),
-//! cross-kind members, cross-file members, and attr+deletion combos
-//! decline (each pinned, each a follow-up).
+//! Slice-3 law: untouched live uses never block the joint. The D13
+//! probe owns touched-use safety (the emission keeps uses the native
+//! removed or rewrote, so the posts mismatch and the joint declines);
+//! the engine owns untouched-use honesty (the deletion hunk reports
+//! anchored uses of the deleted member as `orphans`, capping the run
+//! at `partial` via `global_semantics`). Unrelated same-named idents
+//! are not anchored uses, so they fire `verified` (WI-14 siblings
+//! never veto).
+//!
+//! Single deletion, single-file only: struct and enum arms are disjoint
+//! by kind (field vs variant parsing); two deletions, cross-kind
+//! members, cross-file members, and attr+deletion combos decline (each
+//! pinned, each a follow-up).
 //!
 //! D5: this module also owns the pre-pass call-site helpers
 //! (`find_deletion_joints` + `claim_deletion_hunks`) so `item_intent.rs`
@@ -272,13 +277,14 @@ fn del_carrier(pre: &str, field: &str, point: usize) -> Option<String> {
 /// WI-21 joint search for the field-deletion half: returns the joint
 /// claim when the def section holds exactly one attached field
 /// deletion (shape-A pure-deletion hunk or shape-B record, same file
-/// and section, deletion-point carrier is the renamed struct, zero
-/// live uses of the deleted field anywhere in the pre tree) plus
+/// and section, deletion-point carrier is the renamed struct) plus
 /// claimable uses otherwise, with no other non-claimable balanced pair
-/// in the def section. Struct-only, `fn` excluded, at most one joint
-/// per def section (the caller runs this arm only when the attr, evo,
-/// and addition arms decline). `None` means no joint — the caller falls
-/// back to today's posture.
+/// in the def section. Untouched live uses never block: the D13 probe
+/// declines touched uses (emission keeps what the native removed), the
+/// engine reports untouched uses as `orphans` (`partial`). Struct-only,
+/// `fn` excluded, at most one joint per def section (the caller runs
+/// this arm only when the attr, evo, and addition arms decline).
+/// `None` means no joint — the caller falls back to today's posture.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_field_del_joint(
     pairs: &[super::item_intent::Pair],
@@ -353,33 +359,11 @@ pub(crate) fn find_field_del_joint(
         return None;
     }
     let joint = cands.into_iter().next()?;
-    // Slice-1 honesty gate: the deleted field must have no live uses —
-    // exactly one whole-word hit across the whole pre tree (the
-    // declaration line). Any other hit (struct literal, `s.y` use,
-    // unrelated same-named local) or a missing declaration declines;
-    // orphan duty is the next slice, never a silent stranding.
-    let field = super::item_joint_field_add::parse_field_add(&joint.member_minus)?;
-    let mut hits = 0usize;
-    for text in pre.values() {
-        let bytes = text.as_bytes();
-        let mut i = 0usize;
-        while i + field.len() <= bytes.len() {
-            let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-            if &bytes[i..i + field.len()] == field.as_bytes() {
-                let prev = if i > 0 { bytes[i - 1] } else { b'\n' };
-                let next = bytes.get(i + field.len()).copied().unwrap_or(b'\n');
-                if !is_ident(prev) && !is_ident(next) {
-                    hits += 1;
-                }
-                i += field.len();
-            } else {
-                i += 1;
-            }
-        }
-    }
-    if hits != 1 {
-        return None;
-    }
+    // Slice-3 law: no whole-word honesty gate. Touched uses fail the
+    // D13 probe downstream (the emission keeps the use line the native
+    // removed or rewrote); untouched anchored uses surface as engine
+    // `orphans` (`partial`); unrelated same-named idents are not
+    // anchored uses and fire `verified`.
     Some(joint)
 }
 
@@ -451,39 +435,17 @@ fn enum_del_carrier(pre: &str, variant: &str, point: usize) -> Option<String> {
     holders.into_iter().next()
 }
 
-/// Whole-word hit count of `name` across the pre tree (the shared
-/// honesty-gate scan: exactly one hit — the declaration — or decline).
-fn pre_tree_hits(pre: &std::collections::HashMap<String, String>, name: &str) -> usize {
-    let mut hits = 0usize;
-    for text in pre.values() {
-        let bytes = text.as_bytes();
-        let mut i = 0usize;
-        while i + name.len() <= bytes.len() {
-            let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-            if &bytes[i..i + name.len()] == name.as_bytes() {
-                let prev = if i > 0 { bytes[i - 1] } else { b'\n' };
-                let next = bytes.get(i + name.len()).copied().unwrap_or(b'\n');
-                if !is_ident(prev) && !is_ident(next) {
-                    hits += 1;
-                }
-                i += name.len();
-            } else {
-                i += 1;
-            }
-        }
-    }
-    hits
-}
-
-/// WI-21 slice 2 joint search for the variant-deletion half: returns the
-/// joint claim when the def section holds exactly one attached variant
-/// deletion (shape-A pure-deletion hunk or shape-B record, same file
-/// and section, deletion-point carrier is the renamed enum, zero live
-/// uses of the deleted variant anywhere in the pre tree) plus claimable
-/// uses otherwise, with no other non-claimable balanced pair in the def
-/// section. Enum-only, `fn` excluded, at most one joint per def section
-/// (the caller runs this arm only when the attr, evo, addition, and
-/// field-deletion arms decline). `None` means no joint.
+/// WI-21 slices 2–3 joint search for the variant-deletion half:
+/// returns the joint claim when the def section holds exactly one
+/// attached variant deletion (shape-A pure-deletion hunk or shape-B
+/// record, same file and section, deletion-point carrier is the renamed
+/// enum) plus claimable uses otherwise, with no other non-claimable
+/// balanced pair in the def section. Untouched live uses never block:
+/// the D13 probe declines touched uses, the engine reports untouched
+/// uses as `orphans` (`partial`). Enum-only, `fn` excluded, at most one
+/// joint per def section (the caller runs this arm only when the attr,
+/// evo, addition, and field-deletion arms decline). `None` means no
+/// joint.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_variant_del_joint(
     pairs: &[super::item_intent::Pair],
@@ -553,10 +515,9 @@ pub(crate) fn find_variant_del_joint(
         return None;
     }
     let joint = cands.into_iter().next()?;
-    let variant = super::item_joint_field_add::parse_variant_add(&joint.member_minus)?;
-    if pre_tree_hits(pre, &variant) != 1 {
-        return None;
-    }
+    // Slice-3 law: no whole-word honesty gate (see the field arm).
+    // The D13 probe declines touched uses; the engine reports untouched
+    // uses as `orphans` (`partial`).
     Some(joint)
 }
 
@@ -703,9 +664,10 @@ mod tests {
 
     #[test]
     fn live_use_declines_joint() {
-        // The deleted field is read in the body: orphan duty belongs to
-        // the next slice — the joint declines (rename may still
-        // partition alone; today's posture holds).
+        // Touched live use: the native deletes the `s.y` line alongside
+        // the field, so the joint emission (which keeps `s.y`) fails the
+        // D13 probe and declines (rename may still partition alone).
+        // Untouched uses fire partial (see the slice-3 pins below).
         let pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) -> u32 {\n    s.y\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,3 +4,2 @@\n-fn f(s: Old) -> u32 {\n-    s.y\n+fn f(s: New) -> u32 {\n";
         let out = infer(section, pre);
@@ -720,23 +682,61 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_same_named_ident_declines_joint() {
-        // The honesty gate is pre-tree-global and safe-directional: an
-        // unrelated same-named `y` (a fn param here) declines the joint
-        // even though the D13 probe alone would pass (that function is
-        // byte-identical on both sides). Orphan duty for genuinely live
-        // fields is the next slice; over-decline is never a stranding.
+    fn unrelated_same_named_ident_fires_verified() {
+        // Slice-3 precision: an unrelated same-named `y` (a fn param
+        // here) is not an anchored use of `Old::y`, so the joint fires
+        // `verified` with zero orphans (WI-14 siblings never veto). The
+        // D13 probe passes byte-identical; the engine orphan scan stays
+        // silent on the bare param.
         let pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\nfn g(y: u32) -> u32 {\n    y\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
-        let out = infer(section, pre);
-        if let Some(o) = out {
-            assert_eq!(
-                o.matches("rule=r1").count(),
-                1,
-                "unrelated same-named ident declines the deletion joint, got:\n{o}"
-            );
-            assert!(!o.contains("- y: u32,"), "got:\n{o}");
-        }
+        let out = infer(section, pre).expect("unrelated ident must not block the joint");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("- y: u32,"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(
+            report.rules.iter().all(|r| r.orphans.is_empty()),
+            "got: {report:?}"
+        );
+        assert!(
+            files["f.rs"].contains("fn g(y: u32)"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn untouched_live_field_use_fires_partial_with_orphan() {
+        // Slice-3 headline: the native leaves `s.y` untouched while
+        // deleting the field. The joint fires (probe passes — both sides
+        // keep `s.y`); the engine reports the stranded `s.y` as an
+        // `off-target` orphan, capping the run at `partial`.
+        let pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n    let _ = s.y;\n}\nfn g(t: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n@@ -8,1 +7,1 @@\n-fn g(t: Old) {\n+fn g(t: New) {\n";
+        let out = infer(section, pre).expect("untouched live use must fire partial joint");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("- y: u32,"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(
+            files["f.rs"].contains("s.y"),
+            "orphaned use retained, got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            report.rules.iter().any(|r| !r.orphans.is_empty()),
+            "deletion hunk must carry the stranded use, got: {report:?}"
+        );
+        let orphan = report
+            .rules
+            .iter()
+            .flat_map(|r| r.orphans.iter())
+            .find(|o| o.text.contains("s.y"))
+            .expect("s.y orphan named");
+        assert_eq!(orphan.reason, "off-target", "got: {orphan:?}");
     }
 
     #[test]
@@ -860,8 +860,10 @@ mod tests {
 
     #[test]
     fn live_variant_use_declines_joint() {
-        // The deleted variant is constructed in the body: orphan duty
-        // belongs to the next slice — the joint declines.
+        // Untouched `Old::B` while the follow rewrites it to `New::B`:
+        // the emission and the native disagree, so the D13 probe
+        // declines. The partial shape carries the `Old::B → New::B`
+        // rewrite (see the slice-3 pin below).
         let pre =
             "enum Old {\n    A,\n    B,\n}\nfn f() -> Old {\n    Old::B\n}\nfn g(v: Old) {\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -7,1 +6,1 @@\n-fn g(v: Old) {\n+fn g(v: New) {\n";
@@ -877,26 +879,51 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_variant_ident_declines_joint() {
-        // Unrelated same-named `B` (a struct name here) declines the
-        // joint via the pre-tree-global honesty gate. The plain rename
-        // may still fire alone (or the whole intent may decline) — the
-        // joint emission (two hunks sharing r1 with an `enum Old {`
-        // deletion context) must never appear.
+    fn unrelated_variant_ident_fires_verified() {
+        // Slice-3 precision: an unrelated same-named `B` (a struct name
+        // here) is a different namespace from the `Old::B` variant, so
+        // the joint fires `verified` with zero orphans. The struct is
+        // byte-identical on both sides; the probe passes.
         let pre = "enum Old {\n    A,\n    B,\n}\nstruct B {\n    x: u32,\n}\nfn f(v: Old) {\n}\n";
         let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -8,1 +7,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
-        let out = infer(section, pre);
-        if let Some(o) = out {
-            assert_eq!(
-                o.matches("rule=r1").count(),
-                1,
-                "unrelated same-named ident declines the variant joint, got:\n{o}"
-            );
-            assert!(
-                !o.contains("  enum Old {"),
-                "no joint deletion hunk may fire, got:\n{o}"
-            );
-        }
+        let out = infer(section, pre).expect("unrelated struct B must not block the joint");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("  enum Old {"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(
+            report.rules.iter().all(|r| r.orphans.is_empty()),
+            "got: {report:?}"
+        );
+        assert!(files["f.rs"].contains("struct B"), "got: {}", files["f.rs"]);
+    }
+
+    #[test]
+    fn rewritten_variant_use_fires_partial_with_orphan() {
+        // Slice-3 variant headline: the native rewrites `Old::B` to
+        // `New::B` as a claimable rename-use pair while deleting the
+        // variant. The joint fires (probe passes — both sides carry
+        // `New::B`); the engine reports the dangling `New::B` as an
+        // orphan, capping the run at `partial`.
+        let pre =
+            "enum Old {\n    A,\n    B,\n}\nfn f() -> Old {\n    Old::B\n}\nfn g(v: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -5,1 +4,1 @@\n-fn f() -> Old {\n+fn f() -> New {\n@@ -6,1 +5,1 @@\n-    Old::B\n+    New::B\n@@ -8,1 +7,1 @@\n-fn g(v: Old) {\n+fn g(v: New) {\n";
+        let out = infer(section, pre).expect("rewritten variant use must fire partial joint");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("- B,"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(
+            files["f.rs"].contains("New::B"),
+            "orphaned use retained, got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            report.rules.iter().any(|r| !r.orphans.is_empty()),
+            "deletion hunk must carry the stranded variant use, got: {report:?}"
+        );
     }
 
     #[test]

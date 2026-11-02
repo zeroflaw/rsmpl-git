@@ -715,6 +715,28 @@ fn apply_inner(
                                     old,
                                 )
                             }
+                            PatternKind::FieldDeletion {
+                                struct_name, field, ..
+                            } => crate::use_graph_member::member_orphans(
+                                &states,
+                                &file_edits,
+                                path,
+                                edits_before,
+                                crate::use_graph_member::MemberKind::Field,
+                                struct_name,
+                                field,
+                            ),
+                            PatternKind::VariantDeletion {
+                                enum_name, variant, ..
+                            } => crate::use_graph_member::member_orphans(
+                                &states,
+                                &file_edits,
+                                path,
+                                edits_before,
+                                crate::use_graph_member::MemberKind::Variant,
+                                enum_name,
+                                variant,
+                            ),
                             PatternKind::AssocRename {
                                 impl_header,
                                 want_trait,
