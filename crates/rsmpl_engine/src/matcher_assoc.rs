@@ -198,7 +198,11 @@ pub fn apply_assoc_rename_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected assoc rename pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-assoc-rename-template",
+                "write a bare assoc-item rename pair under its `impl`/`trait` header (`- fn old` / `+ fn new`); see SPEC 14.8",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -493,7 +497,11 @@ pub fn apply_assoc_evolution_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected assoc evolution pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-assoc-evolution-template",
+                "write a bare assoc-item evolution pair under its header (one slot evolves, name and other slots equal); see SPEC 14.8",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -1000,5 +1008,92 @@ mod tests {
             "type Item = Box<[u8]>;",
         );
         assert!(apply(&p, "trait Tr {\n    type Item;\n}\n").is_err());
+    }
+
+    fn wi18_assoc_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("assoc patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_assoc_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 10: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice10_assoc_rename_dispatch_repair_is_specific() {
+        let p = patch("impl S {", "const MAX: i32 = 10;", "const LIMIT: i32 = 10;");
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_assoc_setup(&p, "impl S {\n    const MAX: i32 = 10;\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_assoc_rename_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected assoc rename pattern");
+        let (code, w) = wi18_assoc_repair(&err);
+        assert_eq!(code, "dispatch-assoc-rename-template");
+        assert!(w.contains("`- fn old`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice10_assoc_evolution_dispatch_repair_is_specific() {
+        let p = patch(
+            "trait Tr {",
+            "type Item = Vec<u8>;",
+            "type Item = Box<[u8]>;",
+        );
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_assoc_setup(&p, "trait Tr {\n    type Item = Vec<u8>;\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_assoc_evolution_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected assoc evolution pattern");
+        let (code, w) = wi18_assoc_repair(&err);
+        assert_eq!(code, "dispatch-assoc-evolution-template");
+        assert!(w.contains("one slot evolves"), "got: {w}");
     }
 }

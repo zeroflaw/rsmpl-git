@@ -405,6 +405,14 @@ mod tests {
     /// item-joint constructors ×2) to site-specific
     /// `frontier-*-template` repairs (ceiling 41 -> 33; no D5 split —
     /// all owners well under 1600).
+    /// WI-18 follow-up slice 10 moved the 13-site definition-shape
+    /// dispatch family in `rsmpl_engine` (`matcher_item.rs` ×1,
+    /// `matcher_member.rs` ×2, `matcher_assoc.rs` ×2,
+    /// `matcher_impl.rs` ×4, `matcher_use.rs` ×2, `matcher_value.rs`
+    /// ×2, where the `evo_shape::bad` closure is the single
+    /// constructor-level repair for both evolution arms) to
+    /// site-specific `dispatch-*-template` repairs (ceiling 33 -> 20;
+    /// no D5 split — largest owner `matcher_item.rs` at 1216).
     /// (`Match`/`Range`/`Parse`/`GitHunk`/`Build` or an unclassified
     /// code) fails naming file + line + code, because the filler does
     /// not cover those codes and a bare site there is a prose-only
@@ -413,7 +421,7 @@ mod tests {
     /// The companion runtime enumeration lives in
     /// `bin/applyrs/tests/wi3_repair_complete_e2e.rs` (one failing
     /// patch per patch-input class); this test is the source gate.
-    const PATTERN_TAIL_CEILING: usize = 33;
+    const PATTERN_TAIL_CEILING: usize = 20;
 
     #[test]
     fn wi18_source_scan_every_site_carries_repair_or_allow_list() {

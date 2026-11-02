@@ -181,6 +181,10 @@ fn evo_shape(compiled: &CompiledPattern, alias: bool) -> Result<EvoShape, Struct
             ErrorCode::PatternConflict,
             "expected definition evolution pattern".to_string(),
         )
+        .with_repair(StructuredError::fix_pattern_repair(
+            "dispatch-value-evolution-template",
+            "write a bare definition-evolution pair (`- type A = T;` / `+ type A = U;`, same name; const/static likewise; see SPEC 14.8)",
+        ))
     };
     match &compiled.kind {
         PatternKind::TypeAliasEvolution {
@@ -369,7 +373,11 @@ pub fn apply_const_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected const/static evolution pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-const-static-template",
+                "write a bare const/static evolution pair (`- const C: T = E;` / `+ const C: T = F;`, same name and type; see SPEC 14.8)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -694,5 +702,98 @@ mod tests {
         );
         let err = apply(&patch, "type A<T> = Vec<T>;\n").unwrap_err();
         assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    }
+
+    fn wi18_value_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("value patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_value_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 10: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice10_value_evolution_dispatch_repair_is_specific() {
+        // The `evo_shape::bad` closure is the single constructor-level
+        // repair for both the type-alias and the const/static arms.
+        let patch = evo_patch(
+            "type A = Vec<u8>;",
+            "type A = Box<[u8]>;",
+            "@@ -1,1 +1,1 @@",
+            "",
+        );
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_value_setup(&patch, "type A = Vec<u8>;\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_type_alias_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected definition evolution pattern");
+        let (code, w) = wi18_value_repair(&err);
+        assert_eq!(code, "dispatch-value-evolution-template");
+        assert!(w.contains("`- type A = T;`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice10_const_static_dispatch_repair_is_specific() {
+        let patch = evo_patch(
+            "const C: u8 = 1;",
+            "const C: u8 = 2;",
+            "@@ -1,1 +1,1 @@",
+            "",
+        );
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_value_setup(&patch, "const C: u8 = 1;\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_const_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected const/static evolution pattern");
+        let (code, w) = wi18_value_repair(&err);
+        assert_eq!(code, "dispatch-const-static-template");
+        assert!(w.contains("`- const C: T = E;`"), "got: {w}");
     }
 }

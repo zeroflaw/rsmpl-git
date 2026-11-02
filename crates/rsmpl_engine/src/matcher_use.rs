@@ -160,7 +160,11 @@ pub fn apply_use_rename_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected use-path rename pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-use-rename-template",
+                "write a use-path prefix pair (`- use crate::old` / `+ use crate::new`, same tail; see SPEC 14.9)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -267,7 +271,11 @@ pub fn apply_use_regroup_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected use-regroup merge pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-use-regroup-template",
+                "write a merge-only use-regroup pair (N≥2 `use P::Ti;` minus lines plus one grouped `use P::{...}` plus line; see SPEC 14.9)",
+            )));
         }
     };
     let rule = hunk.rule_name();
@@ -890,5 +898,97 @@ mod tests {
         );
         let err = apply(&patch, "use a::b::X; use a::b::Y;\n").unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    fn wi18_use_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("use patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_use_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 10: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice10_use_rename_dispatch_repair_is_specific() {
+        let patch = use_patch_in(
+            "@@ -1,1 @@",
+            "use crate::old",
+            "use crate::new",
+            "# allow=many\n",
+        );
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_use_setup(&patch, "use crate::old::Thing;\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_use_rename_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected use-path rename pattern");
+        let (code, w) = wi18_use_repair(&err);
+        assert_eq!(code, "dispatch-use-rename-template");
+        assert!(w.contains("`- use crate::old`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice10_use_regroup_dispatch_repair_is_specific() {
+        let patch = regroup_patch_in(
+            "@@ -1,2 @@",
+            &["use a::b::X;", "use a::b::Y;"],
+            "use a::b::{X, Y};",
+            "",
+        );
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_use_setup(&patch, "use a::b::X;\nuse a::b::Y;\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_use_regroup_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected use-regroup merge pattern");
+        let (code, w) = wi18_use_repair(&err);
+        assert_eq!(code, "dispatch-use-regroup-template");
+        assert!(w.contains("merge-only"), "got: {w}");
     }
 }

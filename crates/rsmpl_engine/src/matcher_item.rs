@@ -387,7 +387,11 @@ pub fn apply_item_rename_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected item rename pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-item-rename-template",
+                "write a bare item rename pair (`- struct Old` / `+ struct New`, one ident change; see SPEC 14.8)",
+            )));
         }
     };
     // WI-5-R2: a vis-evolving pair rewrites the visibility slot alongside
@@ -1212,5 +1216,68 @@ mod tests {
         let nodelta = patch.replace("+ pub struct N", "+ struct N");
         let err = apply(&nodelta, src).unwrap_err();
         assert!(err.contains("identical"), "got: {err}");
+    }
+
+    fn wi18_item_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("item patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_item_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 10: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice10_item_dispatch_repair_is_specific() {
+        let patch = rename_patch("struct Old", "struct New", "@@ -1,1 +1,1 @@");
+        let (hunk, mut compiled, parsed, index, src) = wi18_item_setup(&patch, "struct Old;\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_item_rename_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected item rename pattern");
+        let (code, w) = wi18_item_repair(&err);
+        assert_eq!(code, "dispatch-item-rename-template");
+        assert!(w.contains("`- struct Old`"), "got: {w}");
     }
 }

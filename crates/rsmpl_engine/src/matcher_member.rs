@@ -327,7 +327,11 @@ pub fn apply_field_rename_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected field rename pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-field-rename-template",
+                "write a bare field rename pair (`- x: u32` / `+ y: u32`, same type both sides; see SPEC 14.8)",
+            )));
         }
     };
     check_attr_mirror(hunk, &minus_attrs, &plus_attrs)?;
@@ -394,7 +398,11 @@ pub fn apply_variant_rename_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected variant rename pattern".to_string(),
-            ));
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-variant-rename-template",
+                "write a bare variant rename pair (`- A` / `+ B`, same payload shape both sides; see SPEC 14.8)",
+            )));
         }
     };
     check_attr_mirror(hunk, &minus_attrs, &plus_attrs)?;
@@ -538,5 +546,88 @@ mod tests {
         let src = "enum E {\n    Keep,\n}\nenum F {\n    Old,\n}\n";
         let err = apply(&patch, src).unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    fn wi18_member_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("member patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_member_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 10: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    #[test]
+    fn wi18_slice10_field_dispatch_repair_is_specific() {
+        let patch = field_patch_at("old: u32", "new: u32", "@@ -1,4 +1,4 @@");
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_member_setup(&patch, "struct S {\n    old: u32,\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_field_rename_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected field rename pattern");
+        let (code, w) = wi18_member_repair(&err);
+        assert_eq!(code, "dispatch-field-rename-template");
+        assert!(w.contains("`- x: u32`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice10_variant_dispatch_repair_is_specific() {
+        let patch = variant_patch_at("Old", "New", "@@ -1,2 +1,2 @@");
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_member_setup(&patch, "enum E {\n    Old,\n}\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_variant_rename_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected variant rename pattern");
+        let (code, w) = wi18_member_repair(&err);
+        assert_eq!(code, "dispatch-variant-rename-template");
+        assert!(w.contains("`- A`"), "got: {w}");
     }
 }

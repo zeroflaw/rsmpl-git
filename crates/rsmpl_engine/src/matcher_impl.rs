@@ -31,7 +31,11 @@ pub fn apply_impl_context_hunk(
             return Err(StructuredError::new(
                 ErrorCode::PatternConflict,
                 "expected impl-context pattern".to_string(),
-            ))
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-impl-context-template",
+                "write the `<impl> <Name>` context header line above the method pair (SPEC 13.4); this hunk reached the method matcher without one",
+            )))
         }
     };
     // WI-4a: the header is a filter in every scope (SPEC 13.4). It is
@@ -121,7 +125,11 @@ pub fn apply_impl_context_hunk(
                 ErrorCode::PatternConflict,
                 "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)",
             )
-            .with_rule(&rule));
+            .with_rule(&rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-impl-body-template",
+                "write `...` bodies on both sides of a method hunk (bodies are always preserved; body evolution is not supported in v1)",
+            )));
         }
         // Attribute mirror gates (same contract as `apply_fn_hunk`: the
         // plus side must mirror the minus side, never invent or drop).
@@ -173,7 +181,11 @@ pub fn apply_impl_context_hunk(
                 ErrorCode::PatternConflict,
                 "trait methods cannot declare visibility: drop `pub` (or `pub(...)`) on the `+` side",
             )
-            .with_rule(&rule));
+            .with_rule(&rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-impl-trait-vis-template",
+                "drop `pub` (or `pub(...)`) on the `+` side of a trait-method hunk (trait methods carry no visibility)",
+            )));
         }
         for (vis, sig, attrs, span) in methods {
             let name_ok = if minus_name.starts_with('$') {
@@ -210,6 +222,10 @@ pub fn apply_impl_context_hunk(
                             "cannot analyze method signature",
                         )
                         .with_rule(&rule)
+                        .with_repair(StructuredError::fix_pattern_repair(
+                            "dispatch-impl-sig-template",
+                            "write a parseable method signature (the `+` side must parse as a Rust `fn` signature; check qualifiers and receivers)",
+                        ))
                     },
                 )?;
             if !minus_pat.matches_item_fn(&synth) {
@@ -385,4 +401,123 @@ fn replace_self_receiver(s: &str) -> String {
         i += 1;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    fn wi18_impl_setup(
+        patch_text: &str,
+        src: &str,
+    ) -> (
+        rsmpl_patch::RsmplHunk,
+        rsmpl_pattern::CompiledPattern,
+        syn::File,
+        crate::lines::LineIndex,
+        String,
+    ) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("impl patch compiles");
+        let src = src.to_string();
+        let parsed: syn::File = syn::parse_str(&src).expect("src parses");
+        let index = crate::lines::LineIndex::new(&src);
+        (hunk, compiled, parsed, index, src)
+    }
+
+    fn wi18_impl_repair(err: &rsmpl_patch::StructuredError) -> (String, String) {
+        let repair = err
+            .repair
+            .as_ref()
+            .expect("WI-18 slice 10: must carry repair");
+        let code = repair
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("code str")
+            .to_string();
+        let write_instead = repair
+            .get("write_instead")
+            .and_then(|v| v.as_str())
+            .expect("template str")
+            .to_string();
+        assert_ne!(code, "pattern", "must beat the generic filler");
+        assert!(
+            !write_instead.contains(&err.message),
+            "repair must not echo the reason, got: {write_instead}"
+        );
+        (code, write_instead)
+    }
+
+    const IMPL_SRC: &str = "struct S;\nimpl S {\n    fn m(&self) -> i32 {\n        1\n    }\n}\n";
+    const TRAIT_SRC: &str = "trait Tr {\n    fn m(&self);\n}\n";
+
+    fn impl_patch(minus: &str, plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,5 @@ rule=m\n# lang=rust\n  impl S {{\n-     {minus}\n+     {plus}\n  }}\n"
+        )
+    }
+
+    fn trait_patch(minus: &str, plus: &str) -> String {
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 @@ rule=m\n# lang=rust\n  trait Tr {{\n-     {minus}\n+     {plus}\n  }}\n"
+        )
+    }
+
+    #[test]
+    fn wi18_slice10_impl_context_dispatch_repair_is_specific() {
+        let patch = impl_patch("fn m(&self) { ... }", "fn n(&self) { ... }");
+        let (hunk, mut compiled, parsed, index, src) = wi18_impl_setup(&patch, IMPL_SRC);
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err =
+            super::apply_impl_context_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected impl-context pattern");
+        let (code, w) = wi18_impl_repair(&err);
+        assert_eq!(code, "dispatch-impl-context-template");
+        assert!(w.contains("`<impl> <Name>`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice10_impl_body_repair_is_specific() {
+        // Live-reachable: concrete method bodies compile, then the engine
+        // body gate fires (probed via applyrs: generic `pattern` at HEAD).
+        let patch = impl_patch("fn m(&self) -> i32 { 1 }", "fn n(&self) -> i32 { 1 }");
+        let (hunk, compiled, parsed, index, src) = wi18_impl_setup(&patch, IMPL_SRC);
+        let mut edits = Vec::new();
+        let err =
+            super::apply_impl_context_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("concrete bodies must fail");
+        assert_eq!(
+            err.message,
+            "v1 function hunks require `...` bodies on both sides (body evolution is not supported; the original body is always preserved)"
+        );
+        let (code, w) = wi18_impl_repair(&err);
+        assert_eq!(code, "dispatch-impl-body-template");
+        assert!(w.contains("`...` bodies"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_slice10_impl_trait_vis_repair_is_specific() {
+        // Live-reachable: `+ pub fn` in a trait context compiles, then the
+        // engine trait-vis gate fires (probed via applyrs at HEAD).
+        let patch = trait_patch("fn m(&self);", "pub fn m(&self);");
+        let (hunk, compiled, parsed, index, src) = wi18_impl_setup(&patch, TRAIT_SRC);
+        let mut edits = Vec::new();
+        let err =
+            super::apply_impl_context_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+                .expect_err("trait `pub` must fail");
+        assert_eq!(
+            err.message,
+            "trait methods cannot declare visibility: drop `pub` (or `pub(...)`) on the `+` side"
+        );
+        let (code, w) = wi18_impl_repair(&err);
+        assert_eq!(code, "dispatch-impl-trait-vis-template");
+        assert!(w.contains("drop `pub`"), "got: {w}");
+    }
 }
