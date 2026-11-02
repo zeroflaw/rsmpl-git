@@ -260,6 +260,90 @@ impl<'ast> Visit<'ast> for MethodCallWalker<'_> {
             self.opaque.push((line, "a macro invocation".to_string()));
         }
     }
+
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        // No recursion: attribute interiors never host method claims —
+        // `S::old` inside `#[doc = …]` names nothing the anchor order
+        // proves (scalar parity). The same-spelling idents are opaque
+        // evidence instead, never a rewrite.
+        self.opaque.extend(attr_opaque_lines(node, self.old));
+    }
+}
+
+/// Opaque attribute lines for one attribute node: path segments plus
+/// value idents (`#[doc = old]`, `#[doc = S::old]`) plus list tokens
+/// (`#[foo(old)]`). String literals (`#[doc = "old"]`) are `Literal`,
+/// never `Ident`, and stay out by construction.
+pub(crate) fn attr_opaque_lines(node: &syn::Attribute, old: &str) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for seg in node.path().segments.iter() {
+        if seg.ident == old {
+            out.push((
+                seg.ident.span().start().line as u32,
+                "an attribute".to_string(),
+            ));
+        }
+    }
+    match &node.meta {
+        syn::Meta::NameValue(nv) => {
+            struct ValuePaths<'o> {
+                old: &'o str,
+                opaque: Vec<u32>,
+            }
+            impl<'ast> Visit<'ast> for ValuePaths<'_> {
+                fn visit_path(&mut self, node: &'ast syn::Path) {
+                    for seg in &node.segments {
+                        if seg.ident == self.old {
+                            self.opaque.push(seg.ident.span().start().line as u32);
+                        }
+                    }
+                    visit::visit_path(self, node);
+                }
+                fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                    for line in macro_ident_lines(&node.tokens, self.old) {
+                        self.opaque.push(line);
+                    }
+                }
+            }
+            let mut values = ValuePaths {
+                old,
+                opaque: Vec::new(),
+            };
+            values.visit_expr(&nv.value);
+            for line in values.opaque {
+                out.push((line, "an attribute".to_string()));
+            }
+        }
+        syn::Meta::List(list) => {
+            for line in macro_ident_lines(&list.tokens, old) {
+                out.push((line, "an attribute".to_string()));
+            }
+        }
+        syn::Meta::Path(_) => {}
+    }
+    out
+}
+
+/// Every opaque attribute line in a file (resolve-gate feed for the
+/// veto-without-fallback / skip-with-fallback parity).
+pub(crate) fn file_attr_opaque(parsed: &syn::File, old: &str) -> Vec<(u32, String)> {
+    struct V<'a> {
+        old: &'a str,
+        out: Vec<(u32, String)>,
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            // No recursion: the helper records the opaque idents; the
+            // interior never hosts a method claim.
+            self.out.extend(attr_opaque_lines(node, self.old));
+        }
+    }
+    let mut v = V {
+        old,
+        out: Vec::new(),
+    };
+    v.visit_file(parsed);
+    v.out
 }
 
 /// Last ident of a `QSelf` position type (`S` in `<S as Tr>`).
@@ -300,5 +384,55 @@ pub(crate) fn collect_method_calls(
         off_target: w.off_target,
         chain_skipped: w.chain_skipped,
         opaque: w.opaque,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(src: &str) -> syn::File {
+        syn::parse_str(src).expect("fixture parses")
+    }
+
+    fn opaque_lines_for_attr(src: &str, old: &str) -> Vec<u32> {
+        let parsed = file(src);
+        let mut lines: Vec<u32> = file_attr_opaque(&parsed, old)
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        lines.sort_unstable();
+        lines
+    }
+
+    #[test]
+    fn attribute_path_value_and_list_form_are_opaque() {
+        // `#[old]` path, `#[doc = old]` value, and `#[foo(old)]` list
+        // tokens never resolve to the method: all surface as opaque.
+        let src = "trait Tr { fn old(&self); }\n#[old]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "old"), vec![2]);
+        let src = "trait Tr { fn old(&self); }\n#[doc = old]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "old"), vec![2]);
+        let src = "trait Tr { fn old(&self); }\n#[foo(old)]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "old"), vec![2]);
+        // String literals are not idents: silent.
+        let src = "trait Tr { fn old(&self); }\n#[doc = \"old\"]\nfn f() {}\n";
+        assert_eq!(opaque_lines_for_attr(src, "old"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn qualified_value_is_opaque_and_never_claimed() {
+        // `#[doc = S::old]` must not claim the `S::old` tail: the
+        // walker records one opaque line and zero claims.
+        let src = "struct S;\nimpl S { fn old(&self) {} }\n#[doc = S::old]\nfn g() {}\n";
+        let parsed = file(src);
+        let outcome = collect_method_calls(&parsed, "", &["S".to_string()], "old", false);
+        assert!(outcome.claims.is_empty(), "got: {:?}", outcome.claims.len());
+        assert_eq!(
+            outcome.opaque,
+            vec![(3, "an attribute".to_string())],
+            "got: {:?}",
+            outcome.opaque
+        );
     }
 }

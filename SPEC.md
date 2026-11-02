@@ -2798,9 +2798,12 @@ item defines `old`), `off-target`, or the WI-11 chain reasons
 (`chain-depth`, `chain-unproven`, `ambiguous-bound`) evidence — never
 a veto. Inherent `impl S { fn old }` and other-trait
 `impl <Other> for _ { fn old }` defs never claim a trait-header rename
-(different items → `shadowed` evidence). Without follow, leftover
+(different items → `shadowed` evidence). Macro-token / attribute
+interiors (paths and values) mentioning `old` are opaque: veto without
+fallback, skip with `macro-hidden` under it (scalar/member parity).
+Without follow, leftover
 trait-proven impl defs and anchored call sites report as orphans
-(`off-target`, unproven `shadowed`, macro `macro-hidden`).
+(`off-target`, unproven `shadowed`, macro/attribute `macro-hidden`).
 
 `# follow=uses` on a bare-inherent-`impl` method rename (WI-6, `impl S {`
 context + `fn old` → `fn new`) rewrites every inherent `impl S`
@@ -2814,7 +2817,10 @@ and one-hop method-return chains; generic bounds never prove a concrete
 self type and stay `off-target`). `trait` declarations, `impl <Trait> for _` definitions,
 and other-type inherent `impl U { fn old }` defs never claim (different
 items → `shadowed` evidence); unproven receivers are `shadowed`,
-`off-target`, or the WI-11 chain reasons, never a veto. Without follow, leftover domain defs and
+`off-target`, or the WI-11 chain reasons, never a veto. Macro-token /
+attribute interiors (paths and values) mentioning `old` are opaque:
+veto without fallback, skip with `macro-hidden` under it
+(scalar/member parity). Without follow, leftover domain defs and
 anchored calls report as orphans with the same reasons. The definition
 set is every inherent `impl S` block of the domain (last-segment
 equality, D8). `impl T for S` headers name a trait-impl block, not a

@@ -19,7 +19,7 @@ use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::LineIndex;
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
-use crate::use_graph_method_calls::collect_method_calls;
+use crate::use_graph_method_calls::{collect_method_calls, file_attr_opaque};
 
 /// Last `::` segment, cut at generics/whitespace (`"S < T >"` → `"S"`).
 pub(crate) fn last_ident(normed: &str) -> String {
@@ -217,8 +217,8 @@ pub(crate) type MethodFollowSpans = Vec<(String, Vec<MethodEdit>)>;
 /// Workspace outcome for trait-method follow: definition claims plus
 /// anchored call-site claims (`recv.old()` with a proven receiver,
 /// `S::old` tails). Unproven receivers are `off-target`/`shadowed`
-/// evidence, never a veto. Opaque macro mentions of `old` veto without
-/// fallback (assoc parity).
+/// evidence, never a veto. Opaque macro/attribute mentions of `old` veto
+/// without fallback (assoc parity).
 pub(crate) struct MethodOutcome {
     pub per_file: MethodFollowSpans,
     pub skipped: Vec<FollowSkip>,
@@ -405,7 +405,7 @@ pub(crate) fn resolve_method_workspace(
     };
     // Opaque gate: a macro-token / attribute mention of `old` vetoes
     // without fallback (assoc parity, never a silent skip).
-    let mut opaque: Vec<(String, u32)> = Vec::new();
+    let mut opaque: Vec<(String, u32, String)> = Vec::new();
     for (path, parsed, _, _) in files {
         struct V<'a> {
             old: &'a str,
@@ -427,22 +427,30 @@ pub(crate) fn resolve_method_workspace(
         };
         v.visit_file(parsed);
         for line in v.out {
-            opaque.push((path.clone(), line));
+            opaque.push((path.clone(), line, "a macro invocation".to_string()));
+        }
+        // Attribute paths and values (`#[old]`, `#[doc = old]`,
+        // `#[doc = S::old]`, `#[foo(old)]`) are equally opaque: they
+        // never resolve to the renamed method.
+        for (line, ctx) in file_attr_opaque(parsed, old) {
+            opaque.push((path.clone(), line, ctx));
         }
     }
+    opaque.sort();
+    opaque.dedup();
     if !opaque.is_empty() && !fallback_syntax {
-        let (path, line) = &opaque[0];
+        let (path, line, ctx) = &opaque[0];
         return Err(FollowVeto {
             reason: format!(
-                "use of `{old}` hides in a macro body at {path}:{line}: cannot attribute it syntactically"
+                "use of `{old}` inside {ctx} at {path}:{line}: cannot attribute it syntactically"
             ),
         });
     }
     let mut skipped: Vec<FollowSkip> = opaque
         .into_iter()
-        .map(|(f, l)| {
+        .map(|(f, l, ctx)| {
             FollowSkip::new(
-                format!("{f}:{l}: use of `{old}` inside a macro body left untouched (opaque)"),
+                format!("{f}:{l}: use of `{old}` inside {ctx} left untouched (opaque)"),
                 &f,
                 l,
                 skip_reason::MACRO_HIDDEN,

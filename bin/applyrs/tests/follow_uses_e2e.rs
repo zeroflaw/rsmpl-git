@@ -252,3 +252,119 @@ fn fn_attribute_value_vetoes_then_skips_with_fallback() {
     assert!(got.contains("new_fn();"), "got:\n{got}");
     assert!(got.contains("#[doc = old_fn]"), "value kept, got:\n{got}");
 }
+
+#[test]
+fn trait_method_attribute_value_vetoes_then_skips_with_fallback() {
+    // Attribute values are opaque to method renames (fn/item parity):
+    // bare (`#[doc = old]`), qualified (`#[doc = S::old]`), and list
+    // (`#[foo(old)]`) idents veto without fallback, rewrite def + impl
+    // def + anchored call and report `macro-hidden` with fallback while
+    // every value stays byte-verbatim. Pre-fix, the qualified value
+    // rewrote to `#[doc = S::new]` with `verified` and no orphans.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "trait Tr { fn old(&self); }\nstruct S;\nimpl Tr for S { fn old(&self) {} }\nfn f(s: S) { s.old(); }\n#[doc = old]\n#[doc = S::old]\n#[foo(old)]\nfn g() {}\n",
+    );
+    let patch = "diff --git src/lib.rs\n@@ -1,2 @@ rule=method_attr_val\n# follow=uses\n  trait Tr {\n-     fn old(&self);\n+     fn new(&self);\n";
+    let out = run_stdin(dir.path(), patch, &["--format", "json", "--check"]);
+    assert!(!out.status.success(), "opacity veto expected");
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["error"]["code"], "RSMPL_SYMBOL_CONFLICT", "got: {v}");
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("an attribute"),
+        "attr ctx named, got: {v}"
+    );
+
+    let patch_fb = "diff --git src/lib.rs\n@@ -1,2 @@ rule=method_attr_val\n# follow=uses\n# fallback=syntax\n  trait Tr {\n-     fn old(&self);\n+     fn new(&self);\n";
+    let out = run_stdin(
+        dir.path(),
+        patch_fb,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["checked"]["semantics"], "partial", "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"]
+        .as_array()
+        .expect("skips present");
+    for line in [5, 6, 7] {
+        assert!(
+            details
+                .iter()
+                .any(|d| d["line"] == line && d["reason"] == "macro-hidden"),
+            "attr line {line} named, got: {v}"
+        );
+    }
+
+    // Real apply: trait decl + impl def + anchored call rewrite, every
+    // attribute value verbatim.
+    let out = run_stdin(dir.path(), patch_fb, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("trait Tr { fn new(&self); }"), "got:\n{got}");
+    assert!(
+        got.contains("impl Tr for S { fn new(&self) {} }"),
+        "got:\n{got}"
+    );
+    assert!(got.contains("s.new();"), "got:\n{got}");
+    assert!(got.contains("#[doc = old]"), "bare value kept, got:\n{got}");
+    assert!(
+        got.contains("#[doc = S::old]"),
+        "qualified kept, got:\n{got}"
+    );
+    assert!(got.contains("#[foo(old)]"), "list kept, got:\n{got}");
+}
+
+#[test]
+fn trait_method_attribute_string_literal_stays_silent() {
+    // String literals are not idents: `#[doc = "old"]` never fires the
+    // opacity gate — `verified`, no skips, untouched.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "trait Tr { fn old(&self); }\nstruct S;\nimpl Tr for S { fn old(&self) {} }\nfn f(s: S) { s.old(); }\n#[doc = \"old\"]\nfn g() {}\n",
+    );
+    let patch_fb = "diff --git src/lib.rs\n@@ -1,2 @@ rule=method_attr_lit\n# follow=uses\n  trait Tr {\n-     fn old(&self);\n+     fn new(&self);\n";
+    let out = run_stdin(
+        dir.path(),
+        patch_fb,
+        &["--format", "json", "--diff-max-lines", "0", "--check"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    assert_eq!(v["checked"]["semantics"], "verified", "got: {v}");
+
+    let out = run_stdin(dir.path(), patch_fb, &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = read(dir.path(), "src/lib.rs");
+    assert!(got.contains("s.new();"), "got:\n{got}");
+    assert!(
+        got.contains("#[doc = \"old\"]"),
+        "literal kept, got:\n{got}"
+    );
+}

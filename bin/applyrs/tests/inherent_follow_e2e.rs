@@ -189,3 +189,51 @@ fn inherent_two_hop_chain_skips_chain_depth() {
     // No `cargo check`: the definition renamed while the skipped call
     // still names `old` — the evidence (not the build) is the pin.
 }
+
+#[test]
+fn inherent_attribute_value_vetoes_then_skips_with_fallback() {
+    // Attribute values are opaque to inherent-method renames (trait
+    // parity): `#[doc = S::old]` vetoes without fallback, rewrites def
+    // + anchored call and reports `macro-hidden` with fallback while
+    // the value stays byte-verbatim. Pre-fix, the value rewrote to
+    // `#[doc = S::new]` with `verified` and no orphans.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub struct S;\nimpl S {\n    pub fn old(&self) {}\n}\npub fn f(s: &S) {\n    s.old();\n}\n#[doc = S::old]\nfn g() {}\n",
+    );
+    let out = run_stdin(dir.path(), INHERENT_PATCH, &["--format", "json", "--check"]);
+    assert!(!out.status.success(), "opacity veto expected");
+    let v = json_of(&out);
+    assert_eq!(v["error"]["code"], "RSMPL_SYMBOL_CONFLICT", "got: {v}");
+    assert!(
+        v["error"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("an attribute"),
+        "attr ctx named, got: {v}"
+    );
+
+    let patch_fb = INHERENT_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
+    let v = check_json(dir.path(), &patch_fb);
+    assert_eq!(v["checked"]["semantics"], "partial", "got: {v}");
+    let details = v["rules"][0]["follow_skipped_details"]
+        .as_array()
+        .expect("skips present");
+    assert!(
+        details
+            .iter()
+            .any(|d| d["line"] == 8 && d["reason"] == "macro-hidden"),
+        "attr line named, got: {v}"
+    );
+
+    // Real apply: def + anchored call rewrite, attribute verbatim.
+    // No `cargo check`: `#[doc = S::old]` is intentionally non-code
+    // (an opaque value, never compiled as a path) — the byte-compare
+    // below is the pin.
+    apply_patch(dir.path(), &patch_fb);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("pub fn new(&self) {}"), "got: {post}");
+    assert!(post.contains("s.new();"), "got: {post}");
+    assert!(post.contains("#[doc = S::old]"), "value kept, got: {post}");
+}
