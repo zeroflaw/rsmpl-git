@@ -39,6 +39,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::item_intent_sites::{is_dedicated_use_site, is_fn_call_use_site, is_fn_use_tail_site};
 use super::{split_item, try_item_rename, unique_rule};
 
 /// One native pair at its old-side site.
@@ -189,6 +190,10 @@ pub(crate) fn try_item_intent_sweep(
     let mut old_ident = String::new();
     let mut new_ident = String::new();
     let mut def_prefix = String::new();
+    // WI-5 slice 1: `fn` rename + single vis/qual evolution joint (at
+    // most one def of either kind per patch).
+    let mut def_is_fn_joint = false;
+    let mut joint_new_prefix = String::new();
     for (i, pair) in pairs.iter().enumerate() {
         if let Some((prefix, kind, old, new)) = split_delta(&pair.minus, &pair.plus) {
             if def_idx.is_some() {
@@ -200,6 +205,21 @@ pub(crate) fn try_item_intent_sweep(
             old_ident = old;
             new_ident = new;
             def_prefix = prefix;
+        } else if let Some(j) =
+            super::item_joint_visqual::classify_fn_visqual_joint(&pair.minus, &pair.plus)
+        {
+            // A second def of either kind vetoes (never a partial pair).
+            if def_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+            def_idx = Some(i);
+            def_kind = "fn".to_string();
+            old_ident = j.old;
+            new_ident = j.new;
+            def_prefix = j.old_prefix.clone();
+            joint_new_prefix = j.new_prefix;
+            def_is_fn_joint = true;
         }
     }
     let def_idx = def_idx?;
@@ -446,8 +466,15 @@ pub(crate) fn try_item_intent_sweep(
     }
     // Twin-definition veto (unique-definition rule, SPEC 14.8): exactly
     // one `split_item` definition of `old` with the def kind across
-    // the involved pre-images (claimed set).
-    if count_kind_defs(pre, &claimed_pairs, &def_kind, &old_ident) != 1 {
+    // the involved pre-images (claimed set). The WI-5 slice-1 fn joint
+    // counts column-0 `fn old` headers of every vis/qual spelling
+    // instead (`split_item` misses qualifier-bearing headers, so a
+    // twin `async fn old` would slip the pure veto).
+    if def_is_fn_joint {
+        if super::item_joint_visqual::count_fn_defs(pre, &claimed_pairs, &old_ident) != 1 {
+            return None;
+        }
+    } else if count_kind_defs(pre, &claimed_pairs, &def_kind, &old_ident) != 1 {
         return None;
     }
     // The def pair must be emittable as a lone item rename (terse-`fn`
@@ -458,8 +485,10 @@ pub(crate) fn try_item_intent_sweep(
     // with equal suffixes (any signature); `try_item_rename` suffix
     // laws are skipped (`->` fns carry them; the scratch probe below
     // subsumes the check since the concrete-vis terse emission always
-    // parses).
-    if is_fn_intent {
+    // parses). The WI-5 slice-1 fn joint skips this gate: its vis/qual
+    // spellings were proved by the joint classifier (which admits
+    // qualifier-bearing old prefixes the closed vis set rejects).
+    if is_fn_intent && !def_is_fn_joint {
         if !is_fn_vis_prefix(&def_prefix) {
             return None;
         }
@@ -468,7 +497,7 @@ pub(crate) fn try_item_intent_sweep(
         if contains_ident(&def_prefix, &old_ident) {
             return None;
         }
-    } else {
+    } else if !is_fn_intent {
         let mut probe_used = vec![format!("probe{}", used_rules.len())];
         let def_pre = pre.get(&def.path).map(String::as_str);
         try_item_rename(
@@ -483,76 +512,98 @@ pub(crate) fn try_item_intent_sweep(
     // Build the emission: sweep dummy + follow + def pair (WI-5: the
     // attr delta rides above the def pair in the joint arm; slice 2b:
     // the member delta rides below it — field and variant joints share
-    // the def-above-member emit).
+    // the def-above-member emit; WI-5 slice 1: the fn vis/qual joint
+    // emits the concrete evolved terse pair through its own arm, and
+    // joints never stack (at most one intent per patch).
     let rule = unique_rule(used_rules, &format!("rename_{old_ident}_to_{new_ident}"));
-    let emission = match (
-        attr_joint,
-        field_joint,
-        variant_joint,
-        add_joint.as_ref(),
-        variant_add_joint.as_ref(),
-    ) {
-        (Some(api), None, None, None, None) => super::item_joint_attr::joint_emit(
-            &def.path,
-            &rule,
-            &def_kind,
-            &def_prefix,
-            &old_ident,
-            &new_ident,
-            &pairs[api].minus,
-            &pairs[api].plus,
-        ),
-        (None, Some(fpi), None, None, None) => super::item_joint_field_evo::joint_emit(
-            &def.path,
-            &rule,
-            &def_kind,
-            &def_prefix,
-            &old_ident,
-            &new_ident,
-            &pairs[fpi].minus,
-            &pairs[fpi].plus,
-        ),
-        (None, None, Some(vpi), None, None) => super::item_joint_field_evo::joint_emit(
-            &def.path,
-            &rule,
-            &def_kind,
-            &def_prefix,
-            &old_ident,
-            &new_ident,
-            &pairs[vpi].minus,
-            &pairs[vpi].plus,
-        ),
-        (None, None, None, Some(add), None) => super::item_joint_field_add::add_emit(
-            &def.path,
-            &rule,
-            &def_kind,
-            &def_prefix,
-            &old_ident,
-            &new_ident,
-            add.point,
-            &add.member_plus,
-        ),
-        (None, None, None, None, Some(add)) => super::item_joint_field_add::variant_add_emit(
-            &def.path,
-            &rule,
-            &def_kind,
-            &def_prefix,
-            &old_ident,
-            &new_ident,
-            add.point,
-            &add.member_plus,
-        ),
-        (None, None, None, None, None) => super::item_joint_attr::emit(
-            &def.path,
-            &rule,
-            &def_kind,
-            &def_prefix,
-            &old_ident,
-            &new_ident,
-        ),
-        _ => {
+    let emission = if def_is_fn_joint {
+        if attr_joint.is_some()
+            || field_joint.is_some()
+            || variant_joint.is_some()
+            || add_joint.is_some()
+            || variant_add_joint.is_some()
+        {
             used_rules.truncate(checkpoint);
             return None;
+        }
+        super::item_joint_visqual::joint_emit(
+            &def.path,
+            &rule,
+            &def_prefix,
+            &old_ident,
+            &joint_new_prefix,
+            &new_ident,
+        )
+    } else {
+        match (
+            attr_joint,
+            field_joint,
+            variant_joint,
+            add_joint.as_ref(),
+            variant_add_joint.as_ref(),
+        ) {
+            (Some(api), None, None, None, None) => super::item_joint_attr::joint_emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &new_ident,
+                &pairs[api].minus,
+                &pairs[api].plus,
+            ),
+            (None, Some(fpi), None, None, None) => super::item_joint_field_evo::joint_emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &new_ident,
+                &pairs[fpi].minus,
+                &pairs[fpi].plus,
+            ),
+            (None, None, Some(vpi), None, None) => super::item_joint_field_evo::joint_emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &new_ident,
+                &pairs[vpi].minus,
+                &pairs[vpi].plus,
+            ),
+            (None, None, None, Some(add), None) => super::item_joint_field_add::add_emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &new_ident,
+                add.point,
+                &add.member_plus,
+            ),
+            (None, None, None, None, Some(add)) => super::item_joint_field_add::variant_add_emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &new_ident,
+                add.point,
+                &add.member_plus,
+            ),
+            (None, None, None, None, None) => super::item_joint_attr::emit(
+                &def.path,
+                &rule,
+                &def_kind,
+                &def_prefix,
+                &old_ident,
+                &new_ident,
+            ),
+            _ => {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
         }
     };
     // Scratch-apply probe: every claimed site must show its native plus
@@ -737,199 +788,6 @@ fn contains_ident(haystack: &str, needle: &str) -> bool {
     false
 }
 
-/// True when the use line's changed subterm sits in a dedicated
-/// detector's position: a call callee or macro head naming `old`
-/// (`Old(1)`, `m::Old::<T>(x)`, `old!(…)` incl. `let`-wrapped). Those
-/// classes keep their pinned shapes; everything else (impl/fn headers,
-/// type positions, struct literals/patterns, `use` lines, bare value
-/// paths) stays claimable for the probe.
-fn is_dedicated_use_site(minus: &str, old: &str) -> bool {
-    let mut text = minus.trim();
-    if let Some(stripped) = super::strip_one_terminator(text) {
-        text = stripped.trim_end();
-    }
-    if text.is_empty() {
-        return false;
-    }
-    if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
-        if is_dedicated_expr(&expr, old) {
-            return true;
-        }
-    }
-    // `let`-wrapped sites (`let b = old!(…);`) parse as statements.
-    if let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(minus.trim()) {
-        if let Some(init) = local.init {
-            if is_dedicated_expr(&init.expr, old) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// WI-9: true when the use line's changed subterm is a *call callee*
-/// naming `old` — the plain-`fn` follow domain (bare, qualified,
-/// turbofish; `let`-wrapped included). Method calls, fields, bare
-/// value paths, macro heads, and `use` lines all return false and
-/// veto the `fn` intent. Arguments never count — only the head.
-fn is_fn_call_use_site(minus: &str, old: &str) -> bool {
-    let mut text = minus.trim();
-    if let Some(stripped) = super::strip_one_terminator(text) {
-        text = stripped.trim_end();
-    }
-    if text.is_empty() {
-        return false;
-    }
-    if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
-        if is_fn_call_expr(&expr, old) {
-            return true;
-        }
-    }
-    if let Ok(syn::Stmt::Local(local)) = syn::parse_str::<syn::Stmt>(minus.trim()) {
-        if let Some(init) = local.init {
-            if is_fn_call_expr(&init.expr, old) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// WI-2: true when the pair is a `use`-tail delta renaming exactly one
-/// leaf ident `old` → `new` at a tail-or-direct-group-member position:
-/// plain tails (`use crate::a::foo;`), grouped members
-/// (`use crate::a::{foo, Other};`), `as`-preserving
-/// (`use crate::a::foo as f;`), and `pub use` re-export forms. Both
-/// lines must parse as `syn::ItemUse` with equal vis/attrs; glob trees,
-/// nested member paths (`crate::{x::foo}` suffix), intermediate-segment
-/// changes (`crate::foo::Bar`), and vis/attr deltas all return false.
-/// The workspace scratch-apply probe below stays authoritative
-/// (second-hop re-exports and off-diff same-tail uses veto there).
-fn is_fn_use_tail_site(minus: &str, plus: &str, old: &str, new: &str) -> bool {
-    let minus_item: syn::ItemUse = match syn::parse_str(minus.trim()) {
-        Ok(item) => item,
-        Err(_) => return false,
-    };
-    let plus_item: syn::ItemUse = match syn::parse_str(plus.trim()) {
-        Ok(item) => item,
-        Err(_) => return false,
-    };
-    let minus_vis = &minus_item.vis;
-    let plus_vis = &plus_item.vis;
-    if quote::quote!(#minus_vis).to_string() != quote::quote!(#plus_vis).to_string() {
-        return false;
-    }
-    if minus_item.leading_colon != plus_item.leading_colon {
-        return false;
-    }
-    if minus_item.attrs.len() != plus_item.attrs.len() {
-        return false;
-    }
-    for (a, b) in minus_item.attrs.iter().zip(plus_item.attrs.iter()) {
-        if quote::quote!(#a).to_string() != quote::quote!(#b).to_string() {
-            return false;
-        }
-    }
-    match use_tree_single_tail_delta(&minus_item.tree, &plus_item.tree, old, new, false) {
-        Some(count) => count == 1,
-        None => false,
-    }
-}
-
-/// Single-tail delta walk over two `use` trees: `Some(n)` when the trees
-/// are structurally identical except for `n` leaf `old` → `new` swaps at
-/// allowed tail positions, `None` on any other divergence (glob, vis
-/// already checked above, mismatched variants, intermediate changes).
-/// `in_group` is true inside a `{…}` member list: a change under a
-/// nested `Path` there (`{x::foo}`) is a suffix and vetoes.
-fn use_tree_single_tail_delta(
-    minus: &syn::UseTree,
-    plus: &syn::UseTree,
-    old: &str,
-    new: &str,
-    in_group: bool,
-) -> Option<u32> {
-    match (minus, plus) {
-        (syn::UseTree::Path(m), syn::UseTree::Path(p)) => {
-            if m.ident != p.ident {
-                return None;
-            }
-            let inner = use_tree_single_tail_delta(&m.tree, &p.tree, old, new, in_group)?;
-            if inner > 0 && in_group {
-                return None;
-            }
-            Some(inner)
-        }
-        (syn::UseTree::Name(m), syn::UseTree::Name(p)) => {
-            if m.ident == p.ident {
-                Some(0)
-            } else if m.ident == old && p.ident == new {
-                Some(1)
-            } else {
-                None
-            }
-        }
-        (syn::UseTree::Rename(m), syn::UseTree::Rename(p)) => {
-            if m.rename != p.rename {
-                return None;
-            }
-            if m.ident == p.ident {
-                Some(0)
-            } else if m.ident == old && p.ident == new {
-                Some(1)
-            } else {
-                None
-            }
-        }
-        (syn::UseTree::Group(m), syn::UseTree::Group(p)) => {
-            if m.items.len() != p.items.len() {
-                return None;
-            }
-            let mut total = 0u32;
-            for (mm, pp) in m.items.iter().zip(p.items.iter()) {
-                total += use_tree_single_tail_delta(mm, pp, old, new, true)?;
-            }
-            Some(total)
-        }
-        _ => None,
-    }
-}
-
-/// True for call callees naming `old` (qualified and turbofish
-/// spellings included — the engine's scalar follow rewrites them;
-/// method calls never count: different namespace).
-fn is_fn_call_expr(expr: &syn::Expr, old: &str) -> bool {
-    match expr {
-        syn::Expr::Call(call) => {
-            if let syn::Expr::Path(path) = call.func.as_ref() {
-                path.qself.is_none() && path.path.segments.last().is_some_and(|s| s.ident == old)
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
-}
-
-/// True for call callees and macro heads naming `old` (qualified and
-/// turbofish spellings included; arguments never count — only the
-/// head position).
-fn is_dedicated_expr(expr: &syn::Expr, old: &str) -> bool {
-    match expr {
-        syn::Expr::Call(call) => {
-            if let syn::Expr::Path(path) = call.func.as_ref() {
-                if path.qself.is_none() && path.path.segments.last().is_some_and(|s| s.ident == old)
-                {
-                    return true;
-                }
-            }
-            false
-        }
-        syn::Expr::Macro(m) => m.mac.path.segments.last().is_some_and(|s| s.ident == old),
-        _ => false,
-    }
-}
-
 /// Count `split_item` definitions of (`kind`, `ident`) across the
 /// involved pre-images (one line per definition).
 pub(crate) fn count_kind_defs(
@@ -1010,6 +868,9 @@ pub(crate) fn probe_reproduces(
 #[cfg(test)]
 mod tests {
     use super::super::infer_semantic_with_pre_images;
+    use super::super::item_intent_sites::{
+        is_dedicated_use_site, is_fn_call_use_site, is_fn_use_tail_site,
+    };
     use super::*;
     use std::collections::HashMap;
 
@@ -1603,8 +1464,9 @@ mod tests {
     }
 
     #[test]
-    fn fn_intent_vis_change_vetoes() {
-        // A vis delta is an evolution (WI-14's domain), never this arm.
+    fn fn_intent_vis_change_fires_as_joint() {
+        // WI-5 slice 1: a rename + single vis evolution joins the
+        // follow (the concrete evolved terse pair, never a `V` hole).
         let sections = vec![
             "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) -> i32 {\n+pub(crate) fn bar(x: i32) -> i32 {\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
                 .to_string(),
@@ -1614,8 +1476,83 @@ mod tests {
             "pub fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n}\n",
         )]);
         let mut used = Vec::new();
-        assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
-        assert!(used.is_empty());
+        let (out, _, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("vis joint must fire");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("# follow=uses"), "got:\n{}", out[0]);
+        assert!(out[0].contains("- pub fn foo"), "got:\n{}", out[0]);
+        assert!(out[0].contains("+ pub(crate) fn bar"), "got:\n{}", out[0]);
+        assert!(
+            !out[0].contains("# visibility"),
+            "never a `V` hole, got:\n{}",
+            out[0]
+        );
+        validated_live(&out[0], &pre);
+        let parsed = rsmpl_patch::parse_patch(&out[0]).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            files["src/lib.rs"].contains("pub(crate) fn bar(x: i32) -> i32 {"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            !files["src/lib.rs"].contains("foo"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        // Full pipeline raises the same joint hunk.
+        let e2e = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
+        assert!(e2e.contains("- pub fn foo"), "got:\n{e2e}");
+        assert!(e2e.contains("+ pub(crate) fn bar"), "got:\n{e2e}");
+    }
+
+    #[test]
+    fn fn_intent_qual_change_fires_as_joint() {
+        // WI-5 slice 1, qualifier half: `fn` → `async fn` alongside the
+        // rename, same follow shape.
+        let sections = vec![
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+async fn bar(x: i32) -> i32 {\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+                .to_string(),
+        ];
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn main() {\n    let a = foo(1);\n}\n",
+        )]);
+        let mut used = Vec::new();
+        let (out, _, _) =
+            try_item_intent_sweep(&sections, &pre, &mut used).expect("qual joint must fire");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].contains("- fn foo"), "got:\n{}", out[0]);
+        assert!(out[0].contains("+ async fn bar"), "got:\n{}", out[0]);
+        validated_live(&out[0], &pre);
+        let e2e = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
+        assert!(e2e.contains("+ async fn bar"), "got:\n{e2e}");
+    }
+
+    #[test]
+    fn fn_intent_double_slot_joint_vetoes() {
+        // Two evolving slots (vis + return, vis + qual) never joint —
+        // the signature domain (`fn_joint`) or ordinary owns them.
+        for (def_minus, def_plus) in [
+            ("pub fn foo() {", "pub(crate) fn bar() -> i32 {"),
+            ("fn foo() {", "pub async fn bar() {"),
+            ("fn foo(x: i32) {", "pub fn bar(x: u32) {"),
+        ] {
+            let sections = vec![format!(
+                "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-{def_minus}\n+{def_plus}\n@@ -3,1 +3,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+            )];
+            let pre = pre_map(&[(
+                "src/lib.rs",
+                "fn foo() {\n}\nfn main() {\n    let a = foo(1);\n}\n",
+            )]);
+            let mut used = Vec::new();
+            assert!(
+                try_item_intent_sweep(&sections, &pre, &mut used).is_none(),
+                "{def_minus} → {def_plus} must stay ordinary"
+            );
+            assert!(used.is_empty());
+        }
     }
 
     #[test]

@@ -7523,13 +7523,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   one concrete vis; `# sweep` already carries file scope at any
   spread). One-line definitions (`fn foo(x: i32) -> i32 { x }`) join
   the same way when the bodies are token-identical (the suffix covers
-  the body). `pub(…)` paths naming the old ident itself, vis changes,
-  signature evolutions, method calls, fields, bare value paths, macro
-  heads, glob `use` shapes, nested member paths (`crate::{x::old}`
-  suffixes), intermediate-segment changes, and second-hop re-exports
-  veto the whole intent (never a partial claim); the probe doubles as
-  the uniqueness guard (an off-diff same-name call or same-tail `use`
-  fails the unchanged-leg).
+   the body). `pub(…)` paths naming the old ident itself, signature
+   evolutions, method calls, fields, bare value paths, macro heads,
+   glob `use` shapes, nested member paths (`crate::{x::old}`
+   suffixes), intermediate-segment changes, and second-hop re-exports
+   veto the whole intent (never a partial claim; a vis/qual evolution
+   alongside the rename is the joint paragraph below, never this pure
+   arm); the probe doubles as the uniqueness guard (an off-diff
+   same-name call or same-tail `use` fails the unchanged-leg).
   Item rename+attr joint (WI-5 slice 1, same detector): one definition
   rename pair plus exactly one attached attr-delta pair (same file,
   attr line directly above the def line) joined with at least one
@@ -7537,9 +7538,27 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   above the def pair (the authored Preserve-delta spelling). Double
   attr deltas, detached attr hunks, non-attr co-residents, `fn` defs
   (WI-4 B2 owns those), and attr+def without a use stay ordinary
-   (a detached attr hunk falls back to the pure rename intent with the
-   attr left ordinary). Variant-add, multi-addition, and cross-file-member
-   joints stay ordinary (future slices).
+ (a detached attr hunk falls back to the pure rename intent with the
+ attr left ordinary). Variant-add, multi-addition, and cross-file-member
+ joints stay ordinary (future slices).
+  Item rename+vis/qual joint (WI-5 slice 1, same detector): a
+  top-level `fn` definition pair differing in the name plus exactly
+  one of {visibility, qualifier-list} (`pub fn foo` →
+  `pub(crate) fn bar`, `fn foo` → `async fn bar`;
+  generics/params/return/`where` token-equal) joined with at least one
+  claimable use from the pure arm's domain (call-callee lines,
+  `use`-tail deltas) emits the follow hunk with the concrete evolved
+  terse pair (`- pub fn foo` / `+ pub(crate) fn bar` — never a `V`/`Q`
+  hole: the intent proved one concrete evolution, and the engine lowers
+  rename+vis/qual simultaneously). Two evolving slots,
+  `extern "ABI"` qualifiers, self-referential vis (`pub(in old)`),
+  indented (method) headers, `;` decls, multi-line headers, twin
+  definitions (counted over every vis/qual spelling of `fn old`),
+  unbalanced sections, and missing pre-images veto the whole intent
+  (the joint probe doubles as the uniqueness guard). Bare-item
+  (`struct`/`enum`/`trait`/`type`/`const`/`static`/`mod`)
+  rename+vis/qual joints stay ordinary (future slice: `ItemRename` is
+  rename-only — pattern and engine work).
 - Joint `impl Trait for Type` raising (WI-3, detector `item_joint_impl`):
   exactly one `trait` definition rename pair plus exactly one self-type
   definition rename pair (`struct`/`enum`/`union`) plus exactly one
@@ -7572,9 +7591,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T` bytes (`H` = hunks,
   claiming otherwise would fail its own probe). Totality is the same
   scratch-apply probe plus the unique-definition guard and the
   byte-win guard. Claim-then-veto suppresses instead of fragmenting:
-   a joint shape that fails any fire gate (body/attr delta, arg-delta
-   calls, vis/qual/generics/where delta, twin defs, probe or byte-win
-   fail) suppresses its old callee name for each involved file, so the call
+  a joint shape that fails any fire gate (body/attr delta, arg-delta
+  calls, generics/where delta, vis/qual deltas the `item_intent`
+  vis/qual joint declines, twin defs, probe or byte-win fail)
+  suppresses its old callee name for each involved file, so the call
   hunks stay wholly ordinary instead of emitting a rename-claiming
   sweep over a definition delta they cannot see.
 - Joint-B composition raising (WI-4b, detector `fn_joint`): the two
@@ -9266,7 +9286,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(128), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(129), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

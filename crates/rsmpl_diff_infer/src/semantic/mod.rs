@@ -74,10 +74,12 @@ mod verbatim;
 // paths keep working.
 mod hybrid;
 mod item_intent;
+mod item_intent_sites;
 mod item_joint_attr;
 mod item_joint_field_add;
 mod item_joint_field_evo;
 mod item_joint_impl;
+mod item_joint_visqual;
 mod item_span;
 mod mod_rename;
 
