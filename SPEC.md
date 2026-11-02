@@ -9497,7 +9497,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   spellings always win; `guard_for("verbatim")` stays Strict for
   multis. In subhunk runs a declined whole still tries the bounded
   split-search before per-pair singles, so literal keys never shadow
-  the hetero multis their pairs belong to (bench 48).
+  the hetero multis their pairs belong to (bench 48). WI-6 slice 2:
+  array-repeat (`[E; N]`, elem plus length structural) and `&raw`
+  addr (mutability token-equal, pointee structural) join the shared
+  shape gate — both match structurally in the engine since WI-2a, so
+  the raiser admits them alongside every other structural shape;
+  macro invocations stay vetoed (token-equal engine arm plus
+  macro-body opacity, Section 21).
   All seven metavar sweeps carry the same pre-image subterm totality
   (T409): matchable-unit count (calls/methods by callee+arity, same-method
   literals by method+old-args, strips by method+args, slots by fn ident

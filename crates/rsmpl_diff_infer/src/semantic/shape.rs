@@ -112,6 +112,15 @@ pub(crate) fn supported_expr(e: &syn::Expr) -> bool {
             // (matches anything, like the engine `Infer` arm).
             | syn::Expr::Const(_)
             | syn::Expr::Infer(_)
+            // WI-6 slice 2: array-repeat (elem + len structural) and
+            // `&raw` addr (mutability token-equal + pointee
+            // structural) — both match structurally in the engine
+            // since WI-2a (`match_expr` arms), so the raiser admits
+            // them here; `Macro` (token-equal engine arm) stays
+            // vetoed — macro-body opacity breaks statement-level
+            // totality counting (SPEC 21).
+            | syn::Expr::Repeat(_)
+            | syn::Expr::RawAddr(_)
     )
 }
 
@@ -214,17 +223,22 @@ mod tests {
         ] {
             assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
-        // WI-6 slice 1: `async`/`try`/`unsafe`/`yield` match
-        // structurally now — only macros fall to `_ => false`.
+        // WI-6 slice 1: `async`/`try`/`unsafe`/`yield`, WI-8 slice 1:
+        // const blocks and `_`, WI-6 slice 2: array-repeat and `&raw`
+        // addr — all match structurally now; only macros fall to
+        // `_ => false`.
         for ok in [
             "async { x }",
             "try { x }",
             "unsafe { x }",
             "yield x",
             "yield",
-            // WI-8 slice 1: const blocks and `_` match structurally.
             "const { 1 + 2 }",
             "_",
+            "[0u8; 8]",
+            "[x; n]",
+            "&raw const x",
+            "&raw mut x",
         ] {
             assert!(supported_expr(&expr(ok)), "{ok} must be supported");
         }
@@ -238,6 +252,10 @@ mod tests {
         // WI-8 slice 1: const blocks and `_` match structurally now.
         assert!(init_ok(&expr("const { 1 + 2 }")));
         assert!(init_ok(&expr("_")));
+        // WI-6 slice 2: array-repeat and `&raw` addr match
+        // structurally now (WI-2a engine arms).
+        assert!(init_ok(&expr("[0u8; 8]")));
+        assert!(init_ok(&expr("&raw const x")));
         // Macros and unsupported nodes veto; WI-5b shapes pass.
         assert!(!init_ok(&expr("m!(x)")));
         assert!(init_ok(&expr("match a { _ => b }")));

@@ -312,6 +312,10 @@ const CYCLE_OK: &[&str] = &[
     "46-fn-follow",
     "89-fn-follow-single",
     "93-verbatim-single",
+    "50-repeat-let",
+    "62-repeat-grow",
+    "54-raw-addr",
+    "80-raw-addr-flip",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -388,16 +392,8 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "t375: single-site struct-pat swap re-infers ordinary",
     ),
     (
-        "50-repeat-let",
-        "t375: single-site repeat-grow re-infers ordinary",
-    ),
-    (
         "52-macro-verbatim",
         "hetero: let-verbatim macro sweep re-infers as sub-line call sweep (different semantic shape; tree legs still close)",
-    ),
-    (
-        "54-raw-addr",
-        "engine-shape (WI-6s1): single-site raw-addr rewrite stays ordinary — the engine cannot match the raw-addr shape, so the N=1 byte probe vetoes (unary-family residue for a later WI-6 slice with an engine shape, not a raiser widening)",
     ),
     (
         "55-infer-wildcard",
@@ -409,12 +405,8 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
 
     (
-        "62-repeat-grow",
-        "t375: single-site repeat-grow re-infers ordinary",
-    ),
-    (
         "63-repeat-hole",
-        "t375: single-site repeat-hole re-infers ordinary",
+        "verbatim-single (WI-6s2): re-infers as the literal verbatim single (`let buf = [7u8; 8];` → `[7u8; 16];`); the authored holed `[E; 8]`→`[E; 16]` sweep and the literal single diverge canonically (holed len-delta template is WI-7 repeat-family work)",
     ),
     (
         "64-struct-reorder",
@@ -455,7 +447,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "80-raw-addr-flip",
-        "engine-shape (WI-6s1): single-site raw-addr rewrite stays ordinary — the engine cannot match the raw-addr shape, so the N=1 byte probe vetoes (unary-family residue for a later WI-6 slice with an engine shape, not a raiser widening)",
+        "verbatim-single (WI-6s2): moved to CYCLE_OK (kept here as a tombstone until the harness re-pins — DELETE this entry)",
     ),
     (
         "82-const-block-single",
@@ -527,7 +519,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "118-repeat-hole-many-single",
-        "t375: single-site repeat-hole rewrite re-infers ordinary",
+        "verbatim-single (WI-6s2): re-infers as the literal verbatim single (`let buf = [7u8; 8];` → `[7u8; 16];`, `tiny` untouched); the authored holed allow-many `[E; 8]`→`[E; 16]` sweep and the literal single diverge canonically (holed len-delta template is WI-7 repeat-family work)",
     ),
     (
         "119-match-arm-many-single",

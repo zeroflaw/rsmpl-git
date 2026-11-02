@@ -1434,32 +1434,85 @@ mod tests {
     }
 
     #[test]
-    fn wi6_verbatim_single_raw_addr_stays_ordinary() {
-        // Probed: `&raw const/mut` pairs stay ordinary — the engine
-        // cannot match the raw-addr shape, so the byte probe vetoes.
-        // This pins the WI-6 unary-family residue for a later slice
-        // (it must arrive with an engine shape, not a raiser widening).
+    fn wi6s2_verbatim_single_repeat_len_fires_allow_one() {
+        // WI-6 slice 2: the 50/62 shape — an array-length change no
+        // holed single owns raises as a literal allow-one `let` hunk
+        // (Repeat matches structurally in the engine since WI-2a; the
+        // raiser gate admits it via shared `supported_expr`).
+        let pre = "fn f() {\n    let buf = [0u8; 8];\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2 +2 @@\n-    let buf = [0u8; 8];\n+    let buf = [0u8; 16];\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("unique repeat-len single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        assert!(!out.contains("# sweep"), "ranged single: {out}");
+        assert!(out.contains("- let buf = [0u8; 8];\n"), "got: {out}");
+        assert!(out.contains("+ let buf = [0u8; 16];\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let out2 =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("must fire");
+        assert_eq!(out, out2, "fixed point");
+    }
+
+    #[test]
+    fn wi6s2_verbatim_single_repeat_twin_vetoes() {
+        // Uniqueness at n=1 for the repeat shape: an unchanged twin
+        // of the minus site over-counts (2 != 1) and stays ordinary.
+        assert!(
+            vsingle(
+                "    let buf = [0u8; 8];",
+                "    let buf = [0u8; 16];",
+                Some("fn f() {\n    let buf = [0u8; 8];\n    let buf = [0u8; 8];\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "same-minus repeat twin must veto"
+        );
+        // Novelty gate (WI-5b): a plus-side uppercase ident absent
+        // from minus would infer as an unbound hole on apply.
+        assert!(
+            vsingle(
+                "    let buf = [0u8; 8];",
+                "    let buf = [N; 8];",
+                Some("fn f() {\n    let buf = [0u8; 8];\n}\n"),
+                &[2]
+            )
+            .is_none(),
+            "plus-introduced uppercase elem must decline"
+        );
+    }
+
+    #[test]
+    fn wi6s2_verbatim_single_raw_addr_fires_allow_one() {
+        // WI-6 slice 2: the 54/80 shape — a `&raw` mutability flip no
+        // holed single owns raises as a literal allow-one `let` hunk
+        // (RawAddr matches structurally in the engine since WI-2a;
+        // the slice-1 "stays ordinary" pin below is superseded — the
+        // engine shape it waited for already existed).
         let pre = "fn m() {\n    let p = &raw const x;\n}\n";
         let raw = section(
             "f.rs",
             "@@ -2 +2 @@\n-    let p = &raw const x;\n+    let p = &raw mut x;\n",
         );
         let pre_map = pre_map(&[("f.rs", pre)]);
-        assert!(
-            vsingle(
-                "    let p = &raw const x;",
-                "    let p = &raw mut x;",
-                Some(pre),
-                &[2]
-            )
-            .is_none(),
-            "raw-addr single must decline at HEAD"
-        );
-        assert!(
+        let out =
             crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
-                .is_none(),
-            "raw-addr section stays ordinary end-to-end"
-        );
+                .expect("unique raw-addr single must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "allow-one: {out}");
+        assert!(out.contains("- let p = &raw const x;\n"), "got: {out}");
+        assert!(out.contains("+ let p = &raw mut x;\n"), "got: {out}");
+        validated_live(&out, &pre_map);
+        let out2 =
+            crate::semantic::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("must fire");
+        assert_eq!(out, out2, "fixed point");
     }
 
     #[test]
