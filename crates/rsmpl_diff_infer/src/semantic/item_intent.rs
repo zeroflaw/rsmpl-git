@@ -85,6 +85,9 @@ pub(crate) fn try_item_intent_sweep(
     // (shape-A insertions) + decomposed shape-B records.
     let mut unbals: Vec<super::item_joint_field_add::Unbal> = Vec::new();
     let mut shape_bs: Vec<super::item_joint_field_add::ShapeB> = Vec::new();
+    // WI-21 slice 1: decomposed shape-B deletion records (2 minus, 1
+    // plus: def rename + adjacent field deletion).
+    let mut del_shape_bs: Vec<super::item_joint_delete::DelShapeB> = Vec::new();
     for (i, sec) in sections.iter().enumerate() {
         let header = sec.lines().next().unwrap_or("");
         if !header.starts_with("diff --git ") || sec.contains('\r') {
@@ -143,7 +146,10 @@ pub(crate) fn try_item_intent_sweep(
         if !he.balanced {
             // Shape B (1 minus, 2 plus: def rename + adjacent field
             // line) decomposes to a virtual def pair; every other
-            // unbalanced shape stays skipped as before.
+            // unbalanced shape stays skipped as before. WI-21 slice 1:
+            // shape-B deletion (2 minus, 1 plus: def rename + adjacent
+            // field deletion) decomposes the same way (disjoint by
+            // counts, so at most one fires per hunk).
             if let Some((dm, dp, add_plus, point)) =
                 super::item_joint_field_add::decompose_shape_b(&he.minuses, &he.pluses, &he.text)
             {
@@ -161,6 +167,24 @@ pub(crate) fn try_item_intent_sweep(
                     path: he.path.clone(),
                     point,
                     add_plus,
+                });
+            } else if let Some((dm, dp, del_minus, point)) =
+                super::item_joint_delete::decompose_del_shape_b(&he.minuses, &he.pluses, &he.text)
+            {
+                pairs.push(Pair {
+                    sec: he.sec,
+                    path: he.path.clone(),
+                    minus: dm,
+                    plus: dp,
+                    site: point,
+                });
+                pair_hunk.push(hi);
+                del_shape_bs.push(super::item_joint_delete::DelShapeB {
+                    hi,
+                    sec: he.sec,
+                    path: he.path.clone(),
+                    point,
+                    del_minus,
                 });
             }
             continue;
@@ -372,11 +396,35 @@ pub(crate) fn try_item_intent_sweep(
     } else {
         None
     };
+    // WI-21 slice 1: struct rename + field-deletion joint (shape-A
+    // pure-deletion hunk or shape-B record, same file and section;
+    // runs only when the attr/evo/addition arms decline).
+    let del_joint = if attr_joint.is_none()
+        && field_joint.is_none()
+        && variant_joint.is_none()
+        && add_joint.is_none()
+        && variant_add_joint.is_none()
+    {
+        super::item_joint_delete::find_field_del_joint(
+            &pairs,
+            def_idx,
+            is_fn_intent,
+            &def_kind,
+            &old_ident,
+            pre,
+            &pair_claimable,
+            &unbals,
+            &del_shape_bs,
+        )
+    } else {
+        None
+    };
     if attr_joint.is_none()
         && field_joint.is_none()
         && variant_joint.is_none()
         && add_joint.is_none()
         && variant_add_joint.is_none()
+        && del_joint.is_none()
     {
         for pi in &hunk_pairs[def_hunk] {
             if *pi == def_idx {
@@ -388,8 +436,12 @@ pub(crate) fn try_item_intent_sweep(
         }
         // Shape B traps the def pair in an unbalanced hunk: the pure
         // path cannot strand its insertion half, so it declines unless
-        // the add joint fires (today's wholly-ordinary posture).
-        if shape_bs.iter().any(|b| b.hi == def_hunk) {
+        // the add joint fires (today's wholly-ordinary posture). WI-21
+        // slice 1: the deletion shape-B record traps the same way
+        // unless the deletion joint fires.
+        if shape_bs.iter().any(|b| b.hi == def_hunk)
+            || del_shape_bs.iter().any(|b| b.hi == def_hunk)
+        {
             return None;
         }
     }
@@ -433,6 +485,12 @@ pub(crate) fn try_item_intent_sweep(
     if let Some(add) = &variant_add_joint {
         claimed_hunks.insert(add.hi);
     }
+    // WI-21 slice 1: the deletion hunk holds no balanced pair so the
+    // loop above skips it; claim it explicitly (shape B re-inserts the
+    // def hunk, idempotent).
+    if let Some(del) = &del_joint {
+        claimed_hunks.insert(del.hi);
+    }
     // Claimed pairs = def + pairs in claimable hunks.
     let mut claimed_idx: Vec<usize> = Vec::new();
     for hi in claimed_hunks.iter() {
@@ -444,6 +502,7 @@ pub(crate) fn try_item_intent_sweep(
     // hunk with no balanced entry — lift the virtual def explicitly.
     if add_joint.as_ref().is_some_and(|a| a.shape_b)
         || variant_add_joint.as_ref().is_some_and(|a| a.shape_b)
+        || del_joint.as_ref().is_some_and(|a| a.shape_b)
     {
         claimed_idx.push(def_idx);
     }
@@ -552,6 +611,7 @@ pub(crate) fn try_item_intent_sweep(
             || variant_joint.is_some()
             || add_joint.is_some()
             || variant_add_joint.is_some()
+            || del_joint.is_some()
         {
             used_rules.truncate(checkpoint);
             return None;
@@ -577,83 +637,35 @@ pub(crate) fn try_item_intent_sweep(
             )
         }
     } else {
-        match (
+        // Joint/plain emission lives in the `item_joint_emit` sibling
+        // (D5 split at the 2000-line gate); stacking joints decline.
+        let Some(emission) = super::item_joint_emit::joint_emission(
+            &def.path,
+            &rule,
+            &def_kind,
+            &def_prefix,
+            &old_ident,
+            &new_ident,
+            &pairs,
             attr_joint,
             field_joint,
             variant_joint,
             add_joint.as_ref(),
             variant_add_joint.as_ref(),
-        ) {
-            (Some(api), None, None, None, None) => super::item_joint_attr::joint_emit(
-                &def.path,
-                &rule,
-                &def_kind,
-                &def_prefix,
-                &old_ident,
-                &new_ident,
-                &pairs[api].minus,
-                &pairs[api].plus,
-            ),
-            (None, Some(fpi), None, None, None) => super::item_joint_field_evo::joint_emit(
-                &def.path,
-                &rule,
-                &def_kind,
-                &def_prefix,
-                &old_ident,
-                &new_ident,
-                &pairs[fpi].minus,
-                &pairs[fpi].plus,
-            ),
-            (None, None, Some(vpi), None, None) => super::item_joint_field_evo::joint_emit(
-                &def.path,
-                &rule,
-                &def_kind,
-                &def_prefix,
-                &old_ident,
-                &new_ident,
-                &pairs[vpi].minus,
-                &pairs[vpi].plus,
-            ),
-            (None, None, None, Some(add), None) => super::item_joint_field_add::add_emit(
-                &def.path,
-                &rule,
-                &def_kind,
-                &def_prefix,
-                &old_ident,
-                &new_ident,
-                add.point,
-                &add.member_plus,
-            ),
-            (None, None, None, None, Some(add)) => super::item_joint_field_add::variant_add_emit(
-                &def.path,
-                &rule,
-                &def_kind,
-                &def_prefix,
-                &old_ident,
-                &new_ident,
-                add.point,
-                &add.member_plus,
-            ),
-            (None, None, None, None, None) => super::item_joint_attr::emit(
-                &def.path,
-                &rule,
-                &def_kind,
-                &def_prefix,
-                &old_ident,
-                &new_ident,
-            ),
-            _ => {
-                used_rules.truncate(checkpoint);
-                return None;
-            }
-        }
+            del_joint.as_ref(),
+        ) else {
+            used_rules.truncate(checkpoint);
+            return None;
+        };
+        emission
     };
     // Scratch-apply probe: every claimed site must show its native plus
     // line, every other line byte-identical (per file, claimed subset).
     // The add joint inserts a line, so it probes composed-emission vs
-    // claimed-native full-post equality instead (D13, multi-file).
-    let probed = match (&add_joint, &variant_add_joint) {
-        (Some(_), _) | (_, Some(_)) => {
+    // claimed-native full-post equality instead (D13, multi-file). The
+    // deletion joint deletes a line, so it probes the same way.
+    let probed = match (&add_joint, &variant_add_joint, &del_joint) {
+        (Some(_), _, _) | (_, Some(_), _) | (_, _, Some(_)) => {
             let mut claimed_map: HashMap<String, Vec<String>> = HashMap::new();
             for (hi, he) in hunks.iter().enumerate() {
                 if claimed_hunks.contains(&hi) {
@@ -665,7 +677,7 @@ pub(crate) fn try_item_intent_sweep(
             }
             super::item_joint_field_add::probe_add_joint(pre, &emission, &claimed_map)
         }
-        (None, None) => probe_reproduces(pre, &emission, &claimed_pairs),
+        (None, None, None) => probe_reproduces(pre, &emission, &claimed_pairs),
     };
     if !probed {
         used_rules.truncate(checkpoint);

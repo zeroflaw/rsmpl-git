@@ -653,6 +653,7 @@ pub(crate) fn plus_instantiated_parsed(
         PatternKind::Insertion { .. }
         | PatternKind::ItemCapture { .. }
         | PatternKind::FieldAddition { .. }
+        | PatternKind::FieldDeletion { .. }
         | PatternKind::VariantAddition { .. }
         | PatternKind::ArmAddition { .. }
         | PatternKind::Raw { .. } => None,

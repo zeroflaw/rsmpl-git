@@ -487,6 +487,15 @@ pub(crate) fn classify(
     if let Some(add) = crate::pattern_member_evo::classify_member_addition(m, p, c, table)? {
         return Ok(add);
     }
+    // Member-context deletion (WI-21 slice 1: struct-only): plus-empty
+    // minus-single field under a container header. After addition
+    // (which owns minus-empty shapes) and before evolution (which
+    // rejects plus-empty shapes loud — those are deletions, not
+    // malformed pairs). Enum-context minus lines decline here
+    // (variant-deletion is a later slice).
+    if let Some(del) = crate::pattern_member_evo::classify_member_deletion(m, p, c, table)? {
+        return Ok(del);
+    }
     // Match-arm addition (WI-12d): minus-empty plus-single arm under
     // a `match <scrut> {` context line. After member addition (which
     // owns struct/enum headers) and before evolution (which needs a

@@ -2451,7 +2451,18 @@ lowered diff is the observable truth as always (Section D.2).
     tuple-payload, struct-payload, or discriminant) in the same file and
     section, either a distant pure-insertion hunk or an adjacent
     (1-minus, 2-plus) hunk, plus claimable uses raises to the same
-    shared-rule shape with the `enum Old {` context. Two evolutions,
+    shared-rule shape with the `enum Old {` context. Struct rename +
+    field-deletion joint (WI-21 slice 1): a `struct` rename plus exactly
+    one field-deletion line in the same file and section — either a
+    distant pure-deletion hunk (`@@ -N +M,0 @@`) or a hunk adjacent to
+    the def change (two minus, one plus) — plus claimable uses raises to
+    a shared-rule two-hunk emission (the field-deletion hunk naming the
+    old container, then the terse rename follow hunk), proved by the one
+    multi-file full-post probe (D13) under strict T375. The deleted field
+    must have no live uses anywhere in the pre tree (exactly one
+    whole-word hit — its declaration); any other use declines the joint
+    (orphan-with-`partial` duty is a later slice, never a silent
+    stranding). Two evolutions,
     two additions, an addition of another container, bare renames,
     cross-kind members, and alias/const shapes never joint-fire (only
     multi-addition and cross-file-member joints stay out: a member in
@@ -7969,6 +7980,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     variant); a member in another file than its container cannot joint
     (container law non-goal). Field-addition joints raise per
     2b-next2b-first, variant-addition joints per 2b-next2b-next.
+    Struct rename + field-deletion joint (WI-21 slice 1): a def hunk
+    holding the `struct` rename plus exactly one attached field-deletion
+    line (same file/section — either a distant pure-deletion hunk or a
+    hunk adjacent to the def change; the holder's pre-image carrier is
+    the renamed struct; the deleted field has no live uses anywhere in
+    the pre tree) plus claimable uses raises as a shared-rule two-hunk
+    emission (the field-deletion hunk naming the old container, then the
+    terse rename follow hunk), proved by the one multi-file full-post
+    probe (D13) under strict T375; diffrs fixture
+    `142-struct-rename-field-delete-fires`. Two deletions, live-use
+    deletions, enum variant-deletions, cross-kind members, and
+    attr+deletion combos stay ordinary (later slices).
     Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
     the enum half of the same law — a def hunk holding the `enum`
     rename plus exactly one attached variant-evolution pair (tuple
@@ -9661,7 +9684,7 @@ stripping is deliberate. Equalities per origin close the contract:
   or precision-shaped against a differently-spelled authoring.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(142), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(143), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

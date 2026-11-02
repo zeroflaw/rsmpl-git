@@ -918,6 +918,59 @@ pub(crate) fn classify_member_addition(
 }
 
 // ---------------------------------------------------------------------------
+// Member deletion (WI-21 slice 1: struct-only)
+// ---------------------------------------------------------------------------
+
+/// Classify member-context deletion: plus member set empty, minus
+/// member set exactly one field line, struct container header present.
+///
+/// Called after `classify_member_addition` (which owns minus-empty
+/// shapes) and before the joint classifiers. Returns `Ok(None)` for
+/// every non-deletion shape — including malformed minus lines inside
+/// a member container, which stay ordinary rather than erroring here
+/// (mirrors the addition posture, so no new `PatternConflict` sites:
+/// the WI-18 ceiling is untouched). Enum containers decline
+/// (variant-deletion is a later slice, never a silent fallthrough —
+/// the evolution classifier below still owns malformed *pairs*).
+pub(crate) fn classify_member_deletion(
+    minus_raw: &str,
+    plus_raw: &str,
+    context_raw: &str,
+    _table: &MetavarTable,
+) -> Result<Option<PatternKind>, StructuredError> {
+    let struct_c = struct_context(context_raw);
+    if struct_c.is_none() {
+        return Ok(None);
+    }
+    let minus_stripped = strip_container_headers(minus_raw);
+    let plus_stripped = strip_container_headers(plus_raw);
+    let (minus_attrs, minus_pair) = crate::pattern_general::split_leading_attrs(&minus_stripped);
+    let (plus_attrs, plus_pair) = crate::pattern_general::split_leading_attrs(&plus_stripped);
+    // Deletion owns plus-empty shapes only; anything with a plus
+    // member (or plus attrs) belongs to evolution/rename/ordinary.
+    if !plus_attrs.is_empty() || !plus_pair.trim().is_empty() {
+        return Ok(None);
+    }
+    let minus_pair = minus_pair.trim().to_string();
+    if minus_pair.is_empty() || minus_pair.lines().count() != 1 {
+        return Ok(None);
+    }
+    // Struct container: the minus line must parse as a field side.
+    // Malformed minus lines stay unclaimed here (ordinary), never loud.
+    let container = struct_c.expect("checked above");
+    let Ok(Some(side)) = parse_field_side(&minus_pair) else {
+        return Ok(None);
+    };
+    Ok(Some(PatternKind::FieldDeletion {
+        struct_name: container,
+        field: side.name.clone(),
+        minus_raw: minus_pair,
+        minus_attrs,
+        plus_attrs: Vec::new(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Match-arm addition (WI-12d)
 // ---------------------------------------------------------------------------
 
@@ -1070,4 +1123,49 @@ pub fn norm_arm_expr(e: &syn::Expr) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metavar::MetavarTable;
+
+    fn table() -> MetavarTable {
+        MetavarTable::default()
+    }
+
+    fn classify(m: &str, p: &str, c: &str) -> Option<PatternKind> {
+        classify_member_deletion(m, p, c, &table()).expect("never loud on these shapes")
+    }
+
+    #[test]
+    fn deletion_fires_on_struct_field() {
+        match classify("y: u32,", "", "  struct Old {").expect("must fire") {
+            PatternKind::FieldDeletion {
+                struct_name, field, ..
+            } => {
+                assert_eq!(struct_name, "Old");
+                assert_eq!(field, "y");
+            }
+            other => panic!("wrong kind: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_deletion_shapes_decline() {
+        // Plus-nonempty belongs to evolution/rename/ordinary.
+        assert!(classify("y: u32,", "y: u64,", "  struct Old {").is_none());
+        // Minus-nonempty addition shapes are not deletions.
+        assert!(classify("", "z: u32,", "  struct Old {").is_none());
+        // Malformed minus lines stay ordinary, never loud.
+        assert!(classify("y: (", "", "  struct Old {").is_none());
+        assert!(classify("not a field", "", "  struct Old {").is_none());
+        // Enum context declines (variant-deletion is a later slice).
+        assert!(classify("B,", "", "  enum E {").is_none());
+        // No container header declines.
+        assert!(classify("y: u32,", "", "").is_none());
+        assert!(classify("y: u32,", "", "fn f() {").is_none());
+        // Multi-line minus declines.
+        assert!(classify("y: u32,\nz: u32,", "", "  struct Old {").is_none());
+    }
 }

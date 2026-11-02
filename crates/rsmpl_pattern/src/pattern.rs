@@ -220,6 +220,18 @@ pub enum PatternKind {
         minus_attrs: Vec<String>,
         plus_attrs: Vec<String>,
     },
+    /// Struct-field deletion (`struct S {` context + `- b: bool,`):
+    /// a point deletion inside the container (WI-21 slice 1: the
+    /// rename+field-deletion joint carrier). The field name is
+    /// concrete, the deleted line is concrete text (v1: no templates).
+    /// `# follow=uses` is rejected (C17). Reports `reparse-only`.
+    FieldDeletion {
+        struct_name: String,
+        field: String,
+        minus_raw: String,
+        minus_attrs: Vec<String>,
+        plus_attrs: Vec<String>,
+    },
     /// Enum-variant addition (`enum E {` context + `+ C[,…]`):
     /// a point insertion inside the container. The variant line is
     /// concrete text (bare/unit/tuple/struct/discriminant).
@@ -627,9 +639,12 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // `C`) — the plus ident is not a metavariable hole, so the
     // unbound-plus gate never fires for them (concrete-only v1).
     // WI-12d: match-arm additions are likewise concrete (`syn::Arm`).
+    // WI-21 slice 1: field deletions are likewise concrete (the minus
+    // ident names the deleted field; nothing is bound on the plus side).
     if matches!(
         &kind,
         PatternKind::FieldAddition { .. }
+            | PatternKind::FieldDeletion { .. }
             | PatternKind::VariantAddition { .. }
             | PatternKind::ArmAddition { .. }
     ) {
@@ -696,6 +711,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             PatternKind::EnumRenameVariantEvo { .. } => "enum-rename-variant-evolution",
             PatternKind::VariantPayloadEvolution { .. } => "variant-payload evolution",
             PatternKind::FieldAddition { .. } => "field addition",
+            PatternKind::FieldDeletion { .. } => "field deletion",
             PatternKind::VariantAddition { .. } => "variant addition",
             PatternKind::ArmAddition { .. } => "match-arm addition",
             PatternKind::UseRename { .. } => "use-path",

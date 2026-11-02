@@ -38,6 +38,7 @@ pub(crate) fn candidate_preview(
             | PatternKind::EnumRenameVariantEvo { .. }
             | PatternKind::VariantPayloadEvolution { .. }
             | PatternKind::FieldAddition { .. }
+            | PatternKind::FieldDeletion { .. }
             | PatternKind::VariantAddition { .. }
             | PatternKind::ArmAddition { .. }
             | PatternKind::UseRename { .. }
@@ -112,6 +113,9 @@ pub(crate) fn candidate_preview(
                     Some(("enum ".to_string(), Some(old_container.clone())))
                 }
                 PatternKind::FieldAddition { struct_name, .. } => {
+                    Some(("struct ".to_string(), Some(struct_name.clone())))
+                }
+                PatternKind::FieldDeletion { struct_name, .. } => {
                     Some(("struct ".to_string(), Some(struct_name.clone())))
                 }
                 PatternKind::VariantPayloadEvolution { enum_name, .. } => {

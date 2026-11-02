@@ -1537,6 +1537,43 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
+    } else if name == "142-struct-rename-field-delete-fires" {
+        // WI-21 slice 1: struct rename + single field deletion with no
+        // live uses of the deleted field raises as the shared-rule
+        // two-hunk composition (deletion hunk + rename follow hunk);
+        // the harness checks the tree legs (--check + lowered git
+        // apply); two-deletion/live-use/cross-kind twins are pinned
+        // inline (finder tests).
+        assert!(
+            semantic.matches("rule=r1").count() == 2,
+            "both hunks share one rule, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("# follow=uses"),
+            "rename half must carry follow, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- struct Old"),
+            "def minus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ struct New"),
+            "def plus must raise, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- y: u32,"),
+            "deletion minus must raise, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("+ y: u32,"),
+            "deletion must not gain a plus side, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "deletion joint must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     } else if name == "100-cross-file-assoc-fires" {
         // WI-12: trait decl + impl def + `::Item` uses across files join
         // one shared-rule intent (one section per def file, follow on
