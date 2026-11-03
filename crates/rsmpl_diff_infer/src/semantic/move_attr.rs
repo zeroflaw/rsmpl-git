@@ -16,11 +16,11 @@
 //! Scope is deliberately narrow: any move-eligible item kind, exactly
 //! one added single `#[...]` attr (one line, or one balanced attr
 //! spanning up to `MAX_ATTR_LINES` lines — slice 5) or one `///` line.
-//! Removed / replaced attrs, two added attrs, multi-line docs, `/* */` /
-//! `//!` docs, attr interiors mentioning the moved ident, and rename+attr
-//! (two deltas) all decline to ordinary (pinned below; slice 4 proves the
-//! removed mirror needs engine work — the whole-span cut law — so it
-//! stays ordinary by construction). Later WI-14 slices own those axes.
+//! Removed / replaced attrs, two added attrs, multi-line docs,
+//! `/* */` / `//!` docs, and rename+attr (two deltas) all decline to
+//! ordinary (pinned below; slice 4 proves the removed mirror needs
+//! engine work — the whole-span cut law — so it stays ordinary by
+//! construction). Later WI-14 slices own those axes.
 
 use syn::spanned::Spanned;
 
@@ -298,11 +298,82 @@ mod tests {
     }
 
     #[test]
-    fn attr_replaced_stays_ordinary() {
-        // Minus `#[a]+fn`, plus `#[b]+fn`: no textual hit, evolved arms
-        // veto — later slice territory.
+    fn attr_replaced_fn_stays_ordinary_span_law() {
+        // WI-14 slice 6 triage: minus `#[old]+fn`, plus `#[new]+fn`
+        // stays ordinary BY CONSTRUCTION under the whole-span cut law
+        // (same wall as the removed axis, slice 4). `- I` matches the
+        // full item span *including* attrs, so a bare-span cut over the
+        // shared `fn` matches nothing, while a full-span cut captures
+        // the old attr a bare paste would replay. A bare-pair attempt
+        // was built, measured, REVERTED (two `validated_live`
+        // `no match found` failures — the engine attaches the minus
+        // attr to the item span). Stripping needs engine work
+        // (sub-span cut or strip-on-paste) — a future WI-14 slice owns
+        // it, shared with the removed mirror.
         let big = big_fn("foo");
         let minus_item = format!("#[allow(dead_code)]\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(unused_variables)]\n{big}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "single-line attr-replaced fn move must stay ordinary (engine span law)"
+        );
+    }
+
+    #[test]
+    fn attr_replaced_struct_stays_ordinary_span_law() {
+        // Struct twin of the span-law veto: non-fn spans likewise
+        // include attrs, so any move-eligible kind stays ordinary on
+        // the replaced axis (companion fire attempt failed
+        // `validated_live` with `no match found — nearest struct Big`,
+        // then reverted).
+        let mut strukt = String::from("struct Big {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let minus_item = format!("#[allow(dead_code)]\n{strukt}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[derive(Clone)]\n{strukt}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "struct attr-replaced move must stay ordinary (engine span law)"
+        );
+    }
+
+    #[test]
+    fn attr_replaced_tiny_stays_ordinary() {
+        // Tiny shapes stay ordinary on the replaced axis too (no pair
+        // ever forms — span law, so T375 is never even reached).
+        let tiny = "fn foo() {}\n";
+        let minus_item = format!("#[allow(dead_code)]\n{tiny}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[inline]\n{tiny}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "tiny attr-replaced move must stay ordinary (engine span law)"
+        );
+    }
+
+    #[test]
+    fn attr_replaced_multiline_minus_stays_ordinary() {
+        // Multi-line `#[old]` against single-line `#[new]`: same span
+        // law (the minus attr is part of the item span), so no pair
+        // forms regardless of line counts.
+        let big = big_fn("foo");
+        let minus_item = format!("#[allow(\n    dead_code,\n)]\n{big}");
         let a_old = format!("fn keep() {{}}\n{minus_item}");
         let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
         let plus_item = format!("#[inline]\n{big}");
@@ -311,7 +382,105 @@ mod tests {
         let mut used = Vec::new();
         assert!(
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "replaced attr must stay ordinary"
+            "multi-line minus replaced attr must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn attr_replaced_doc_stays_ordinary() {
+        // Doc replaced (`///` old → `///` new): docs attach to the item
+        // span exactly like attrs, so the same span law keeps the pair
+        // from forming.
+        let big = big_fn("foo");
+        let minus_item = format!("/// Old doc.\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("/// New doc.\n{big}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "doc-replaced move must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn attr_replaced_two_attrs_minus_stays_ordinary() {
+        // Exactly one minus attr: two `#[old]` lines decline even when
+        // the plus side carries one `#[new]`.
+        let big = big_fn("foo");
+        let minus_item = format!("#[inline]\n#[allow(dead_code)]\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(unused_variables)]\n{big}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "two-attr minus replaced must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn attr_replaced_multi_item_partial_fires() {
+        // Two-item minus hunk with one replaced member: the replaced
+        // member forms no pair (span law) but the byte-identical
+        // companion still moves — partial rescue. `aaa` rides
+        // cut+paste while `bbb` (both attrs + body) stays ordinary on
+        // both sides.
+        let big_a = big_fn("aaa");
+        let big_b = big_fn("bbb");
+        let minus_b = format!("#[allow(dead_code)]\n{big_b}");
+        let minus_body = format!("{big_a}\n{minus_b}");
+        let a_old = format!("fn keep() {{}}\n{minus_body}");
+        let a_minus: String = minus_body.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_b = format!("#[inline]\n{big_b}");
+        let plus_body = format!("{big_a}\n{plus_b}");
+        let b_plus: String = plus_body.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("identical companion must still move");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            !text.contains("-fn aaa() {"),
+            "moved companion consumed, got:\n{text}"
+        );
+        assert!(
+            text.contains("-#[allow(dead_code)]\n"),
+            "replaced old attr stays ordinary, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[inline]\n"),
+            "replaced new attr stays ordinary, got:\n{text}"
+        );
+        assert!(
+            text.contains("-fn bbb() {") && text.contains("+fn bbb() {"),
+            "replaced body stays ordinary both sides, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn attr_replaced_ident_mention_stays_ordinary_span_law() {
+        // Interior mentions change nothing on this axis: the pair never
+        // forms (span law), so `#[allow(foo)]` → `#[allow(bar)]` around
+        // a moved `fn foo` stays ordinary like every other replaced
+        // shape — no opaque-interior reasoning needed raiser-side.
+        let big = big_fn("foo");
+        let minus_item = format!("#[allow(foo)]\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(bar)]\n{big}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "ident-mentioning replaced attrs must stay ordinary"
         );
     }
 

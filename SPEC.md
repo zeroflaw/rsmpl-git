@@ -9544,7 +9544,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     matches the full item span including attrs, so a bare-span cut
     matches nothing while a full-span cut captures the attr a bare
     paste would replay; stripping needs sub-span-cut or
-    strip-on-paste engine work).
+    strip-on-paste engine work; slice 6 proves the replaced axis hits
+    the same wall — a bare-pair attempt failed `validated_live` with
+    `no match found` on both `fn` and `struct`, then reverted).
        Everything else (other item kinds, other attr deltas, vis+body combos
        without a signature delta, two-slot signature+body combos,
        trait-`impl` moves, shadowed-body
