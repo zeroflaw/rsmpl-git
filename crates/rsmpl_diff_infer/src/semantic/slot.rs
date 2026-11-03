@@ -60,6 +60,12 @@ pub(crate) fn try_fn_slot_sweep(
         {
             return Some(out);
         }
+        // WI-6 slice 2: lone one-line trait-default (`}`) single.
+        if let Some(out) =
+            try_trait_default_single(minuses, pluses, path, file_old, changed, used_rules)
+        {
+            return Some(out);
+        }
         // A `;`-terminated pair that the trait arm declines (free-fn
         // site, `;`/`{` mismatch, opaque twin, N=2) is never a `{`/`}`
         // fn shape either — decline fast without consuming a rule.
@@ -241,6 +247,85 @@ fn try_trait_decl_single(
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
     let minus_fx = format!("V Q fn {old_name} G (...) W ;");
     let plus_fx = format!("V Q fn {new_name} G (...) W ;");
+    let mut out = format!(
+        "{}\n@@ -{},1 @@ rule={rule}\n",
+        crate::git_header(path),
+        changed[0]
+    );
+    out.push_str(&format!(
+        "  {}\n-     {minus_fx}\n+     {plus_fx}\n",
+        g.header_line
+    ));
+    if !scratch_single_reproduces(pre, path, &out, changed, pluses) {
+        return None;
+    }
+    Some(out)
+}
+
+/// WI-6 slice 2: lone trait-default `}` rename as a compact filtered
+/// diet single (detector `fn_slot_sweep`, shared with the impl-method
+/// `}` arm and the trait-decl `;` arm above — no new guard row, no new
+/// call sites). A one-line `fn old(...) { body }` → `fn new(...) { body }`
+/// (rename-only, byte-identical body) inside a `trait` block compresses
+/// to the verbatim trait header plus one inline-body
+/// `V Q fn {old} G (...) W { ... }` pair (no frame, no directives —
+/// the impl-arm precedent; the engine matches the inline form under a
+/// trait filter, probed byte-identical). Uniqueness is the trait-scoped
+/// grouping (one group, one site — a same-name twin in another trait
+/// never matches the filter) plus the `scratch_single_reproduces`
+/// byte-compare pre-reservation. Opaque macro/string interiors veto via
+/// `no_opaque_hits`. Multi-line trait-default headers (`{`) stay
+/// ordinary (residue, pinned in test); `;`/free-fn/mixed postures
+/// decline to the arms that own them.
+fn try_trait_default_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    // Method discipline: trait defaults are indented; column-0 `}`
+    // lines are never trait methods.
+    if !minuses[0].starts_with([' ', '\t']) || !pluses[0].starts_with([' ', '\t']) {
+        return None;
+    }
+    // `}` inputs normalize to the `{` terminator; `;` decls and `{`
+    // multi-line headers belong to the sibling arms.
+    if !minuses[0].trim_end().ends_with('}') || !pluses[0].trim_end().ends_with('}') {
+        return None;
+    }
+    let (old_name, new_name, term) =
+        super::trait_methods::trait_rename_pair(minuses[0], pluses[0])?;
+    if term != '{' || old_name == new_name {
+        return None;
+    }
+    if !super::trait_methods::in_trait_block(pre, changed[0]) {
+        return None;
+    }
+    // Fixture-30 posture, shared with the decl arm: a same-name free fn
+    // or impl method anywhere in the file vetoes the def-only single
+    // (the rename may belong to a broader trait+impl intent).
+    // Same-name twins in *other trait blocks* are fine (different items;
+    // the filter disambiguates).
+    if has_nontrait_namesake(pre, &old_name) {
+        return None;
+    }
+    if !crate::totality::no_opaque_hits(file_old, minuses, changed) {
+        return None;
+    }
+    let groups = super::block_headers::group_sites_by_trait_block(file_old, changed)?;
+    let g = groups.first()?;
+    if g.sites.len() != 1 || g.sites[0] != changed[0] {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
+    let minus_fx = format!("V Q fn {old_name} G (...) W {{ ... }}");
+    let plus_fx = format!("V Q fn {new_name} G (...) W {{ ... }}");
     let mut out = format!(
         "{}\n@@ -{},1 @@ rule={rule}\n",
         crate::git_header(path),
@@ -720,6 +805,109 @@ mod tests {
         let thirty_pre = "trait T {\n    fn old_name(&self) -> i32;\n}\n\ntrait U {\n    fn old_name(&self) -> i32;\n}\n\nfn old_name() -> i32 {\n    1\n}\n";
         assert!(infer_semantic_with_pre_images(
             &["diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old_name(&self) -> i32;\n+    fn new_name(&self) -> i32;\n"
+                .to_string()],
+            &pre_map(&[("f.rs", thirty_pre)]),
+        )
+        .is_none());
+    }
+
+    const TRAIT_DEFAULT_PRE: &str = "trait T {\n    fn old(&self) -> i32 { 1 }\n}\n";
+
+    const TRAIT_DEFAULT_TWIN_PRE: &str =
+        "trait T {\n    fn old(&self) -> i32 { 1 }\n}\n\ntrait U {\n    fn old(&self) -> i32 { 1 }\n}\n";
+
+    #[test]
+    fn trait_default_single_fires_with_filter() {
+        // WI-6 slice 2: a lone one-line trait-default rename compresses
+        // to the compact filtered diet single (the `;`-decl arm's twin
+        // for default bodies; the impl `}` arm's twin for trait blocks).
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self) -> i32 { 1 }\n+    fn new(&self) -> i32 { 1 }\n";
+        let out = infer_semantic_with_pre_images(
+            &[raw.to_string()],
+            &pre_map(&[("f.rs", TRAIT_DEFAULT_PRE)]),
+        )
+        .expect("trait-default single must fire");
+        assert!(out.contains("trait T {"), "filter kept, got:\n{out}");
+        assert!(
+            out.contains("-     V Q fn old G (...) W { ... }\n"),
+            "compact pair, got:\n{out}"
+        );
+        assert!(
+            out.contains("+     V Q fn new G (...) W { ... }\n"),
+            "compact pair, got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map(&[("f.rs", TRAIT_DEFAULT_PRE)]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("    fn new(&self) -> i32 { 1 }"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn trait_default_twin_fires_with_filter() {
+        // An untouched same-name default in another trait never matches
+        // the filter; the renamed block compresses, the twin survives
+        // byte-identical.
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self) -> i32 { 1 }\n+    fn new(&self) -> i32 { 1 }\n";
+        let out = infer_semantic_with_pre_images(
+            &[raw.to_string()],
+            &pre_map(&[("f.rs", TRAIT_DEFAULT_TWIN_PRE)]),
+        )
+        .expect("trait-default twin single must fire");
+        assert!(out.contains("trait T {"), "filter kept, got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map(&[("f.rs", TRAIT_DEFAULT_TWIN_PRE)]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("trait T {\n    fn new(&self) -> i32 { 1 }"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("trait U {\n    fn old(&self) -> i32 { 1 }"),
+            "twin must survive, got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn trait_default_single_vetoes() {
+        // Rename plus a body change is not rename-only (the shared
+        // suffix comparison keeps one-line bodies byte-identical).
+        let body_delta =
+            "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self) -> i32 { 1 }\n+    fn new(&self) -> i32 { 2 }\n";
+        assert!(infer_semantic_with_pre_images(
+            &[body_delta.to_string()],
+            &pre_map(&[("f.rs", TRAIT_DEFAULT_PRE)]),
+        )
+        .is_none());
+        // `;`/`}` mismatch declines (decls belong to the `;` arm).
+        let mismatch =
+            "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self) -> i32 { 1 }\n+    fn new(&self) -> i32;\n";
+        assert!(infer_semantic_with_pre_images(
+            &[mismatch.to_string()],
+            &pre_map(&[("f.rs", TRAIT_DEFAULT_PRE)]),
+        )
+        .is_none());
+        // Multi-line trait-default headers stay ordinary (residue: the
+        // one-line arm never spans bodies; WI-13 owns body pairs).
+        let multi_pre = "trait T {\n    fn old(&self) -> i32 {\n        1\n    }\n}\n";
+        let multi =
+            "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self) -> i32 {\n+    fn new(&self) -> i32 {\n";
+        assert!(infer_semantic_with_pre_images(
+            &[multi.to_string()],
+            &pre_map(&[("f.rs", multi_pre)]),
+        )
+        .is_none());
+        // Fixture-30 posture: a free-fn namesake vetoes the def-only
+        // single, so the section stays wholly ordinary.
+        let thirty_pre =
+            "trait T {\n    fn old(&self) -> i32 { 1 }\n}\n\nfn old() -> i32 {\n    1\n}\n";
+        assert!(infer_semantic_with_pre_images(
+            &["diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self) -> i32 { 1 }\n+    fn new(&self) -> i32 { 1 }\n"
                 .to_string()],
             &pre_map(&[("f.rs", thirty_pre)]),
         )

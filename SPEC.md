@@ -8108,7 +8108,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    evidence without an occurrence count).
   One-line (`}`-terminated, brace-balanced by whole-item parse,
   rename-only with byte-identical body) lone method definitions in
-  `impl` blocks compress instead to the compact filtered single
+  `impl` blocks — and lone default-body definitions in `trait` blocks
+  (WI-6 slice 2, same spelling with the verbatim trait header as the
+  filter) — compress instead to the compact filtered single
   (verbatim filter header plus one inline-body
   `V Q fn Old G (...) W { ... }` pair, no frame, no directives)
   under the same guard with the four-guard filter-block budget; the
