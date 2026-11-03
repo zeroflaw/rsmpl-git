@@ -304,9 +304,28 @@ pub(crate) fn plus_runs_hold(body: &[String], runs: &[(usize, usize)]) -> bool {
     for w in sorted.windows(2) {
         let (_, l1) = w[0];
         let (f2, _) = w[1];
-        if f2 != l1 + 2 || !line_text(&body[l1 + 1]).trim().is_empty() {
+        // E1 slice 4: interior gaps may hold exactly one single-attr/doc
+        // line (the replaced-axis new attr) after the single blank the
+        // paste join restores. Pure single-blank gaps hold with nothing
+        // to emit; blank+attr gaps hold with the attr emitted as an
+        // interior ordinary plus leftover by the rebuild. Bare-attr (no
+        // blank), two-attr, code, or double-blank gaps still veto — a
+        // bare attr would gain a join blank, a trailing blank would
+        // double it.
+        let gap_start = l1 + 1;
+        if gap_start >= f2 || f2 > body.len() {
             return false;
         }
+        if line_text(&body[gap_start]).trim().is_empty() {
+            if f2 == gap_start + 1 {
+                continue;
+            }
+            if f2 == gap_start + 2 && is_single_attr_doc(line_text(&body[gap_start + 1])) {
+                continue;
+            }
+            return false;
+        }
+        return false;
     }
     true
 }
@@ -764,6 +783,67 @@ mod tests {
         ];
         let pairs = vec![test_pair(0, 0), test_pair(2, 2)];
         assert!(!minus_hunk_holds(&body, &pairs, 0, 0));
+    }
+
+    #[test]
+    fn plus_blank_attr_gap_holds() {
+        // E1 slice 4: `[aaa, blank, #[new], bbb]` plus gap holds — the
+        // paste join restores the blank, the rebuild emits `+#[new]` as an
+        // interior ordinary leftover.
+        let body: Vec<String> = vec![
+            "+fn a() {}".to_string(),
+            "+".to_string(),
+            "+#[new]".to_string(),
+            "+fn b() {}".to_string(),
+        ];
+        assert!(plus_runs_hold(&body, &[(0, 0), (3, 3)]));
+    }
+
+    #[test]
+    fn plus_pure_blank_gap_holds() {
+        // Pure single-blank gaps keep holding with nothing to emit.
+        let body: Vec<String> = vec![
+            "+fn a() {}".to_string(),
+            "+".to_string(),
+            "+fn b() {}".to_string(),
+        ];
+        assert!(plus_runs_hold(&body, &[(0, 0), (2, 2)]));
+    }
+
+    #[test]
+    fn plus_bare_attr_without_blank_vetoes() {
+        // Bare attr with no blank would gain a join blank — veto.
+        let body: Vec<String> = vec![
+            "+fn a() {}".to_string(),
+            "+#[new]".to_string(),
+            "+fn b() {}".to_string(),
+        ];
+        assert!(!plus_runs_hold(&body, &[(0, 0), (2, 2)]));
+    }
+
+    #[test]
+    fn plus_two_attr_gap_vetoes() {
+        // Two attrs in one plus gap stay ordinary.
+        let body: Vec<String> = vec![
+            "+fn a() {}".to_string(),
+            "+".to_string(),
+            "+#[a]".to_string(),
+            "+#[b]".to_string(),
+            "+fn b() {}".to_string(),
+        ];
+        assert!(!plus_runs_hold(&body, &[(0, 0), (4, 4)]));
+    }
+
+    #[test]
+    fn plus_code_gap_vetoes() {
+        // Unpaired code between paired plus runs never holds.
+        let body: Vec<String> = vec![
+            "+fn a() {}".to_string(),
+            "+".to_string(),
+            "+let x = 1;".to_string(),
+            "+fn b() {}".to_string(),
+        ];
+        assert!(!plus_runs_hold(&body, &[(0, 0), (3, 3)]));
     }
 
     #[test]

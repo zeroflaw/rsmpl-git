@@ -470,11 +470,13 @@ mod tests {
 
     #[test]
     fn attr_replaced_multi_item_partial_fires() {
-        // Two-item minus hunk with one replaced member: the replaced
-        // member forms no pair (prefix-only stripped cut, E1 slice 1 —
-        // interior attrs stay ordinary) but the byte-identical
-        // companion still moves — partial rescue. `aaa` rides
-        // cut+paste while `bbb` (both attrs + body) stays ordinary on
+        // E1 slice 4: two-item hunk with one replaced member now fires
+        // both moves (was partial rescue at slice 1 — interior attrs
+        // stayed ordinary). `aaa` rides cut+paste and `bbb` rides a
+        // stripped cut+paste with the old block as an interior ordinary
+        // minus leftover and the new block as an interior ordinary plus
+        // leftover (kept name: the companions' partial-rescue path is
+        // pinned by `hunk_interior_two_removed_stays_partial`).
         let big_a = big_fn("aaa");
         let big_b = big_fn("bbb");
         let minus_b = format!("#[allow(dead_code)]\n{big_b}");
@@ -489,22 +491,26 @@ mod tests {
         let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
             .expect("identical companion must still move");
         let text = out.join("");
-        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert_eq!(
+            text.matches("# bind=").count(),
+            2,
+            "both companions must move, got:\n{text}"
+        );
         assert!(
             !text.contains("-fn aaa() {"),
             "moved companion consumed, got:\n{text}"
         );
         assert!(
             text.contains("-#[allow(dead_code)]\n"),
-            "replaced old attr stays ordinary, got:\n{text}"
+            "replaced old attr rides interior ordinary minus, got:\n{text}"
         );
         assert!(
             text.contains("+#[inline]\n"),
-            "replaced new attr stays ordinary, got:\n{text}"
+            "replaced new attr rides interior ordinary plus, got:\n{text}"
         );
         assert!(
-            text.contains("-fn bbb() {") && text.contains("+fn bbb() {"),
-            "replaced body stays ordinary both sides, got:\n{text}"
+            !text.contains("-fn bbb() {") && !text.contains("+fn bbb() {"),
+            "replaced body must be consumed by its cut, got:\n{text}"
         );
         validated_live(&text, &pre);
     }

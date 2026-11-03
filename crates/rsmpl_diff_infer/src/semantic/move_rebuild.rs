@@ -385,9 +385,58 @@ pub(crate) fn rebuild_sections(
                     rebuilt.push('\n');
                 }
             }
-            for q in pastes {
-                emitted += q.len();
-                rebuilt.push_str(q);
+            // E1 slice 4: interior gaps between distinct plus runs stay
+            // ordinary (disjoint new-range insertions, SPEC 10.6 option-1).
+            // Each same-anchor paste join restores exactly one blank
+            // between pastes, so one leading blank per gap is skipped;
+            // the remainder is the replaced-axis new attr line admitted by
+            // `plus_runs_hold` and re-emits verbatim. Pure single-blank
+            // gaps emit nothing (skip consumes them).
+            let mut runs: Vec<(usize, usize)> = named
+                .iter()
+                .filter(|(p, _, _)| p.plus_hunk_key == (*si, hi))
+                .map(|(p, _, _)| (p.plus_first, p.plus_last))
+                .collect();
+            runs.sort();
+            runs.dedup();
+            for (ri, run) in runs.iter().enumerate() {
+                for (_, _, q) in named.iter().filter(|(p, _, _)| {
+                    p.plus_hunk_key == (*si, hi) && (p.plus_first, p.plus_last) == *run
+                }) {
+                    emitted += q.len();
+                    rebuilt.push_str(q);
+                }
+                if ri + 1 >= runs.len() {
+                    continue;
+                }
+                let gap_start = run.1 + 1;
+                let gap_end = runs[ri + 1].0;
+                if gap_start >= gap_end || gap_end > hunk.body.len() {
+                    continue;
+                }
+                let mut glo = gap_start;
+                if glo < gap_end && line_text(&hunk.body[glo]).trim().is_empty() {
+                    glo += 1;
+                }
+                if glo >= gap_end {
+                    continue;
+                }
+                let glen = gap_end - glo;
+                let header = format!(
+                    "@@ -{},{} +{},{} @@",
+                    hunk.old_start,
+                    hunk.old_len,
+                    hunk.new_start + glo as u32,
+                    glen
+                );
+                emitted += header.len() + 1;
+                rebuilt.push_str(&header);
+                rebuilt.push('\n');
+                for line in hunk.body.iter().skip(glo).take(glen) {
+                    emitted += line.len() + 1;
+                    rebuilt.push_str(line);
+                    rebuilt.push('\n');
+                }
             }
             if phi + 1 < hunk.body.len() {
                 let tlo = phi + 1;
