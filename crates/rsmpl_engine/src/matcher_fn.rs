@@ -1938,12 +1938,26 @@ mod tests {
     }
 
     #[test]
-    fn wi20_joint_body_non_expr_stays_on_trailing_gate() {
-        // A `let`-statement body delta is not the general-expr slice:
-        // the helper declines and the single-shape parse fails loud.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n";
-        let err = apply(patch, JOINT_PRE).expect_err("non-expr body must fail");
-        assert!(err.contains("trailing tokens"), "got: {err}");
+    fn wi13_joint_body_let_parses_then_fails_absent_loud() {
+        // WI-13 slice 1: a same-binder `let` body pair parses as a
+        // joint (no longer the trailing-gate rejection); against a
+        // pre-image lacking the minus line it fails loud on the
+        // span-scoped absent gate — never a silent partial rename.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n";
+        let err = apply(patch, JOINT_PRE).expect_err("absent let body must fail");
+        assert!(err.contains("not found in the file"), "got: {err}");
+        assert!(err.contains("fn-joint-body-absent-template"), "got: {err}");
+    }
+
+    #[test]
+    fn wi13_joint_body_let_applies_scoped() {
+        let pre = "fn foo(x: i32) -> i32 {\n    let y = 1;\n    y\n}\nfn m() {\n    foo(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n";
+        let out = apply(patch, pre).expect("let joint must apply");
+        assert_eq!(
+            out, "fn bar(x: i32) -> i32 {\n    let y = 2;\n    y\n}\nfn m() {\n    bar(1);\n}\n",
+            "let joint must rename header, body line, and follow calls"
+        );
     }
 
     #[test]

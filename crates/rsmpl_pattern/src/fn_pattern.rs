@@ -859,15 +859,15 @@ pub fn try_parse_fn_body_joint(
     if !names_differ {
         return None;
     }
-    // One whole-line general expression each side, differing text.
+    // One whole-line body pair, differing text: a general expression
+    // (WI-20) or a plain same-binder `let` statement with an init
+    // (WI-13 slice 1). Binder-changing `let` pairs decline (`None`) —
+    // binder renames belong to D11/D16 capture, out of scope here.
     let (bm_t, bp_t) = (bm.trim(), bp.trim());
     if bm_t.is_empty() || bp_t.is_empty() || bm_t == bp_t {
         return None;
     }
-    if syn::parse_str::<syn::Expr>(bm_t).is_err() {
-        return None;
-    }
-    if syn::parse_str::<syn::Expr>(bp_t).is_err() {
+    if !body_pair_holds(bm_t, bp_t) {
         return None;
     }
     Some(FnBodyJoint {
@@ -876,6 +876,37 @@ pub fn try_parse_fn_body_joint(
         body_minus: bm_t.to_string(),
         body_plus: bp_t.to_string(),
     })
+}
+
+/// WI-13 slice 1: the body-pair half of the joint gate (shared law with
+/// the raiser's `body_pair_ok`). Accepts one `syn::Expr` each side, or
+/// one plain same-binder `let` (`syn::Stmt::Local`, both with `init`,
+/// no attributes, binder `pat` token-equal whitespace-insensitively).
+fn body_pair_holds(bm_t: &str, bp_t: &str) -> bool {
+    if syn::parse_str::<syn::Expr>(bm_t).is_ok() && syn::parse_str::<syn::Expr>(bp_t).is_ok() {
+        return true;
+    }
+    let (lm, lp) = match (
+        syn::parse_str::<syn::Stmt>(bm_t),
+        syn::parse_str::<syn::Stmt>(bp_t),
+    ) {
+        (Ok(syn::Stmt::Local(m)), Ok(syn::Stmt::Local(p))) => (m, p),
+        _ => return false,
+    };
+    if !lm.attrs.is_empty() || !lp.attrs.is_empty() {
+        return false;
+    }
+    if lm.init.is_none() || lp.init.is_none() {
+        return false;
+    }
+    let norm = |pat: &syn::Pat| {
+        quote::quote!(#pat)
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    norm(&lm.pat) == norm(&lp.pat)
 }
 
 /// Minimal tokenizer keeping multi-char tokens (`...`, `->`, `::`) intact.
@@ -1355,6 +1386,24 @@ mod tests {
     }
 
     #[test]
+    fn wi13_body_joint_fires_on_same_binder_let() {
+        let joint = try_parse_fn_body_joint(
+            "fn foo(x: i32) -> i32 { ... }\nlet y = 1;",
+            "fn bar(x: i32) -> i32 { ... }\nlet y = 2;",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .expect("header+same-binder-let joint must parse");
+        assert_eq!(joint.body_minus, "let y = 1;");
+        assert_eq!(joint.body_plus, "let y = 2;");
+    }
+
+    #[test]
     fn wi20_body_joint_declines() {
         let no = |m: &str, p: &str| {
             try_parse_fn_body_joint(m, p, &[], &[], &[], &[], &[], &[], false).is_none()
@@ -1374,10 +1423,15 @@ mod tests {
             "fn foo(x: i32) { ... }\nlet y = x + 1;\ny * 2",
             "fn bar(x: i32) { ... }\nlet y = x + 2;\ny * 3"
         ));
-        // `let`-statement bodies never parse as expressions.
+        // `let` without an init carries no init delta.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }\nlet y;",
+            "fn bar(x: i32) -> i32 { ... }\nlet y;"
+        ));
+        // Binder-changing `let` pairs belong to D11/D16 capture.
         assert!(no(
             "fn foo(x: i32) -> i32 { ... }\nlet y = 1;",
-            "fn bar(x: i32) -> i32 { ... }\nlet y = 2;"
+            "fn bar(x: i32) -> i32 { ... }\nlet z = 1;"
         ));
         // Identical body text is no delta.
         assert!(no(

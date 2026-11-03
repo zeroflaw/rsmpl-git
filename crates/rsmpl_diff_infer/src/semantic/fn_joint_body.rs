@@ -19,6 +19,37 @@ use super::fn_joint::{is_call_site_of, is_callee_only};
 use super::fn_joint_sig::slots_equal_except_name;
 use super::fn_joint_types::{Fire, FlatPair, Joint};
 
+/// WI-13 slice 1: body-pair half of the joint gate (mirrors the
+/// engine pattern's `body_pair_holds`). Accepts one `syn::Expr` each
+/// side, or one plain same-binder `let` (`syn::Stmt::Local`, both with
+/// `init`, no attributes, binder `pat` token-equal).
+fn body_pair_ok(bm: &str, bp: &str) -> bool {
+    if syn::parse_str::<syn::Expr>(bm).is_ok() && syn::parse_str::<syn::Expr>(bp).is_ok() {
+        return true;
+    }
+    let (lm, lp) = match (
+        syn::parse_str::<syn::Stmt>(bm),
+        syn::parse_str::<syn::Stmt>(bp),
+    ) {
+        (Ok(syn::Stmt::Local(m)), Ok(syn::Stmt::Local(p))) => (m, p),
+        _ => return false,
+    };
+    if !lm.attrs.is_empty() || !lp.attrs.is_empty() {
+        return false;
+    }
+    if lm.init.is_none() || lp.init.is_none() {
+        return false;
+    }
+    let norm = |pat: &syn::Pat| {
+        quote::quote!(#pat)
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    norm(&lm.pat) == norm(&lp.pat)
+}
+
 /// Try the body-joint shape for one single-file group. `def_idx` is the
 /// positional header-delta pair; `old`/`new` its names. Returns the
 /// fireable payload, else `None` (the caller falls through to the
@@ -55,13 +86,16 @@ pub(crate) fn try_body_joint(
     if !slots_equal_except_name(&flat[def_idx].minus, &flat[def_idx].plus) {
         return None;
     }
-    // One whole-line expression pair, differing text, not itself a call
-    // site of the rename.
+    // One whole-line body pair, differing text, not itself a call
+    // site of the rename: a general expression (WI-20) or a plain
+    // same-binder `let` statement with an init (WI-13 slice 1).
+    // Binder-changing `let` pairs decline — binder renames belong to
+    // D11/D16 capture, out of scope here.
     let (bm, bp) = (flat[body_idx].minus.trim(), flat[body_idx].plus.trim());
     if bm.is_empty() || bp.is_empty() || bm == bp {
         return None;
     }
-    if syn::parse_str::<syn::Expr>(bm).is_err() || syn::parse_str::<syn::Expr>(bp).is_err() {
+    if !body_pair_ok(bm, bp) {
         return None;
     }
     if is_call_site_of(&flat[body_idx].minus, &flat[body_idx].plus, old, new) {
@@ -291,8 +325,9 @@ mod tests {
     }
 
     #[test]
-    fn body_joint_non_expr_body_suppresses() {
-        // A `let`-statement body delta is not the general-expr slice.
+    fn body_joint_let_single_fires_verified_byte_identical() {
+        // WI-13 slice 1: rename + one same-binder `let` body pair fires
+        // as the single follow hunk, like the expr single.
         let pre = pre_map(&[(
             "src.rs",
             "fn foo(x: i32) -> i32 {\n    let y = 1;\n    y\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
@@ -301,10 +336,56 @@ mod tests {
             "src.rs",
             "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let y = 1;\n+fn bar(x: i32) -> i32 {\n+    let y = 2;\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("let body joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- let y = 1;"), "got:\n{out}");
+        assert!(out.contains("+ let y = 2;"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    let y = 2;\n    y\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "let body joint must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn body_joint_let_binder_change_suppresses() {
+        // Binder-changing `let` pairs belong to D11/D16 capture —
+        // wholly ordinary, never a joint.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    let y = 1;\n    y\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let y = 1;\n+fn bar(x: i32) -> i32 {\n+    let z = 1;\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
         let full = infer_semantic_with_pre_images(&sections, &pre);
         assert!(
             full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "non-expr body shape must stay wholly ordinary, got: {full:?}"
+            "binder-changing let shape must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn body_joint_non_let_body_suppresses() {
+        // A `let` without an init carries no init delta — ordinary.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    let y;\n    y = 1;\n    y\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let y;\n+fn bar(x: i32) -> i32 {\n+    let z;\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "init-less let shape must stay wholly ordinary, got: {full:?}"
         );
     }
 }
