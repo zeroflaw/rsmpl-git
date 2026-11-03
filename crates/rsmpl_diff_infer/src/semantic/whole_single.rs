@@ -19,10 +19,7 @@ use super::{attempt, guard_for, Guard};
 /// per-detector). `ordinary` is the normalized section length, `allow`
 /// the arm's precision allowance. Rename-prelude sections compare the
 /// re-headered final bytes; the decline path truncates the reserved
-/// rule and records `precision-guard` provenance, exactly as the seven
-/// open-coded blocks did — except the item-rename arm, which the
-/// original left silent on the rename-prelude path (truncate, no
-/// decline); `decline_prelude_over` preserves that single exception.
+/// rule and records `precision-guard` provenance on every arm.
 #[allow(clippy::too_many_arguments)]
 fn emit_if_within(
     emission: &str,
@@ -34,7 +31,6 @@ fn emit_if_within(
     rename_prelude: &Option<String>,
     ordinary: usize,
     allow: usize,
-    decline_prelude_over: bool,
     checkpoint: usize,
     used_rules: &mut Vec<String>,
     prov: &mut Vec<HunkProvenance>,
@@ -60,9 +56,7 @@ fn emit_if_within(
             used_rules.truncate(checkpoint);
             return None;
         }
-        if decline_prelude_over {
-            declined_guard(declined, detector, "precision-guard");
-        }
+        declined_guard(declined, detector, "precision-guard");
         used_rules.truncate(checkpoint);
         None
     } else if emission.len() <= ordinary + allow {
@@ -114,8 +108,6 @@ pub(crate) fn try_whole_single_section(
         debug_assert_eq!(guard_for("item_rename"), Guard::Precision);
         // WI-7a: rename sections re-emit under the preserved
         // prelude; the precision guard compares the final bytes.
-        // The prelude-over path stays silent (truncate, no decline),
-        // exactly as the open-coded block did.
         if let Some(out) = emit_if_within(
             &rename,
             "item_rename",
@@ -126,7 +118,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             super::guard::precision_allowance(1, 0),
-            false,
             checkpoint,
             used_rules,
             prov,
@@ -156,7 +147,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             super::guard::precision_allowance(1, 0),
-            true,
             evo_checkpoint,
             used_rules,
             prov,
@@ -209,7 +199,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             allow,
-            true,
             prec_checkpoint,
             used_rules,
             prov,
@@ -238,7 +227,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             super::guard::precision_allowance(1, 0),
-            true,
             impl_checkpoint,
             used_rules,
             prov,
@@ -277,7 +265,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             super::guard::precision_allowance(1, 0),
-            true,
             attr_checkpoint,
             used_rules,
             prov,
@@ -308,7 +295,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             super::guard::precision_allowance(1, 0),
-            true,
             use_checkpoint,
             used_rules,
             prov,
@@ -339,7 +325,6 @@ pub(crate) fn try_whole_single_section(
             rename_prelude,
             ordinary,
             super::guard::precision_allowance(1, 0),
-            true,
             macro_checkpoint,
             used_rules,
             prov,

@@ -154,7 +154,10 @@ pub(crate) fn try_delete_sweep(section: &str, used_rules: &mut Vec<String>) -> O
             rewritten.push_str("\\ No newline at end of file\n");
         }
     }
-    if rewritten.len() < section.len() {
+    if super::guard::within_strict(
+        rewritten.len(),
+        super::guard::normalized_section_len(section),
+    ) {
         Some(rewritten)
     } else {
         used_rules.truncate(checkpoint);

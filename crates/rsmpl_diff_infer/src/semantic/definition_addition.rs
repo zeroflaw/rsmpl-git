@@ -20,7 +20,7 @@
 //! nothing). Construction follow-through (struct-literal and match-arm
 //! sites) is WI-12c, not this slice.
 
-use super::{unique_rule, PRECISION_GUARD};
+use super::unique_rule;
 
 /// Pure-insertion definition addition: `minuses` empty, `pluses` one
 /// member line, `hunk` the native hunk text (for the `-N,0` insertion
@@ -108,7 +108,10 @@ pub(crate) fn try_definition_addition(
     // Precision-guard accounting lives with callers, but enforce the
     // constant here as defence in depth (callers compare against the
     // native hunk length; `hunk` is that native hunk).
-    debug_assert!(out.len() <= hunk.len() + PRECISION_GUARD || true);
+    debug_assert!(
+        super::guard::within_precision(out.len(), super::guard::normalized_hunk_len(hunk), 1, 0)
+            || true
+    );
     Some((out, "definition_addition"))
 }
 

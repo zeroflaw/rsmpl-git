@@ -255,8 +255,11 @@ pub(crate) fn try_joint_impl_rename(
         used_rules.truncate(checkpoint);
         return None;
     }
-    // T375 pure-section byte guard (diet must beat native).
-    if emission.len() >= cand.section.len() {
+    // Strict T375 over the normalized span (diet must beat native).
+    if !super::guard::within_strict(
+        emission.len(),
+        super::guard::normalized_section_len(&cand.section),
+    ) {
         used_rules.truncate(checkpoint);
         return None;
     }

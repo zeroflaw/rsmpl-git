@@ -9617,25 +9617,30 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —
-`diffrs` never emits an unparseable patch. Two byte guards price
-competing risks (WI-19, one decision point:
-`rsmpl_diff_infer::semantic::guard_for`). Sweep shapes (calls,
+`diffrs` never emits an unparseable patch. One allowance law prices
+competing risks (WI-19/WI-7, one decision point:
+`rsmpl_diff_infer::semantic::guard_for` for the posture plus
+`guard::precision_allowance` for the number, decided by the single
+helpers `within_precision` / `within_strict`). Sweep shapes (calls,
 methods, `general_expr`, `control_template`, verbatim, macro
 interiors — any minus pattern that could match wider than the diff)
-keep strict T375: a semantic hunk is kept only when byte-smaller
-(bytes proxy tokens, and bytes proxy over-match risk) than the
-ordinary hunk(s) it replaces — whole-section candidates against the
-whole section, per-hunk candidates against their hunk (prelude shared
-either way; ties stay ordinary). Definition shapes (`item_rename`,
-`member_rename`, `assoc_rename`, `macro_rules_rename`,
-slot/sig/header evolution singles, definition evolution/addition,
-`delete`, `move`, `mod_rename`, `item_intent` — every detector whose
-plus the WI-1 postcondition re-verifies at its spans) fire under the
-precision guard: semantic ≤ ordinary + 16 bytes (per hunk; partial
-partition scales the allowance by claimed pairs, `+ 16 × claimed`).
-The ordinary side is the rendering-normalized hunk span: git's elided
-`,1` prices like the explicit `,1` form, so the verdict never depends
-on header rendering.
+keep strict T375 (`within_strict`: a semantic hunk is kept only when
+byte-smaller — bytes proxy tokens, and bytes proxy over-match risk —
+than the ordinary hunk(s) it replaces; whole-section candidates
+against the whole section, per-hunk candidates against their hunk,
+prelude shared either way; ties stay ordinary). Definition shapes
+(`item_rename`, `member_rename`, `assoc_rename`,
+`macro_rules_rename`, slot/sig/header evolution singles, definition
+evolution/addition, `delete`, `move`, `mod_rename`, `item_intent` —
+every detector whose plus the WI-1 postcondition re-verifies at its
+spans) fire under the precision allowance (`within_precision`:
+semantic ≤ ordinary + `precision_allowance(n_claimed, filter_extra)`
+with `precision_allowance(n, extra) = 16 × max(1, n) + extra`; the
+partial partition scales the allowance by claimed pairs and filtered
+singles add their mandatory anchor-block bytes as `filter_extra`).
+The ordinary side on both helpers is the rendering-normalized span:
+git's elided `,1` prices like the explicit `,1` form at hunk and
+section level, so the verdict never depends on header rendering.
 The 16-byte constant is the price of the `diff --git` + `@@ … rule=`
 + pattern lines the ordinary form does not carry — a pinned SPEC
 constant, never a tunable discovered in code. A losing shape falls

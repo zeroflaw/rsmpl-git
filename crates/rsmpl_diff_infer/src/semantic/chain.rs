@@ -787,10 +787,13 @@ pub(crate) fn compress_section(
         &minuses, &pluses, path, file_old, &changed, used_rules, declined,
     ) {
         // WI-7a: rename sections re-emit under the preserved prelude;
-        // the T375 guard compares the final bytes.
+        // Strict T375 over the normalized span compares the final bytes.
         if let Some(prelude) = &rename_prelude {
             if let Some(final_text) = reheader_rename(&sweep, prelude) {
-                if final_text.len() < section.len() {
+                if super::guard::within_strict(
+                    final_text.len(),
+                    super::guard::normalized_section_len(section),
+                ) {
                     push_section_prov(
                         prov,
                         &final_text,
@@ -807,7 +810,10 @@ pub(crate) fn compress_section(
             }
             declined_guard(declined, detector, "byte-guard");
             used_rules.truncate(checkpoint);
-        } else if sweep.len() < section.len() {
+        } else if super::guard::within_strict(
+            sweep.len(),
+            super::guard::normalized_section_len(section),
+        ) {
             push_section_prov(
                 prov, &sweep, section, path, detector, &changed, file_old, checkpoint, used_rules,
             );
@@ -831,10 +837,13 @@ pub(crate) fn compress_section(
         try_partition_section(&minuses, &pluses, path, file_old, &changed, used_rules),
     ) {
         // WI-7a: rename sections re-emit under the preserved prelude;
-        // the T375 guard compares the final bytes.
+        // Strict T375 over the normalized span compares the final bytes.
         if let Some(prelude) = &rename_prelude {
             if let Some(final_text) = reheader_rename(&part, prelude) {
-                if final_text.len() < section.len() {
+                if super::guard::within_strict(
+                    final_text.len(),
+                    super::guard::normalized_section_len(section),
+                ) {
                     push_section_prov(
                         prov,
                         &final_text,
@@ -851,7 +860,10 @@ pub(crate) fn compress_section(
             }
             declined_guard(declined, part_detector, "byte-guard");
             used_rules.truncate(part_checkpoint);
-        } else if part.len() < section.len() {
+        } else if super::guard::within_strict(
+            part.len(),
+            super::guard::normalized_section_len(section),
+        ) {
             push_section_prov(
                 prov,
                 &part,

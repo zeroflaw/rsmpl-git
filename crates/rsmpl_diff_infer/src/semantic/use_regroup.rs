@@ -27,8 +27,6 @@
 
 use std::collections::HashMap;
 
-use super::PRECISION_GUARD;
-
 /// Unbalanced-hunk regroup entry: N≥2 `use` minus lines plus exactly
 /// one plus line. Returns the hunk body plus the detector name (the
 /// caller splices the body after the shared section prelude). Every
@@ -97,7 +95,7 @@ pub(crate) fn try_use_regroup_hunk(
     body.push_str(&format!("+ {}\n", pluses[0]));
     // Precision guard on the hunk body (same posture as the single-pair
     // precision shapes: `body <= hunk + 16`).
-    if body.len() > super::normalized_hunk_len(hunk) + PRECISION_GUARD {
+    if !super::guard::within_precision(body.len(), super::normalized_hunk_len(hunk), 1, 0) {
         used_rules.truncate(checkpoint);
         return None;
     }

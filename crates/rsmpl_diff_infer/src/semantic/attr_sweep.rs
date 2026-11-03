@@ -617,7 +617,7 @@ pub(crate) fn try_attr_sweep_section(
         };
         // Per-class T375: a multi-member class fires iff its body beats
         // its covered ordinary hunks. A singleton fires under the
-        // precision posture (`<= ordinary + PRECISION_GUARD`). A losing
+        // precision posture (one allowance over the normalized span). A losing
         // class declines alone — it never vetoes a winning class
         // (partial compression over all-or-nothing).
         let hunk_len: usize = members
@@ -625,10 +625,10 @@ pub(crate) fn try_attr_sweep_section(
             .map(|&idx| super::normalized_hunk_len(&hunks[sites[idx].hunk]))
             .sum();
         if singleton {
-            if lines.len() > hunk_len + super::PRECISION_GUARD {
+            if !super::guard::within_precision(lines.len(), hunk_len, 1, 0) {
                 continue;
             }
-        } else if lines.len() >= hunk_len {
+        } else if !super::guard::within_strict(lines.len(), hunk_len) {
             continue;
         }
         candidates.push(Candidate {
