@@ -162,7 +162,20 @@ pub(crate) fn try_fn_joint_intent(
                         .sum();
                     (f.claimed_hunk_bytes, eh)
                 };
-                if emission_bytes >= claimed_bytes {
+                // WI-8 slice 2: B1 two-hunk emission prices the WI-7 precision
+                // allowance over the proved site set; every other joint keeps
+                // strict T375 (precision is a superset of strict, so prior
+                // N=2 fires are byte-identical).
+                let wins = match &f.joint {
+                    Joint::B1 { .. } => super::guard::within_precision(
+                        emission_bytes,
+                        claimed_bytes,
+                        f.claims.len(),
+                        0,
+                    ),
+                    _ => emission_bytes < claimed_bytes,
+                };
+                if !wins {
                     used_rules.truncate(checkpoint);
                     suppressed.insert((path.to_string(), f.old));
                     continue;
@@ -698,10 +711,9 @@ fn joint_candidate(
         // args (uniform template below); the header must evolve params
         // only with the return preserved — a return delta plus an
         // arg-add is two evolutions the shared-rule pair cannot
-        // restate. Lone additions (N=1) never pay the second hunk.
-        if claimed_flat.len() < 3 {
-            return Candidate::Suppress(old);
-        }
+        // restate. N=1 (def plus one call) pays the second hunk under the
+        // precision allowance at the fire gate (WI-8 slice 2); the len gate
+        // above already guarantees at least one call.
         if !header_argadd_gates(&flat[def_idx].minus, &flat[def_idx].plus) {
             return Candidate::Suppress(old);
         }
@@ -1303,14 +1315,42 @@ mod tests {
     }
 
     #[test]
+    fn joint_b1_single_call_fires_shared_rule() {
+        // WI-8 slice 2: rename plus param-add with a single uniform
+        // arg-adding call (N=1) raises to the shared-rule two-hunk B1
+        // under the precision allowance — the probe proves the site set.
+        let one = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: i32, y: i32) {\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1, 0);\n",
+        )];
+        let pre = pre_map(&[("src.rs", one)]);
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("B1 N=1 must fire");
+        assert!(
+            out.matches("rule=r1").count() >= 2,
+            "both hunks share one rule"
+        );
+        assert!(!out.contains("follow=uses"), "no follow in a joint");
+        assert!(out.contains("- foo(E0)"), "call template minus");
+        assert!(out.contains("+ bar(E0, 0)"), "call template plus");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"], "fn bar(x: i32, y: i32) {\n    x\n}\nfn m() {\n    bar(1, 0);\n}\n",
+            "B1 N=1 must round-trip byte-identical"
+        );
+    }
+
+    #[test]
     fn joint_b1_hetero_vetoes_stay_ordinary() {
-        // Lone additions (N=1), hetero suffixes, prefix rewrites,
-        // hetero arities, return deltas, and vis/qual deltas each stay
-        // wholly ordinary — no uniform template states them.
+        // Hetero suffixes, prefix rewrites, hetero arities, return deltas,
+        // and vis/qual deltas each stay wholly ordinary — no uniform
+        // template states them. (WI-8 slice 2: lone N=1 additions now fire
+        // as B1, pinned by joint_b1_single_call_fires_shared_rule.)
         let pre = PRE;
         for body in [
-            // N=1 lone addition never pays the second hunk.
-            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: i32, y: i32) {\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1, 0);\n",
             // Hetero trailing suffix.
             "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 1);\n",
             // Leading-arg rewrite is not an addition.

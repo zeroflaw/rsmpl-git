@@ -2275,11 +2275,13 @@ would refuse the overlap). The authored spelling is the same pair an
 agent would write by hand (explicit slots, `{ ... }` body). Anything
 else in the joint shape (body delta, hetero call shapes, qual/
 generics/where delta, vis-only or triple-slot (vis+params+return)
-delta, twin defs, N=1 joints) suppresses the old callee
+delta, twin defs, N=1 B2/Body joints) suppresses the old callee
 name for the file, so the section stays wholly ordinary — the
 fragmented fallback (ordinary definition plus a rename-claiming call
 sweep) is unrepresentable by construction. Multi-file joints stay
 ordinary (future work).
+Joint-B1 fires at N>=1: the single-call two-hunk emission prices the
+WI-7 precision allowance over the proved site set.
 
 #### Slot removal
 
