@@ -10141,6 +10141,10 @@ otherwise the ordinary remainder never normalizes; trait-side-only,
 standalone-insertion, and zero-edit shapes stay ordinary by design;
 macro-rename singles fire as allow-one verbatim hunks under
 `# macro=token_tree` where the `macro_holds` proof admits them.
+Joint/partition benches 45–48 are auditability-pinned (one composed
+scratch-apply probe per intent, D13), not token-saving claims: at small N
+the anchor/header facts exceed the native bytes (WI-7 allowance admits
+them as proved intents); a factored shared-rule diet stays future work.
 
 <!-- generated: d5-exclusions start -- do not hand-edit; run `python3 tools/gen_d5_exclusions.py --write` -->
 CYCLE_OK: 102 entries (canonically lossless; the harness asserts tree-canonical equality plus the `S'' == S'` fixed point).
