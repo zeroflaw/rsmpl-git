@@ -2,7 +2,7 @@
 //! addition (T447). Split from `super` (T468) to hold the 2000-line
 //! hygiene gate.
 
-use super::{call_parts, parse_call_expr, unique_rule};
+use super::{call_parts, parse_call_expr, prov::Counted, unique_rule};
 
 /// Whole-arg permutation sweep (WI-6 slice 2, F6(a)): N ≥ 1 `-`/`+`
 /// pairs whose every call subterm is a same-callee same-arity bare
@@ -108,9 +108,9 @@ pub(crate) fn try_call_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut old_cal: Option<String> = None;
     let mut new_cal: Option<String> = None;
@@ -122,13 +122,13 @@ pub(crate) fn try_call_sweep(
             break;
         };
         if old_cal.as_ref().is_some_and(|c| *c != o) {
-            return None;
+            return Counted::Miss;
         }
         if new_cal.as_ref().is_some_and(|c| *c != n) {
-            return None;
+            return Counted::Miss;
         }
         if arity.is_some_and(|x| x != a) {
-            return None;
+            return Counted::Miss;
         }
         old_cal = Some(o);
         new_cal = Some(n);
@@ -141,12 +141,19 @@ pub(crate) fn try_call_sweep(
     }
     if let (Some(old_cal), Some(new_cal), Some(arity)) = (old_cal, new_cal, arity) {
         if old_cal == new_cal {
-            return None;
+            return Counted::Miss;
         }
-        if !crate::totality::call_holds(file_old, &old_cal, arity, minuses, changed) {
-            return None;
+        // WI-17 slice 4: the shape matched, so a failing probe names its
+        // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+        match crate::totality::call_verdict(file_old, &old_cal, arity, minuses, changed) {
+            crate::totality::CallVerdict::Holds => {}
+            crate::totality::CallVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality::CallVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality::CallVerdict::Unproven => return Counted::Miss,
         }
-        return Some(emit_call_sweep(
+        return Counted::Fire(emit_call_sweep(
             path, used_rules, &old_cal, &new_cal, arity, changed,
         ));
     }
@@ -156,23 +163,28 @@ pub(crate) fn try_call_sweep(
     // sub-line territory. Totality counts occurrences via the engine
     // probe.
     if super::subline::all_identical_pairs(minuses, pluses) {
-        return None;
+        return Counted::Miss;
     }
     let mut sub_old: Option<String> = None;
     let mut sub_new: Option<String> = None;
     let mut sub_arity: Option<usize> = None;
     let mut total = 0usize;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let sites = super::subline::extract_bare_sites(m, p)?;
+        // WI-17 slice 4 residue: the sub-line probe stays bool-only, so
+        // its totality failure keeps the `Miss` mapping (a counted
+        // `template_expr` probe is a later slice).
+        let Some(sites) = super::subline::extract_bare_sites(m, p) else {
+            return Counted::Miss;
+        };
         for s in &sites {
             if sub_old.as_ref().is_some_and(|c| *c != s.old_cal) {
-                return None;
+                return Counted::Miss;
             }
             if sub_new.as_ref().is_some_and(|c| *c != s.new_cal) {
-                return None;
+                return Counted::Miss;
             }
             if sub_arity.is_some_and(|x| x != s.arity) {
-                return None;
+                return Counted::Miss;
             }
             sub_old = Some(s.old_cal.clone());
             sub_new = Some(s.new_cal.clone());
@@ -180,15 +192,17 @@ pub(crate) fn try_call_sweep(
             total += 1;
         }
     }
-    let (old_cal, new_cal, arity) = (sub_old?, sub_new?, sub_arity?);
+    let (Some(old_cal), Some(new_cal), Some(arity)) = (sub_old, sub_new, sub_arity) else {
+        return Counted::Miss;
+    };
     if old_cal == new_cal || total < 2 {
-        return None;
+        return Counted::Miss;
     }
     if !crate::totality::template_expr_holds(path, file_old, &call_template(&old_cal, arity), total)
     {
-        return None;
+        return Counted::Miss;
     }
-    Some(emit_call_sweep(
+    Counted::Fire(emit_call_sweep(
         path, used_rules, &old_cal, &new_cal, arity, changed,
     ))
 }
@@ -197,7 +211,7 @@ pub(crate) fn try_call_sweep(
 /// `PrecisionUnique`. Fires iff the pair parses whole-line as
 /// `Old(args)` → `New(args)` with identical args, `old != new`, a
 /// pre-image is present (`None` vetoes — uniqueness needs the whole
-/// file, D3), and `call_holds` proves exactly one `old_cal/arity`
+/// file, D3), and `call_verdict` proves exactly one `old_cal/arity`
 /// site file-wide with zero opaque hits (conditions (a)+(b); (c) is
 /// structural: the bare-call template always carries the callee token
 /// beyond the `E` holes). Emission is the WI-19b allow-one spelling
@@ -209,19 +223,30 @@ pub(crate) fn try_call_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    file_old?;
-    let (old_cal, new_cal, arity) = parse_call_pair(minuses[0], pluses[0])?;
-    if old_cal == new_cal {
-        return None;
+    if file_old.is_none() {
+        return Counted::Miss;
     }
-    if !crate::totality::call_holds(file_old, &old_cal, arity, minuses, changed) {
-        return None;
+    let Some((old_cal, new_cal, arity)) = parse_call_pair(minuses[0], pluses[0]) else {
+        return Counted::Miss;
+    };
+    if old_cal == new_cal {
+        return Counted::Miss;
+    }
+    // WI-17 slice 4: the shape matched, so a failing probe names its
+    // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+    match crate::totality::call_verdict(file_old, &old_cal, arity, minuses, changed) {
+        crate::totality::CallVerdict::Holds => {}
+        crate::totality::CallVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality::CallVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality::CallVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     let mut vars = Vec::with_capacity(arity);
@@ -234,7 +259,7 @@ pub(crate) fn try_call_single(
     // Allow-one: directive-free ranged hunk (59/77 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {old_lit}({args})\n+ {new_lit}({args})\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// WI-7 slice-14: sub-line bare-call callee-only single (N=1) under
@@ -451,7 +476,7 @@ fn call_template(old_cal: &str, arity: usize) -> String {
 /// per-site trailing metavars would bind nothing on the minus side
 /// (T442-illegal unbound emission), so hetero trailing additions
 /// (09d3446's `symlink` vs `false`) stay ordinary. Pre-image totality
-/// reuses `call_holds` over the minus arity (exact for this shape:
+/// reuses `call_verdict` over the minus arity (exact for this shape:
 /// every old-arity call matches the minus pattern).
 pub(crate) fn try_call_arg_add_sweep(
     minuses: &[&str],
@@ -460,9 +485,9 @@ pub(crate) fn try_call_arg_add_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     use quote::ToTokens;
     let tok = |e: &syn::Expr| e.to_token_stream().to_string();
@@ -470,35 +495,54 @@ pub(crate) fn try_call_arg_add_sweep(
     let mut prefix: Option<usize> = None;
     let mut tail: Option<Vec<String>> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o_cal, o_args) = call_parts(&parse_call_expr(m)?)?;
-        let (n_cal, n_args) = call_parts(&parse_call_expr(p)?)?;
+        let Some(o_expr) = parse_call_expr(m) else {
+            return Counted::Miss;
+        };
+        let Some((o_cal, o_args)) = call_parts(&o_expr) else {
+            return Counted::Miss;
+        };
+        let Some(n_expr) = parse_call_expr(p) else {
+            return Counted::Miss;
+        };
+        let Some((n_cal, n_args)) = call_parts(&n_expr) else {
+            return Counted::Miss;
+        };
         if o_cal != n_cal || n_args.len() <= o_args.len() {
-            return None;
+            return Counted::Miss;
         }
         if cal.as_ref().is_some_and(|c| *c != o_cal) {
-            return None;
+            return Counted::Miss;
         }
         if prefix.is_some_and(|k| k != o_args.len()) {
-            return None;
+            return Counted::Miss;
         }
         if !o_args
             .iter()
             .zip(n_args.iter())
             .all(|(a, b)| tok(a) == tok(b))
         {
-            return None;
+            return Counted::Miss;
         }
         let grown: Vec<String> = n_args[o_args.len()..].iter().map(tok).collect();
         if tail.as_ref().is_some_and(|t| *t != grown) {
-            return None;
+            return Counted::Miss;
         }
         cal = Some(o_cal);
         prefix = Some(o_args.len());
         tail = Some(grown);
     }
-    let (cal, k, tail) = (cal?, prefix?, tail?);
-    if !crate::totality::call_holds(file_old, &cal, k, minuses, changed) {
-        return None;
+    let (Some(cal), Some(k), Some(tail)) = (cal, prefix, tail) else {
+        return Counted::Miss;
+    };
+    // WI-17 slice 4: the shape matched, so a failing probe names its
+    // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+    match crate::totality::call_verdict(file_old, &cal, k, minuses, changed) {
+        crate::totality::CallVerdict::Holds => {}
+        crate::totality::CallVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality::CallVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality::CallVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{cal}_add_{}", tail.len()));
     let mut hunk = crate::emission_header(path, &rule, changed);
@@ -518,7 +562,7 @@ pub(crate) fn try_call_arg_add_sweep(
         (format!("{lit}({head})"), format!("{lit}({head}, {grown})"))
     };
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// Parse a `-`/`+` line pair as bare calls; return
@@ -593,18 +637,21 @@ mod tests {
         // An untouched same-callee twin anywhere vetoes the HOLED
         // template (totality); the unique whole line raises as a
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
+        // WI-17 slice 4: the veto names both counts, not `no-match`.
         let pre = "fn m() {\n    foo(1);\n    foo(9);\n}\n";
         assert!(
-            super::try_call_single(
-                &["    foo(1);"],
-                &["    bar(1);"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
-            "holed twin must veto at the core"
+            matches!(
+                super::try_call_single(
+                    &["    foo(1);"],
+                    &["    bar(1);"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                super::Counted::Totality { found: 2, want: 1 }
+            ),
+            "holed twin must veto with both counts at the core"
         );
         let raw = section("f.rs", "@@ -2 +2 @@\n-    foo(1);\n+    bar(1);\n");
         let pre_map = pre_map(&[("f.rs", pre)]);
@@ -612,6 +659,79 @@ mod tests {
             .expect("literal verbatim single must fire");
         assert!(out.contains("- foo(1)\n"), "got: {out}");
         assert!(out.contains("+ bar(1)\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi17_call_sweep_twin_names_totality_in_provenance() {
+        // WI-17 slice 4: a 2-pair callee-only sweep with an untouched
+        // twin stays wholly ordinary, and the chain records the counted
+        // decline (`totality:3:2`) instead of `no-match`. Hetero args
+        // defeat the literal/verbatim arms and the twin defeats the
+        // general arm, so the ordinary entry carries the wire visibly.
+        let pre = "fn m() {\n    foo(1);\n    foo(2);\n    foo(3);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -1,5 +1,5 @@\n fn m() {\n     foo(1);\n-    foo(2);\n-    foo(3);\n+    bar(2);\n+    bar(3);\n }\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let mut prov = Vec::new();
+        let opt = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&raw),
+            &pre_map,
+            &mut prov,
+        );
+        assert!(opt.is_none(), "twin sweep stays ordinary, got: {opt:?}");
+        assert_eq!(prov.len(), 1, "one ordinary entry, got: {prov:?}");
+        assert!(
+            prov[0]
+                .declined
+                .iter()
+                .any(|d| d.detector == "call_sweep" && d.reason == "totality:3:2"),
+            "counted decline named, got: {:?}",
+            prov[0].declined
+        );
+        for d in &prov[0].declined {
+            assert!(
+                super::super::prov::reason_is_closed(&d.reason),
+                "open reason: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wi17_call_sweep_opaque_twin_names_veto_in_provenance() {
+        // WI-17 slice 4: a count-exact sweep whose needle hides in a
+        // macro on a changed line stays wholly ordinary (existing
+        // totality pin), and the chain records `veto:opaque-hit` under
+        // `call_sweep` instead of `no-match`.
+        let pre = "fn m() {\n    foo(1);\n    g(m!(foo(1)));\n    foo(1);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    foo(1);\n-    foo(1);\n+    bar(1);\n+    bar(1);\n }\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let mut prov = Vec::new();
+        let opt = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&raw),
+            &pre_map,
+            &mut prov,
+        );
+        assert!(opt.is_none(), "opaque twin stays ordinary, got: {opt:?}");
+        assert_eq!(prov.len(), 1, "one ordinary entry, got: {prov:?}");
+        assert!(
+            prov[0]
+                .declined
+                .iter()
+                .any(|d| d.detector == "call_sweep" && d.reason == "veto:opaque-hit"),
+            "opaque veto named, got: {:?}",
+            prov[0].declined
+        );
+        for d in &prov[0].declined {
+            assert!(
+                super::super::prov::reason_is_closed(&d.reason),
+                "open reason: {d:?}"
+            );
+        }
     }
 
     #[test]
@@ -628,17 +748,21 @@ mod tests {
 
     #[test]
     fn wi7_call_single_no_pre_image_vetoes() {
-        // No whole-file evidence → no guessing (D3).
+        // No whole-file evidence → no guessing (D3). WI-17 slice 4:
+        // unproven pre-images keep the `Miss` (`no-match`) mapping —
+        // no counts to name.
         assert!(
-            super::try_call_single(
-                &["    foo(1);"],
-                &["    bar(1);"],
-                "f.rs",
-                None,
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_call_single(
+                    &["    foo(1);"],
+                    &["    bar(1);"],
+                    "f.rs",
+                    None,
+                    &[2],
+                    &mut Vec::new()
+                ),
+                super::Counted::Miss
+            ),
             "None pre-image must veto"
         );
     }

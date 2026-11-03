@@ -548,6 +548,77 @@ fn wi17_guard_veto_carries_verdict_numbers() {
     }
 }
 #[test]
+fn wi17_slice4_twin_single_names_totality_end_to_end() {
+    // WI-17 slice 4 non-vacuous wire pin: a 1-pair callee-only single
+    // with an identical-literal twin stays wholly ordinary through
+    // the full binary path (the per-hunk `call_sweep` single counts
+    // 2 file-wide vs 1 claimed, and the literal twin defeats the
+    // verbatim rescue too), and the JSON trial names the counted
+    // decline (`call_sweep` / `totality:2:1`) — not just parseable in
+    // the taxonomy loop above, but emitted. Text mode prints the same
+    // triple on stderr (parity). (The multi-pair `totality:3:2` wire
+    // is pinned in-process: at binary level the per-hunk verbatim
+    // rescue soundly claims each line, so no ordinary entry survives
+    // to carry it.)
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    foo(2);\n    foo(2);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    foo(2);\n    bar(2);\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "twin single stays ordinary, got: {v}");
+    let e = &hunks[0];
+    assert_eq!(e["detector"], serde_json::json!("ordinary"), "got: {v}");
+    let declined = e["declined"].as_array().unwrap();
+    assert!(
+        declined
+            .iter()
+            .any(|d| d["detector"] == serde_json::json!("call_sweep")
+                && d["reason"] == serde_json::json!("totality:2:1")),
+        "counted decline named, got: {declined:?}"
+    );
+    // Exactly one `totality:` entry on the section: the wire fires
+    // once, for the family that proved the mismatch.
+    assert_eq!(
+        declined
+            .iter()
+            .filter(|d| d["reason"]
+                .as_str()
+                .is_some_and(|r| r.starts_with("totality:")))
+            .count(),
+        1,
+        "got: {declined:?}"
+    );
+    let text_out = run(dir.path(), &[]);
+    assert!(
+        text_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text_out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&text_out.stderr)
+            .lines()
+            .any(|l| l == "declined: src/f.rs call_sweep totality:2:1"),
+        "text parity, got: {}",
+        String::from_utf8_lossy(&text_out.stderr)
+    );
+}
+#[test]
 fn wi17_slice2_no_bare_guard_vetoes() {
     // WI-17 slice 2 surface invariant: no bare `byte-guard` /
     // `precision-guard` reason is emitted on any input. Guard vetoes

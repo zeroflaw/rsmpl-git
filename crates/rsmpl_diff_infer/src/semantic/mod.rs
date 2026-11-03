@@ -566,7 +566,7 @@ pub(crate) fn unique_rule(used: &mut Vec<String>, _base: &str) -> String {
 
 pub use prov::HunkDeclined;
 pub use prov::HunkProvenance;
-pub(crate) use prov::{attempt, declined_guard_with_numbers};
+pub(crate) use prov::{attempt, attempt_counted, declined_guard_with_numbers};
 
 /// True when a `diff --git` header names a rename (differing real
 /// sides, T377) via the shared space-aware splitter.

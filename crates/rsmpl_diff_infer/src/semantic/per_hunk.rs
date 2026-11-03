@@ -27,7 +27,7 @@ pub(crate) fn compress_balanced_pair_body(
     used_rules: &mut Vec<String>,
     declined: &mut Vec<super::HunkDeclined>,
 ) -> Option<(String, &'static str)> {
-    use super::{attempt, declined_guard_with_numbers};
+    use super::{attempt, attempt_counted, declined_guard_with_numbers};
     if minuses.len() != pluses.len() || minuses.is_empty() {
         return None;
     }
@@ -60,9 +60,11 @@ pub(crate) fn compress_balanced_pair_body(
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-1: whole-line bare-call single under the precision
-        // guard (`body <= hunk + 16`; uniqueness proved by `call_holds`
+        // guard (`body <= hunk + 16`; uniqueness proved by `call_verdict`
         // at n=1, `guard_for("call_sweep")` stays Strict for multis).
-        if let Some(single) = attempt(
+        // WI-17 slice 4: counted decline — an N=1 shape match with a twin
+        // records `totality:found:want` (or `veto:opaque-hit`).
+        if let Some(single) = attempt_counted(
             declined,
             "call_sweep",
             super::try_call_single(minuses, pluses, path, file_old, changed, used_rules),

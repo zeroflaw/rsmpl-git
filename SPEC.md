@@ -7778,8 +7778,14 @@ out by the byte guard — `kind` is `byte` under strict T375 with
 losing emission bytes, `ord` the normalized ordinary span, `allow`
 the precision allowance, so the overflow `sem > ord + allow` is
 computable from the report alone), `totality:<found>:<want>`
-(site-count mismatch), `veto:<name>` (named veto: off-diff use,
-opaque hit, ambiguous anti-unification), `precondition:<name>` (named
+(site-count mismatch — WI-17 slice 4 wires the call family first
+(`call_sweep` / `call_arg_add` whole-section, per-hunk `call_sweep`
+single: the shape matched and the file-wide count `found` differs
+from the diff pair count `want`; unwired detectors still decline
+shape-or-count as `no-match`), `veto:<name>` (named veto: off-diff
+use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the same
+call family when a macro/string twin covers a changed line —,
+ambiguous anti-unification), `precondition:<name>` (named
 failed shape premise, incl. the LF-only section premise); the pre-WI-17 bare `byte-guard` /
 `precision-guard` spellings stay parseable but are no longer emitted
 anywhere (WI-17 slice 2 unified every guard veto path), and the bare
@@ -7798,7 +7804,11 @@ section's `declined` list (`member_rename`, `assoc_rename`, and
 `trait_method_rename` also fire as per-section chain detectors and keep
 appearing there under their chain meaning). There is deliberately no
 patch-level `declined` key — a pre-pass decline is the absence of a
-semantic entry, by design; partially-compressed sections (semantic plus ordinary
+semantic entry, by design (WI-17 close-out: the absent pre-pass
+`not-tried` listing is a final non-goal, not deferred work — a
+patch-global absence cannot be attributed per-section without
+inventing a section it never ran on, and the per-section absence is
+already data via `not-tried`); partially-compressed sections (semantic plus ordinary
 remainder in one emitted file section) carry one remainder ordinary entry —
 `sites` are the original section's changed lines minus the union of the committed
 semantic prov sites for the emitted rules (run-scoped, so context-carrying bodies
@@ -7818,6 +7828,10 @@ Budget (bytes beyond `patch`):
 evidence, not overhead).
 Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
 `T` = total sites, `D` = total `declined` entries). No relative % bound, same rationale as D.2.
+The completed log needs no truncation arm (WI-17 close-out): the entry
+count is bounded by construction (one per attempted detector family,
+gate, and registry completion, deduped), so the `75·D` term prices
+every length and the totals stay the default truth at any size.
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain

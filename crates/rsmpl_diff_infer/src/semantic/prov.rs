@@ -55,7 +55,9 @@ pub struct HunkProvenance {
 /// WI-17 slice 1 closes the taxonomy (SPEC D.2): `no-match` (shape
 /// decline, no candidate), `guard:<kind>:sem=X:ord=Y:allow=Z` (a
 /// candidate priced out by the byte guard, with the three WI-7
-/// numbers), `totality:<a>:<b>` (site-count mismatch), `veto:<name>`
+/// numbers), `totality:<a>:<b>` (site-count mismatch — WI-17 slice 4
+/// wires the call family first; unwired detectors still decline
+/// shape-or-count as `no-match`), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
 /// anti-unification, joint-territory section gates),
 /// `precondition:<name>` (a stated shape premise failed, incl. the
@@ -137,9 +139,8 @@ pub(crate) fn reason_not_tried() -> String {
 pub(crate) fn reason_guard(kind: &str, sem: usize, ord: usize, allow: usize) -> String {
     format!("guard:{kind}:sem={sem}:ord={ord}:allow={allow}")
 }
-/// WI-17 slice 1 constructor (totality vetoes with both counts;
-/// still unwired — WI-17 slice 4 owns the found/want plumbing).
-#[allow(dead_code)]
+/// WI-17 slice 1 constructor (WI-17 slice 4: wired via
+/// [`declined_totality`] — the call family is the first counted source).
 pub(crate) fn reason_totality(found: usize, want: usize) -> String {
     format!("totality:{found}:{want}")
 }
@@ -179,6 +180,64 @@ pub(crate) fn declined_veto(declined: &mut Vec<HunkDeclined>, detector: &str, na
     declined.push(HunkDeclined {
         detector: detector.to_string(),
         reason: reason_veto(name),
+    });
+}
+
+/// WI-17 slice 4 counted-decline outcome: detectors whose totality probe
+/// yields both counts return this instead of `Option`, so the chain can
+/// record `totality:<found>:<want>` (count mismatch) or
+/// `veto:opaque-hit` (opaque macro/string twin covering a changed line)
+/// instead of a bare `no-match`. `Miss` is every other decline (shape,
+/// arity, unparseable pre-image) — today's `None` mapping, unchanged.
+pub(crate) enum Counted<T> {
+    Fire(T),
+    Miss,
+    Totality { found: usize, want: usize },
+    Opaque,
+}
+
+/// WI-17 slice 4 chain attempt recorder for counted detectors: `Fire`
+/// passes through untouched; every other arm records its closed reason
+/// and passes `None` on. The name lives at the call site, like
+/// [`attempt`], so the list cannot drift from the chain order.
+pub(crate) fn attempt_counted<T>(
+    declined: &mut Vec<HunkDeclined>,
+    detector: &'static str,
+    r: Counted<T>,
+) -> Option<T> {
+    match r {
+        Counted::Fire(v) => Some(v),
+        Counted::Miss => {
+            declined.push(HunkDeclined {
+                detector: detector.to_string(),
+                reason: reason_no_match(),
+            });
+            None
+        }
+        Counted::Totality { found, want } => {
+            declined_totality(declined, detector, found, want);
+            None
+        }
+        Counted::Opaque => {
+            declined_veto(declined, detector, "opaque-hit");
+            None
+        }
+    }
+}
+
+/// WI-17 slice 4 totality recorder: the shape matched but the
+/// file-wide site count (`found`) differs from the diff pair count
+/// (`want`). Emits the closed `totality:` reason (SPEC D.2) — the
+/// overflow direction is computable from the report alone.
+pub(crate) fn declined_totality(
+    declined: &mut Vec<HunkDeclined>,
+    detector: &str,
+    found: usize,
+    want: usize,
+) {
+    declined.push(HunkDeclined {
+        detector: detector.to_string(),
+        reason: reason_totality(found, want),
     });
 }
 
@@ -1416,6 +1475,48 @@ mod tests {
         let len = full.len();
         complete_with_not_tried(&mut full);
         assert_eq!(full.len(), len, "got: {full:?}");
+    }
+
+    #[test]
+    fn wi17_counted_attempt_records_totality_and_opaque() {
+        // WI-17 slice 4: `Fire` passes through untouched; `Miss`
+        // records `no-match` (today's mapping, unchanged); `Totality`
+        // names both counts; `Opaque` records `veto:opaque-hit`. Every
+        // emitted reason parses under the closed taxonomy.
+        let mut v = Vec::new();
+        assert_eq!(
+            attempt_counted(&mut v, "call_sweep", Counted::Fire(1)),
+            Some(1)
+        );
+        assert!(v.is_empty());
+        assert_eq!(
+            attempt_counted::<i32>(&mut v, "call_sweep", Counted::Miss),
+            None
+        );
+        assert_eq!(
+            attempt_counted::<i32>(
+                &mut v,
+                "call_sweep",
+                Counted::Totality { found: 3, want: 2 }
+            ),
+            None
+        );
+        assert_eq!(
+            attempt_counted::<i32>(&mut v, "call_sweep", Counted::Opaque),
+            None
+        );
+        assert_eq!(
+            v,
+            declined(&[
+                ("call_sweep", "no-match"),
+                ("call_sweep", "totality:3:2"),
+                ("call_sweep", "veto:opaque-hit"),
+            ]),
+            "got: {v:?}"
+        );
+        for d in &v {
+            assert!(reason_is_closed(&d.reason), "open reason: {d:?}");
+        }
     }
 
     #[test]

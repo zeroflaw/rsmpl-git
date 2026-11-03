@@ -144,17 +144,38 @@ fn needles_of(minuses: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// N-site bare-call totality: `old_cal` with `arity` args occurs exactly
-/// `minuses.len()` times (single-seg, no turbofish — detector shape).
-pub(crate) fn call_holds(
+/// WI-17 slice 4 counted verdict for the N-site bare-call totality probe
+/// (`old_cal` with `arity` args occurs exactly `minuses.len()` times —
+/// single-seg, no turbofish, detector shape). A failing gate names which
+/// leg failed with both counts, so the chain can record
+/// `totality:<found>:<want>` (count mismatch) or `veto:opaque-hit`
+/// (opaque macro/string twin covering a changed line) instead of a bare
+/// `no-match`. `Unproven` is the legacy unparseable-pre-image veto
+/// (callers keep the `no-match` mapping there — no pre-image means no
+/// counts to name). `Holds` covers the legacy `None`-pre-image allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallVerdict {
+    Holds,
+    CountMismatch { found: usize, want: usize },
+    OpaqueHit,
+    Unproven,
+}
+
+/// Counted bare-call probe: the engine file-wide `old_cal/arity`
+/// count (`found`) against the diff pair count (`want`), plus the
+/// line-aware opaque veto as its own arm.
+pub(crate) fn call_verdict(
     file_old: Option<&str>,
     old_cal: &str,
     arity: usize,
     minuses: &[&str],
     changed: &[usize],
-) -> bool {
+) -> CallVerdict {
     let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
+        if file_old.is_none() {
+            return CallVerdict::Holds;
+        }
+        return CallVerdict::Unproven;
     };
     let n = minuses.len();
     struct C<'a> {
@@ -187,15 +208,21 @@ pub(crate) fn call_holds(
     };
     c.visit_file(&file);
     if c.count != n {
-        return false;
+        return CallVerdict::CountMismatch {
+            found: c.count,
+            want: n,
+        };
     }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+    if opaque_hit_lines(&file, &needles_of(minuses), changed) {
+        return CallVerdict::OpaqueHit;
+    }
+    CallVerdict::Holds
 }
 
 /// N-site bare-call trailing-literal totality (T448): bare single-seg
 /// no-turbofish call `cal` with `arity` args whose trailing arg flat-ws
 /// equals `old_trailing` occurs exactly `minuses.len()` times.
-/// `call_holds` (callee+arity) would over-count same-arity sites with a
+/// `call_verdict` (callee+arity) would over-count same-arity sites with a
 /// different trailing literal (e.g. 7025a14's `true` site next to the 2x
 /// `false` prize group); the trailing literal is the precise pre-image,
 /// mirroring `method_literal_holds` (T420).
@@ -1274,6 +1301,56 @@ mod tests {
         );
         let pre2 = "fn m() {\n    foo(1);\n    foo(2);\n    foo(3);\n}\n";
         assert!(!infer(&raw, pre2).contains("rule="), "extra site must veto");
+    }
+    #[test]
+    fn wi17_call_verdict_names_both_counts() {
+        // WI-17 slice 4: the counted probe names found+want on mismatch,
+        // the opaque twin as its own arm, and preserves both legacy
+        // legs (None pre-image allows; unparseable vetoes as Unproven).
+        let minuses = ["    foo(1);", "    foo(2);"];
+        let changed = [2, 3];
+        // Twin: 3 file-wide sites vs 2 claimed.
+        assert_eq!(
+            super::call_verdict(
+                Some("fn m() {\n    foo(1);\n    foo(2);\n    foo(3);\n}\n"),
+                "foo",
+                1,
+                &minuses,
+                &changed,
+            ),
+            super::CallVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        // Exact: holds.
+        assert_eq!(
+            super::call_verdict(
+                Some("fn m() {\n    foo(1);\n    foo(2);\n}\n"),
+                "foo",
+                1,
+                &minuses,
+                &changed,
+            ),
+            super::CallVerdict::Holds
+        );
+        // Opaque macro twin on a changed line: its own arm.
+        assert_eq!(
+            super::call_verdict(
+                Some("fn m() {\n    foo(1);\n    g(m!(foo(1)));\n    foo(1);\n}\n"),
+                "foo",
+                1,
+                &minuses,
+                &changed,
+            ),
+            super::CallVerdict::OpaqueHit
+        );
+        // Legacy legs preserved.
+        assert_eq!(
+            super::call_verdict(None, "foo", 1, &minuses, &changed),
+            super::CallVerdict::Holds
+        );
+        assert_eq!(
+            super::call_verdict(Some("not rust {{{{"), "foo", 1, &minuses, &changed,),
+            super::CallVerdict::Unproven
+        );
     }
     #[test]
     fn call_literal_totality_keys_on_trailing() {

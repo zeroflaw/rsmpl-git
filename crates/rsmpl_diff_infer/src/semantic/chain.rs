@@ -12,8 +12,8 @@
 /// 2000-line gate (D5): pure move, call sites unchanged.
 pub(crate) use super::partition::try_partition_section;
 use super::prov::{
-    attempt, commit_prov, declined_guard_with_numbers, declined_precondition, declined_veto,
-    push_section_prov, reheader_rename,
+    attempt, attempt_counted, commit_prov, declined_guard_with_numbers, declined_precondition,
+    declined_veto, push_section_prov, reheader_rename,
 };
 use super::{HunkDeclined, HunkProvenance};
 
@@ -225,7 +225,10 @@ pub(crate) fn run_pair_chain(
     // N >= 2 bare-call rewrites (callee-only delta), use-path prefix
     // renames above included; fall through to the trailing-arg sweeps
     // otherwise.
-    if let Some(sweep) = attempt(
+    // WI-17 slice 4: counted decline — a shape match with a twin on an
+    // unchanged line records `totality:found:want` (or `veto:opaque-hit`)
+    // instead of `no-match`.
+    if let Some(sweep) = attempt_counted(
         declined,
         "call_sweep",
         super::try_call_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -249,7 +252,8 @@ pub(crate) fn run_pair_chain(
     // T447: same-callee trailing-arg addition (homo concrete tails
     // compress; hetero tails like 09d3446's `symlink` vs `false`
     // veto via minus-arity totality).
-    if let Some(add) = attempt(
+    // WI-17 slice 4: counted decline, like `call_sweep` above.
+    if let Some(add) = attempt_counted(
         declined,
         "call_arg_add",
         super::try_call_arg_add_sweep(minuses, pluses, path, file_old, changed, used_rules),
