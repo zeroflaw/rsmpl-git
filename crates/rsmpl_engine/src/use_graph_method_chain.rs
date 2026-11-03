@@ -30,6 +30,10 @@ pub(crate) struct ChainMaps {
     /// Stated inherent-method returns: `(self_ty, method) -> ret_ty`
     /// (`Self` already normalised to the impl self type).
     returns: HashMap<(String, String), String>,
+    /// Same-file trait methods returning `Self`: `(trait, method)`.
+    /// WI-10 slice 2: `c.get().run()` proves the base type when
+    /// exactly one trait defines `get` so.
+    trait_self: HashSet<(String, String)>,
     /// Generic-bound scopes in document order: (start, end, param → bounds).
     bounds: Vec<(u32, u32, HashMap<String, Vec<String>>)>,
 }
@@ -80,6 +84,20 @@ impl<'ast> Visit<'ast> for MapBuilder<'_> {
             }
         }
         visit::visit_item_impl(self, node);
+    }
+
+    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+        let trait_name = node.ident.to_string();
+        for it in &node.items {
+            if let syn::TraitItem::Fn(m) = it {
+                if sig_ret_tail(&m.sig).as_deref() == Some("Self") {
+                    self.maps
+                        .trait_self
+                        .insert((trait_name.clone(), m.sig.ident.to_string()));
+                }
+            }
+        }
+        visit::visit_item_trait(self, node);
     }
 
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
@@ -276,10 +294,33 @@ pub(crate) fn resolve_chain_type(
                 return ChainVerdict::Decline;
             };
             let mid = inner.method.to_string();
-            match maps.returns.get(&(base_ty.clone(), mid)) {
-                Some(ret) => ChainVerdict::Proven(ret.clone()),
-                None => ChainVerdict::Unproven,
+            // Inherent stated returns keep precedence over the
+            // trait-`Self` rule below (a concrete return wins).
+            if let Some(ret) = maps.returns.get(&(base_ty.clone(), mid.clone())) {
+                return ChainVerdict::Proven(ret.clone());
             }
+            // WI-10 slice 2: trait-`Self` return — `c.get().run()`
+            // proves the base type when exactly one same-file trait
+            // defines `get` with a `Self` return. Two or more such
+            // traits stay `chain-unproven`, never a guess.
+            let holders = maps
+                .trait_self
+                .iter()
+                .filter(|entry| entry.1 == mid)
+                .count();
+            if holders == 1 {
+                return ChainVerdict::Proven(base_ty);
+            }
+            if holders > 1 {
+                return ChainVerdict::Unproven;
+            }
+            // Closed `clone`-shape: `c.clone()` returns the receiver
+            // type when the receiver is independently anchored (which
+            // it is — `base_concrete_type` proved it above).
+            if mid == "clone" {
+                return ChainVerdict::Proven(base_ty);
+            }
+            ChainVerdict::Unproven
         }
         _ => ChainVerdict::Decline,
     }
@@ -432,6 +473,7 @@ pub(crate) fn ambiguous_bound_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::use_graph_anchor::AnchorIndex;
 
     fn parse(src: &str) -> syn::File {
         syn::parse_str(src).expect("test src must parse")
@@ -478,6 +520,61 @@ mod tests {
         assert_eq!(
             chain_skip_reason(&ChainVerdict::Ambiguous),
             "ambiguous-bound"
+        );
+    }
+
+    const TRAIT_SELF_SRC: &str =
+        "struct C;\ntrait Tr {\n    fn get(&self) -> Self;\n    fn other(&self) -> u8;\n}\n";
+
+    #[test]
+    fn trait_self_map_collects_self_returns_only() {
+        let maps = ChainMaps::for_file(&parse(TRAIT_SELF_SRC));
+        assert!(maps
+            .trait_self
+            .contains(&("Tr".to_string(), "get".to_string())));
+        assert!(!maps
+            .trait_self
+            .contains(&("Tr".to_string(), "other".to_string())));
+    }
+
+    fn resolve_recv(src: &str, recv_src: &str, line: u32) -> ChainVerdict {
+        let parsed = parse(src);
+        let anchors = AnchorIndex::for_file(&parsed);
+        let maps = ChainMaps::for_file(&parsed);
+        let recv: syn::Expr = syn::parse_str(recv_src).expect("recv parses");
+        resolve_chain_type(&recv, line, &anchors, &maps, "Other", None, None, true)
+    }
+
+    #[test]
+    fn trait_self_chain_proves_base_type() {
+        let src = "struct C;\ntrait Tr {\n    fn get(&self) -> Self;\n}\nfn f(c: C) {\n    c.get().run();\n}\n";
+        assert_eq!(
+            resolve_recv(src, "c.get()", 6),
+            ChainVerdict::Proven("C".to_string())
+        );
+    }
+
+    #[test]
+    fn twin_self_traits_stay_unproven() {
+        let src = "struct C;\ntrait A {\n    fn get(&self) -> Self;\n}\ntrait B {\n    fn get(&self) -> Self;\n}\nfn f(c: C) {\n    c.get().run();\n}\n";
+        assert_eq!(resolve_recv(src, "c.get()", 9), ChainVerdict::Unproven);
+    }
+
+    #[test]
+    fn inherent_return_wins_over_trait_self() {
+        let src = "struct C;\nstruct Other;\nimpl C {\n    fn get(&self) -> Other { Other }\n}\ntrait Tr {\n    fn get(&self) -> Self;\n}\nfn f(c: C) {\n    c.get().run();\n}\n";
+        assert_eq!(
+            resolve_recv(src, "c.get()", 10),
+            ChainVerdict::Proven("Other".to_string())
+        );
+    }
+
+    #[test]
+    fn clone_shape_proves_anchored_base() {
+        let src = "struct C;\nfn f(c: C) {\n    c.clone().run();\n}\n";
+        assert_eq!(
+            resolve_recv(src, "c.clone()", 3),
+            ChainVerdict::Proven("C".to_string())
         );
     }
 }

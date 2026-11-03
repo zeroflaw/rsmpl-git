@@ -43,10 +43,14 @@ impl AnchorIndex {
         // WI-10: shadow set is build-time only (never stored — the
         // scopes already carry the deref'd containers).
         let no_unwrap = collect_no_unwrap(parsed);
+        // WI-10 slice 2: same-file Deref targets, likewise build-time
+        // only (scopes carry the deref'd containers).
+        let deref_targets = collect_deref_targets(parsed);
         let mut idx = Self::default();
         let mut builder = Builder {
             idx: &mut idx,
             no_unwrap: &no_unwrap,
+            deref_targets: &deref_targets,
         };
         builder.visit_file(parsed);
         idx
@@ -94,6 +98,7 @@ impl AnchorIndex {
 struct Builder<'a> {
     idx: &'a mut AnchorIndex,
     no_unwrap: &'a HashSet<String>,
+    deref_targets: &'a HashMap<String, String>,
 }
 
 impl<'ast> Visit<'ast> for Builder<'_> {
@@ -109,7 +114,9 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         for arg in &node.sig.inputs {
             if let syn::FnArg::Typed(pat) = arg {
                 if let syn::Pat::Ident(id) = pat.pat.as_ref() {
-                    if let Some(container) = type_tail_deref(&pat.ty, self.no_unwrap) {
+                    if let Some(container) =
+                        type_tail_deref(&pat.ty, self.no_unwrap, self.deref_targets)
+                    {
                         scope.params.insert(id.ident.to_string(), container);
                     }
                 }
@@ -118,6 +125,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         let mut collector = LocalCollector {
             out: &mut scope.bindings,
             no_unwrap: self.no_unwrap,
+            deref_targets: self.deref_targets,
         };
         collector.visit_block(&node.block);
         self.idx.scopes.push(scope);
@@ -142,7 +150,9 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         for arg in &node.sig.inputs {
             if let syn::FnArg::Typed(pat) = arg {
                 if let syn::Pat::Ident(id) = pat.pat.as_ref() {
-                    if let Some(container) = type_tail_deref(&pat.ty, self.no_unwrap) {
+                    if let Some(container) =
+                        type_tail_deref(&pat.ty, self.no_unwrap, self.deref_targets)
+                    {
                         scope.params.insert(id.ident.to_string(), container);
                     }
                 }
@@ -151,6 +161,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         let mut collector = LocalCollector {
             out: &mut scope.bindings,
             no_unwrap: self.no_unwrap,
+            deref_targets: self.deref_targets,
         };
         collector.visit_block(&node.block);
         self.idx.scopes.push(scope);
@@ -185,6 +196,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
 struct LocalCollector<'a> {
     out: &'a mut Vec<(String, String, u32)>,
     no_unwrap: &'a HashSet<String>,
+    deref_targets: &'a HashMap<String, String>,
 }
 
 impl<'ast> Visit<'ast> for LocalCollector<'_> {
@@ -194,7 +206,9 @@ impl<'ast> Visit<'ast> for LocalCollector<'_> {
             // `let x: C = …` — ascription lives in `Pat::Type` in syn 2.
             syn::Pat::Type(t) => {
                 if let syn::Pat::Ident(id) = t.pat.as_ref() {
-                    if let Some(container) = type_tail_deref(&t.ty, self.no_unwrap) {
+                    if let Some(container) =
+                        type_tail_deref(&t.ty, self.no_unwrap, self.deref_targets)
+                    {
                         self.out.push((id.ident.to_string(), container, bind_line));
                     }
                 }
@@ -251,18 +265,26 @@ fn type_tail(ty: &syn::Type) -> Option<String> {
 }
 
 /// WI-10 slice 1: one-step deref unwrap over [`type_tail`].
+/// WI-10 slice 2: same-file `impl Deref for C` targets.
 ///
 /// `Box<T>` / `Rc<T>` / `Arc<T>` (exactly one generic type arg)
 /// anchors to the inner tail `T`; `&`/`&mut` peel first via the
-/// shared tail so `&Box<S>` composes. Single step only:
-/// `Box<Box<S>>` unwraps to `Box` (off-target against `S`).
+/// shared tail so `&Box<S>` composes. A plain `C` with a same-file
+/// `impl Deref for C { type Target = T; }` anchors to the outer
+/// tail of `T`. Single step only: `Box<Box<S>>` unwraps to `Box`
+/// (off-target against `S`); `Box<C>` unwraps to `C` (wrapper wins,
+/// never chains to `T`); `&C` peels then derefs to `T`.
 /// Anything else (incl. `Vec<S>`) keeps the outer-type behavior.
 ///
 /// Resolution, not spelling (D8): a single-segment wrapper unwraps
 /// unless this file shadows the name (`no_unwrap`); a multi-segment
 /// path unwraps only on a `std`/`alloc`/`core` first segment
 /// (`std::boxed::Box<S>` yes, `foo::Box<S>` no).
-fn type_tail_deref(ty: &syn::Type, no_unwrap: &HashSet<String>) -> Option<String> {
+fn type_tail_deref(
+    ty: &syn::Type,
+    no_unwrap: &HashSet<String>,
+    deref_targets: &HashMap<String, String>,
+) -> Option<String> {
     match ty {
         syn::Type::Path(tp) => {
             if tp.qself.is_some() {
@@ -290,9 +312,16 @@ fn type_tail_deref(ty: &syn::Type, no_unwrap: &HashSet<String>) -> Option<String
                     }
                 }
             }
+            // Same-file Deref target: one step, no chaining through
+            // wrappers (the wrapper arm above already returned).
+            if tp.path.segments.len() == 1 {
+                if let Some(target) = deref_targets.get(&name) {
+                    return Some(target.clone());
+                }
+            }
             Some(name)
         }
-        syn::Type::Reference(r) => type_tail_deref(&r.elem, no_unwrap),
+        syn::Type::Reference(r) => type_tail_deref(&r.elem, no_unwrap, deref_targets),
         _ => None,
     }
 }
@@ -326,6 +355,46 @@ fn path_allows_unwrap(path: &syn::Path, name: &str, no_unwrap: &HashSet<String>)
             .as_deref(),
         Some("std" | "alloc" | "core")
     )
+}
+
+/// WI-10 slice 2: same-file `impl Deref for C` targets (`C -> T`
+/// outer tail of `type Target = T;`). `Target = Self` is a no-op and
+/// is never stored. Only the trait's last ident must read `Deref`;
+/// a user type merely *named* `Deref` in another module is a named
+/// gap (workspace resolution in slice 3 disambiguates by path).
+fn collect_deref_targets(parsed: &syn::File) -> HashMap<String, String> {
+    struct V {
+        out: HashMap<String, String>,
+    }
+    impl<'ast> Visit<'ast> for V {
+        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+            let names_deref = match &node.trait_ {
+                Some((_, p, _)) => p.segments.last().is_some_and(|s| s.ident == "Deref"),
+                None => false,
+            };
+            if names_deref {
+                if let Some(self_ty) = self_ty_last(&node.self_ty) {
+                    for it in &node.items {
+                        if let syn::ImplItem::Type(t) = it {
+                            if t.ident == "Target" {
+                                if let Some(target) = type_tail(&t.ty) {
+                                    if target != "Self" && !target.is_empty() {
+                                        self.out.insert(self_ty.clone(), target);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            visit::visit_item_impl(self, node);
+        }
+    }
+    let mut v = V {
+        out: HashMap::new(),
+    };
+    v.visit_file(parsed);
+    v.out
 }
 
 /// WI-10: names in the closed wrapper set that this file shadows, so
@@ -511,5 +580,37 @@ mod tests {
     fn std_import_keeps_unwrap() {
         let src = "use std::boxed::Box;\nstruct S;\nfn f(b: Box<S>) {\n    b;\n}\n";
         assert_eq!(anchor(src, "b", 4).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn deref_target_param_anchors_to_target() {
+        let src = "struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 7).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn wrapper_wins_over_deref_target_no_chain() {
+        // `Box<C>` unwraps to `C`, never chains to `T`.
+        let src = "struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\nfn f(b: Box<C>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 6).as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn ref_of_deref_target_composes() {
+        let src = "struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\nfn f(c: &C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 6).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn vec_of_deref_target_stays_outer() {
+        let src = "struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\nfn f(v: Vec<C>) {\n    v;\n}\n";
+        assert_eq!(anchor(src, "v", 6).as_deref(), Some("Vec"));
+    }
+
+    #[test]
+    fn deref_target_self_is_noop() {
+        let src =
+            "struct C;\nimpl Deref for C {\n    type Target = Self;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 6).as_deref(), Some("C"));
     }
 }
