@@ -285,6 +285,25 @@ pub(crate) fn compress_balanced_pair_body(
             declined_guard(declined, "general_expr", "precision-guard");
             used_rules.truncate(checkpoint);
         }
+        // WI-2 slice 1: bare-type literal single (one type subterm
+        // delta in any line shape) under the precision guard
+        // (uniqueness proved by `template_type_holds` at n=1 plus the
+        // T361 byte-compare, `guard_for("type_sweep")` stays Strict for
+        // multis). Sits right after the general-expr single: a bare
+        // type is tighter than any holed wrap of the same site, and the
+        // wrap arms below decline type positions by construction.
+        if let Some(single) = attempt(
+            declined,
+            "type_sweep",
+            semantic::try_type_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + semantic::PRECISION_GUARD {
+                return Some((body.to_string(), "type_sweep"));
+            }
+            declined_guard(declined, "type_sweep", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
         // WI-7 slice-6: bare-call arg-template wrap single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,

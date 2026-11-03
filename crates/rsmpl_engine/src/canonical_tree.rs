@@ -1824,4 +1824,48 @@ mod tests {
         );
         assert!(!a.contains("# symbol"), "symbols dropped:\n{a}");
     }
+
+    #[test]
+    fn wi2_bare_type_single_instantiates_to_concrete_delta() {
+        // WI-2 slice 1: the bare-type equality arm. The authored holed
+        // sweep (`Vec<T>` → `Box<[T]>`) and the inferred literal single
+        // (`Vec<i32>` → `Box<[i32]>`) prove the same one line site; both
+        // canonicalize to the concrete type delta — never to the whole
+        // header lines (a lone `{`-terminated header is not an
+        // applicable pattern: `unbalanced body block`, probed).
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn sum(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=box_param\n# lang=rust\n# type T\n- Vec<T>\n+ Box<[T]>\n";
+        let inferred = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n- Vec<i32>\n+ Box<[i32]>\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- Vec<i32>\n+ Box<[i32]>\n"),
+            "concrete type delta:\n{a}"
+        );
+        assert!(!a.contains("# type"), "hole declarations dropped:\n{a}");
+        // Tree legs close: one site, one post-tree on both legs.
+        let ka = single_site_post_key(&p, authored).expect("authored applies");
+        let kb = single_site_post_key(&p, inferred).expect("inferred applies");
+        assert_eq!(ka, kb, "same single site, same post-tree");
+    }
+
+    #[test]
+    fn wi2_bare_type_multi_delta_stays_divergent() {
+        // Negative control: a single line carrying two type deltas has
+        // no one-`Type` middle, so the arm declines and the legs stay
+        // canonically distinct (never healed into equality).
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn m(a: Vec<u32>, b: Vec<String>) -> i32 {\n    0\n}\n",
+        )]);
+        let holed = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- Vec<T0>\n+ Box<[T0]>\n";
+        let literal = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n- Vec<u32>\n+ Box<[u32]>\n";
+        let a = canonicalize_with_tree(holed, &p).unwrap();
+        let b = canonicalize_with_tree(literal, &p).unwrap();
+        assert_ne!(a, b, "multi-delta lines never unify:\n{a}\nvs\n{b}");
+    }
 }

@@ -345,6 +345,7 @@ const CYCLE_OK: &[&str] = &[
     "18-general-expr",
     "69-typehole-path",
     "82-const-block-single",
+    "117-type-rewrite-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -447,10 +448,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "113-sig-evolve-single",
         "WI-19b: vis+ret evolution stays ordinary (N=1 sig singles own vis/qual-only; ret belongs to the type domain)",
-    ),
-    (
-        "117-type-rewrite-single",
-        "t375: single-site type rewrite re-infers ordinary",
     ),
 ];
 

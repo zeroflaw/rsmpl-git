@@ -8117,7 +8117,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     params/generics/return/where evolution stays ordinary — the sig
     rewrite would re-render the type with pretty spacing (`Box<[i32]>`
     to `Box <[ i32 ]>`, 117 precedent), so those shapes belong to the
-    type-sweep family (strict N ≥ 2) instead. An N = 1 sig single
+    type-sweep family (strict N ≥ 2) instead — except a lone
+    single-type-delta line, which raises as a WI-2 bare-type literal
+    single (`- Vec<i32>` / `+ Box<[i32]>`, exactly-one-type-subterm
+    proof) rather than through the sig rewrite. An N = 1 sig single
     requires a pre-image (same wide-minus doctrine as the slot sweep).
     Method (indented) N = 1 vis/qual singles emit the canonical
     verbatim-header block hunk and pay a 64-byte method-run price (four
@@ -9775,11 +9778,13 @@ stripping is deliberate. Equalities per origin close the contract:
   form re-diffs to it (like terse→sweep normalisation).
 - Semantic → native → semantic, single-site (literal-instantiation
   equality, D17): at exactly one distinct line site, an authored
-  templated, holed, or symbol spelling and the inferred literal or
-  holed diet single compare equal iff both instantiate to the same
+   templated, holed, or symbol spelling and the inferred literal or
+   holed diet single compare equal iff both instantiate to the same
   literal pair — the trimmed pre/post lines at that site
   (expression shapes terminator-stripped per the raiser precedent,
-  statement shapes whole) — with locality and hole declarations
+  statement shapes whole; bare-type hunks instantiate to the concrete
+  type delta between the site lines, since a lone header line is not
+  an applicable pattern) — with locality and hole declarations
   dropped, and a unified-patch re-apply rebuilds the identical
   post-tree (multi-subsite lines unify at line granularity: one
   distinct line span is one site). Over-wide templates (two line

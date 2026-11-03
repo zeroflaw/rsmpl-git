@@ -8,9 +8,11 @@
 //! A pure single-pair hunk that proves exactly one distinct line site
 //! rewrites to its instantiated literal pair — trimmed pre/post lines
 //! at that site (expression shapes terminator-stripped per the raiser
-//! precedent) — with its range pinned to the site and locality + hole
-//! declarations dropped, so the authored templated spelling and the
-//! inferred literal diet share one tree-aware form. Multi-subsite
+//! precedent; bare-type hunks rewrite to the concrete type delta
+//! between the site lines, since a lone header line is not an
+//! applicable pattern) — with its range pinned to the site and
+//! locality + hole declarations dropped, so the authored templated
+//! spelling and the inferred literal diet share one tree-aware form. Multi-subsite
 //! lines (two call sites, one line) unify at line granularity: one
 //! distinct line span is one site. The caller keeps the rewrite only
 //! when the unified patch re-proves the identical post-tree.
@@ -212,7 +214,11 @@ fn gate_verbatim_single(
         .get(target)?
         .lines()
         .nth((s as usize).checked_sub(1)?)?;
-    let (lit_minus, lit_plus) = verbatim_literal_pair(pre_line, post_line)?;
+    let (lit_minus, lit_plus) = if is_bare_type_hunk(r) {
+        concrete_type_delta(pre_line, post_line)?
+    } else {
+        verbatim_literal_pair(pre_line, post_line)?
+    };
     // A declared hole name surviving as a bare token in the literal
     // pair (e.g. a pre line that already names `E`) is not a hole
     // instantiation — leave the hunk pinned.
@@ -234,14 +240,79 @@ fn gate_verbatim_single(
     Some((lit_minus, lit_plus))
 }
 
+/// A bare-type hunk body: exactly one minus + one plus line, both
+/// parsing as `syn::Type` (the WI-2 type-single shape, holed or
+/// literal).
+fn is_bare_type_hunk(r: &rsmpl_patch::RsmplHunk) -> bool {
+    let mut bodies = Vec::new();
+    for l in &r.lines {
+        if l.is_removal() || l.is_addition() {
+            // Body text keeps the post-marker space (`- foo` parses to
+            // text ` foo`): trim before the shape probe.
+            bodies.push(l.text.trim().to_string());
+        } else {
+            return false;
+        }
+    }
+    if bodies.len() != 2 {
+        return false;
+    }
+    syn::parse_str::<syn::Type>(&bodies[0]).is_ok()
+        && syn::parse_str::<syn::Type>(&bodies[1]).is_ok()
+}
+
+/// Concrete type delta between two site lines: the longest-shared-frame
+/// middle on chars, scanned from the longest shared suffix down to the
+/// first split whose middles both parse as one `syn::Type` (the shared
+/// suffix may start inside the delta — `Vec<i32>` vs `Box<[i32]>`
+/// share the trailing `>` before `) -> i32 {`). `None` when no split
+/// yields a type pair (multi-delta lines never parse as one `Type`).
+fn concrete_type_delta(pre_line: &str, post_line: &str) -> Option<(String, String)> {
+    let m: Vec<char> = pre_line.trim().chars().collect();
+    let p: Vec<char> = post_line.trim().chars().collect();
+    if m.is_empty() || p.is_empty() {
+        return None;
+    }
+    let mut pre = 0usize;
+    while pre < m.len() && pre < p.len() && m[pre] == p[pre] {
+        pre += 1;
+    }
+    let mut max_suf = 0usize;
+    while max_suf < m.len() - pre
+        && max_suf < p.len() - pre
+        && m[m.len() - 1 - max_suf] == p[p.len() - 1 - max_suf]
+    {
+        max_suf += 1;
+    }
+    let mut suf = max_suf;
+    loop {
+        let m_mid: String = m[pre..m.len() - suf].iter().collect();
+        let p_mid: String = p[pre..p.len() - suf].iter().collect();
+        let m_mid = m_mid.trim().to_string();
+        let p_mid = p_mid.trim().to_string();
+        if !m_mid.is_empty()
+            && !p_mid.is_empty()
+            && m_mid != p_mid
+            && syn::parse_str::<syn::Type>(&m_mid).is_ok()
+            && syn::parse_str::<syn::Type>(&p_mid).is_ok()
+        {
+            return Some((m_mid, p_mid));
+        }
+        if suf == 0 {
+            return None;
+        }
+        suf -= 1;
+    }
+}
 /// Literal pair for the WI-1s1 rewrite: the instantiated pre/post
 /// line at the proven site, with the raiser's expression-shape
 /// terminator rule (`try_verbatim_single` precedent: a trailing
 /// statement terminator never reaches the pattern, so a `tasty + 1;`
 /// line instantiates to the `tasty + 1` expression pair both legs
 /// share; complete-statement shapes keep the whole trimmed line, `;`
-/// included). `None` for empty, identical, or unclassifiable pairs —
-/// the hunk stays pinned.
+/// included). Bare-type hunks never reach this (the caller routes
+/// them to `concrete_type_delta`). `None` for empty, identical, or
+/// unclassifiable pairs — the hunk stays pinned.
 fn verbatim_literal_pair(pre_line: &str, post_line: &str) -> Option<(String, String)> {
     let m = pre_line.trim();
     let p = post_line.trim();
@@ -257,10 +328,10 @@ fn verbatim_literal_pair(pre_line: &str, post_line: &str) -> Option<(String, Str
     if !sm.is_empty() && !sp.is_empty() && sm != sp && is_expr(sm) && is_expr(sp) {
         return Some((sm.to_string(), sp.to_string()));
     }
-    if syn::parse_str::<syn::Stmt>(m).is_err() || syn::parse_str::<syn::Stmt>(p).is_err() {
-        return None;
+    if syn::parse_str::<syn::Stmt>(m).is_ok() && syn::parse_str::<syn::Stmt>(p).is_ok() {
+        return Some((m.to_string(), p.to_string()));
     }
-    Some((m.to_string(), p.to_string()))
+    None
 }
 
 /// Strip one trailing statement/arg terminator (`;`, else `,`), the

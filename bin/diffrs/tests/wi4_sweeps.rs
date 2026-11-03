@@ -256,16 +256,25 @@ fn wi4b_type_sweep_fires() {
 #[test]
 fn wi4b_type_sweep_extra_site_stays_ordinary() {
     // Fixture 72: a third untouched `Vec<..>` ascription in the
-    // pre-image breaks engine-count totality (3 != 2) — the sweep
-    // would silently rewrite it, so the section stays ordinary.
+    // pre-image breaks engine-count totality (3 != 2) — the holed sweep
+    // would silently rewrite it, so no `# allow=many` sweep fires. The
+    // primitive-inner alpha line still raises as its own WI-2 literal
+    // type single (`Vec<u32>` matches exactly once); the `String`-inner
+    // beta line stays ordinary (`String` infers as a type hole, so
+    // `Vec<String>` would match the untouched `Vec<u8>` too — the same
+    // probe vetoes, pinned at detector level).
     let (_native_input, semantic) = convert_fixture("72-type-sweep-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "extra Vec site must veto, got: {semantic}"
+        !semantic.contains("# allow=many"),
+        "no sweep may fire, got: {semantic}"
     );
     assert!(
-        semantic.contains("-    let alpha_value: Vec<u32> = compute_first(input);"),
-        "native minus must survive, got: {semantic}"
+        semantic.contains("- Vec<u32>\n+ Box<[u32]>\n"),
+        "alpha must raise as a literal type single, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-    let beta_value: Vec<String> = compute_second(other);"),
+        "beta native minus must survive, got: {semantic}"
     );
 }
 

@@ -78,6 +78,7 @@ mod slot;
 mod subhunk;
 pub(crate) mod subline;
 mod trait_methods;
+mod type_single;
 mod use_regroup;
 mod verbatim;
 // WI-3c: covering-span helpers live in `item_span` (this file was over
@@ -160,6 +161,7 @@ pub(crate) use perm_single::{
 pub(crate) use repeat::{try_partial_strip_sweep, try_repeat_fold_single, try_repeat_fold_sweep};
 pub(crate) use sig_evolution::try_sig_evolution_sweep;
 pub(crate) use single_block::try_single_block_sweep;
+pub(crate) use type_single::try_type_single;
 pub(crate) use verbatim::try_verbatim_single;
 
 pub(crate) use guard::{guard_for, Guard};

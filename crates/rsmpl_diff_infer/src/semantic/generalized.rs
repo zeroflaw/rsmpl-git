@@ -911,10 +911,13 @@ mod tests {
     }
 
     #[test]
-    fn sig_evo_single_params_evolution_declines() {
-        // WI-19b/117: a params evolution is the type-sweep's domain —
-        // the sig rewrite would re-render the type with pretty spacing
-        // (`Box<[i32]>` → `Box <[ i32 ]>`), so the single stays ordinary.
+    fn sig_evo_single_params_evolution_rides_type_single() {
+        // WI-19b/117, WI-2 slice 1: a params evolution is the
+        // type-single's domain, never the sig detector's — the sig
+        // rewrite would re-render the type with pretty spacing
+        // (`Box<[i32]>` → `Box <[ i32 ]>`), so `try_sig_evolution_sweep`
+        // keeps declining (pinned below) while the whole pipeline raises
+        // the literal bare-type single (`- Vec<i32>`).
         let raw = section(
             "f.rs",
             "@@ -1,1 +1,1 @@\n-fn sum(values: Vec<i32>) -> i32 {\n+fn sum(values: Box<[i32]>) -> i32 {\n",
@@ -923,7 +926,10 @@ mod tests {
             "f.rs",
             "fn sum(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("params evolution must ride the type single");
+        assert!(out.contains("- Vec<i32>\n"), "got:\n{out}");
+        assert!(out.contains("+ Box<[i32]>\n"), "got:\n{out}");
         let mut used = Vec::new();
         assert!(super::super::try_sig_evolution_sweep(
             &["fn sum(values: Vec<i32>) -> i32 {"],
@@ -1556,29 +1562,25 @@ mod tests {
 
     #[test]
     fn vis_single_two_slot_vetoes() {
-        // vis+return and type-level evolutions stay ordinary — the WI-7
-        // type/signature domain, never this single. (vis+qual together
-        // fires: both are single-token, formatting-stable — pinned by
-        // `sig_evo_single_fires_with_pre_image`.)
-        for (minus, plus, body) in [
-            (
-                "fn foo() {",
-                "pub fn foo() -> i32 {",
-                "fn foo() {\n    1\n}\n",
-            ),
-            (
-                "fn sum(values: Vec<i32>) -> i32 {",
-                "fn sum(values: Box<[i32]>) -> i32 {",
-                "fn sum(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
-            ),
-        ] {
-            let raw = section("f.rs", &vis_single_body(minus, plus));
-            let pre = pre_map(&[("f.rs", body)]);
-            assert!(
-                infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
-                "{minus} → {plus} must stay ordinary"
-            );
-        }
+        // vis+return stays ordinary — the WI-8 two-slot domain, never
+        // this single. (vis+qual together fires: both are single-token,
+        // formatting-stable — pinned by
+        // `sig_evo_single_fires_with_pre_image`.) The params-evolution
+        // shape that used to sit in this veto loop now rides the WI-2
+        // type single (pinned by
+        // `sig_evo_single_params_evolution_rides_type_single` and the
+        // `type_single` module tests).
+        let (minus, plus, body) = (
+            "fn foo() {",
+            "pub fn foo() -> i32 {",
+            "fn foo() {\n    1\n}\n",
+        );
+        let raw = section("f.rs", &vis_single_body(minus, plus));
+        let pre = pre_map(&[("f.rs", body)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+            "{minus} → {plus} must stay ordinary"
+        );
         // vis+qual together fires (both single-token slots).
         let raw = section(
             "f.rs",
