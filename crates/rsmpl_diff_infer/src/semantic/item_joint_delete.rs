@@ -1209,6 +1209,240 @@ mod tests {
         );
     }
 
+    /// WI-12 slice 2: cross-file deletion-joint parity pins. The
+    /// def+deletion pair always lives in the container's file
+    /// (container law); claimable uses may sit in any file and ride the
+    /// workspace follow under the multi-file D13 probe. All pins run the
+    /// whole-patch inference over two/three sections plus an
+    /// `apply_patch_to_tree` byte-compare, mirroring the live
+    /// `gitrs diff` probes.
+    fn xsection(path: &str, body: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{body}")
+    }
+
+    fn infer_x(sections: &[String], pre: &[(&str, &str)]) -> Option<String> {
+        let map: std::collections::HashMap<String, String> = pre
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        super::super::infer_semantic_with_pre_images(sections, &map)
+    }
+
+    #[test]
+    fn field_del_cross_file_use_fires() {
+        // Def + shape-A deletion + use in a.rs, use-only in b.rs: one
+        // shared-rule joint; the follow rewrites b.rs workspace-wide.
+        let a_pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\n";
+        let b_pre = "fn g(t: Old) {\n}\n";
+        let sections = vec![
+            xsection(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n",
+            ),
+            xsection("b.rs", "@@ -1,1 +1,1 @@\n-fn g(t: Old) {\n+fn g(t: New) {\n"),
+        ];
+        let out = infer_x(&sections, &[("a.rs", a_pre), ("b.rs", b_pre)])
+            .expect("cross-file deletion joint must fire");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("- y: u32,"), "got:\n{out}");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([
+            ("a.rs".to_string(), a_pre.to_string()),
+            ("b.rs".to_string(), b_pre.to_string()),
+        ]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert_eq!(
+            files["a.rs"], "struct New {\n    x: u32,\n}\nfn f(s: New) {\n}\n",
+            "got: {}",
+            files["a.rs"]
+        );
+        assert_eq!(
+            files["b.rs"], "fn g(t: New) {\n}\n",
+            "got: {}",
+            files["b.rs"]
+        );
+        assert!(
+            report.rules.iter().all(|r| r.orphans.is_empty()),
+            "no stranded uses, got: {report:?}"
+        );
+    }
+
+    #[test]
+    fn field_del_cross_file_shape_b_fires() {
+        // Adjacent def + deletion in a.rs, use-only in b.rs.
+        let a_pre = "struct Old {\n    y: u32,\n    x: u32,\n}\nfn f(s: Old) {\n}\n";
+        let b_pre = "fn g(t: Old) {\n}\n";
+        let sections = vec![
+            xsection(
+                "a.rs",
+                "@@ -1,2 +1,1 @@\n-struct Old {\n-    y: u32,\n+struct New {\n@@ -5 +4 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n",
+            ),
+            xsection("b.rs", "@@ -1,1 +1,1 @@\n-fn g(t: Old) {\n+fn g(t: New) {\n"),
+        ];
+        let out = infer_x(&sections, &[("a.rs", a_pre), ("b.rs", b_pre)])
+            .expect("cross-file shape-B deletion joint must fire");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("- y: u32,"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([
+            ("a.rs".to_string(), a_pre.to_string()),
+            ("b.rs".to_string(), b_pre.to_string()),
+        ]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(!files["a.rs"].contains("y: u32"), "got: {}", files["a.rs"]);
+        assert!(
+            files["a.rs"].contains("struct New"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert_eq!(
+            files["b.rs"], "fn g(t: New) {\n}\n",
+            "got: {}",
+            files["b.rs"]
+        );
+    }
+
+    #[test]
+    fn variant_del_cross_file_rewritten_use_fires_partial() {
+        // Enum deletion in a.rs; b.rs rewrites both the type use and the
+        // `Old::B` variant use. The joint fires; the dangling `New::B`
+        // orphans, capping at partial (single-file twin posture).
+        let a_pre = "enum Old {\n    A,\n    B,\n}\nfn f(v: Old) {\n}\n";
+        let b_pre = "fn g() -> Old {\n    Old::B\n}\n";
+        let sections = vec![
+            xsection(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -3 +2,0 @@\n-    B,\n@@ -5,1 +4,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n",
+            ),
+            xsection(
+                "b.rs",
+                "@@ -1,2 +1,2 @@\n-fn g() -> Old {\n-    Old::B\n+fn g() -> New {\n+    New::B\n",
+            ),
+        ];
+        let out = infer_x(&sections, &[("a.rs", a_pre), ("b.rs", b_pre)])
+            .expect("cross-file variant joint must fire partial");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        assert!(out.contains("- B,"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([
+            ("a.rs".to_string(), a_pre.to_string()),
+            ("b.rs".to_string(), b_pre.to_string()),
+        ]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(files["b.rs"].contains("New::B"), "got: {}", files["b.rs"]);
+        assert!(
+            report.rules.iter().any(|r| !r.orphans.is_empty()),
+            "dangling variant use must orphan, got: {report:?}"
+        );
+    }
+
+    #[test]
+    fn field_del_cross_file_untouched_member_uses_partial() {
+        // Both files keep their `s.y` / `t.y` lines untouched while the
+        // field is deleted: the joint fires and both stranded lines
+        // orphan workspace-wide (the slice-3 law, now cross-file).
+        let a_pre =
+            "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n    let _ = s.y;\n}\n";
+        let b_pre = "fn g(t: Old) {\n    let _ = t.y;\n}\n";
+        let sections = vec![
+            xsection(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n",
+            ),
+            xsection("b.rs", "@@ -1,1 +1,1 @@\n-fn g(t: Old) {\n+fn g(t: New) {\n"),
+        ];
+        let out = infer_x(&sections, &[("a.rs", a_pre), ("b.rs", b_pre)])
+            .expect("cross-file joint with stranded uses must fire");
+        assert_eq!(out.matches("rule=r1").count(), 2, "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = std::collections::HashMap::from([
+            ("a.rs".to_string(), a_pre.to_string()),
+            ("b.rs".to_string(), b_pre.to_string()),
+        ]);
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(files["a.rs"].contains("s.y"), "got: {}", files["a.rs"]);
+        assert!(files["b.rs"].contains("t.y"), "got: {}", files["b.rs"]);
+        let orphan_texts: Vec<String> = report
+            .rules
+            .iter()
+            .flat_map(|r| r.orphans.iter().map(|o| o.text.clone()))
+            .collect();
+        assert!(
+            orphan_texts.iter().any(|t| t.contains("s.y"))
+                && orphan_texts.iter().any(|t| t.contains("t.y")),
+            "both stranded uses must orphan, got: {report:?}"
+        );
+    }
+
+    #[test]
+    fn field_del_cross_file_third_file_off_diff_use_vetoes() {
+        // `c.rs` is touched (comment) but leaves `x: Old` unrewritten:
+        // the follow would rewrite it, so the D13 probe fails the joint
+        // and no shared-rule deletion emission may appear.
+        let a_pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\n";
+        let b_pre = "fn g(t: Old) {\n}\n";
+        let c_pre = "// touch\nfn h(x: Old) {\n}\n";
+        let sections = vec![
+            xsection(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n",
+            ),
+            xsection("b.rs", "@@ -1,1 +1,1 @@\n-fn g(t: Old) {\n+fn g(t: New) {\n"),
+            xsection("c.rs", "@@ -1,1 +1,1 @@\n-// touch\n+// changed\n"),
+        ];
+        let out = infer_x(
+            &sections,
+            &[("a.rs", a_pre), ("b.rs", b_pre), ("c.rs", c_pre)],
+        );
+        if let Some(o) = out {
+            // Emission spelling (`- y: u32,` under `  struct Old {`
+            // context) never appears; the native `-    y: u32,` spelling
+            // in an ordinary remainder is fine.
+            assert!(
+                !o.contains("- y: u32,"),
+                "off-diff use must veto the joint, got:\n{o}"
+            );
+            assert_eq!(
+                o.matches("rule=r1").count(),
+                1,
+                "no shared-rule joint may emit, got:\n{o}"
+            );
+        }
+    }
+
+    #[test]
+    fn field_del_cross_file_mixed_hunk_declines_like_single_file() {
+        // `b.rs` fuses the claimable rename use with an unclaimable
+        // `let` delta in one balanced hunk: the joint declines, exactly
+        // like the single-file twin (hunk atomicity — a hunk is claimed
+        // whole or not at all). Documents the parity boundary.
+        let a_pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\n";
+        let b_pre = "fn g(t: Old) {\n    let z = 1;\n}\n";
+        let sections = vec![
+            xsection(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -3 +2,0 @@\n-    y: u32,\n@@ -5,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n",
+            ),
+            xsection(
+                "b.rs",
+                "@@ -1,2 +1,2 @@\n-fn g(t: Old) {\n-    let z = 1;\n+fn g(t: New) {\n+    let z = 2;\n",
+            ),
+        ];
+        let out = infer_x(&sections, &[("a.rs", a_pre), ("b.rs", b_pre)]);
+        if let Some(o) = out {
+            assert!(
+                !o.contains("- y: u32,"),
+                "mixed-hunk joint must decline, got:\n{o}"
+            );
+            assert_eq!(
+                o.matches("rule=r1").count(),
+                1,
+                "no shared-rule joint may emit, got:\n{o}"
+            );
+        }
+    }
+
     #[test]
     fn emission_applies_jointly() {
         let pre = "struct Old {\n    x: u32,\n    y: u32,\n}\nfn f(s: Old) {\n}\n";

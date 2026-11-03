@@ -8063,7 +8063,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     field-deletion line (same file/section — either a distant
     pure-deletion hunk or a hunk adjacent to the def change; the
     holder's pre-image carrier is the renamed struct) plus claimable
-    uses raises as a shared-rule two-hunk emission (the field-deletion
+    uses (in any file — WI-12 slice 2: the follow is workspace-wide and
+    the D13 probe counts every touched file, so a touched file leaving
+    an `Old` use unrewritten vetoes the joint) raises as a shared-rule
+    two-hunk emission (the field-deletion
     hunk naming the old container, then the terse rename follow hunk),
     proved by the one multi-file full-post probe (D13) under strict
     T375; diffrs fixture `142-struct-rename-field-delete-fires`. Uses
@@ -8086,7 +8089,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     variant-deletion line (same file/section — either a distant
     pure-deletion hunk or a hunk adjacent to the def change; the
     holder's pre-image carrier is the renamed enum) plus claimable uses
-    raises as a shared-rule two-hunk emission (the variant-deletion
+    (in any file — WI-12 slice 2: same workspace follow and D13 probe
+    law as the struct half; a touched file leaving an `Old` use
+    unrewritten vetoes the joint) raises as a shared-rule two-hunk
+    emission (the variant-deletion
     hunk naming the old container, then the terse rename follow hunk),
     proved by the one multi-file full-post probe (D13) under strict
     T375; diffrs fixture `143-enum-rename-variant-delete-fires`. Same
