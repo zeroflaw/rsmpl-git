@@ -9819,7 +9819,8 @@ stripping is deliberate. Equalities per origin close the contract:
   byte-identical).
   Filtered fn-rename hunks (`impl`/`trait` filter plus `(...)`-family
   pair) instantiate instead to the shared concrete inline form
-  `fn {name}(...) { ... }`, frame dropped.
+  `fn {name}(...) { ... }` for definitions and `fn {name}(...) ;`
+  for trait declarations (`{` vs `;` never unify), frame dropped.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
 (144), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope

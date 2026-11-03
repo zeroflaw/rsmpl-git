@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use rsmpl_patch::{Directive, Hunk, MetavarKind};
 
-use super::canonical_tree::has_bare_token;
+use super::spell_normalize::has_bare_token;
 
 /// Deterministic key of a full file tree (sorted `path + NUL + text`
 /// joined): key equality means byte-identical post-trees. The WI-1s0
@@ -131,9 +131,13 @@ pub(crate) fn unify_fn_filter_single_to_concrete(
     }
 }
 
-/// WI-2 slice 2 gate: `Some(new lines)` when hunk `r` is a filtered
-/// fn-rename single, else `None` (byte-identical). The target derives
-/// from the hunk pair itself; the caller verifies by re-applying.
+/// WI-2 slice 2 gate (+ WI-3 slice 2 `;` arm): `Some(new lines)` when
+/// hunk `r` is a filtered fn-rename single, else `None`
+/// (byte-identical). The target derives from the hunk pair itself; the
+/// caller verifies by re-applying. Definitions erase to the inline
+/// `fn {name}(...) { ... }` form; trait declarations erase to the
+/// `fn {name}(...) ;` form (`{` vs `;` never unify — a declaration and
+/// a definition are different items).
 fn gate_fn_filter_single(r: &rsmpl_patch::RsmplHunk) -> Option<Vec<rsmpl_patch::BodyLine>> {
     if !r.directives.iter().all(|d| {
         matches!(
@@ -174,7 +178,16 @@ fn gate_fn_filter_single(r: &rsmpl_patch::RsmplHunk) -> Option<Vec<rsmpl_patch::
     }
     let (m_indent, m_name, m_rest) = fn_diet_erase(&r.lines[minus[0]].text)?;
     let (p_indent, p_name, p_rest) = fn_diet_erase(&r.lines[plus[0]].text)?;
-    if m_rest != p_rest || m_rest != "(...) { ... }" || m_name == p_name {
+    // WI-3 slice 2: the `;` declaration family shares the gate with the
+    // `{ ... }` definition family, but the families never mix (a trait
+    // declaration and a definition over the same name are different
+    // items — `m_rest == p_rest` plus the per-family target below keeps
+    // them divergent).
+    if m_rest != p_rest || m_name == p_name {
+        return None;
+    }
+    let semi = m_rest == "(...) ;";
+    if m_rest != "(...) { ... }" && !semi {
         return None;
     }
     // The `N` fn-header name hole is a template, never a rename.
@@ -193,8 +206,8 @@ fn gate_fn_filter_single(r: &rsmpl_patch::RsmplHunk) -> Option<Vec<rsmpl_patch::
         .flatten()
         .collect();
     for n in &declared {
-        if super::canonical_tree::has_bare_token(&format!("fn {m_name}"), n)
-            || super::canonical_tree::has_bare_token(&format!("fn {p_name}"), n)
+        if super::spell_normalize::has_bare_token(&format!("fn {m_name}"), n)
+            || super::spell_normalize::has_bare_token(&format!("fn {p_name}"), n)
         {
             return None;
         }
@@ -203,11 +216,19 @@ fn gate_fn_filter_single(r: &rsmpl_patch::RsmplHunk) -> Option<Vec<rsmpl_patch::
     for (i, l) in r.lines.iter().enumerate() {
         if i == minus[0] {
             let mut nl = l.clone();
-            nl.text = format!("{m_indent}fn {m_name}(...) {{ ... }}");
+            nl.text = if semi {
+                format!("{m_indent}fn {m_name}(...) ;")
+            } else {
+                format!("{m_indent}fn {m_name}(...) {{ ... }}")
+            };
             out.push(nl);
         } else if i == plus[0] {
             let mut nl = l.clone();
-            nl.text = format!("{p_indent}fn {p_name}(...) {{ ... }}");
+            nl.text = if semi {
+                format!("{p_indent}fn {p_name}(...) ;")
+            } else {
+                format!("{p_indent}fn {p_name}(...) {{ ... }}")
+            };
             out.push(nl);
         } else if is_filter_header_line(l.text.trim()) {
             out.push(l.clone());
@@ -236,11 +257,15 @@ fn is_filter_header_line(trimmed: &str) -> bool {
     body.is_empty() || body.starts_with([' ', '\t', '<', '{'])
 }
 
-/// Split a pair line into (indent, fn name, diet-erased rest):
-/// `V Q fn foo G (...) W { ... }` → `("     ", "foo", "(...) { ... }")`,
-/// `fn foo(...) {` → `("", "foo", "(...) { ... }")`. The `(...)`
-/// family only — full concrete signatures stay divergent (a future
-/// slice may widen). `None` for non-header shapes.
+/// Split a pair line into (indent, fn name, diet-erased rest):/// `V Q fn foo G (...) W { ... }` → `("     ", "foo", "(...) { ... }")`,
+/// `fn foo(...) {` → `("", "foo", "(...) { ... }")`,
+/// `V Q fn foo G (...) W ;` → `("     ", "foo", "(...) ;")`,
+/// `fn foo();` → `("", "foo", "(...) ;")` (WI-3 slice 2: the empty
+/// parameter list is the narrowest concrete spelling — it proves the
+/// same one site the `(...)` diet proves under D17's exactly-one-hit
+/// premise on both sides). The `(...)` family (plus empty `()`) only —
+/// full concrete signatures stay divergent (a future slice may widen).
+/// `None` for non-header shapes.
 fn fn_diet_erase(line_text: &str) -> Option<(String, String, String)> {
     let trimmed = line_text.trim_start();
     let indent_len = line_text.len() - trimmed.len();
@@ -263,6 +288,12 @@ fn fn_diet_erase(line_text: &str) -> Option<(String, String, String)> {
     // shared inline target.
     if rest == "(...) {" || rest == "(...) { ... }" {
         rest = "(...) { ... }".to_string();
+    } else if rest == "(...) ;" || rest == "(...);" || rest == "() ;" || rest == "();" {
+        // WI-3 slice 2: the `;` declaration family (diet with or
+        // without the `V Q … G (…) W` wildcards, plus the empty
+        // concrete parameter list) erases to the shared `;` target.
+        // `{` vs `;` never unify (gated by `m_rest == p_rest` above).
+        rest = "(...) ;".to_string();
     } else {
         return None;
     }

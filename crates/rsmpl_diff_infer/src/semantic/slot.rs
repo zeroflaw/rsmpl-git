@@ -12,7 +12,10 @@ use super::{ident_len, is_ident_char, item_emission_header, unique_rule};
 /// sites) — plus the WI-6 slice 1 N=1 one-line arm: a lone
 /// `}`-terminated brace-balanced definition (byte-identical body,
 /// rename-only) in an `impl` block compresses to the compact
-/// filtered single under the same proof. Column-0 sites emit the free-fn slot sweep (T329 shape);
+/// filtered single under the same proof — plus the WI-3 slice 2 N=1
+/// trait-decl arm: a lone `;`-terminated declaration in a `trait`
+/// block compresses likewise (twin in another trait never matches
+/// the filter). Column-0 sites emit the free-fn slot sweep (T329 shape);
 /// uniformly indented sites emit one hunk per enclosing `impl` block
 /// with its verbatim header line (WI-4a: the engine header filter
 /// matches only the named block); mixed indent stays passthrough.
@@ -39,6 +42,30 @@ pub(crate) fn try_fn_slot_sweep(
     }
     if changed.len() != minuses.len() {
         return None;
+    }
+    // WI-3 slice 2: N=1 trait-decl `;` single. A lone indented
+    // `fn old(...);` → `fn new(...);` declaration inside a `trait`
+    // block compresses to the compact filtered diet single (trait
+    // header + one pair, no frame, no directives — the WI-6 slice-1
+    // `}`-arm precedent). The WI-4a filter names the match domain so
+    // an untouched same-name twin in another trait (fixture 112)
+    // never matches — the per-emission scratch below proves the site
+    // set; only macro/string interiors veto. N≥2 `;` classes never
+    // reach here (early `len == 1` gate; the generic `fn_rename_pair`
+    // loop below keeps declining `;`, so fixture 30's trait-side-only
+    // sweep stays ordinary by design).
+    if minuses.len() == 1 {
+        if let Some(out) =
+            try_trait_decl_single(minuses, pluses, path, file_old, changed, used_rules)
+        {
+            return Some(out);
+        }
+        // A `;`-terminated pair that the trait arm declines (free-fn
+        // site, `;`/`{` mismatch, opaque twin, N=2) is never a `{`/`}`
+        // fn shape either — decline fast without consuming a rule.
+        if minuses[0].trim_end().ends_with(';') || pluses[0].trim_end().ends_with(';') {
+            return None;
+        }
     }
     let mut old_name: Option<String> = None;
     let mut new_name: Option<String> = None;
@@ -155,6 +182,120 @@ pub(crate) fn try_fn_slot_sweep(
         "- V Q fn {old_name} G (...) W {{\n+ V Q fn {new_name} G (...) W {{\n      ...\n  }}\n"
     ));
     Some(hunk)
+}
+
+/// WI-3 slice 2: lone trait-decl `;` rename as a compact filtered diet
+/// single (detector `fn_slot_sweep`, shared with the impl-method arms
+/// above — no new guard row, no new call sites). The trait header is
+/// the WI-4a filter (verbatim source line); the pair is the diet
+/// `V Q fn {old} G (...) W ;` form, mirroring the 112 authored
+/// spelling. Uniqueness is the trait-scoped grouping (one group, one
+/// site — a same-name twin in another trait never matches the filter)
+/// plus the `scratch_single_reproduces` byte-compare pre-reservation
+/// (the `}`-arm precedent: no `slot_holds` file-wide count, no probe —
+/// the emission itself is what gets proved). Opaque macro/string
+/// interiors veto via `no_opaque_hits`.
+fn try_trait_decl_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    // Method discipline: trait declarations are indented; column-0
+    // `;` lines are never trait methods.
+    if !minuses[0].starts_with([' ', '\t']) || !pluses[0].starts_with([' ', '\t']) {
+        return None;
+    }
+    let (old_name, new_name, term) =
+        super::trait_methods::trait_rename_pair(minuses[0], pluses[0])?;
+    if term != ';' || old_name == new_name {
+        return None;
+    }
+    if !super::trait_methods::in_trait_block(pre, changed[0]) {
+        return None;
+    }
+    // Fixture-30 posture: a same-name free fn or impl method anywhere
+    // in the file vetoes the trait-decl single (the rename may belong
+    // to a broader trait+impl intent the def-only single cannot see —
+    // mixed classes raise via `trait_method_rename`, never as a
+    // def-only single). Same-name twins in *other trait blocks* are
+    // fine (different items; the WI-4a filter disambiguates — the 112
+    // shape).
+    if has_nontrait_namesake(pre, &old_name) {
+        return None;
+    }
+    if !crate::totality::no_opaque_hits(file_old, minuses, changed) {
+        return None;
+    }
+    let groups = super::block_headers::group_sites_by_trait_block(file_old, changed)?;
+    let g = groups.first()?;
+    if g.sites.len() != 1 || g.sites[0] != changed[0] {
+        return None;
+    }
+    let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
+    let minus_fx = format!("V Q fn {old_name} G (...) W ;");
+    let plus_fx = format!("V Q fn {new_name} G (...) W ;");
+    let mut out = format!(
+        "{}\n@@ -{},1 @@ rule={rule}\n",
+        crate::git_header(path),
+        changed[0]
+    );
+    out.push_str(&format!(
+        "  {}\n-     {minus_fx}\n+     {plus_fx}\n",
+        g.header_line
+    ));
+    if !scratch_single_reproduces(pre, path, &out, changed, pluses) {
+        return None;
+    }
+    Some(out)
+}
+
+/// Same-name free-fn or impl-method namesake anywhere in `pre`
+/// (top-level and inline-mod items): the fixture-30 veto behind
+/// `try_trait_decl_single`. Trait-block declarations are excluded —
+/// same-name methods in other traits are different items the WI-4a
+/// filter disambiguates.
+fn has_nontrait_namesake(pre: &str, old: &str) -> bool {
+    let Ok(file) = syn::parse_str::<syn::File>(pre) else {
+        return false;
+    };
+    fn walk(items: &[syn::Item], old: &str, hit: &mut bool) {
+        if *hit {
+            return;
+        }
+        for it in items {
+            match it {
+                syn::Item::Fn(f) if f.sig.ident == old => *hit = true,
+                syn::Item::Impl(imp) => {
+                    for m in &imp.items {
+                        if let syn::ImplItem::Fn(f) = m {
+                            if f.sig.ident == old {
+                                *hit = true;
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, old, hit);
+                    }
+                }
+                _ => {}
+            }
+            if *hit {
+                return;
+            }
+        }
+    }
+    let mut hit = false;
+    walk(&file.items, old, &mut hit);
+    hit
 }
 
 /// A `-`/`+` line pair as a rename-only fn header: both trimmed
@@ -468,5 +609,120 @@ mod tests {
         let mut files = pre_map(&[("f.rs", pre)]);
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
         assert!(files["f.rs"].contains("fn new()"), "got: {}", files["f.rs"]);
+    }
+
+    const TRAIT_TWIN_PRE: &str =
+        "trait T {\n    fn old_name(&self) -> i32;\n}\n\ntrait U {\n    fn old_name(&self) -> i32;\n}\n";
+
+    #[test]
+    fn trait_decl_single_fires_with_filter() {
+        // WI-3 slice 2 (fixture 19 shape): a lone trait-decl rename
+        // compresses to the compact filtered diet single.
+        let pre = "trait T {\n    fn foo();\n}\n";
+        let raw = "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn foo();\n+    fn bar();\n";
+        let out = infer_semantic_with_pre_images(&[raw.to_string()], &pre_map(&[("f.rs", pre)]))
+            .expect("trait-decl single must fire");
+        assert!(out.contains("trait T {"), "filter kept, got:\n{out}");
+        assert!(
+            out.contains("-     V Q fn foo G (...) W ;\n"),
+            "compact pair, got:\n{out}"
+        );
+        assert!(
+            out.contains("+     V Q fn bar G (...) W ;\n"),
+            "compact pair, got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map(&[("f.rs", pre)]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("    fn bar();"),
+            "got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn trait_decl_twin_fires_with_filter() {
+        // WI-3 slice 2 (fixture 112 shape): an untouched same-name twin
+        // in another trait never matches the filter; the renamed block
+        // compresses, the twin survives byte-identical.
+        let raw =
+            "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old_name(&self) -> i32;\n+    fn new_name(&self) -> i32;\n";
+        let out = infer_semantic_with_pre_images(
+            &[raw.to_string()],
+            &pre_map(&[("f.rs", TRAIT_TWIN_PRE)]),
+        )
+        .expect("trait-decl twin single must fire");
+        assert!(out.contains("trait T {"), "filter kept, got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map(&[("f.rs", TRAIT_TWIN_PRE)]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert!(
+            files["f.rs"].contains("trait T {\n    fn new_name(&self) -> i32;"),
+            "got: {}",
+            files["f.rs"]
+        );
+        assert!(
+            files["f.rs"].contains("trait U {\n    fn old_name(&self) -> i32;"),
+            "twin must survive, got: {}",
+            files["f.rs"]
+        );
+    }
+
+    #[test]
+    fn trait_decl_vetoes() {
+        // `;`/`{` mismatch, free-fn site, opaque macro twin, and N=2
+        // (fixture 30 posture: trait-side-only sweep stays ordinary).
+        let pre = "trait T {\n    fn foo();\n}\n";
+        // Terminator mismatch declines.
+        assert!(infer_semantic_with_pre_images(
+            &[
+                "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn foo();\n+    fn bar() {\n"
+                    .to_string()
+            ],
+            &pre_map(&[("f.rs", pre)]),
+        )
+        .is_none());
+        // Free-fn `;` line is never a trait method.
+        let free_pre = "fn foo();\nfn main() {}\n";
+        assert!(infer_semantic_with_pre_images(
+            &["diff --git a/f.rs b/f.rs\n@@ -1,1 +1,1 @@\n-fn foo();\n+fn bar();\n".to_string()],
+            &pre_map(&[("f.rs", free_pre)]),
+        )
+        .is_none());
+        // Identical names decline.
+        assert!(infer_semantic_with_pre_images(
+            &[
+                "diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn foo();\n+    fn foo();\n"
+                    .to_string()
+            ],
+            &pre_map(&[("f.rs", pre)]),
+        )
+        .is_none());
+        // N=2 trait-decl pairs stay ordinary at detector level (the arm
+        // is N=1-only; fixture 30's 3-pair sweep keeps its by-design
+        // ordinary pin via the whole-section decline + the
+        // non-trait-namesake veto on each per-hunk single).
+        let two_pre = "trait T {\n    fn foo();\n}\ntrait U {\n    fn foo();\n}\n";
+        let mut used = Vec::new();
+        assert!(super::try_fn_slot_sweep(
+            &["    fn foo();", "    fn foo();"],
+            &["    fn bar();", "    fn bar();"],
+            "f.rs",
+            Some(two_pre),
+            &[2, 5],
+            &mut used,
+        )
+        .is_none());
+        // Fixture-30 posture at pipeline level: a free-fn + inherent
+        // namesake vetoes each per-hunk single, so the section stays
+        // wholly ordinary.
+        let thirty_pre = "trait T {\n    fn old_name(&self) -> i32;\n}\n\ntrait U {\n    fn old_name(&self) -> i32;\n}\n\nfn old_name() -> i32 {\n    1\n}\n";
+        assert!(infer_semantic_with_pre_images(
+            &["diff --git a/f.rs b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old_name(&self) -> i32;\n+    fn new_name(&self) -> i32;\n"
+                .to_string()],
+            &pre_map(&[("f.rs", thirty_pre)]),
+        )
+        .is_none());
     }
 }

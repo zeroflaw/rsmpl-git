@@ -59,6 +59,7 @@ mod postcheck_namehole;
 mod postcheck_synth;
 mod postcheck_use;
 mod single_site_eq;
+mod spell_normalize;
 mod suggest;
 mod use_graph;
 mod use_graph_anchor;

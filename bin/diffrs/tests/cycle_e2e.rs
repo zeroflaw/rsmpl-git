@@ -351,6 +351,8 @@ const CYCLE_OK: &[&str] = &[
     "10-impl-rename",
     "113-sig-evolve-single",
     "102-use-rename-single",
+    "19-trait-rename",
+    "112-trait-sweep-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -390,10 +392,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)",
     ),
     (
-        "19-trait-rename",
-        "t375: single trait method re-infers ordinary",
-    ),
-    (
         "22-attrs-strip",
         "t375: single attributed fn re-infers ordinary",
     ),
@@ -428,10 +426,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "97-macro-sweep-single",
         "t375: single-site macro-sweep rewrite re-infers ordinary",
-    ),
-    (
-        "112-trait-sweep-single",
-        "t375: single-site trait-sweep rewrite re-infers ordinary",
     ),
 ];
 

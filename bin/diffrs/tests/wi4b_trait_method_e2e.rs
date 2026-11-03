@@ -282,9 +282,12 @@ fn trait_name_mismatch_stays_ordinary() {
     );
 }
 #[test]
-fn trait_decl_only_stays_ordinary() {
-    // WI-4b: trait-side-only renames stay ordinary (no impl side
-    // shares the intent) — pinned by design.
+fn trait_decl_only_raises_def_only_singles() {
+    // WI-3 slice 2: trait-side-only renames raise as one filtered
+    // def-only single per trait block (no impl side needed for the
+    // follow-free single; the WI-4b follow intent still requires both
+    // sides, so no `# follow=uses` rides). Each twin trait keeps its
+    // own rule; real-apply is byte-identical per hunk.
     let dir = init_repo();
     let before = "trait T {\n    fn old_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\n\ntrait U {\n    fn old_name(&self, first_argument: FirstLongTypeArgument, second_argument: SecondLongTypeArgument) -> i32;\n}\n";
     write(dir.path(), "src/lib.rs", before);
@@ -296,8 +299,20 @@ fn trait_decl_only_stays_ordinary() {
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
-        !patch.contains("V Q fn"),
-        "decl-only must stay ordinary, got: {patch}"
+        patch.contains(
+            "  trait T {\n-     V Q fn old_name G (...) W ;\n+     V Q fn new_name G (...) W ;\n"
+        ),
+        "trait-T def-only single, got: {patch}"
+    );
+    assert!(
+        patch.contains(
+            "  trait U {\n-     V Q fn old_name G (...) W ;\n+     V Q fn new_name G (...) W ;\n"
+        ),
+        "trait-U def-only single, got: {patch}"
+    );
+    assert!(
+        !patch.contains("follow=uses"),
+        "def-only singles carry no follow, got: {patch}"
     );
 }
 
