@@ -40,8 +40,14 @@ struct ImplScope {
 impl AnchorIndex {
     /// Build the index for one parsed file.
     pub(crate) fn for_file(parsed: &syn::File) -> Self {
+        // WI-10: shadow set is build-time only (never stored — the
+        // scopes already carry the deref'd containers).
+        let no_unwrap = collect_no_unwrap(parsed);
         let mut idx = Self::default();
-        let mut builder = Builder { idx: &mut idx };
+        let mut builder = Builder {
+            idx: &mut idx,
+            no_unwrap: &no_unwrap,
+        };
         builder.visit_file(parsed);
         idx
     }
@@ -87,6 +93,7 @@ impl AnchorIndex {
 
 struct Builder<'a> {
     idx: &'a mut AnchorIndex,
+    no_unwrap: &'a HashSet<String>,
 }
 
 impl<'ast> Visit<'ast> for Builder<'_> {
@@ -102,7 +109,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         for arg in &node.sig.inputs {
             if let syn::FnArg::Typed(pat) = arg {
                 if let syn::Pat::Ident(id) = pat.pat.as_ref() {
-                    if let Some(container) = type_tail(&pat.ty) {
+                    if let Some(container) = type_tail_deref(&pat.ty, self.no_unwrap) {
                         scope.params.insert(id.ident.to_string(), container);
                     }
                 }
@@ -110,6 +117,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         }
         let mut collector = LocalCollector {
             out: &mut scope.bindings,
+            no_unwrap: self.no_unwrap,
         };
         collector.visit_block(&node.block);
         self.idx.scopes.push(scope);
@@ -134,7 +142,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         for arg in &node.sig.inputs {
             if let syn::FnArg::Typed(pat) = arg {
                 if let syn::Pat::Ident(id) = pat.pat.as_ref() {
-                    if let Some(container) = type_tail(&pat.ty) {
+                    if let Some(container) = type_tail_deref(&pat.ty, self.no_unwrap) {
                         scope.params.insert(id.ident.to_string(), container);
                     }
                 }
@@ -142,6 +150,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
         }
         let mut collector = LocalCollector {
             out: &mut scope.bindings,
+            no_unwrap: self.no_unwrap,
         };
         collector.visit_block(&node.block);
         self.idx.scopes.push(scope);
@@ -175,6 +184,7 @@ impl<'ast> Visit<'ast> for Builder<'_> {
 /// overwrites at lookup): `let x: C = …` and `let x = C { … }`.
 struct LocalCollector<'a> {
     out: &'a mut Vec<(String, String, u32)>,
+    no_unwrap: &'a HashSet<String>,
 }
 
 impl<'ast> Visit<'ast> for LocalCollector<'_> {
@@ -184,7 +194,7 @@ impl<'ast> Visit<'ast> for LocalCollector<'_> {
             // `let x: C = …` — ascription lives in `Pat::Type` in syn 2.
             syn::Pat::Type(t) => {
                 if let syn::Pat::Ident(id) = t.pat.as_ref() {
-                    if let Some(container) = type_tail(&t.ty) {
+                    if let Some(container) = type_tail_deref(&t.ty, self.no_unwrap) {
                         self.out.push((id.ident.to_string(), container, bind_line));
                     }
                 }
@@ -240,6 +250,169 @@ fn type_tail(ty: &syn::Type) -> Option<String> {
     }
 }
 
+/// WI-10 slice 1: one-step deref unwrap over [`type_tail`].
+///
+/// `Box<T>` / `Rc<T>` / `Arc<T>` (exactly one generic type arg)
+/// anchors to the inner tail `T`; `&`/`&mut` peel first via the
+/// shared tail so `&Box<S>` composes. Single step only:
+/// `Box<Box<S>>` unwraps to `Box` (off-target against `S`).
+/// Anything else (incl. `Vec<S>`) keeps the outer-type behavior.
+///
+/// Resolution, not spelling (D8): a single-segment wrapper unwraps
+/// unless this file shadows the name (`no_unwrap`); a multi-segment
+/// path unwraps only on a `std`/`alloc`/`core` first segment
+/// (`std::boxed::Box<S>` yes, `foo::Box<S>` no).
+fn type_tail_deref(ty: &syn::Type, no_unwrap: &HashSet<String>) -> Option<String> {
+    match ty {
+        syn::Type::Path(tp) => {
+            if tp.qself.is_some() {
+                return None;
+            }
+            let last = tp.path.segments.last()?;
+            let name = last.ident.to_string();
+            if is_wrapper(&name) && path_allows_unwrap(&tp.path, &name, no_unwrap) {
+                if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
+                    let inners: Vec<&syn::Type> = args
+                        .args
+                        .iter()
+                        .filter_map(|a| match a {
+                            syn::GenericArgument::Type(t) => Some(t),
+                            _ => None,
+                        })
+                        .collect();
+                    if inners.len() == 1 {
+                        // Inner is one deref step: peel refs, take the
+                        // plain-path tail. Non-path inners (`dyn Trait`)
+                        // fall through to the outer name (off-target).
+                        if let Some(inner) = plain_tail(inners[0]) {
+                            return Some(inner);
+                        }
+                    }
+                }
+            }
+            Some(name)
+        }
+        syn::Type::Reference(r) => type_tail_deref(&r.elem, no_unwrap),
+        _ => None,
+    }
+}
+
+/// Inner tail of one deref step: refs peeled, plain path only.
+fn plain_tail(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(tp) => {
+            if tp.qself.is_some() {
+                return None;
+            }
+            tp.path.segments.last().map(|s| s.ident.to_string())
+        }
+        syn::Type::Reference(r) => plain_tail(&r.elem),
+        _ => None,
+    }
+}
+
+fn is_wrapper(name: &str) -> bool {
+    matches!(name, "Box" | "Rc" | "Arc")
+}
+
+fn path_allows_unwrap(path: &syn::Path, name: &str, no_unwrap: &HashSet<String>) -> bool {
+    if path.segments.len() == 1 {
+        return !no_unwrap.contains(name);
+    }
+    matches!(
+        path.segments
+            .first()
+            .map(|s| s.ident.to_string())
+            .as_deref(),
+        Some("std" | "alloc" | "core")
+    )
+}
+
+/// WI-10: names in the closed wrapper set that this file shadows, so
+/// the deref unwrap must not fire. Local `struct`/`enum`/`union`/`type`
+/// definitions plus `use` imports of the bare name from a non-std
+/// prefix (`use foo::Box` shadows; `use std::boxed::Box` does not).
+fn collect_no_unwrap(parsed: &syn::File) -> HashSet<String> {
+    struct V {
+        out: HashSet<String>,
+    }
+    impl<'ast> Visit<'ast> for V {
+        fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+            if is_wrapper(&node.ident.to_string()) {
+                self.out.insert(node.ident.to_string());
+            }
+            visit::visit_item_struct(self, node);
+        }
+        fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
+            if is_wrapper(&node.ident.to_string()) {
+                self.out.insert(node.ident.to_string());
+            }
+            visit::visit_item_enum(self, node);
+        }
+        fn visit_item_union(&mut self, node: &'ast syn::ItemUnion) {
+            if is_wrapper(&node.ident.to_string()) {
+                self.out.insert(node.ident.to_string());
+            }
+            visit::visit_item_union(self, node);
+        }
+        fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+            if is_wrapper(&node.ident.to_string()) {
+                self.out.insert(node.ident.to_string());
+            }
+            visit::visit_item_type(self, node);
+        }
+        fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+            let mut pairs: Vec<(Vec<String>, String)> = Vec::new();
+            flatten_use_names(&node.tree, &mut Vec::new(), &mut pairs);
+            for (full, local) in pairs {
+                if is_wrapper(&local)
+                    && !full
+                        .first()
+                        .is_some_and(|f| f == "std" || f == "alloc" || f == "core")
+                {
+                    self.out.insert(local);
+                }
+            }
+        }
+    }
+    let mut v = V {
+        out: HashSet::new(),
+    };
+    v.visit_file(parsed);
+    v.out
+}
+
+/// (full path segments, local name) for one `use` tree.
+fn flatten_use_names(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, String)>,
+) {
+    match tree {
+        syn::UseTree::Path(p) => {
+            prefix.push(p.ident.to_string());
+            flatten_use_names(&p.tree, prefix, out);
+            prefix.pop();
+        }
+        syn::UseTree::Name(n) => {
+            let mut full = prefix.clone();
+            full.push(n.ident.to_string());
+            out.push((full, n.ident.to_string()));
+        }
+        syn::UseTree::Rename(r) => {
+            let mut full = prefix.clone();
+            full.push(r.ident.to_string());
+            out.push((full, r.rename.to_string()));
+        }
+        syn::UseTree::Glob(_) => {}
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                flatten_use_names(t, prefix, out);
+            }
+        }
+    }
+}
+
 fn self_ty_last(ty: &syn::Type) -> Option<String> {
     type_tail(ty)
 }
@@ -265,5 +438,78 @@ pub(crate) fn field_root(base: &syn::Expr) -> Option<String> {
         }
         syn::Expr::Field(f) => field_root(&f.base),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anchor(src: &str, var: &str, line: u32) -> Option<String> {
+        let parsed: syn::File = syn::parse_str(src).expect("fixture parses");
+        AnchorIndex::for_file(&parsed).anchor_of(var, line)
+    }
+
+    #[test]
+    fn box_param_anchors_to_inner() {
+        let src = "struct S;\nfn f(b: Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 3).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn rc_arc_let_anchors_to_inner() {
+        let src = "struct S;\nfn f() {\n    let x: Rc<S> = y;\n    x;\n}\n";
+        assert_eq!(anchor(src, "x", 4).as_deref(), Some("S"));
+        let src = "struct S;\nfn f() {\n    let x: Arc<S> = y;\n    x;\n}\n";
+        assert_eq!(anchor(src, "x", 4).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn vec_stays_outer() {
+        let src = "struct S;\nfn f(b: Vec<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 3).as_deref(), Some("Vec"));
+    }
+
+    #[test]
+    fn local_struct_box_shadows() {
+        let src = "struct Box;\nstruct S;\nfn f(b: Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 4).as_deref(), Some("Box"));
+    }
+
+    #[test]
+    fn foreign_path_box_stays_outer() {
+        let src = "struct S;\nfn f(b: foo::Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 3).as_deref(), Some("Box"));
+    }
+
+    #[test]
+    fn std_path_box_unwraps() {
+        let src = "struct S;\nfn f(b: std::boxed::Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 3).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn double_deref_stays_outer_by_one_step() {
+        // Single unwrap only: Box<Box<S>> -> Box (off-target vs S).
+        let src = "struct S;\nfn f(b: Box<Box<S>>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 3).as_deref(), Some("Box"));
+    }
+
+    #[test]
+    fn ref_of_box_composes() {
+        let src = "struct S;\nfn f(b: &Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 3).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn shadow_import_blocks_unwrap() {
+        let src = "use foo::Box;\nstruct S;\nfn f(b: Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 4).as_deref(), Some("Box"));
+    }
+
+    #[test]
+    fn std_import_keeps_unwrap() {
+        let src = "use std::boxed::Box;\nstruct S;\nfn f(b: Box<S>) {\n    b;\n}\n";
+        assert_eq!(anchor(src, "b", 4).as_deref(), Some("S"));
     }
 }

@@ -1043,6 +1043,33 @@ mod tests {
     }
 
     #[test]
+    fn inherent_box_receiver_rewrites_through_deref() {
+        // WI-10 slice 1: `b: Box<S>` anchors to `S` through one deref step.
+        let src = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f(b: Box<S>) {\n    b.old();\n}\n";
+        let (files, _) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("b.new();"), "got: {out}");
+        assert!(!out.contains("b.old()"), "got: {out}");
+    }
+
+    #[test]
+    fn inherent_shadowed_box_stays_off_target() {
+        // A local `struct Box` shadows the std vocabulary: no unwrap.
+        let src = "struct Box;\nstruct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nfn f(b: Box<S>) {\n    b.old();\n}\n";
+        let (files, report) = apply_files(&inherent_patch(), &[("src/lib.rs", src)]).unwrap();
+        let out = &files["src/lib.rs"];
+        assert!(out.contains("b.old()"), "got: {out}");
+        assert!(
+            report.rules[0]
+                .follow_skipped_details
+                .iter()
+                .any(|d| d.reason == "off-target"),
+            "got: {:?}",
+            report.rules[0].follow_skipped_details
+        );
+    }
+
+    #[test]
     fn inherent_cross_file_defs_and_calls_rewrite() {
         let patch = inherent_patch().replace("src/lib.rs", "src/a.rs");
         let (files, _) = apply_files(

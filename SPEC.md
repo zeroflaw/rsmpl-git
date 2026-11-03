@@ -2643,7 +2643,7 @@ Rules:
 
 `# follow=uses` on a member rename rewrites anchored use sites workspace-wide (WI-14 anchor classes, strongest first; sibling same-named definitions never veto — the definition hunk always applies, unproven sites are `shadowed`/`off-target` evidence):
 
-- Fields: literal-path sites are proven by the path — struct-literal labels (`S { old: v }`) and struct-pattern labels (`S { old: p }`) whose path names `S` (last segment equality, plus `Self`-spelled paths inside an `impl` of `S`). Shorthand labels expand keeping the local binding: `S { old }` rewrites to `S { new: old }`. `.old` accesses are proven only by a receiver anchor: fn-signature params (`fn f(a: A)` proves `a.old`), `let x: A` annotations, `let x = S { … }` struct-literal inits, and `self` inside `impl S` (all flow-ordered per fn body; a later `let x: B` re-anchors). `-> A` returns never anchor; call/literal bases (`make_a().old`) never claim. Unproven accesses are `shadowed` (another container defines the name) or `off-target` evidence — never a run failure. Method idents named `old` and tuple `.0` accesses never match and never veto (different namespaces).
+- Fields: literal-path sites are proven by the path — struct-literal labels (`S { old: v }`) and struct-pattern labels (`S { old: p }`) whose path names `S` (last segment equality, plus `Self`-spelled paths inside an `impl` of `S`). Shorthand labels expand keeping the local binding: `S { old }` rewrites to `S { new: old }`. `.old` accesses are proven only by a receiver anchor: fn-signature params (`fn f(a: A)` proves `a.old`), `let x: A` annotations, `let x = S { … }` struct-literal inits, and `self` inside `impl S` (all flow-ordered per fn body; a later `let x: B` re-anchors). The closed wrapper set derefs one step: `Box<S>`/`Rc<S>`/`Arc<S>` (single-segment spelling unless shadowed by a local def/use, or multi-segment on a `std`/`alloc`/`core` prefix) anchors to `S`, composing with `&`/`&mut`; double-deref stays off-target. `-> A` returns never anchor; call/literal bases (`make_a().old`) never claim. Unproven accesses are `shadowed` (another container defines the name) or `off-target` evidence — never a run failure. Method idents named `old` and tuple `.0` accesses never match and never veto (different namespaces).
 - Variants: expression/pattern paths spelling `E::Old` (any leading prefix, plus `Self::Old` inside an `impl` of `E`) and `use …::E::Old` import segments are proven (literal-path). Bare `Old` rewrites only with a `use …::E::*` glob anchor naming `E` in the same file; otherwise it is `second-hop` evidence (never a veto). `qself` paths and macro interiors mentioning the member name are opaque like scalar renames (veto without fallback, skip + report with it).
 - Orphan evidence mirrors scalar renames: a definition-only member rename lists anchored use lines as `orphans` (`off-target` for proven, `shadowed`/`second-hop` for unproven, `macro-hidden` for interiors) while `--check` stays green; a `# follow=uses` hunk never carries `orphans` (`follow_skipped_details` owns that signal, each with its WI-2 `reason`).
 
@@ -2827,7 +2827,9 @@ name — each impl `fn` ident rewritten and labelled `rename` in
 call sites (WI-21): `recv.old()` where the WI-14 anchor order proves
 the receiver names a domain self type (fn-signature params, `let x: C`
 annotations, `let x = S { … }` literal inits, `self` inside a domain
-`impl S` or inside the defining `trait Tr` default body), and `S::old`
+`impl S` or inside the defining `trait Tr` default body — WI-10 lets
+`Box<S>`/`Rc<S>`/`Arc<S>` receivers anchor to `S` through one deref
+step under the same closed-set/shadowing law), and `S::old`
 tails where `S` names a domain self type (or the trait itself), plus
 `<S as Tr>::old` qself tails naming the trait. WI-11 grows the anchor
 order same-file only (D8): `C::ctor(…).old()` where `ctor` is
@@ -2856,7 +2858,9 @@ context + `fn old` → `fn new`) rewrites every inherent `impl S`
 definition of the same name — each `fn` ident rewritten and labelled
 `rename` in `span_labels` (`matches` counts the definition-hunk block) —
 plus anchored call sites by the same anchor order over the single-type
-domain (`S`): `recv.old()` with a proven `S` receiver, `self` inside an
+domain (`S`): `recv.old()` with a proven `S` receiver (WI-10: `Box<S>`/
+`Rc<S>`/`Arc<S>` receivers anchor through one deref step under the
+closed-set/shadowing law), `self` inside an
 `impl S` block, `S::old` tails, and `<S as _>::old` qself tails naming
 the self type, plus the WI-11 same-file chain shapes (constructor calls
 and one-hop method-return chains; generic bounds never prove a concrete
