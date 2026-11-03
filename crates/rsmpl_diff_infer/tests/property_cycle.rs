@@ -74,20 +74,28 @@ fn native_section(path: &str, pre: &str, post: &str) -> String {
 
 /// Independently recompute the N→S→N leg: apply `rsmpl` to `pre` and
 /// require the byte-identical native `post` (SPEC D.5 state-losslessness).
-fn assert_state_lossless(rsmpl: &str, pre: &str, post: &str, seed: u64) {
+/// Returns the apply report so WI-19 slice-3 honesty legs can cross-check
+/// it against tree evidence (report fields are never trusted blindly).
+fn assert_state_lossless(
+    rsmpl: &str,
+    pre: &str,
+    post: &str,
+    seed: u64,
+) -> rsmpl_engine::ApplyReport {
     let parsed = rsmpl_patch::parse_patch(rsmpl)
         .unwrap_or_else(|_| panic!("seed {seed}: emitted patch must parse"));
     let mut files = pre_map(&[("f.rs", pre)]);
     for section in &parsed.files {
         files.entry(section.target_path.clone()).or_default();
     }
-    rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+    let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
         .unwrap_or_else(|_| panic!("seed {seed}: emitted patch must apply cleanly"));
     assert_eq!(
         files.get("f.rs").map(String::as_str),
         Some(post),
         "seed {seed}: N→S→N post tree must be byte-identical"
     );
+    report
 }
 
 /// Generate one (pre, post) pair from `rng`. All shapes are
@@ -257,5 +265,128 @@ fn property_bare_ident_veto_rederived() {
         !out.rsmpl.contains("rule="),
         "bare-ident minus must stay ordinary, got: {}",
         out.rsmpl
+    );
+}
+
+#[test]
+fn property_verdict_honesty_orphans_recomputed() {
+    // WI-19 slice 3: the apply report's orphan/skip verdict is recomputed
+    // from tree + patch-text evidence, never trusted blindly. Generator
+    // premise (by construction): no namesakes/shadowed twins exist in any
+    // generated pre image, so a lossless semantic raise must report zero
+    // orphans and zero follow skips; a phantom entry (or an unlisted skip
+    // that still applies clean) fails loudly with the seed.
+    for case in 0..40 {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15u64.wrapping_add(case as u64 * 0x9E37_79B9));
+        let (pre, post) = generate(&mut rng);
+        let seed = case as u64 + 1;
+        let raw = native_section("f.rs", &pre, &post);
+        let pmap = pre_map(&[("f.rs", pre.as_str())]);
+        let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pmap)
+            .unwrap_or_else(|_| panic!("seed {seed}: inference must succeed (no panic, no error)"));
+        // Independent apply (same path as `assert_state_lossless`, report kept).
+        let parsed = rsmpl_patch::parse_patch(&out.rsmpl)
+            .unwrap_or_else(|_| panic!("seed {seed}: emitted patch must parse"));
+        let mut files = pre_map(&[("f.rs", pre.as_str())]);
+        for section in &parsed.files {
+            files.entry(section.target_path.clone()).or_default();
+        }
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed)
+            .unwrap_or_else(|_| panic!("seed {seed}: emitted patch must apply cleanly"));
+        let applied = files.get("f.rs").cloned().unwrap_or_default();
+        assert_eq!(
+            applied, post,
+            "seed {seed}: N→S→N post tree must be byte-identical"
+        );
+        // (a) Ordinary posture recomputed from patch text, never from the
+        // report's own flag: semantic emissions carry `rule=`, ordinary
+        // passthrough never does.
+        assert_eq!(
+            report.has_ordinary,
+            !out.rsmpl.contains("rule="),
+            "seed {seed}: has_ordinary must agree with patch-text posture"
+        );
+        // (c) Leftover scan on the applied tree (never on report fields):
+        // call-swap keeps both defs (only `= foo(` calls must go), full
+        // renames must leave no `foo` at all. The control decoy carries no
+        // `foo` either way and passes vacuously.
+        if pre.contains("fn bar(") {
+            assert!(
+                !applied.contains("= foo("),
+                "seed {seed}: applied post must not retain old callee calls"
+            );
+        } else {
+            assert!(
+                !applied.contains("foo"),
+                "seed {seed}: applied post must not retain the old name"
+            );
+        }
+        // (b) A lossless semantic raise over a namesake-free pre image
+        // reports zero orphans and zero follow skips. The decoy is exempt:
+        // it is ordinary by construction today, and a future detector that
+        // fires on control headers with skips must revisit this premise
+        // explicitly rather than pass silently.
+        if out.rsmpl.contains("rule=") && !pre.contains("for line") {
+            let orphans: usize = report.rules.iter().map(|r| r.orphans.len()).sum();
+            let skips: usize = report
+                .rules
+                .iter()
+                .map(|r| r.follow_skipped_details.len())
+                .sum();
+            assert_eq!(
+                (orphans, skips),
+                (0, 0),
+                "seed {seed}: lossless semantic raise must report zero orphans/skips"
+            );
+        }
+    }
+}
+
+#[test]
+fn property_verdict_honesty_firing_reports_clean() {
+    // Kind-0 family pin: the semantic raise applies lossless with zero
+    // orphans/skips and `has_ordinary == false` (all recomputed above).
+    let pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n    let b = foo(2);\n}\n";
+    let post = "fn bar(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = bar(1);\n    let b = bar(2);\n}\n";
+    let raw = native_section("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        out.rsmpl.contains("rule="),
+        "fn rename must raise semantic, got: {}",
+        out.rsmpl
+    );
+    let report = assert_state_lossless(&out.rsmpl, pre, post, 2001);
+    assert!(
+        !report.has_ordinary,
+        "semantic raise must not report ordinary hunks"
+    );
+    let orphans: usize = report.rules.iter().map(|r| r.orphans.len()).sum();
+    let skips: usize = report
+        .rules
+        .iter()
+        .map(|r| r.follow_skipped_details.len())
+        .sum();
+    assert_eq!((orphans, skips), (0, 0), "firing raise must report clean");
+}
+
+#[test]
+fn property_verdict_honesty_ordinary_reports_ordinary() {
+    // Decoy pin: the ordinary passthrough reports `has_ordinary` (posture
+    // recomputed from patch text in the loop above; pinned here directly).
+    let pre = "fn m(section: &str) {\n    for line in section.lines() {\n        use_line(line);\n    }\n    for line in section.lines() {\n        use_line(line);\n    }\n}\n";
+    let post = "fn m(section: &str) {\n    for line in raw_lines(section) {\n        use_line(line);\n    }\n    for line in raw_lines(section) {\n        use_line(line);\n    }\n}\n";
+    let raw = native_section("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        !out.rsmpl.contains("rule="),
+        "control-header pair must stay ordinary, got: {}",
+        out.rsmpl
+    );
+    let report = assert_state_lossless(&out.rsmpl, pre, post, 2002);
+    assert!(
+        report.has_ordinary,
+        "ordinary passthrough must report has_ordinary"
     );
 }
