@@ -1107,6 +1107,48 @@ mod tests {
     }
 
     #[test]
+    fn wi26_repeat_elem_infers_expr() {
+        // WI-26: an undeclared hole in array-repeat element position
+        // (`[E0; 8]`) infers `expr` exactly like `let x = E0` /
+        // `foo(E0)` — the `Expr::Repeat` arm mirrors the engine's
+        // structural repeat match. Before, the hole stayed literal and
+        // only the declared spelling applied.
+        let t = infer("let buf = [E0; 8];", "let buf = [E0; 16];");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi26_repeat_len_hole_infers_expr() {
+        // The repeat length recurses as `expr` too (the engine binds it
+        // via `match_expr`), so a preserved len hole needs no
+        // declaration either.
+        let t = infer("let buf = [E; N0];", "let buf = [F; N0];");
+        assert_eq!(t.kind_of("E"), Some(MetavarKind::Expr));
+        assert_eq!(t.kind_of("F"), Some(MetavarKind::Expr));
+        assert_eq!(t.kind_of("N0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi26_repeat_declared_agreement_holds() {
+        // Declared `# expr E` over a repeat keeps agreeing (no
+        // incompatible-positions regression from the new arm).
+        let b = base(vec![Directive::MetaVar {
+            kind: MetavarKind::Expr,
+            names: vec!["E".to_string()],
+        }]);
+        let t = infer_table(b, "let buf = [E; 8];", "let buf = [E; 16];", None).unwrap();
+        assert_eq!(t.kind_of("E"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
+    fn wi26_repeat_in_call_arg_stays_expr() {
+        // Pin: repeat inside call args already inferred via the paren
+        // groups — the new AST arm must agree, not conflict.
+        let t = infer("foo([E0; 2])", "foo([E0; 3])");
+        assert_eq!(t.kind_of("E0"), Some(MetavarKind::Expr));
+    }
+
+    #[test]
     fn parenthesized_fn_args_infer_type() {
         // WI-6c-diet: `T` inside `Fn(T) -> T` infers `type` (input and
         // output), so the diet spelling needs no `# type T`. The call

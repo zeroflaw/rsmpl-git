@@ -564,6 +564,16 @@ pub(crate) fn assign_expr_ast(e: &syn::Expr, kinds: &mut HashMap<String, HashSet
                 assign_expr_ast(x, kinds);
             }
         }
+        // WI-26: array-repeat elements infer like array elements (mirror
+        // the engine's structural `Repeat` match: elem + len both
+        // recurse as `expr`). Without this an undeclared `[E0; 8]` hole
+        // stayed literal while `let x = E0` / `foo(E0)` inferred —
+        // and `normalize_let_diet_spelling` could emit the non-applying
+        // decl-free diet form.
+        syn::Expr::Repeat(er) => {
+            assign_expr_ast(&er.expr, kinds);
+            assign_expr_ast(&er.len, kinds);
+        }
         syn::Expr::Tuple(et) => {
             for x in &et.elems {
                 assign_expr_ast(x, kinds);
