@@ -35,7 +35,8 @@ use rsmpl_patch::{
 };
 
 use crate::single_site_eq::{
-    post_tree_key, unify_fn_filter_single_to_concrete, unify_single_site_verbatim_to_literal,
+    post_tree_key, unify_fn_evo_single_to_concrete, unify_fn_filter_single_to_concrete,
+    unify_single_site_verbatim_to_literal,
 };
 
 /// Canonicalize `patch_text` against the pre-image tree `pre`
@@ -131,6 +132,8 @@ pub fn canonicalize_with_tree(
     // unclassifiable shapes fail the gate and stay byte-identical, so
     // comparison never heals a real divergence. Runs when either apply
     // proves a post-tree; the literal lines come from that post-tree.
+    // WI-2 slice 2 added the filtered fn-rename arm and slice 3 the
+    // return-slot arm below (same D17 discipline, disjoint gates).
     if applied || raw_post.is_some() {
         let post: &HashMap<String, String> = if applied {
             &files
@@ -150,6 +153,10 @@ pub fn canonicalize_with_tree(
         // `(...)`-family pair) unify to the shared concrete inline
         // form under the same single-site + re-prove discipline.
         unify_fn_filter_single_to_concrete(&mut patch, pre, post, &mut unified_spans, &raw_spans);
+        // WI-2 slice 3: fn evolution singles whose minus omits the
+        // return unify to the concrete-minus form under the same
+        // discipline (the site return fills the omission).
+        unify_fn_evo_single_to_concrete(&mut patch, pre, post, &mut unified_spans, &raw_spans);
         let mut check = seeded;
         let same = crate::apply_patch_to_tree(&mut check, &patch).is_ok()
             && post_tree_key(&check) == post_tree_key(post);

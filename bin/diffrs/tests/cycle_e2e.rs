@@ -349,6 +349,7 @@ const CYCLE_OK: &[&str] = &[
     "58-impl-filter",
     "76-impl-filter-B",
     "10-impl-rename",
+    "113-sig-evolve-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -435,10 +436,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "112-trait-sweep-single",
         "t375: single-site trait-sweep rewrite re-infers ordinary",
-    ),
-    (
-        "113-sig-evolve-single",
-        "WI-19b: vis+ret evolution stays ordinary (N=1 sig singles own vis/qual-only; ret belongs to the type domain)",
     ),
 ];
 

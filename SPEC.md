@@ -8109,28 +8109,39 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    uniform name delta plus slot deltas); hetero-name slot-only
    classes belong to the header-evolution sweep below — the two are
    disjoint by construction (uniform names vs hetero preserved names).
-    Vis/qual-only evolution singles (WI-19b, N = 1, WI-14 slice 3):
-    a lone vis/qual-evolving header pair compresses as a precision
-    single (uniform-by-construction) under default `one` (no
-    `# allow=many`: exactly-one-set proof via the engine-count probe).
-    Empty preserved long slots stay concrete (`()`/omission, never
-    `G (...) W` — the diet fix for short headers); non-empty preserved
-    longs keep the wildcard (concrete pretty-printing would re-render
-    types like `&str`/`Option<String>` and fail the byte-compare) with
-    the `-> T W` law unchanged (a preserved return keeps the minus
-    omission plus `W`). Single-line `}`-terminated items parse via
-    their header prefix (text up to the first `{`); the scaffold
-    emission rewrites the header only (engine preserves the body
-    verbatim, including single-line bodies). A lone
-    params/generics/return/where evolution stays ordinary — the sig
-    rewrite would re-render the type with pretty spacing (`Box<[i32]>`
-    to `Box <[ i32 ]>`, 117 precedent), so those shapes belong to the
-    type-sweep family (strict N ≥ 2) instead — except a lone
-    single-type-delta line, which raises as a WI-2 bare-type literal
-    single (`- Vec<i32>` / `+ Box<[i32]>`, exactly-one-type-subterm
-    proof) rather than through the sig rewrite. An N = 1 sig single
-    requires a pre-image (same wide-minus doctrine as the slot sweep).
-    Method (indented) N = 1 vis/qual singles emit the canonical
+     Vis/qual/return evolution singles (WI-19b, N = 1, WI-14 slice 3):
+     a lone vis/qual-evolving header pair compresses as a precision
+     single (uniform-by-construction) under default `one` (no
+     `# allow=many`: exactly-one-set proof via the engine-count probe).
+     Empty preserved long slots stay concrete (`()`/omission, never
+     `G (...) W` — the diet fix for short headers); non-empty preserved
+     longs keep the wildcard (concrete pretty-printing would re-render
+     types like `&str`/`Option<String>` and fail the byte-compare) with
+     the `-> T W` law unchanged (a preserved return keeps the minus
+     omission plus `W`). Single-line `}`-terminated items parse via
+     their header prefix (text up to the first `{`); the scaffold
+     emission rewrites the header only (engine preserves the body
+     verbatim, including single-line bodies). A lone
+     params/generics/where evolution stays ordinary — the sig
+     rewrite would re-render the type with pretty spacing (`Box<[i32]>`
+     to `Box <[ i32 ]>`, 117 precedent), so those shapes belong to the
+     type-sweep family (strict N ≥ 2) instead — except a lone
+     single-type-delta line, which raises as a WI-2 bare-type literal
+     single (`- Vec<i32>` / `+ Box<[i32]>`, exactly-one-type-subterm
+     proof) rather than through the sig rewrite. A vis evolution joined
+     with a formatting-stable return evolution (WI-2 slice 3: both
+     return texts single-token, e.g. `-> i32` → `-> i64`, 113 shape —
+     composite returns decline and ride the bare-type single instead),
+     and a lone formatting-stable return evolution, raise as precision
+     singles likewise (the evolving return rides concrete on both
+     sides; omitted-return twins veto via the engine-count totality).
+     Tree-canonical equality unifies the authored bare-minus spelling
+     (`- fn helper(...)`) with the inferred concrete-minus spelling
+     (`- fn helper(...) -> i32`) under the D17 single-site + re-prove
+     discipline (WI-1s1 return-slot arm): wide-range bare templates
+     proving two same-name sites stay divergent. An N = 1 sig single
+     requires a pre-image (same wide-minus doctrine as the slot sweep).
+     Method (indented) N = 1 vis/qual/return singles emit the canonical
     verbatim-header block hunk and pay a 64-byte method-run price (four
     guards) for the mandatory WI-4a filter block (a proof anchor, D10,
     not bloat): the whole-section arm allows 32 over its
@@ -8144,8 +8155,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     alone. Totality is the
     engine-count check plus the scratch-apply byte-compare in every
     path, so mixed-section method singles fire beside ordinary or
-    other-class pairs; in-scope twins, two-slot evolutions, and
-    trait-context vis deltas still decline.
+    other-class pairs; in-scope twins, params/generics/where-involving
+    two-slots, and trait-context vis deltas still decline.
     Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
     same kind/name/suffix, closed-set vis step; `fn` rides the sig sweep,
     `mod` stays ordinary, `impl`/`macro_rules!` take no visibility) raise

@@ -864,15 +864,35 @@ mod tests {
     }
 
     #[test]
-    fn sig_evo_extra_site_vetoes() {
-        // Totality: a third untouched `fn alpha` in the pre-image would
-        // be silently rewritten — the sweep vetoes.
+    fn sig_evo_extra_site_anchors_single() {
+        // WI-2 slice 3: a third untouched `fn alpha` vetoes the N=2 sweep
+        // (its hetero-omitted minus would silently rewrite it), but the
+        // concrete stable return anchors pair 1 as a precision single:
+        // `- fn alpha(...) -> i32` matches exactly one site, so pair 1
+        // raises while pair 2 stays ordinary — and the third alpha is
+        // byte-untouched by the apply. Omitted-return twins still veto
+        // wholesale (pinned by `sig_evo_single_twin_vetoes`).
         let raw = section("f.rs", &evo_return_body());
         let pre = pre_map(&[(
             "f.rs",
             "fn alpha(x: i32) -> i32 {\n    x + 1\n}\nfn alpha(y: String) -> String {\n    y\n}\nfn alpha(z: u8) -> u8 {\n    z\n}\n",
         )]);
-        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("anchored pair must raise as a single");
+        assert!(out.contains("- fn alpha(...) -> i32 {"), "got:\n{out}");
+        assert!(out.contains("+ fn beta(...) -> u32 {"), "got:\n{out}");
+        assert!(
+            out.contains("-fn alpha(y: String) -> String {"),
+            "pair 2 stays ordinary, got:\n{out}"
+        );
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn beta(x: i32) -> u32 {\n    x + 1\n}\nfn beta(y: String) -> u32 {\n    y\n}\nfn alpha(z: u8) -> u8 {\n    z\n}\n"
+        );
     }
 
     #[test]
@@ -971,6 +991,96 @@ mod tests {
         )
         .is_none());
         assert!(used.is_empty());
+    }
+
+    #[test]
+    fn sig_evo_single_vis_ret_fires() {
+        // WI-2 slice 3 (113 shape): vis + formatting-stable return at
+        // N=1 compresses as a precision single, byte-exact.
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn helper(x: i32) -> i32 {\n+pub fn helper(x: i32) -> i64 {\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn helper(x: i32) -> i32 {\n    x + 1\n}\nfn compute(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("vis+ret single must fire");
+        assert!(out.contains("- fn helper(...) -> i32 {"), "got:\n{out}");
+        assert!(out.contains("+ pub fn helper(...) -> i64 {"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "pub fn helper(x: i32) -> i64 {\n    x + 1\n}\nfn compute(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n"
+        );
+    }
+
+    #[test]
+    fn sig_evo_single_ret_only_fires() {
+        // WI-2 slice 3: a lone formatting-stable return evolution at N=1
+        // is the sig detector's domain (no rename, no vis delta).
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn helper(x: i32) -> i32 {\n+fn helper(x: i32) -> i64 {\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn helper(x: i32) -> i32 {\n    x + 1\n}\nfn compute(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
+        )]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("ret-only single must fire");
+        assert!(out.contains("- fn helper(...) -> i32 {"), "got:\n{out}");
+        assert!(out.contains("+ fn helper(...) -> i64 {"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn helper(x: i32) -> i64 {\n    x + 1\n}\nfn compute(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n"
+        );
+    }
+
+    #[test]
+    fn sig_evo_single_complex_ret_declines() {
+        // WI-2 slice 3 stability pin: a composite return would re-render
+        // with pretty spacing (`Option < String >`), so the sig detector
+        // declines — but the shape still raises through the WI-2
+        // bare-type literal single (`- Option<String>` /
+        // `+ Vec<String>`, exactly-one-type-subterm proof), which owns
+        // complex types. Division of labor pinned at both levels.
+        let mut used = Vec::new();
+        assert!(super::super::try_sig_evolution_sweep(
+            &["fn helper(x: i32) -> Option<String> {"],
+            &["fn helper(x: i32) -> Vec<String> {"],
+            "f.rs",
+            Some("fn helper(x: i32) -> Option<String> {\n    x\n}\n"),
+            &[1],
+            &mut used,
+        )
+        .is_none());
+        assert!(used.is_empty());
+        let raw = section(
+            "f.rs",
+            "@@ -1,1 +1,1 @@\n-fn helper(x: i32) -> Option<String> {\n+fn helper(x: i32) -> Vec<String> {\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn helper(x: i32) -> Option<String> {\n    x\n}\n")]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("complex ret must ride the type single");
+        assert!(out.contains("- Option<String>\n"), "got:\n{out}");
+        assert!(out.contains("+ Vec<String>\n"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn helper(x: i32) -> Vec<String> {\n    x\n}\n"
+        );
     }
 
     #[test]
@@ -1561,15 +1671,14 @@ mod tests {
     }
 
     #[test]
-    fn vis_single_two_slot_vetoes() {
-        // vis+return stays ordinary — the WI-8 two-slot domain, never
-        // this single. (vis+qual together fires: both are single-token,
-        // formatting-stable — pinned by
-        // `sig_evo_single_fires_with_pre_image`.) The params-evolution
-        // shape that used to sit in this veto loop now rides the WI-2
-        // type single (pinned by
+    fn vis_single_vis_ret_fires() {
+        // WI-2 slice 3: vis + formatting-stable return fires as a
+        // precision single (the 113 shape with a ret addition); vis +
+        // params still belongs to the type single (pinned by
         // `sig_evo_single_params_evolution_rides_type_single` and the
-        // `type_single` module tests).
+        // `type_single` module tests). vis+qual together fires (both are
+        // single-token, formatting-stable — pinned by
+        // `sig_evo_single_fires_with_pre_image`).
         let (minus, plus, body) = (
             "fn foo() {",
             "pub fn foo() -> i32 {",
@@ -1577,10 +1686,15 @@ mod tests {
         );
         let raw = section("f.rs", &vis_single_body(minus, plus));
         let pre = pre_map(&[("f.rs", body)]);
-        assert!(
-            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
-            "{minus} → {plus} must stay ordinary"
-        );
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("vis+stable-ret single must fire");
+        assert!(out.contains("- fn foo() {"), "got:\n{out}");
+        assert!(out.contains("+ pub fn foo() -> i32 {"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "pub fn foo() -> i32 {\n    1\n}\n");
         // vis+qual together fires (both single-token slots).
         let raw = section(
             "f.rs",
@@ -1687,8 +1801,11 @@ mod tests {
     }
 
     #[test]
-    fn method_vis_single_two_slot_vetoes() {
-        // vis+return and type-level evolutions stay ordinary (WI-7).
+    fn method_vis_single_vis_ret_fires() {
+        // WI-2 slice 3: vis + formatting-stable return fires as a
+        // precision single (indented twin of the 113 shape, under the
+        // method-run allowance); type-level (params) evolutions stay
+        // ordinary (WI-7).
         let pre_alpha = method_vis_pre();
         let raw = method_vis_raw(
             "    fn alpha(x: i32) {",
@@ -1696,8 +1813,20 @@ mod tests {
         );
         let out = method_vis_rsmpl(&raw, &pre_alpha);
         assert!(
-            !out.contains("rule="),
-            "vis+return must stay ordinary, got:\n{out}"
+            out.contains("rule="),
+            "vis+stable-ret method single must fire, got:\n{out}"
+        );
+        assert!(out.contains("-     fn alpha(...) {"), "got:\n{out}");
+        assert!(
+            out.contains("+     pub fn alpha(...) -> i32 {"),
+            "got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_alpha.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "impl Svc {\n    pub fn alpha(x: i32) -> i32 {\n        x\n    }\n}\n"
         );
 
         let pre_sum = pre_map(&[(

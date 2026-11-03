@@ -390,6 +390,31 @@ fn single_line_site(
     None
 }
 
+/// Item premise for the return-slot arm: exactly one distinct matched
+/// span (an item match, not a line match) with a nonzero header line.
+/// Returns the span; the header line fills the omitted return. Two
+/// spans — e.g. an omitted-return template proving two same-name
+/// items — decline by construction (never a mix: the gate always
+/// describes a single apply, like `single_line_site`).
+fn single_item_site(
+    spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+    raw_spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+    key: &(String, String),
+) -> Option<(u32, u32)> {
+    for evidence in [spans, raw_spans] {
+        if let Some(sites) = evidence.get(key) {
+            let mut distinct = sites.clone();
+            distinct.sort();
+            distinct.dedup();
+            if distinct.len() == 1 && distinct[0].0 != 0 {
+                return Some(distinct[0]);
+            }
+            return None;
+        }
+    }
+    None
+}
+
 /// WI-1s1 gate: `Some((lit_minus, lit_plus))` when hunk `r` over
 /// `target` is a pure single-pair verbatim shape proving the single
 /// line site `s`, else `None` (byte-identical).
@@ -567,4 +592,390 @@ fn strip_one_terminator(text: &str) -> Option<&str> {
         return Some(stripped.trim_end());
     }
     Some(text)
+}
+
+/// WI-2 slice 3 single-site instantiation equality, return-slot family
+/// (IMPROVE.md D17): a single-pair fn evolution single whose minus
+/// omits the return (`- fn helper(...)`) rewrites the minus to carry
+/// the single site's concrete return (`- fn helper(...) -> i32`), so
+/// the authored bare-`...` spelling and the inferred concrete-minus
+/// spelling share one tree-aware form. Same D17 discipline as the
+/// verbatim/filter arms: unique (file, rule) owner, exactly one item
+/// site, read-only gate, caller re-proves the identical post-tree.
+///
+/// Disjoint gates: the verbatim arm owns context-free pairs, the
+/// filter arm owns filter-carrying renames, this one owns fn pairs
+/// whose minus omits a single-token return the plus side carries
+/// concretely. Omitted-return twins (two same-name sites) fail the
+/// single-site gate and composite site returns fail the stability
+/// bound — both stay divergent by construction.
+pub(crate) fn unify_fn_evo_single_to_concrete(
+    patch: &mut rsmpl_patch::Patch,
+    pre: &HashMap<String, String>,
+    _post: &HashMap<String, String>,
+    spans: &mut HashMap<(String, String), Vec<(u32, u32)>>,
+    raw_spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+) {
+    use std::collections::HashMap;
+    let mut owners: HashMap<(String, String), Vec<(usize, usize)>> = HashMap::new();
+    for (fi, sec) in patch.files.iter().enumerate() {
+        for (hi, hunk) in sec.hunks.iter().enumerate() {
+            if let Hunk::Rsmpl(r) = hunk {
+                owners
+                    .entry((sec.target_path.clone(), r.rule_name()))
+                    .or_default()
+                    .push((fi, hi));
+            }
+        }
+    }
+    let mut keys: Vec<(String, String)> = owners.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        let idxs = &owners[&key];
+        if idxs.len() != 1 {
+            continue;
+        }
+        // Item premise (not the line premise of the verbatim/filter
+        // arms): exactly one matched item span — an fn evolution
+        // single matches its whole item, so the evidence span is the
+        // item range and the return fill comes from its header line.
+        let Some((s, _e)) = single_item_site(spans, raw_spans, &key) else {
+            continue;
+        };
+        let (fi, hi) = idxs[0];
+        // Read-only gate pass: compute the rewritten minus before any
+        // mutation so a veto leaves the hunk byte-identical.
+        let rewritten: Option<String> = {
+            let sec = &patch.files[fi];
+            if sec.is_rename() {
+                None
+            } else if let Hunk::Rsmpl(r) = &sec.hunks[hi] {
+                match pre
+                    .get(&sec.target_path)
+                    .and_then(|text| text.lines().nth((s as usize).checked_sub(1)?))
+                {
+                    Some(site_line) => gate_fn_evo_single(r, site_line),
+                    None => None,
+                }
+            } else {
+                None
+            }
+        };
+        let Some(new_minus) = rewritten else {
+            continue;
+        };
+        let Hunk::Rsmpl(r) = &mut patch.files[fi].hunks[hi] else {
+            continue;
+        };
+        for l in r.lines.iter_mut() {
+            if l.is_removal() {
+                l.text = new_minus.clone();
+            }
+        }
+        // Range and spans stay untouched: the evidence spans are line
+        // granularity while the rewritten form keeps the item frame, so
+        // only the minus text converges (both legs already share the
+        // item range on SPEC-conformant patches).
+        // Diet single: no locality lines and no hole declarations
+        // (same posture as the verbatim/filter arms).
+        r.directives.retain(|d| {
+            !matches!(
+                d,
+                Directive::Allow(_)
+                    | Directive::Scope(_)
+                    | Directive::MetaVar {
+                        kind: MetavarKind::Pat | MetavarKind::Type | MetavarKind::Expr,
+                        ..
+                    }
+            )
+        });
+        r.raw_directives.retain(|l| {
+            let t = l.trim_start_matches('#').trim_start();
+            !(t.starts_with("sweep")
+                || t.starts_with("allow")
+                || t.starts_with("scope")
+                || t.starts_with("pat")
+                || t.starts_with("type")
+                || t.starts_with("expr"))
+        });
+    }
+}
+
+/// WI-2 slice 3 gate: `Some(rewritten minus text)` when hunk `r` is a
+/// single fn evolution pair whose minus omits a return the plus side
+/// carries concretely and the pre-image site line `site_line` carries
+/// as one stable token, else `None` (byte-identical). The rewritten
+/// minus keeps the hunk's own indent and vis/qual run and drops a
+/// trailing `W` (a concrete return plus `W` never parses — the
+/// `-> T W` law); the caller verifies by re-applying.
+fn gate_fn_evo_single(r: &rsmpl_patch::RsmplHunk, site_line: &str) -> Option<String> {
+    if !r.directives.iter().all(|d| {
+        matches!(
+            d,
+            Directive::Allow(_)
+                | Directive::Scope(_)
+                | Directive::LangRust
+                | Directive::MetaVar {
+                    kind: MetavarKind::Pat | MetavarKind::Type | MetavarKind::Expr,
+                    ..
+                }
+        )
+    }) {
+        return None;
+    }
+    let mut minus: Vec<&str> = Vec::new();
+    let mut plus: Vec<&str> = Vec::new();
+    for l in &r.lines {
+        if l.is_removal() {
+            minus.push(&l.text);
+        } else if l.is_addition() {
+            plus.push(&l.text);
+        } else {
+            let t = l.text.trim();
+            if t == "..." || t == "{" || t == "}" || is_filter_header_line(t) {
+                continue;
+            }
+            return None;
+        }
+    }
+    if minus.len() != 1 || plus.len() != 1 {
+        return None;
+    }
+    let m = fn_evo_head(minus[0])?;
+    let p = fn_evo_head(plus[0])?;
+    // Same diet header, same indent; the minus omits what the plus
+    // carries. The `N` name hole is a template, never a rewrite (same
+    // law as the filter arm).
+    if m.name != p.name || m.name == "N" || m.indent != p.indent {
+        return None;
+    }
+    if m.ret.is_some() || p.ret.is_none() {
+        return None;
+    }
+    // No other slot may differ: the vis/qual run is the evolution and
+    // the return is the fill — generics, params, and `where` ride the
+    // diet identically on both sides by construction of `fn_evo_head`
+    // (only the leading run and the return clause are erased).
+    if m.core != p.core {
+        return None;
+    }
+    let site_ret = site_fn_return(site_line)?;
+    Some(format!(
+        "{}{}fn {}(...) -> {} {{",
+        m.indent, m.prefix, m.name, site_ret
+    ))
+}
+
+/// One diet fn-header pair line: `PREFIX fn NAME(...) [W] [-> RET] {`
+/// with literal `(...)` params and no generics slot. `core` is the
+/// slot-erased header (`fn NAME(...) {`) the gate compares; `prefix`
+/// is the vis/qual run verbatim. `None` for any other shape.
+struct FnEvoHead {
+    indent: String,
+    prefix: String,
+    name: String,
+    core: String,
+    ret: Option<String>,
+}
+
+/// Closed vis/qual run vocabulary for the return-slot gate: concrete
+/// `pub` (incl. `pub(...)`), qualifier keywords, the `V`/`Q` wildcards,
+/// and quoted ABIs (`extern "C"` lexes as two tokens). Anything else
+/// before `fn` declines — the re-prove is the soundness net, this set
+/// is the legibility bound.
+fn fn_evo_prefix_ok(prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    prefix.split_whitespace().all(|tok| {
+        tok == "V"
+            || tok == "Q"
+            || tok == "pub"
+            || tok.starts_with("pub(")
+            || tok == "async"
+            || tok == "unsafe"
+            || tok == "const"
+            || tok == "extern"
+            || (tok.starts_with('"') && tok.ends_with('"') && tok.len() >= 2)
+    })
+}
+
+fn fn_evo_head(line_text: &str) -> Option<FnEvoHead> {
+    // BodyLine.text keeps the post-marker space (`- fn f` → ` fn f`).
+    let stripped = line_text.trim_start();
+    let indent = line_text[..line_text.len() - stripped.len()].to_string();
+    let head = stripped.strip_suffix('{')?.trim_end();
+    // Literal `(...)` params only — concrete signatures and missing
+    // parens decline (a different spelling class).
+    let open = head.find("(...)")?;
+    let before = head[..open].trim_end();
+    let after = head[open + "(...)".len()..].trim();
+    // `before` is `PREFIX fn NAME`: the name is the trailing ident.
+    let name_end = before.len();
+    let name_start = before[..name_end]
+        .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let name = before[name_start..].to_string();
+    if name.is_empty() || name == "N" {
+        return None;
+    }
+    let prefix = before[..name_start].trim_end();
+    let fn_word = prefix.split_whitespace().next_back()?;
+    if fn_word != "fn" {
+        return None;
+    }
+    let prefix_run = prefix[..prefix.len() - "fn".len()].trim().to_string();
+    if !fn_evo_prefix_ok(&prefix_run) {
+        return None;
+    }
+    // `after` is ``, `W`, or `-> RET` — anything else (including the
+    // unparsable `-> T W` order and `where` clauses) declines.
+    let after = match after.strip_prefix('W') {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => after,
+    };
+    let ret = match after.strip_prefix("->") {
+        Some(ty) => {
+            let ty = ty.trim();
+            if ty.is_empty() || ty.contains(char::is_whitespace) {
+                return None;
+            }
+            // Single-token types re-render byte-identically (the same
+            // stability bound the detector enforces); anything wider
+            // stays divergent rather than emitting spaced pretty text.
+            if syn::parse_str::<syn::Type>(ty).is_err() {
+                return None;
+            }
+            Some(ty.to_string())
+        }
+        None => {
+            if !after.is_empty() {
+                return None;
+            }
+            None
+        }
+    };
+    let core = format!("fn {name}(...) {{");
+    let prefix = if prefix_run.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix_run} ")
+    };
+    Some(FnEvoHead {
+        indent,
+        prefix,
+        name,
+        core,
+        ret,
+    })
+}
+
+/// Concrete single-token return of a pre-image site line (`i32` for
+/// `fn helper(x: i32) -> i32 {`), pretty-printed via `syn` so both
+/// legs compute the identical fill deterministically. `None` when the
+/// line is not a `{`-terminated fn header with a concrete
+/// single-token return (removals, decls, and composite returns
+/// decline — nothing to fill, or nothing stable to fill with).
+fn site_fn_return(site_line: &str) -> Option<String> {
+    // The site line is `{`-terminated (a def header); appending a
+    // close yields an empty-body `ItemFn` probe (the `parse_sig_probe`
+    // posture — stripping the brace first leaves an unparsable lone
+    // `}`).
+    let probe = format!("{} }}", site_line.trim_end());
+    let sig = syn::parse_str::<syn::ItemFn>(&probe).ok().map(|f| f.sig)?;
+    let ty = match sig.output {
+        syn::ReturnType::Type(_, ty) => ty,
+        syn::ReturnType::Default => return None,
+    };
+    let pretty = quote::ToTokens::to_token_stream(&ty)
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if pretty.is_empty() || pretty.contains(char::is_whitespace) {
+        return None;
+    }
+    if syn::parse_str::<syn::Type>(&pretty).is_err() {
+        return None;
+    }
+    Some(pretty)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::canonical_tree::{canonicalize_with_tree, single_site_post_key};
+    use std::collections::HashMap;
+
+    fn pre(files: &[(&str, &str)]) -> HashMap<String, String> {
+        files
+            .iter()
+            .map(|(p, t)| (p.to_string(), t.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn wi2_evo_ret_single_unifies_to_concrete_minus() {
+        // WI-2 slice 3: the return-slot equality arm. The authored
+        // bare-`...` minus (`- fn helper(...)`) and the inferred
+        // concrete minus (`- fn helper(...) -> i32`) prove the same
+        // one item site; both canonicalize to the concrete-minus form.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn helper(x: i32) -> i32 {\n    x + 1\n}\nfn compute(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\n",
+        )]);
+        let authored = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r1\n- fn helper(...) {\n+ pub fn helper(...) -> i64 {\n      ...\n  }\n";
+        let inferred = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r1\n- fn helper(...) -> i32 {\n+ pub fn helper(...) -> i64 {\n      ...\n  }\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- fn helper(...) -> i32 {\n+ pub fn helper(...) -> i64 {\n"),
+            "concrete-minus form:\n{a}"
+        );
+        // Tree legs close: one site, one post-tree on both legs.
+        let ka = single_site_post_key(&p, authored).expect("authored applies");
+        let kb = single_site_post_key(&p, inferred).expect("inferred applies");
+        assert_eq!(ka, kb, "same single site, same post-tree");
+    }
+
+    #[test]
+    fn wi2_evo_ret_twin_stays_divergent() {
+        // Negative control (D17): the bare minus ranged over both
+        // twins proves two sites (the wide range fails the single-site
+        // premise — the apply itself reports two matches), so the arm
+        // declines and the legs stay canonically distinct, never healed.
+        // (A tight range scoping to one twin is a different, sound
+        // single-site claim the arm unifies — ranges are the author's.)
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn helper(x: i32) -> i32 {\n    x\n}\nfn helper(y: i32) -> i64 {\n    y\n}\n",
+        )]);
+        let bare = "diff --git src/lib.rs\n@@ -1,6 @@ rule=r1\n- fn helper(...) {\n+ pub fn helper(...) -> i64 {\n      ...\n  }\n";
+        let concrete = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r1\n- fn helper(...) -> i32 {\n+ pub fn helper(...) -> i64 {\n      ...\n  }\n";
+        let a = canonicalize_with_tree(bare, &p).unwrap();
+        let b = canonicalize_with_tree(concrete, &p).unwrap();
+        assert_ne!(a, b, "twin-site bare minus never unifies:\n{a}\nvs\n{b}");
+        assert!(
+            a.contains("- fn helper(...) {\n"),
+            "bare minus untouched:\n{a}"
+        );
+    }
+
+    #[test]
+    fn wi2_evo_ret_complex_site_stays_divergent() {
+        // Negative control: the site return is composite
+        // (`Option<String>` pretty-prints spaced), so no stable fill
+        // exists — the arm declines and the bare minus stays bare.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn helper(x: i32) -> Option<String> {\n    x\n}\n",
+        )]);
+        let bare = "diff --git src/lib.rs\n@@ -1,3 @@ rule=r1\n- fn helper(...) {\n+ pub fn helper(...) -> Vec<String> {\n      ...\n  }\n";
+        let a = canonicalize_with_tree(bare, &p).unwrap();
+        assert!(
+            a.contains("- fn helper(...) {\n"),
+            "composite site return never fills:\n{a}"
+        );
+    }
 }

@@ -265,7 +265,11 @@ const CASES: &[Case] = &[
         // delete_items hunk. WI-7 slice-21: the unique sub-line
         // `map_err(render_parse_error)` -> `map_err(parse_err)` site
         // (let-init framing) raises as one `method_same_literal` single.
-        expect_sem: 2,
+        // WI-2 slice 3: the `render_parse_error(...) -> String` ->
+        // `parse_err(...) -> CliError` header (rename + single-token
+        // return, unique name) raises as one `sig_evolution` single —
+        // the value-position use stays with the method single above.
+        expect_sem: 3,
     },
     Case {
         commit: "05de4d15bdbe2e44ea2628c8d990ad2a2512e841",

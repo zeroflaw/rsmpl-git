@@ -5,7 +5,7 @@
 //! sweeps; this module owns `try_sig_evolution_sweep` plus its slot
 //! vocabulary (`SlotClass`/`Emit`/`SigSlots` and helpers).
 //
-//! Method (indented) N = 1 vis/qual singles pay a 64-byte method-run
+//! Method (indented) N = 1 vis/qual/return singles pay a 64-byte method-run
 //! price (four guards) for the mandatory WI-4a filter block (a proof
 //! anchor, D10, not bloat): the whole-section arm allows 32 over its
 //! prelude-carrying section (`chain.rs`), the per-hunk fallback
@@ -135,17 +135,23 @@ pub(crate) fn try_sig_evolution_sweep(
         slot_col(&plus_slots, |s| &s.where_),
         true,
     )?;
-    // WI-19b: N=1 owns only vis/qual evolutions (single-token slots,
-    // formatting-stable under rewrite). A params/generics/ret/where
-    // evolution belongs to the type-sweep family (strict N≥2 by
-    // design): the sig rewrite would re-render the type with pretty
-    // spacing (`Box<[i32]>` → `Box <[ i32 ]>`, 117 precedent), losing
-    // to the ordinary hunk it claims to compress.
+    // WI-19b: N=1 owns vis/qual evolutions (single-token slots,
+    // formatting-stable under rewrite) plus formatting-stable return
+    // evolutions (WI-2 slice 3: `-> i32` → `-> i64` re-renders
+    // byte-identically, so the 113 vis+ret shape and the ret-only twin
+    // compress; complex returns decline via `ret_slot_stable` below).
+    // A params/generics/where evolution belongs to the type-sweep
+    // family (strict N≥2 by design): the sig rewrite would re-render
+    // the type with pretty spacing (`Box<[i32]>` → `Box <[ i32 ]>`,
+    // 117 precedent), losing to the ordinary hunk it claims to compress.
     if minuses.len() == 1 {
-        for c in [&params, &generics, &ret, &where_] {
+        for c in [&params, &generics, &where_] {
             if matches!(c, SlotClass::Evolving { .. }) {
                 return None;
             }
+        }
+        if !ret_slot_stable(&ret) {
+            return None;
         }
     }
     // WI-14 slice 3: at N=1 non-empty preserved long slots keep the
@@ -163,10 +169,10 @@ pub(crate) fn try_sig_evolution_sweep(
     // WI-14 slice 3 (fixup restore): the `-> T W` pair below needs a
     // `W` on any side with a concrete return, or the minus side carries
     // the full pretty return and loses the guard (probed: `b_side_path`
-    // `-> Option<String>`). At N=1 `ret` is always preserved (evolving
-    // returns decline above), so a non-empty preserved return forces a
-    // wildcard `where` (matching the pre-fixup WI-19b shape: minus
-    // omits the return and keeps `W`, plus sets it).
+    // `-> Option<String>`). At N=1 a preserved or stable-evolving
+    // return (complex evolving returns decline above) with a non-empty
+    // preserved return forces a wildcard `where` (matching the pre-fixup
+    // WI-19b shape: minus omits the return and keeps `W`, plus sets it).
     if minuses.len() == 1
         && matches!(
             &ret,
@@ -457,6 +463,45 @@ pub(crate) struct SigSlots {
 
 pub(crate) fn slot_col(slots: &[SigSlots], f: impl Fn(&SigSlots) -> &String) -> Vec<String> {
     slots.iter().map(|s| f(s).clone()).collect()
+}
+
+/// WI-2 slice 3: formatting-stability gate for an N=1 evolving
+/// return slot. Both sides must be absent or single-token. Slot texts
+/// are already pretty-printed (`parse_sig_slots` renders via `pretty`,
+/// which single-space-joins tokens), so any multi-token type would
+/// emit spaced text the native tree never contained (`Option<String>`
+/// pretty-prints as `Option < String >`) and break the S′→N
+/// byte-identity leg the cycle harness enforces. Unstable shapes
+/// decline honestly to ordinary instead of emitting a lossy rewrite.
+/// `Preserved` slots never re-render (wildcarded or concrete-preserved)
+/// and always pass.
+fn ret_slot_stable(ret: &SlotClass) -> bool {
+    match ret {
+        SlotClass::Preserved { .. } => true,
+        SlotClass::Evolving { minus, plus } => {
+            ret_text_stable(minus.as_deref().unwrap_or("")) && ret_text_stable(plus)
+        }
+    }
+}
+
+/// One return-slot text is formatting-stable: absent (`""`, addition /
+/// removal of a bare return) or a `-> Ty` whose type is one token (no
+/// whitespace in the pretty text ⟺ single token ⟺ re-renders
+/// byte-identically; a lone ident like `i32`/`String`/`Self`
+/// pretty-prints to itself). Anything wider declines so the emission
+/// never writes spaced text the native post tree never contained.
+fn ret_text_stable(text: &str) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    let ty = match text.strip_prefix("->") {
+        Some(t) => t.trim(),
+        None => return false,
+    };
+    if ty.is_empty() || ty.contains(char::is_whitespace) {
+        return false;
+    }
+    syn::parse_str::<syn::Type>(ty).is_ok()
 }
 
 /// Whitespace-insensitive slot comparison (the engine compares slots
