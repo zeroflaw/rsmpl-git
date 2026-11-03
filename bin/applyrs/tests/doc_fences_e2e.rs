@@ -227,3 +227,108 @@ fn doc_fences_lint_clean_or_marked() {
         "expected at least 7 invalid markers, got {marked}"
     );
 }
+
+/// WI-24 slice 1: directive-inventory coverage gate — the parser is the
+/// single source of supported-directive truth (`KNOWN_KV_KEYS` /
+/// `BARE_FLAGS` / `MetavarKind::parse`), SPEC 9.3/15.1 must cover every
+/// entry. Mirrors `python3 tools/gen_directives.py --check` (same
+/// layering as `d5_exclusions_sync`); both layers are mutation-checked.
+#[test]
+fn directive_inventory_sync() {
+    let root = workspace_root();
+    let directives = std::fs::read_to_string(root.join("crates/rsmpl_patch/src/directives.rs"))
+        .expect("directives.rs must be readable");
+    let model = std::fs::read_to_string(root.join("crates/rsmpl_patch/src/model.rs"))
+        .expect("model.rs must be readable");
+    let spec = std::fs::read_to_string(root.join("SPEC.md")).expect("SPEC.md must be readable");
+
+    fn str_list(src: &str, name: &str) -> Vec<String> {
+        let i = src.find(name).unwrap_or_else(|| panic!("{name} not found"));
+        let after = &src[i..];
+        let l = after.find('[').expect("list open");
+        let r = after.find("];").expect("list close");
+        let mut out = Vec::new();
+        let mut rest = &after[l..r];
+        while let Some(a) = rest.find('"') {
+            let b = rest[a + 1..].find('"').expect("closing quote");
+            out.push(rest[a + 1..a + 1 + b].to_string());
+            rest = &rest[a + 1 + b + 1..];
+        }
+        assert!(!out.is_empty(), "{name} parsed empty");
+        out
+    }
+
+    let keys = str_list(&directives, "KNOWN_KV_KEYS");
+    let bare = str_list(&directives, "BARE_FLAGS");
+    let all = str_list(&directives, "const ALL");
+    // `MetavarKind::parse` arms: `"kind" => Some(Self::...)`.
+    let mut kinds = Vec::new();
+    let mut rest = model.as_str();
+    while let Some(a) = rest.find("=> Some(Self::") {
+        let head = &rest[..a];
+        let q = head.rfind('"').expect("kind quote");
+        let open = head[..q].rfind('"').expect("kind open quote");
+        kinds.push(head[open + 1..q].to_string());
+        rest = &rest[a + 1..];
+    }
+    assert!(!kinds.is_empty(), "MetavarKind arms parsed empty");
+
+    fn section<'a>(spec: &'a str, start: &str, stops: &[&str]) -> &'a str {
+        let i = spec.find(start).expect("SPEC section missing");
+        let tail = &spec[i + start.len()..];
+        let mut end = tail.len();
+        for s in stops {
+            if let Some(j) = tail.find(s) {
+                if j < end {
+                    end = j;
+                }
+            }
+        }
+        &tail[..end]
+    }
+
+    let s93 = section(&spec, "### 9.3 Core directives", &["### 9.4"]);
+    let s151 = section(
+        &spec,
+        "### 15.1 Supported metavariable kinds",
+        &["### 15.2"],
+    );
+    for k in &keys {
+        assert!(
+            s93.contains(&format!("# {k}")),
+            "SPEC 9.3 must cover directive key `{k}`: run `python3 tools/gen_directives.py --check`"
+        );
+    }
+    for b in &bare {
+        assert!(
+            s93.contains(&format!("# {b}")),
+            "SPEC 9.3 must cover bare flag `{b}`: run `python3 tools/gen_directives.py --check`"
+        );
+    }
+    for k in &kinds {
+        assert!(
+            s151.contains(&format!("`{k}`")),
+            "SPEC 15.1 must name metavar kind `{k}`: run `python3 tools/gen_directives.py --check`"
+        );
+    }
+    for d in ["# edition", "# format_scope"] {
+        assert!(
+            spec.contains(d),
+            "SPEC must document rejected directive `{d}`: run `python3 tools/gen_directives.py --check`"
+        );
+    }
+    let mut union: Vec<String> = {
+        let mut set = std::collections::BTreeSet::new();
+        for k in keys.iter().chain(bare.iter()) {
+            set.insert(k.clone());
+        }
+        set.into_iter().collect()
+    };
+    let mut all_sorted = all.clone();
+    union.sort();
+    all_sorted.sort();
+    assert_eq!(
+        union, all_sorted,
+        "suggest_bare ALL must equal KEYS ∪ BARE: run `python3 tools/gen_directives.py --check`"
+    );
+}
