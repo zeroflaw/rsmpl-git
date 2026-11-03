@@ -699,9 +699,10 @@ fn joint_candidate(
         .enumerate()
         .all(|(i, fp)| i == claimed_def_pos || is_callee_only(&fp.minus, &fp.plus, &old, &new));
     let joint = if callee_only {
-        // Joint-A (WI-4a) fire gates on the header: vis in the WI-1
-        // closed set and preserved; qual/generics/where preserved;
-        // evolving ⊆ {params, return}, nonempty.
+        // Joint-A fire gates on the header (header_fire_gates): vis in
+        // the WI-1 closed set; generics/where preserved; evolving ⊆
+        // {vis, qual, params, return} with params or return evolving,
+        // at most two evolve (WI-8 slices 1+4).
         if !header_fire_gates(&flat[def_idx].minus, &flat[def_idx].plus) {
             return Candidate::Suppress(old);
         }
@@ -1431,22 +1432,44 @@ mod tests {
     }
 
     #[test]
-    fn qual_delta_suppresses() {
-        // `async` gain is not a slot joint (WI-8 slice 1 admits vis
-        // alongside params/return only; qualifiers still veto).
-        let (minus, plus) = ("fn foo(x: i32) {", "async fn bar(x: u32) {");
-        let sections = vec![section(
-            "src.rs",
-            &format!(
-                "@@ -1,1 +1,1 @@\n-{minus}\n+{plus}\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n"
+    fn joint_a_qual_params_two_slot_fires() {
+        // WI-8 slice 4: name + qual + params (two slots) raises to one
+        // follow hunk — the old `qual_delta_suppresses` pin now fires.
+        // Qual-only stays the terse WI-5 intent (gate needs
+        // params/return); qual+arg-add stays B1-vetoed (pinned below).
+        // REVIEW: `async` and `unsafe` spellings ride the same
+        // token-compare arm — both pinned here.
+        for (plus_hdr, post) in [
+            (
+                "async fn bar(x: u32) {",
+                "async fn bar(x: u32) {\n    x\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
             ),
-        )];
-        let pre = pre_map(&[("src.rs", PRE)]);
-        let full = infer_semantic_with_pre_images(&sections, &pre);
-        assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "qual veto must stay wholly ordinary for {minus} → {plus}, got: {full:?}"
-        );
+            (
+                "unsafe fn bar(x: u32) {",
+                "unsafe fn bar(x: u32) {\n    x\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            ),
+        ] {
+            let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+            let sections = vec![section(
+                "src.rs",
+                &format!(
+                    "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {{\n+{plus_hdr}\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n"
+                ),
+            )];
+            let pre = pre_map(&[("src.rs", pre)]);
+            let out = infer_semantic_with_pre_images(&sections, &pre)
+                .unwrap_or_else(|| panic!("qual+params joint must fire for {plus_hdr}"));
+            assert!(out.contains("# follow=uses"), "got:\n{out}");
+            assert!(out.contains(&format!("+ {plus_hdr} ... }}")), "got:\n{out}");
+            validated_live(&out, &pre);
+            let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+            let mut files = pre.clone();
+            rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+            assert_eq!(
+                files["src.rs"], post,
+                "joint must round-trip byte-identical"
+            );
+        }
     }
 
     #[test]
@@ -1504,18 +1527,59 @@ mod tests {
 
     #[test]
     fn joint_a_vis_params_return_triple_suppresses() {
-        // Three evolving slots (vis + params + return) stay wholly
-        // ordinary — no joint states them.
-        let pre = "fn foo(x: i32) -> i32 {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        // Three evolving slots stay wholly ordinary — no joint states
+        // them (WI-8 slice 4: qual triples join the vis triple here).
+        for body in [
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+pub fn bar(x: u32) -> u64 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+async fn bar(x: u32) -> u64 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        ] {
+            let pre = "fn foo(x: i32) -> i32 {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+            let sections = vec![section("src.rs", body)];
+            let pre = pre_map(&[("src.rs", pre)]);
+            let full = infer_semantic_with_pre_images(&sections, &pre);
+            assert!(
+                full.as_ref().is_none_or(|s| !s.contains("rule=")),
+                "triple-slot joint must stay wholly ordinary, got: {full:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn joint_a_qual_params_two_slot_fires_at_n1() {
+        // WI-8 slice 4 head probe: name + qual + params at a single
+        // call site raises to one follow hunk under precision.
+        let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n}\n";
         let sections = vec![section(
             "src.rs",
-            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+pub fn bar(x: u32) -> u64 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: u32) {\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1);\n",
         )];
         let pre = pre_map(&[("src.rs", pre)]);
-        let full = infer_semantic_with_pre_images(&sections, &pre);
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("qual+params N=1 must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
         assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "triple-slot joint must stay wholly ordinary, got: {full:?}"
+            out.contains("+ async fn bar(x: u32) { ... }"),
+            "got:\n{out}"
+        );
+        validated_live(&out, &pre);
+    }
+
+    #[test]
+    fn qual_only_rename_stays_terse() {
+        // Qual-only + rename is the WI-5 name-only arm, never Joint-A:
+        // the joint gate needs params/return evolution, so the terse
+        // emission is intact.
+        let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("terse qual intent must fire");
+        assert!(
+            out.contains("- fn foo\n+ async fn bar\n"),
+            "terse intent kept, got:\n{out}"
         );
     }
 

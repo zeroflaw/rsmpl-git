@@ -43,10 +43,11 @@ pub(crate) fn slots_equal_except_name(minus: &str, plus: &str) -> bool {
 }
 
 /// Fire gates on the def header pair: vis in the WI-1 closed set and
-/// (may evolve — WI-8 slice 1 two-slot); qual/generics/where
-/// preserved; evolving ⊆ {vis, params, return} with params or return
-/// evolving (vis-only rename stays the terse intent's domain), at most
-/// two evolve (vis+params+return triple still suppresses).
+/// (may evolve — WI-8 slice 1 two-slot, slice 4 qual-run);
+/// generics/where preserved; evolving ⊆ {vis, qual, params, return}
+/// with params or return evolving (vis-only/qual-only renames stay
+/// their terse intents' domain — item_intent claims them first), at
+/// most two evolve (triples still suppress).
 pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
     let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
         return false;
@@ -64,11 +65,14 @@ pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
     {
         return false;
     }
-    if m.qual != p.qual || m.generics != p.generics || m.where_ != p.where_ {
+    if m.generics != p.generics || m.where_ != p.where_ {
         return false;
     }
     let params_or_ret = m.params != p.params || m.ret != p.ret;
-    let n_evolve = (m.vis != p.vis) as u8 + (m.params != p.params) as u8 + (m.ret != p.ret) as u8;
+    let n_evolve = (m.vis != p.vis) as u8
+        + (m.qual != p.qual) as u8
+        + (m.params != p.params) as u8
+        + (m.ret != p.ret) as u8;
     params_or_ret && n_evolve <= 2
 }
 

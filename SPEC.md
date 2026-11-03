@@ -2263,9 +2263,10 @@ Example (add visibility, generics, and a return type in one hunk, params and bod
 `diffrs` raises a rename+evolution joint as one intent (SPEC D.4):
 exactly one column-0 `fn` definition renamed while its header evolves,
 joined with its call-callee uses in the same file. Three shapes fire.
-Joint-A (rename+slot with callee-only calls) emits the single
-header-pair hunk with `# sweep` + `# follow=uses` carrying both
-deltas. Joint-B1 (rename+params-evolve with uniform arg-adding or
+Joint-A (rename+vis/qual/params/return with at most two slots evolving
+and callee-only calls) emits the single header-pair hunk with `# sweep`
++ `# follow=uses` carrying both deltas. Joint-B1
+(rename+params-evolve with uniform arg-adding or
 uniform trailing-retype calls) and
 Joint-B2 (rename+attr add/remove with uniform callee-only calls) emit
 two hunks under one shared rule — the def hunk (header pair rebuilt
@@ -2274,8 +2275,8 @@ call-template hunk (`- foo(E0)` / `+ bar(E0, 0)`) — with `# sweep` and
 no follow (a follow would claim the call hunk's sites and the lowering
 would refuse the overlap). The authored spelling is the same pair an
 agent would write by hand (explicit slots, `{ ... }` body). Anything
-else in the joint shape (body delta, hetero call shapes, qual/
-generics/where delta, vis-only or triple-slot (vis+params+return)
+else in the joint shape (body delta, hetero call shapes,
+generics/where delta, vis-only/qual-only or triple-slot
 delta, twin defs, N=1 B2/Body joints) suppresses the old callee
 name for the file, so the section stays wholly ordinary — the
 fragmented fallback (ordinary definition plus a rename-claiming call
