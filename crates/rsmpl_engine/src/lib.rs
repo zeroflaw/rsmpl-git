@@ -25,6 +25,7 @@ mod matcher_expr_subst;
 mod matcher_fn;
 mod matcher_fn_body;
 mod matcher_fn_item;
+mod matcher_fn_spans;
 mod matcher_general;
 mod matcher_general_apply;
 mod matcher_general_async;

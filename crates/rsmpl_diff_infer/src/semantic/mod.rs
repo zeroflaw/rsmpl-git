@@ -54,6 +54,7 @@ mod macros;
 mod member;
 mod method_subline;
 mod methods;
+mod methods_ref_strip;
 mod move_attr;
 mod move_attr_removed;
 mod move_collection;
@@ -93,6 +94,7 @@ mod verbatim;
 // paths keep working.
 mod hybrid;
 mod item_intent;
+mod item_intent_probe;
 mod item_intent_sites;
 mod item_joint_attr;
 mod item_joint_delete;
@@ -143,8 +145,8 @@ pub(crate) use method_subline::{
 pub(crate) use methods::{
     try_method_same_literal_single, try_method_same_literal_sweep, try_method_single,
     try_method_to_fn_single, try_method_to_fn_sweep, try_method_to_method_sweep,
-    try_ref_method_strip_sweep,
 };
+pub(crate) use methods_ref_strip::try_ref_method_strip_sweep;
 pub(crate) use paths::{try_qualified_call_sweep, try_turbofish_sweep};
 
 pub(crate) use assoc::{try_assoc_def_only, try_assoc_rename};

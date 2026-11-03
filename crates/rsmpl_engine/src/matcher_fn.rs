@@ -24,6 +24,12 @@ pub(crate) use crate::matcher_fn_item::{delete_lines, find_item_targets, range_e
 // WI-20 slice 1 (D5): the rename+single-expr-body joint application
 // lives in `matcher_fn_body`.
 pub(crate) use crate::matcher_fn_body::apply_fn_body_joint;
+// WI-22 slice 2c (D5): the fn-signature span slicers live in
+// `matcher_fn_spans`.
+pub(crate) use crate::matcher_fn_spans::{
+    generics_bytes, params_inner_bytes, qualifier_bytes, qualifier_span_ends, return_bytes,
+    span_bytes, span_text, swallow_one_space, where_bytes,
+};
 
 /// Whitespace-insensitive normalization for signature slot comparison.
 /// Both sides are token text; stripping all whitespace makes `pub(crate)`,
@@ -346,148 +352,6 @@ pub(crate) fn is_ident_hole(compiled: &CompiledPattern, minus_name: &str) -> boo
         return false;
     };
     compiled.table.kind_of(bare) == Some(rsmpl_patch::MetavarKind::Ident)
-}
-
-/// Byte range of `span` in the original text, or `None` when the span
-/// falls outside the file (never guesses).
-fn span_bytes(
-    original: &str,
-    index: &LineIndex,
-    span: proc_macro2::Span,
-) -> Option<(usize, usize)> {
-    let s = span.start();
-    let e = span.end();
-    let a = index.offset(s.line as u32, s.column)?;
-    let b = index.offset(e.line as u32, e.column)?;
-    if a <= b && b <= original.len() {
-        Some((a, b))
-    } else {
-        None
-    }
-}
-
-/// Slice original text covered by `span`.
-fn span_text(original: &str, index: &LineIndex, span: proc_macro2::Span) -> Option<String> {
-    let (a, b) = span_bytes(original, index, span)?;
-    original.get(a..b).map(|t| t.to_string())
-}
-
-/// Start line/column and end line/column of the qualifier token sequence
-/// (`const`/`async`/`unsafe`/`extern ["ABI"]`), or `None` when the
-/// signature has no qualifiers.
-fn qualifier_span_ends(sig: &syn::Signature) -> Option<(proc_macro2::Span, proc_macro2::Span)> {
-    let mut starts: Vec<proc_macro2::Span> = Vec::new();
-    let mut ends: Vec<proc_macro2::Span> = Vec::new();
-    if let Some(c) = &sig.constness {
-        starts.push(c.span());
-        ends.push(c.span());
-    }
-    if let Some(a) = &sig.asyncness {
-        starts.push(a.span());
-        ends.push(a.span());
-    }
-    if let Some(u) = &sig.unsafety {
-        starts.push(u.span());
-        ends.push(u.span());
-    }
-    if let Some(abi) = &sig.abi {
-        starts.push(abi.span());
-        ends.push(abi.span());
-    }
-    if starts.is_empty() {
-        return None;
-    }
-    // Signatures store qualifiers in fixed order; first start / last end
-    // covers the whole qualifier run.
-    let first = starts.into_iter().next()?;
-    let last = ends.into_iter().next_back()?;
-    Some((first, last))
-}
-
-/// Byte range covering the qualifier run, or `None` when absent.
-fn qualifier_bytes(
-    original: &str,
-    index: &LineIndex,
-    sig: &syn::Signature,
-) -> Option<(usize, usize)> {
-    let (first, last) = qualifier_span_ends(sig)?;
-    let s = first.start();
-    let e = last.end();
-    let a = index.offset(s.line as u32, s.column)?;
-    let b = index.offset(e.line as u32, e.column)?;
-    if a <= b && b <= original.len() {
-        Some((a, b))
-    } else {
-        None
-    }
-}
-
-/// Byte range inside the parameter parentheses (empty for `()`).
-fn params_inner_bytes(index: &LineIndex, sig: &syn::Signature) -> Option<(usize, usize)> {
-    let open_end = sig.paren_token.span.open().end();
-    let close_start = sig.paren_token.span.close().start();
-    let a = index.offset(open_end.line as u32, open_end.column)?;
-    let b = index.offset(close_start.line as u32, close_start.column)?;
-    if a <= b {
-        Some((a, b))
-    } else {
-        None
-    }
-}
-
-/// Byte range of `<...>` (inclusive), or `None` when no generics.
-fn generics_bytes(
-    original: &str,
-    index: &LineIndex,
-    sig: &syn::Signature,
-) -> Option<(usize, usize)> {
-    let (lt, gt) = (
-        sig.generics.lt_token.as_ref()?,
-        sig.generics.gt_token.as_ref()?,
-    );
-    let s = lt.span().start();
-    let e = gt.span().end();
-    let a = index.offset(s.line as u32, s.column)?;
-    let b = index.offset(e.line as u32, e.column)?;
-    if a <= b && b <= original.len() {
-        Some((a, b))
-    } else {
-        None
-    }
-}
-
-/// Byte range of `-> Ty` (inclusive), or `None` when no return type.
-fn return_bytes(original: &str, index: &LineIndex, sig: &syn::Signature) -> Option<(usize, usize)> {
-    match &sig.output {
-        syn::ReturnType::Type(arrow, ty) => {
-            let s = arrow.span().start();
-            let e = ty.span().end();
-            let a = index.offset(s.line as u32, s.column)?;
-            let b = index.offset(e.line as u32, e.column)?;
-            if a <= b && b <= original.len() {
-                Some((a, b))
-            } else {
-                None
-            }
-        }
-        syn::ReturnType::Default => None,
-    }
-}
-
-/// Byte range of the `where ...` clause, or `None` when absent.
-fn where_bytes(original: &str, index: &LineIndex, sig: &syn::Signature) -> Option<(usize, usize)> {
-    let w = sig.generics.where_clause.as_ref()?;
-    span_bytes(original, index, w.span())
-}
-
-/// Extend `end` over one following ASCII space so slot deletions do not
-/// leave doubled spacing (`fn foo()  {`).
-fn swallow_one_space(original: &str, end: usize) -> usize {
-    if original.as_bytes().get(end) == Some(&b' ') {
-        end + 1
-    } else {
-        end
-    }
 }
 
 /// Strict minus-side slot check (SPEC 14 explicit-syntax rule).
