@@ -1232,6 +1232,108 @@ mod tests {
     }
 
     #[test]
+    fn wi9_small_inherent_section_fires_one_follow() {
+        // WI-9 slice 1: one def + one anchored call prices the WI-7
+        // precision allowance (proved site set + filter block), not
+        // strict T375 — the small case fires as one follow hunk.
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {}\n}\nfn f(s: S) {\n    s.old();\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -3,1 +3,1 @@\n-    fn old(&self) {}\n+    fn new(&self) {}\n@@ -6,1 +6,1 @@\n-    s.old();\n+    s.new();\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let out = crate::semantic::chain::compress_section(
+            section,
+            &mut used,
+            &files,
+            &mut prov,
+            &std::collections::HashSet::new(),
+            &mut Vec::new(),
+        )
+        .expect("small inherent def+call must compress");
+        assert_eq!(
+            out.matches("rule=").count(),
+            1,
+            "one intent, one hunk, got:\n{out}"
+        );
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert_eq!(prov.len(), 1, "one provenance entry: {prov:?}");
+        assert_eq!(prov[0].detector, "inherent_method_rename", "{prov:?}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = files;
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "struct S;\nimpl S {\n    fn new(&self) {}\n}\nfn f(s: S) {\n    s.new();\n}\n",
+        );
+    }
+
+    #[test]
+    fn wi9_small_trait_section_fires_one_follow() {
+        // WI-9 slice 1: trait decl + trait-impl def + one anchored
+        // call prices the same allowance — one hunk replaces three.
+        let pre = "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\nfn f(s: S) {\n    s.old();\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    fn old(&self);\n+    fn new(&self);\n@@ -6,1 +6,1 @@\n-    fn old(&self) {\n+    fn new(&self) {\n@@ -10,1 +10,1 @@\n-    s.old();\n+    s.new();\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let out = crate::semantic::chain::compress_section(
+            section,
+            &mut used,
+            &files,
+            &mut prov,
+            &std::collections::HashSet::new(),
+            &mut Vec::new(),
+        )
+        .expect("small trait decl+def+call must compress");
+        assert_eq!(
+            out.matches("rule=").count(),
+            1,
+            "one intent, one hunk, got:\n{out}"
+        );
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert_eq!(prov.len(), 1, "one provenance entry: {prov:?}");
+        assert_eq!(prov[0].detector, "trait_method_rename", "{prov:?}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = files;
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "trait T {\n    fn new(&self);\n}\nstruct S;\nimpl T for S {\n    fn new(&self) {\n    }\n}\nfn f(s: S) {\n    s.new();\n}\n",
+        );
+    }
+
+    #[test]
+    fn wi9_unproven_call_section_has_no_follow() {
+        // WI-9 slice 1: precision prices proved site sets only — an
+        // unproven receiver still declines the follow (never a
+        // def-only partial follow), whether the section stays wholly
+        // ordinary or the def/call ride narrower singles.
+        let pre = "struct S;\nimpl S {\n    fn old(&self) {\n    }\n}\nstruct U;\nfn f(y: U) {\n    y.old();\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -3,1 +3,1 @@\n-    fn old(&self) {\n+    fn new(&self) {\n@@ -8,1 +8,1 @@\n-    y.old();\n+    y.new();\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        let out = crate::semantic::chain::compress_section(
+            section,
+            &mut used,
+            &files,
+            &mut prov,
+            &std::collections::HashSet::new(),
+            &mut Vec::new(),
+        );
+        if let Some(out) = out {
+            assert!(
+                !out.contains("# follow=uses"),
+                "no follow on unproven receivers, got:\n{out}"
+            );
+            assert!(
+                prov.iter().all(|p| p.detector != "inherent_method_rename"),
+                "{prov:?}"
+            );
+        }
+    }
+
+    #[test]
     fn inherent_single_line_def_and_call_compress() {
         // `}` defs arrive normalized to `{`, so the inherent gate passes
         // on the proven form.

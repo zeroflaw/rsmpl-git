@@ -39,7 +39,9 @@ pub(crate) fn guard_for(detector: &str) -> Guard {
         | "delete"
         | "move"
         | "mod_rename"
-        | "item_intent" => Guard::Precision,
+        | "item_intent"
+        | "trait_method_rename"
+        | "inherent_method_rename" => Guard::Precision,
         _ => Guard::Strict,
     }
 }
@@ -72,6 +74,42 @@ pub(crate) fn within_precision(
 /// Strict T375 for sweeps with no proof (`semantic < ordinary`).
 pub(crate) fn within_strict(body_len: usize, ordinary_len: usize) -> bool {
     body_len < ordinary_len
+}
+
+/// WI-9 slice 1: one decision point for whole-section pair-chain
+/// emissions (SPEC D.4). Precision detectors prove their exact site
+/// set (block probe + full-set scratch-apply), so they price the WI-7
+/// allowance over the claimed pair count plus the per-emission
+/// filter-header excess measured from the emission itself; Strict
+/// detectors keep T375. The chain records `precision-guard` vs
+/// `byte-guard` on veto (both in SPEC D.2, no schema change).
+pub(crate) fn pair_section_gate(
+    detector: &str,
+    emission: &str,
+    ordinary: usize,
+    n_claimed: usize,
+) -> bool {
+    if guard_for(detector) == Guard::Precision {
+        within_precision(
+            emission.len(),
+            ordinary,
+            n_claimed,
+            super::block_headers::filter_header_excess(emission),
+        )
+    } else {
+        within_strict(emission.len(), ordinary)
+    }
+}
+
+/// Veto reason for a whole-section pair-chain decline:
+/// `precision-guard` under the WI-7 allowance, `byte-guard` under
+/// strict T375 (both in SPEC D.2, no schema change).
+pub(crate) fn pair_gate_reason(detector: &str) -> &'static str {
+    if guard_for(detector) == Guard::Precision {
+        "precision-guard"
+    } else {
+        "byte-guard"
+    }
 }
 
 /// WI-7 (WI-2b residue): rendering-normalized whole-section length.
@@ -196,6 +234,8 @@ mod tests {
             "move",
             "mod_rename",
             "item_intent",
+            "trait_method_rename",
+            "inherent_method_rename",
         ] {
             assert_eq!(guard_for(d), Guard::Precision, "{d} must be precision");
         }
@@ -228,8 +268,6 @@ mod tests {
             "method_same_literal",
             "method_to_fn",
             "method_to_method",
-            "trait_method_rename",
-            "inherent_method_rename",
             "attr_sweep",
         ] {
             assert_eq!(guard_for(d), Guard::Strict, "{d} must be strict");
@@ -302,6 +340,36 @@ mod tests {
         assert!(!within_precision(100 + 32 + 8, 100, 2, 7));
         assert!(!within_strict(100, 100));
         assert!(within_strict(99, 100));
+    }
+
+    #[test]
+    fn pair_section_gate_admits_proved_method_sizes() {
+        // WI-9 slice 1: method intents prove their site set, so a
+        // 2-pair emission 20B over ordinary still gates Precision
+        // while a Strict detector vetoes the identical bytes.
+        assert!(pair_section_gate(
+            "inherent_method_rename",
+            &"x".repeat(120),
+            100,
+            2
+        ));
+        assert!(pair_section_gate(
+            "trait_method_rename",
+            &"x".repeat(120),
+            100,
+            2
+        ));
+        assert!(!pair_section_gate(
+            "method_to_method",
+            &"x".repeat(120),
+            100,
+            2
+        ));
+        assert_eq!(
+            pair_gate_reason("inherent_method_rename"),
+            "precision-guard"
+        );
+        assert_eq!(pair_gate_reason("call_sweep"), "byte-guard");
     }
 
     #[test]

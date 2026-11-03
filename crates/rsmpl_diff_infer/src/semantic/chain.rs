@@ -786,14 +786,16 @@ pub(crate) fn compress_section(
     if let Some((sweep, detector)) = run_pair_chain(
         &minuses, &pluses, path, file_old, &changed, used_rules, declined,
     ) {
-        // WI-7a: rename sections re-emit under the preserved prelude;
-        // Strict T375 over the normalized span compares the final bytes.
+        // WI-7a: rename sections re-emit under the preserved prelude.
+        // WI-9 slice 1: the gate consults `guard_for` (one decision
+        // point in `guard::pair_section_gate`) — Precision detectors
+        // price the WI-7 allowance over the claimed pair count,
+        // Strict keeps T375 over the normalized span.
+        let ordinary = super::guard::normalized_section_len(section);
+        let n_claimed = minuses.len();
         if let Some(prelude) = &rename_prelude {
             if let Some(final_text) = reheader_rename(&sweep, prelude) {
-                if super::guard::within_strict(
-                    final_text.len(),
-                    super::guard::normalized_section_len(section),
-                ) {
+                if super::guard::pair_section_gate(detector, &final_text, ordinary, n_claimed) {
                     push_section_prov(
                         prov,
                         &final_text,
@@ -808,18 +810,15 @@ pub(crate) fn compress_section(
                     return Some(final_text);
                 }
             }
-            declined_guard(declined, detector, "byte-guard");
+            declined_guard(declined, detector, super::guard::pair_gate_reason(detector));
             used_rules.truncate(checkpoint);
-        } else if super::guard::within_strict(
-            sweep.len(),
-            super::guard::normalized_section_len(section),
-        ) {
+        } else if super::guard::pair_section_gate(detector, &sweep, ordinary, n_claimed) {
             push_section_prov(
                 prov, &sweep, section, path, detector, &changed, file_old, checkpoint, used_rules,
             );
             return Some(sweep);
         } else {
-            declined_guard(declined, detector, "byte-guard");
+            declined_guard(declined, detector, super::guard::pair_gate_reason(detector));
             used_rules.truncate(checkpoint);
         }
     }

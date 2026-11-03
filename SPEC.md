@@ -8386,8 +8386,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    iff the block probe and the full-set scratch probe reproduce every
    changed line; otherwise ordinary (unproven/shadowed calls fail the
    scratch, never a def-only partial). Detector name
-   `inherent_method_rename` (strict T375 like its trait sibling, so the
-   follow form needs enough pairs to beat the ordinary bytes).
+   `inherent_method_rename` (Precision under the WI-7 allowance — the
+   block probe + full-set scratch prove the site set, so the small
+   case fires as one follow hunk).
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
@@ -9633,9 +9634,12 @@ any validation failure falls back to the ordinary passthrough —
 competing risks (WI-19/WI-7, one decision point:
 `rsmpl_diff_infer::semantic::guard_for` for the posture plus
 `guard::precision_allowance` for the number, decided by the single
-helpers `within_precision` / `within_strict`). Sweep shapes (calls,
-methods, `general_expr`, `control_template`, verbatim, macro
-interiors — any minus pattern that could match wider than the diff)
+helpers `within_precision` / `within_strict` — whole-section
+pair-chain emissions consult `guard::pair_section_gate`, which prices
+Precision detectors under the allowance and keeps T375 for Strict).
+Sweep shapes (calls, method sweeps, `general_expr`,
+`control_template`, verbatim, macro interiors — any minus pattern
+that could match wider than the diff)
 keep strict T375 (`within_strict`: a semantic hunk is kept only when
 byte-smaller — bytes proxy tokens, and bytes proxy over-match risk —
 than the ordinary hunk(s) it replaces; whole-section candidates
@@ -9643,7 +9647,9 @@ against the whole section, per-hunk candidates against their hunk,
 prelude shared either way; ties stay ordinary). Definition shapes
 (`item_rename`, `member_rename`, `assoc_rename`,
 `macro_rules_rename`, slot/sig/header evolution singles, definition
-evolution/addition, `delete`, `move`, `mod_rename`, `item_intent` —
+evolution/addition, `delete`, `move`, `mod_rename`, `item_intent`,
+the two method follow intents (`trait_method_rename`,
+`inherent_method_rename`) —
 every detector whose plus the WI-1 postcondition re-verifies at its
 spans) fire under the precision allowance (`within_precision`:
 semantic ≤ ordinary + `precision_allowance(n_claimed, filter_extra)`
