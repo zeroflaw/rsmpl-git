@@ -868,3 +868,63 @@ fn bench_corpus_sns_fixed_point() {
         failures.join("\n")
     );
 }
+
+/// WI-23 slice 2: SPEC D.5 exclusion enumeration is generated from the
+/// harness tables above — the laws stay hand-written, only the counts and
+/// the per-entry bullets are machine-checked here (generator lives at
+/// `tools/gen_d5_exclusions.py --write`).
+#[test]
+fn d5_exclusions_sync() {
+    const START: &str = "<!-- generated: d5-exclusions start";
+    const END: &str = "<!-- generated: d5-exclusions end -->";
+    let spec = std::fs::read_to_string(workspace_root().join("SPEC.md"))
+        .expect("SPEC.md must be readable");
+    let s = spec.find(START).expect("SPEC D.5 start marker missing");
+    let e = spec.find(END).expect("SPEC D.5 end marker missing");
+    assert!(e > s, "SPEC D.5 markers out of order");
+    let block = &spec[s..e + END.len()];
+    let ok_line = block
+        .lines()
+        .find(|l| l.starts_with("CYCLE_OK:"))
+        .expect("CYCLE_OK count line missing");
+    let div_line = block
+        .lines()
+        .find(|l| l.starts_with("KNOWN_DIVERGENT:"))
+        .expect("KNOWN_DIVERGENT count line missing");
+    let num = |l: &str| {
+        l.split_whitespace()
+            .nth(1)
+            .and_then(|n| n.parse::<usize>().ok())
+            .expect("count must parse")
+    };
+    assert_eq!(
+        num(ok_line),
+        CYCLE_OK.len(),
+        "SPEC CYCLE_OK count drifts from harness: run `python3 tools/gen_d5_exclusions.py --write`"
+    );
+    assert_eq!(
+        num(div_line),
+        KNOWN_DIVERGENT.len(),
+        "SPEC KNOWN_DIVERGENT count drifts from harness: run `python3 tools/gen_d5_exclusions.py --write`"
+    );
+    for (name, _) in KNOWN_DIVERGENT {
+        let needle = format!("`{name}`");
+        assert_eq!(
+            block.matches(needle.as_str()).count(),
+            1,
+            "SPEC D.5 must name `{name}` exactly once: run `python3 tools/gen_d5_exclusions.py --write`"
+        );
+    }
+    // No stale bullets: every backticked dashed name in the block is known.
+    for line in block.lines().filter(|l| l.starts_with("- `")) {
+        let name = line
+            .trim_start_matches("- `")
+            .split('`')
+            .next()
+            .unwrap_or_default();
+        assert!(
+            KNOWN_DIVERGENT.iter().any(|(n, _)| *n == name),
+            "SPEC D.5 names stale `{name}`: run `python3 tools/gen_d5_exclusions.py --write`"
+        );
+    }
+}

@@ -10130,52 +10130,34 @@ wanted (forbidden in this repo); run the gate by hand beside `example-benches/ru
 floor measures regression over recent history, never universal raising quality.
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
-bugs in the cycle itself): single-site shapes the raiser
-deliberately leaves ordinary (`13`,
-`22` (rename + full attr/doc strip is a two-slot joint — WI-8
-composed-probe territory; no D17 arm admits `Attrs`-carrying hunks
-by design) — other definition-shape singles among them fire under
-the WI-19 precision guard wherever the single-pair gates admit them;
-macro-rename singles fire as allow-one verbatim `old!(...)` /
-`new!(...)` hunks under `# macro=token_tree` (one invocation,
-token-equal bodies, `macro_holds` at n=1 plus the scratch
-byte-compare; holed authored legs unify via the verbatim literal
-arm); same-name macro-interior edits stay with the interior family
-(`75`: the whole-line let-with-macro literal matches nothing in the
-engine — T440 wall — so D17 re-prove cannot keep; needs engine
-literal-statement matching with macro inits);
-return-carrying/vis-carrying fn singles still need their slice-2
-detectors); `04` divergent mixed sections (one hunk re-infers
-semantic while the ordinary remainder never normalizes): hunk-2
-raises as a `call_sweep` single while hunk-1's one-line col0 fn
-rename stays ordinary (slot frame ~2x native, precision-guard veto;
-terse admission reverted — greedy partial would park hunk-2's win;
-opener is WI-6 free-fn col0 emission with leftover retry);
-heterogeneous sites no template fires on stay
-  ordinary (interleaved same-class groups — A B A line order stays
-  ordinary, order is never manufactured; container-joint residue without
-  uses, e.g. the first hunk of `99-partition-partial-mixed` — and no
-  header+body joint shape in a single pair. Mixed hunks whose runs all
-  prove now split per WI-4 (diffrs fixture `129-subhunk-partition-fires`),
-  and fused `fn`-header-plus-statement def hunks split per WI-15 slice 1
-  (Joint-A/rename-only header follow plus verbatim body leftovers),
-  so only the narrowed residue re-diffs mixed by construction (WI-5d
-  `single_block` still fuses pure let runs only); `14` divergent single-file renames whose
-  deltas never share one intent — struct/enum/const/mod/nested-`Helper`/
-  self-ty-`impl`/trait/trait-side-`impl` re-infer as WI-19c precision
-  singles (8 semantic + 1 ordinary under partial partition) while the
-  `impl Printable for Old` → `impl Labeled for New` double-delta pair
-  raises with its trait+self-ty defs as one joint intent (WI-3,
-  `item_joint_impl`, diffrs fixture `128-joint-impl-rename-fires`); all-single-delta
-  multi-rename sections compress pair by pair instead (diffrs fixture
-   `98-partition-fires`, canonically lossless)), `30` trait-side-only decl/def
-   pairs (ordinary by design — no impl side shares the intent; mixed
-   trait+impl classes raise via `trait_method_rename`, WI-4b); `06`
-   standalone single-line insertions (ordinary by design — the
-   rule-tag overhead exceeds native with zero template benefit;
-   insertion joints with a shared rule ride WI-8/WI-13); zero-edit optional (`05`) re-diffs to empty,
-which `canonicalize` rejects as unparseable. These are the only
-non-tree-canonical cycles; every other corpus case is
+bugs in the cycle itself): the laws stay hand-written here; the
+enumeration below is generated from `bin/diffrs/tests/cycle_e2e.rs`
+by `python3 tools/gen_d5_exclusions.py --write` and linted by the
+`d5_exclusions_sync` test in that file — edit the harness table, never
+the block. Law summary: single-site shapes the raiser deliberately
+leaves ordinary stay ordinary (two-slot joints, hetero sites, engine
+walls); mixed sections split only where every run proves (WI-4/WI-15),
+otherwise the ordinary remainder never normalizes; trait-side-only,
+standalone-insertion, and zero-edit shapes stay ordinary by design;
+macro-rename singles fire as allow-one verbatim hunks under
+`# macro=token_tree` where the `macro_holds` proof admits them.
+
+<!-- generated: d5-exclusions start -- do not hand-edit; run `python3 tools/gen_d5_exclusions.py --write` -->
+CYCLE_OK: 102 entries (canonically lossless; the harness asserts tree-canonical equality plus the `S'' == S'` fixed point).
+KNOWN_DIVERGENT: 11 entries (divergence pinned with the owning reason; a fix moves the entry to CYCLE_OK in the same change as the detector):
+- `04-mixed`: partial (WI-3 slice 4): hunk-2 re-infers as a call_sweep single; hunk-1 one-line col0 fn rename stays ordinary (slot frame ~2x native, precision-guard veto; terse admission reverted — greedy partial would park hunk-2's win; opener is WI-6 free-fn col0 emission + leftover retry)
+- `05-optional-noop`: empty: zero-match optional leaves an empty re-diff
+- `06-insert-use`: by design (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13
+- `12-stmt-rewrite`: hetero (WI-15 slice 1): same-name param-evolution header (Vec<u32> → Box<[u32]>, no rename so no fn-joint def) fused with a binder-change `let count` → `let n` line (D11/D16 capture: no binder-identity machinery) plus a same-binder `let bumped` line. The unproven line is exactly `let count = values.len() as u32;` (binder rename with a live use on the next line); the other two lines re-infer as a type single + a verbatim single. A rename+body twin WITH calls now splits per WI-15 (header follow + verbatim leftovers); this fixture has neither a rename nor calls.
+- `13-sig-evolution`: mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)
+- `14-item-rename`: partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)
+- `22-attrs-strip`: two-slot joint (WI-3 slice 5): rename + full attr/doc strip needs the WI-8 composed probe -- no D17 arm admits `Attrs`-carrying hunks by design, so the N=1 pair stays ordinary (the -20B detector half is joint-owned)
+- `30-trait-sweep`: hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)
+- `52-macro-verbatim`: hetero by design (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close
+- `55-infer-wildcard`: t442: hetero concrete inits vs uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole; tree legs still close)
+- `75-macro-verbatim-single`: engine wall (WI-3 slice 5): whole-line let-with-macro literal matches nothing (T440 `verbatim_let_shape`/`init_ok` wall) so D17 re-prove cannot keep -- the appliable nested-macro-text emission diverges from the authored whole-line leg; needs engine literal-statement matching with macro inits
+<!-- generated: d5-exclusions end -->
+These are the only non-tree-canonical cycles; every other corpus case is
 canonically lossless, and one further iteration is a byte-identical
 fixed point (`S″ == S′`) within a single diff mode.
 
