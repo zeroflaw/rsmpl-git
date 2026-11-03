@@ -57,6 +57,29 @@ type ResolvedUses = Vec<(String, Vec<(usize, usize, String, &'static str)>)>;
 /// prose binding is gone — `details` carry the signal alone.
 pub(crate) type FollowWorkspaceOutcome = (FollowExtras, Vec<crate::FollowSkipReport>);
 
+/// Old ident claimed by a `# follow=uses` hunk (facade D13-domain
+/// widening): the ident whose off-diff mentions must join the raiser
+/// probe pre-image. Mirrors the dispatch match below (scalar / member
+/// / assoc / method targets); `None` for non-follow shapes and for
+/// hunks that fail to compile. Single call so the facade never
+/// re-implements follow-kind knowledge.
+pub fn follow_old_ident(rh: &rsmpl_patch::RsmplHunk) -> Option<String> {
+    let compiled = rsmpl_pattern::compile(rh).ok()?;
+    match &compiled.kind {
+        PatternKind::Fn { minus_name, .. } => Some(minus_name.clone()),
+        PatternKind::ItemRename { minus_name, .. } => Some(minus_name.clone()),
+        PatternKind::StructRenameFieldEvo { old_container, .. } => Some(old_container.clone()),
+        PatternKind::EnumRenameVariantEvo { old_container, .. } => Some(old_container.clone()),
+        PatternKind::FieldRename { old, .. } => Some(old.clone()),
+        PatternKind::VariantRename { old, .. } => Some(old.clone()),
+        PatternKind::AssocRename { minus_name, .. } => Some(minus_name.clone()),
+        PatternKind::ImplContext { .. } => {
+            crate::use_graph_method::method_follow_target(rh, &compiled).map(|(old, _, _)| old)
+        }
+        _ => None,
+    }
+}
+
 /// WI-6b1 `# follow=uses` workspace step (SPEC 14.8): after the definition
 /// rewrite, resolve use sites across every loaded `.rs` file (unique-
 /// definition fast path) and append their ident-span edits under the same

@@ -93,6 +93,7 @@ pub use edits::{apply_edits, TextEdit};
 pub use lines::LineIndex;
 pub use ordinary::ordinary_hunk_edits;
 pub use plan::apply_with_captures;
+pub use use_graph_follow::follow_old_ident;
 pub use validate::{ensure_match_count, ZeroMatchHint};
 
 /// Per-rule application outcome.

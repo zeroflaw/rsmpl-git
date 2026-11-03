@@ -259,12 +259,17 @@ pub fn compress_collected(
     collected: &CollectedDiff,
 ) -> Result<CompressedPatch, DiffError> {
     let (pre, proven_downgraded) = pre_images(repo, staged, rev, &collected.files, &collected.raw);
-    compress_with_pre(
+    compress_closed_with_pre(
+        repo,
+        staged,
+        rev,
         &collected.raw,
-        &pre,
-        proven_downgraded,
-        collected.skipped_history,
-        collected.skipped_untracked_dirs.clone(),
+        pre,
+        RaiseMeta {
+            proven_downgraded,
+            skipped_history: collected.skipped_history,
+            skipped_untracked_dirs: collected.skipped_untracked_dirs.clone(),
+        },
     )
 }
 
@@ -298,28 +303,294 @@ pub fn compress_raw(
 ) -> Result<CompressedPatch, DiffError> {
     let files = rsmpl_diff_source::files_in_diff(raw);
     let (pre, proven_downgraded) = pre_images(repo, staged, rev, &files, raw);
-    compress_with_pre(raw, &pre, proven_downgraded, false, Vec::new())
+    compress_closed_with_pre(
+        repo,
+        staged,
+        rev,
+        raw,
+        pre,
+        RaiseMeta {
+            proven_downgraded,
+            skipped_history: false,
+            skipped_untracked_dirs: Vec::new(),
+        },
+    )
 }
 
-fn compress_with_pre(
-    raw: &str,
-    pre: &HashMap<String, String>,
+/// Pass-through collection metadata for the closed raise (keeps the
+/// raised-patch assembly under the argument-count gate).
+struct RaiseMeta {
     proven_downgraded: Vec<String>,
     skipped_history: bool,
     skipped_untracked_dirs: Vec<String>,
+}
+
+/// Closed raising: inference over a `pre` map widened to cover
+/// off-diff workspace files that mention a followed ident (the
+/// DISCOVERED off-diff gap). Phase 1 infers as today; when the emission
+/// carries `# follow=uses`, mentioning files outside `pre` join the D13
+/// domain and inference re-runs, so an intent whose site set exceeds the
+/// native diff declines to ordinary instead of silently rewriting beyond
+/// it. Bounded: at most 3 re-inferences; a final honest inference on the
+/// fullest map settles the loop. Diffs whose phase-1 emission has no
+/// follow intent pay nothing.
+fn compress_closed_with_pre(
+    repo: &Path,
+    staged: bool,
+    rev: Option<&str>,
+    raw: &str,
+    pre: HashMap<String, String>,
+    meta: RaiseMeta,
 ) -> Result<CompressedPatch, DiffError> {
-    let inferred: InferredPatch = rsmpl_diff_infer::infer_rsmpl_with_pre_images(raw, pre)?;
+    let mut pre = pre;
+    for _ in 0..3 {
+        let inferred: InferredPatch = rsmpl_diff_infer::infer_rsmpl_with_pre_images(raw, &pre)?;
+        let idents = follow_old_idents(&inferred.rsmpl);
+        if idents.is_empty() {
+            return Ok(finish(&inferred, meta));
+        }
+        let extra = off_diff_pre(repo, staged, rev, &pre, &idents);
+        if extra.is_empty() {
+            return Ok(finish(&inferred, meta));
+        }
+        pre.extend(extra);
+    }
+    // Three extensions without settling (a new follow ident per round):
+    // one final inference on the fullest map; its probes saw every
+    // mentioning file, so whatever it emits is honestly proven.
+    let inferred: InferredPatch = rsmpl_diff_infer::infer_rsmpl_with_pre_images(raw, &pre)?;
+    Ok(finish(&inferred, meta))
+}
+
+fn finish(inferred: &InferredPatch, meta: RaiseMeta) -> CompressedPatch {
     let files = rsmpl_diff_source::files_in_diff(&inferred.rsmpl);
-    Ok(CompressedPatch {
-        rsmpl: inferred.rsmpl,
+    CompressedPatch {
+        rsmpl: inferred.rsmpl.clone(),
         files,
-        stripped_binary: inferred.stripped_binary,
-        stripped_gitlink: inferred.stripped_gitlink,
-        skipped_history,
-        skipped_untracked_dirs,
-        hunks: inferred.hunks,
-        proven_downgraded,
-    })
+        stripped_binary: inferred.stripped_binary.clone(),
+        stripped_gitlink: inferred.stripped_gitlink.clone(),
+        skipped_history: meta.skipped_history,
+        skipped_untracked_dirs: meta.skipped_untracked_dirs,
+        hunks: inferred.hunks.clone(),
+        proven_downgraded: meta.proven_downgraded,
+    }
+}
+
+/// Old idents claimed by `# follow=uses` hunks in a raised emission
+/// (deduped, sorted). Unparseable emissions yield empty — the guard
+/// no-ops exactly like the unwidened path.
+fn follow_old_idents(rsmpl: &str) -> Vec<String> {
+    let Ok(parsed) = rsmpl_patch::parse_patch(rsmpl) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for section in &parsed.files {
+        for hunk in &section.hunks {
+            let rsmpl_patch::Hunk::Rsmpl(rh) = hunk else {
+                continue;
+            };
+            if !rh.follows_uses() {
+                continue;
+            }
+            if let Some(old) = rsmpl_engine::follow_old_ident(rh) {
+                if !out.contains(&old) {
+                    out.push(old);
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Pre-image content for off-diff workspace files that mention one of
+/// `idents`: the D13-domain widening. Tracked files come from one
+/// `git grep` (ident-token occurrences via `-w`; string/comment hits
+/// are harmless — the exact probe absorbs them); untracked files
+/// (pending scope only, matching collection) are scanned in-process.
+/// Files already in `pre`, non-`.rs` files, and tool/internal paths
+/// never join. Failures yield empty (today's behavior, never a new
+/// error); unreadable files are skipped like `applyrs`.
+fn off_diff_pre(
+    repo: &Path,
+    staged: bool,
+    rev: Option<&str>,
+    pre: &HashMap<String, String>,
+    idents: &[String],
+) -> HashMap<String, String> {
+    if idents.is_empty() {
+        return HashMap::new();
+    }
+    let with_base = staged || rev.is_some();
+    let base = if with_base {
+        rev_base(rev.unwrap_or("HEAD"))
+    } else {
+        String::new()
+    };
+    let mut mentioning: Vec<String> = Vec::new();
+    // All git searches run at the worktree top (T390: `--repo` may be a
+    // subdirectory): `git diff` paths are root-relative by git's own
+    // behavior, so the guard's hits must be too — a subdir-CWD pathspec
+    // would otherwise match nothing and silently skip the domain.
+    let top = repo_top(repo);
+    // Tracked files: one `git grep` over the worktree (pending) or the
+    // base blobs (staged/rev). Exit 1 with no output means no hits.
+    // Options precede the rev: `git grep <rev>` parses a late option
+    // as a revision. Blob hits carry a `<base>:` prefix to strip.
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(&top)
+        .arg("grep")
+        .arg("-l")
+        .arg("-F")
+        .arg("-w")
+        .arg("-z")
+        .arg("--full-name");
+    for ident in idents {
+        cmd.arg("-e").arg(ident);
+    }
+    if with_base {
+        cmd.arg(&base);
+    }
+    cmd.arg("--").arg("*.rs");
+    if let Ok(out) = cmd.output() {
+        if out.status.success() {
+            for part in out.stdout.split(|b| *b == 0) {
+                if part.is_empty() {
+                    continue;
+                }
+                let mut rel = String::from_utf8_lossy(part)
+                    .trim_end_matches('\n')
+                    .replace('\\', "/");
+                if with_base {
+                    if let Some(stripped) = rel.strip_prefix(&format!("{base}:")) {
+                        rel = stripped.to_string();
+                    } else {
+                        continue;
+                    }
+                }
+                if rel.is_empty()
+                    || !rel.ends_with(".rs")
+                    || rel.starts_with(".git/")
+                    || rel.starts_with("target/")
+                    || rel.starts_with(".history/")
+                {
+                    continue;
+                }
+                if !pre.contains_key(&rel) && !mentioning.contains(&rel) {
+                    mentioning.push(rel);
+                }
+            }
+        }
+    }
+    // Untracked files (pending scope only): listed like `applyrs`,
+    // scanned in-process (no `--untracked` version reliance).
+    if !with_base {
+        if let Ok(out) = Command::new("git")
+            .arg("-C")
+            .arg(&top)
+            .args([
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "--full-name",
+                "-z",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                for part in out.stdout.split(|b| *b == 0) {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    let rel = String::from_utf8_lossy(part).replace('\\', "/");
+                    if !rel.ends_with(".rs")
+                        || rel.starts_with("target/")
+                        || rel.starts_with(".history/")
+                        || pre.contains_key(&rel)
+                        || mentioning.contains(&rel)
+                    {
+                        continue;
+                    }
+                    let abs = top.join(&rel);
+                    if abs.is_symlink() || !abs.is_file() {
+                        continue;
+                    }
+                    if let Ok(text) = std::fs::read_to_string(&abs) {
+                        if idents.iter().any(|id| contains_word(&text, id)) {
+                            mentioning.push(rel);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    mentioning.sort();
+    mentioning.dedup();
+    let mut out = HashMap::new();
+    for path in &mentioning {
+        if with_base {
+            if let Some(text) = show_blob(&top, &base, path) {
+                out.insert(path.clone(), text);
+            }
+        } else if let Ok(text) = std::fs::read_to_string(top.join(path)) {
+            // Off-diff ⇒ worktree == index: the worktree read is the
+            // exact pending pre-image (zero forks).
+            out.insert(path.clone(), text);
+        }
+    }
+    out
+}
+
+/// Worktree top level for guard searches (T390 shape): `git -C <repo>
+/// rev-parse --show-toplevel`, falling back to `<repo>` itself when
+/// unresolvable. Single-sourcing with `rsmpl_diff_source`'s private
+/// copy is WI-24 territory.
+fn repo_top(repo: &Path) -> std::path::PathBuf {
+    match Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if top.is_empty() {
+                repo.to_path_buf()
+            } else {
+                std::path::PathBuf::from(top)
+            }
+        }
+        _ => repo.to_path_buf(),
+    }
+}
+
+/// Ident-token occurrence (word-char boundaries `[A-Za-z0-9_]`):
+/// a superset of ident-token sites that never misses one. Matches
+/// `git grep -w` for ASCII text; the D13 probe (exact) decides.
+fn contains_word(text: &str, ident: &str) -> bool {
+    if ident.is_empty() {
+        return false;
+    }
+    let mut start = 0;
+    while start + ident.len() <= text.len() {
+        let Some(pos) = text[start..].find(ident) else {
+            return false;
+        };
+        let s = start + pos;
+        let e = s + ident.len();
+        let before = text[..s].chars().next_back().is_some_and(is_word_char);
+        let after = text[e..].chars().next().is_some_and(is_word_char);
+        if !before && !after {
+            return true;
+        }
+        start = s + 1;
+    }
+    false
+}
+
+fn is_word_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphanumeric()
 }
 
 /// WI-16: the T361 loop against `--repo` — fetch the pre-image for the
@@ -357,7 +628,7 @@ mod tests {
         // same `CollectedDiff`. A non-`.rs` section needs no `git show`
         // blob fetches (`pre_images` only fetches `.rs` paths), so this
         // runs with no repo and proves the seam forwards the collected
-        // raw + skip flags through the shared `compress_with_pre` path.
+        // raw + skip flags through the shared closed-raise path.
         let raw = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n";
         let collected = CollectedDiff {
             raw: raw.to_string(),
@@ -386,5 +657,51 @@ mod tests {
             .expect("empty collection must raise");
         assert!(patch.rsmpl.is_empty());
         assert!(patch.files.is_empty());
+    }
+
+    #[test]
+    fn follow_old_idents_collects_follow_claims() {
+        // fn + item follows name their minus idents (deduped, sorted);
+        // follow-free emissions (ordinary, plain call sweep) yield empty.
+        let emission = "diff --git src/a.rs\n\
+            @@ -1,1 @@ rule=r1\n\
+            # follow=uses\n\
+            - fn old(x: i32) -> i32\n\
+            + fn new(x: i32) -> i32\n\
+            diff --git src/b.rs\n\
+            @@ -1,1 @@ rule=r2\n\
+            # sweep\n\
+            # follow=uses\n\
+            - pub struct Old\n\
+            + pub struct New\n\
+            diff --git src/b.rs\n\
+            @@ -2,1 @@ rule=r2\n\
+            # sweep\n\
+            # follow=uses\n\
+            - pub struct Old\n\
+            + pub struct New\n";
+        assert_eq!(
+            super::follow_old_idents(emission),
+            vec!["Old".to_string(), "old".to_string()]
+        );
+        let sweep = "diff --git src/a.rs\n\
+            @@ -1,1 @@ rule=s\n\
+            # allow=many\n\
+            - foo(E)\n\
+            + bar(E)\n";
+        assert!(super::follow_old_idents(sweep).is_empty());
+        assert!(super::follow_old_idents("").is_empty());
+        assert!(super::follow_old_idents("not a patch").is_empty());
+    }
+
+    #[test]
+    fn contains_word_matches_ident_boundaries() {
+        assert!(super::contains_word("use crate::Old;\n", "Old"));
+        assert!(super::contains_word("x: Old,", "Old"));
+        assert!(super::contains_word("\"Old\"", "Old"));
+        assert!(!super::contains_word("struct Older;\n", "Old"));
+        assert!(!super::contains_word("Bold move\n", "old"));
+        assert!(!super::contains_word("fn f() {}\n", "Old"));
+        assert!(!super::contains_word("anything", ""));
     }
 }

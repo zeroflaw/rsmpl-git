@@ -7700,9 +7700,14 @@ check never trusts lowering validation alone: `applyrs --check`
 over-match — the lowered diff applies cleanly while rewriting sites
 the native diff never touched — so only the scratch-apply +
 byte-compare proves a raise (T361). Provenance boundary: `--check`
-proves changed-files closure; off-diff same-name uses in untouched
-files stay the engine's apply-time veto backstop (the same context
-infer's totality probes run in).
+proves changed-files closure; workspace intents (`# follow=uses`)
+additionally search off-diff workspace files that mention a followed
+ident (one `git grep` over tracked files at the diff base plus an
+in-process scan of untracked pending-scope files) — a mentioning
+file joins the D13 probe domain, so an intent whose site set exceeds
+the native diff declines to ordinary at raise time instead of relying
+on the engine's apply-time backstop. Mention-free workspaces raise
+byte-identical to the changed-files-only domain.
 Each `hunks` entry carries per-hunk
 provenance for one emitted semantic hunk, plus one entry per
 wholly-ordinary section (WI-15c — the list is never bare `"hunks":
